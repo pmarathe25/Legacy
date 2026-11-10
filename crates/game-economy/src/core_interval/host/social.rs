@@ -165,6 +165,25 @@ impl CoreHost {
         } else {
             None
         };
+        let taking = self
+            .taking
+            .as_ref()
+            .filter(|owner| !owner.report_policies.is_empty() && !meetings.is_empty())
+            .map(|owner| {
+                let mut owner = owner.clone();
+                let contacts: Vec<_> = meetings
+                    .par_iter()
+                    .map(|event| (event.a, event.b))
+                    .collect();
+                let changes = self.stage_taking_reports(&mut owner, &contacts, tick);
+                if !changes.is_empty() {
+                    let current = opinions.get_or_insert_with(|| self.opinions.clone());
+                    if let Some(opinions) = current {
+                        opinions.apply_personal_changes(&changes, tick);
+                    }
+                }
+                owner
+            });
         let route_reports = self
             .core
             .travel
@@ -217,6 +236,9 @@ impl CoreHost {
         }
         if let Some(opinions) = opinions {
             self.opinions = opinions;
+        }
+        if let Some(taking) = taking {
+            self.taking = Some(taking);
         }
         if let Some(knowledge) = knowledge {
             self.knowledge = Some(knowledge);

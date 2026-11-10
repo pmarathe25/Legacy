@@ -83,4 +83,26 @@ impl CoreHost {
         }
         changes
     }
+    /// Testimony uses opening memories and actual contacts. The listener owns belief.
+    pub(super) fn stage_taking_reports(
+        &self,
+        owner: &mut game_economy_taking::Taking,
+        contacts: &[(u64, u64)],
+        tick: u64,
+    ) -> Vec<game_opinions::PersonalChange> {
+        let Some(previous) = self
+            .taking
+            .as_ref()
+            .filter(|previous| !previous.report_policies.is_empty() && !contacts.is_empty())
+        else {
+            return Vec::new();
+        };
+        let feelings = self.opinions.as_ref().map(game_opinions::Opinions::index);
+        owner.receive_reports(previous, contacts, tick, &|listener, speaker| {
+            feelings.as_ref().map_or((0, 0, 0), |index| {
+                let (fear, obligation) = index.feelings(speaker, listener);
+                (index.trust(listener, speaker), fear, obligation)
+            })
+        })
+    }
 }

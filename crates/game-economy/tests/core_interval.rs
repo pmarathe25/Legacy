@@ -3758,6 +3758,85 @@ fn pressured_meeting_can_share_a_false_personal_report_once_per_tick() {
 }
 
 #[test]
+fn pressured_meeting_can_share_false_taking_testimony_once() {
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new().num_threads(workers).build().unwrap().install(|| {
+        let mut initial = fixture();
+        initial.physical.custody.tick = 1;
+        initial.people[1].region = Some(1);
+        let mut third = initial.people[1].clone();
+        third.id = 3;
+        initial.people.push(third);
+        initial.travel.as_mut().unwrap().journeys.clear();
+        initial.nutrition = None;
+        initial.pending_food.clear();
+        let minds = vec![
+            game_economy_knowledge::Mind {
+                person: 2, remember_people: false, people_seen: vec![], people_reporting: None, people_reports: vec![],
+                reporting: Some(game_economy_knowledge::Reporting {willing: false, pressure_threshold: Some(1)}),
+                misreport: Some(game_economy_knowledge::Misreport {target: Some(3), food_delta: 5}),
+                records: vec![game_economy_knowledge::Record {region: 2, food: 10, observed_at: 0, witness: 2, learned_from: None}],
+            },
+            game_economy_knowledge::Mind {
+                person: 3, remember_people: false, people_seen: vec![], people_reporting: None, people_reports: vec![],
+                reporting: None, misreport: None, records: vec![],
+            },
+        ];
+        let rules = serde_json::from_value(serde_json::json!({"minimum":-10,"maximum":10,"initial":0,"fulfilled_gain":1,"default_loss":1,"affinity":{"limit":10}})).unwrap();
+        let opinions = game_opinions::Opinions {rules, sensitivities: Default::default(), records: vec![game_opinions::Opinion {
+            observer: 2, target: 3, trust: 0, fear: 2, obligation: 0, affinity: 0,
+        }], events: vec![]};
+        let social = game_economy::core_interval::CoreSocial {
+            owner: game_social::Social {
+                rules: game_social::Rules {interval: 1, min_health: 1, max_hunger: 10, familiarity_gain: 1, familiarity_max: 10, relationship_retention: None},
+                participants: vec![game_social::Participant {person: 2, willing: false}, game_social::Participant {person: 3, willing: true}],
+                pressures: vec![game_social::PressurePolicy {person: 2, fear_at_least: Some(1), obligation_at_least: None, enabled: true}],
+                relationships: vec![], events: vec![], needs: None,
+            }, last_tick: None,
+        };
+        let snapshot = CoreHostSnapshot {
+            core: initial, autowork: None, tool_wear: None, tool_requirements: vec![], paused_work_rates: vec![],
+            fatigue: None, activity: vec![], giving: None, taking: Some(serde_json::from_value(serde_json::json!({
+                "witnesses": [{"person":2,"actor":1,"notices":true,"last_seen":{"tick":0,"target":3,"good":1,"quantity":1,"outcome":"transferred"}}],
+                "report_policies": [{"person":2,"recipient":3,"actor":1,"willing":false,"pressure_threshold":1,"claimed_outcome":"resisted"}],
+                "receptions": [{"person":3,"stance":"believe","toward_actor":{"resisted":{"affinity":-3}}}]
+            })).unwrap()), medical: None, goal_setbacks: vec![], purpose: None, animal_restraints: None, animal_products: None, recovery: None, fauna: None, hunting: None, animal_feelings: None, animal_care: None, animal_handling: None, family: None, dependent_care: None, gathering: None, environment: None, irrigation: None, agriculture: None, health: None, claims: None, social: Some(social),
+            food_search: None, knowledge: Some(game_economy_knowledge::Knowledge {max_records: 4, minds, retention: vec![]}),
+            opinions: Some(opinions), goals: None, agreements: None, sites: None, schedule: None,
+        };
+        let mut failing = snapshot.clone();
+        failing.social.as_mut().unwrap().owner.relationships.push(game_social::Relationship {
+            a: 2, b: 3, familiarity: 1, encounters: u64::MAX, last_met: 0,
+        });
+        let mut failed = CoreHost::begin(failing, &[(1, 1)]).unwrap();
+        let before = failed.snapshot();
+        assert!(failed.meet_autonomously(&[]).is_err());
+        assert_eq!(failed.snapshot(), before);
+        let mut host = CoreHost::begin(snapshot, &[(1, 1)]).unwrap();
+        host.enable_schedule(500, 1).unwrap();
+        let result = host.advance_scheduled(0, &[]).unwrap();
+        assert_eq!(result.failure, None);
+        assert!(result.events.iter().any(|event| matches!(event, game_economy::core_interval::CoreRunEvent::Meetings(rows) if rows.len() == 1 && rows[0].pressured == Some(2))));
+        let state = host.snapshot();
+        let memory = &state.knowledge.as_ref().unwrap().minds.iter().find(|mind| mind.person == 3).unwrap().records;
+        assert_eq!(memory.iter().find(|record| record.region == 2).unwrap().food, 15);
+        assert_eq!(state.social.as_ref().unwrap().last_tick, Some(1));
+        let report = &state.taking.as_ref().unwrap().reports.get(3)[0];
+        assert_eq!(report.claimed_outcome, game_economy_taking::Outcome::Resisted);
+        assert_eq!(report.belief, game_economy_taking::ReportBelief::Believes);
+        assert_eq!(state.taking.as_ref().unwrap().witnesses[0].last_seen.unwrap().outcome, game_economy_taking::Outcome::Transferred);
+        assert_eq!(state.opinions.as_ref().unwrap().records.iter().find(|row| row.observer == 3 && row.target == 1).unwrap().affinity, -3);
+        let saved = serde_json::to_string(&state).unwrap();
+        let mut restored = CoreHost::resume(serde_json::from_str(&saved).unwrap()).unwrap();
+        assert!(restored.meet_autonomously(&[]).unwrap().is_empty());
+        assert_eq!(restored.snapshot(), state);
+        state
+    })
+    };
+    assert_eq!(run(1), run(6));
+}
+
+#[test]
 fn disease_uses_actual_meetings_and_does_not_require_social_to_progress() {
     let run = |workers| {
         rayon::ThreadPoolBuilder::new().num_threads(workers).build().unwrap().install(|| {
@@ -5981,6 +6060,7 @@ fn core_host_social_benchmark() {
         .and_then(|value| value.parse().ok())
         .unwrap_or(1);
     assert!(count > 2);
+    let taking_reports = std::env::var_os("LEGACY_TAKING_REPORTS").is_some();
     let treatment = std::env::var_os("LEGACY_TREATMENT").is_some();
     let disease = std::env::var_os("LEGACY_DISEASE").is_some() || treatment;
     let mut initial = fixture();
@@ -6157,6 +6237,47 @@ fn core_host_social_benchmark() {
         .build()
         .unwrap()
         .install(|| {
+            let mut snapshot = snapshot;
+            if taking_reports {
+                let mut probe = CoreHost::begin(snapshot.clone(), &[(1, 1)]).unwrap();
+                let pairs = probe.meet_autonomously(&[]).unwrap();
+                let witnesses = pairs
+                    .iter()
+                    .map(|event| game_economy_taking::Witness {
+                        person: event.a,
+                        actor: 1,
+                        target: Some(2),
+                        notices: true,
+                        last_seen: Some(game_economy_taking::ObservedTaking {
+                            tick: 0,
+                            target: 2,
+                            good: 1,
+                            quantity: 1,
+                            outcome: game_economy_taking::Outcome::Transferred,
+                        }),
+                        ..Default::default()
+                    })
+                    .collect::<Vec<_>>();
+                let report_policies = pairs
+                    .iter()
+                    .map(|event| game_economy_taking::ReportPolicy {
+                        person: event.a,
+                        recipient: event.b,
+                        actor: 1,
+                        willing: true,
+                        pressure_threshold: None,
+                        claimed_outcome: Some(game_economy_taking::Outcome::Resisted),
+                        source: game_economy_taking::ReportSource::Observed,
+                        heard_from: None,
+                        details: None,
+                    })
+                    .collect::<Vec<_>>();
+                snapshot.taking = Some(game_economy_taking::Taking {
+                    witnesses: witnesses.into(),
+                    report_policies: report_policies.into(),
+                    ..Default::default()
+                });
+            }
             let mut host = CoreHost::begin(snapshot, &[(1, 1)]).unwrap();
             let start = std::time::Instant::now();
             if treatment {
@@ -6188,6 +6309,12 @@ fn core_host_social_benchmark() {
             let meetings = host.meet_autonomously(&[]).unwrap();
             let elapsed = start.elapsed();
             assert_eq!(meetings.len(), ((count - 1) / 2) as usize);
+            if taking_reports {
+                assert_eq!(
+                    host.snapshot().taking.unwrap().reports.len(),
+                    meetings.len()
+                );
+            }
             let mut hash = std::collections::hash_map::DefaultHasher::new();
             serde_json::to_vec(&host.snapshot())
                 .unwrap()

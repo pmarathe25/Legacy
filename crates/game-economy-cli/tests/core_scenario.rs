@@ -693,3 +693,38 @@ fn authored_taking_loads_named_goods() {
         .id;
     assert_eq!(state.taking.unwrap().policies[0].good, bread);
 }
+
+#[test]
+fn food_request_can_carry_a_doubted_taking_account() {
+    fn run(workers: usize) -> serde_json::Value {
+        rayon::ThreadPoolBuilder::new().num_threads(workers).build().unwrap().install(|| {
+            let root = root();
+            let initial = game_economy_cli::core_scenario(&root.join("content/scenarios/economy-core.toml"), &root.join("content")).unwrap();
+            let mut snapshot = initial.snapshot();
+            snapshot.dependent_care = None;
+            snapshot.medical = None;
+            snapshot.core.people[0].hunger = 5;
+            let bread = snapshot.core.physical.goods.iter().find(|good| good.name == "bread").unwrap().id;
+            snapshot.taking = Some(serde_json::from_value(serde_json::json!({
+                "witnesses":[{"person":1,"actor":2,"target":1,"notices":true,
+                    "last_seen":{"tick":0,"target":1,"good":bread,"quantity":1,"outcome":"transferred"}}],
+                "report_policies":[{"person":1,"recipient":2,"actor":2,"willing":true,"claimed_outcome":"resisted"}],
+                "receptions":[{"person":2,"stance":"doubt"}]
+            })).unwrap());
+            let saved = serde_json::to_string(&snapshot).unwrap();
+            let mut host = game_economy::core_interval::CoreHost::resume(snapshot).unwrap();
+            let mut restored = game_economy::core_interval::CoreHost::resume(serde_json::from_str(&saved).unwrap()).unwrap();
+            assert_eq!(host.advance_continuous(3_600_000, &[]).unwrap().failure, None);
+            assert_eq!(restored.advance_continuous(3_600_000, &[]).unwrap().failure, None);
+            let result = host.snapshot();
+            assert_eq!(result, restored.snapshot());
+            let taking = result.taking.as_ref().unwrap();
+            let report = &taking.reports.get(2)[0];
+            assert_eq!(serde_json::to_value(report.claimed_outcome).unwrap(), "resisted");
+            assert_eq!(serde_json::to_value(report.belief).unwrap(), "doubts");
+            assert_eq!(serde_json::to_value(taking.witnesses[0].last_seen.unwrap().outcome).unwrap(), "transferred");
+            serde_json::to_value(result).unwrap()
+        })
+    }
+    assert_eq!(run(1), run(6));
+}

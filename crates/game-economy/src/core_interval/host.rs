@@ -597,12 +597,9 @@ impl CoreHost {
                 || !owner.complaint_preferences.is_empty()
                 || !owner.assessment_preferences.is_empty()
                 || !owner.inquiry_pursuit.is_empty()
-                || !owner.report_policies.is_empty()
-                || !owner.receptions.is_empty()
-                || !owner.reports.is_empty()
             {
                 return Err(
-                    "taking escalation and testimony are not yet supported by the interval host"
+                    "taking escalation and complaints are not yet supported by the interval host"
                         .into(),
                 );
             }
@@ -1581,7 +1578,13 @@ impl CoreHost {
                     .filter(|event| event.outcome == game_economy_taking::Outcome::Transferred)
                     .map(|event| (event.actor, event.target)),
             );
-            self.stage_taking_reactions(&mut frame.owner)
+            let mut changes = self.stage_taking_reactions(&mut frame.owner);
+            changes.par_extend(self.stage_taking_reports(
+                &mut frame.owner,
+                &contacts,
+                draft.events().tick,
+            ));
+            changes
         } else {
             Vec::new()
         };
