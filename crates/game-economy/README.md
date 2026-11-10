@@ -28,7 +28,11 @@ The same host can use `prepare_early_work` to stage nonperishable identified out
 
 `CoreHost` saves the limited core together with optional autonomous-work policies and tool conditions. It coordinates carried-food choices, work admission, early production, and boundary settlement with those owners; identified consumption with no matching tool owner is rejected. The enclosing host must still supply exclusions for other activities, sites, tools, and claims, and must handle other world owners. Use `resume` for an in-flight snapshot and `begin` with new work rates after a completed boundary.
 
+After making positive progress inside a quantum, a host can enable a periodic decision schedule and call `advance_scheduled`. The runner publishes tied arrivals and nonperishable work, defers perishable completions to the boundary, and then stages carried meals and autonomous work. Decision phase and timing survive save/load. It stops at the boundary for an explicit `settle`; if an action fails, its result reports the failure and earlier events remain committed. The host supplies the same external activity exclusions across split advances. Hunger decisions are periodic, not a complete world action scheduler.
+
 The ignored `core_host_autonomous_work_benchmark` measures policy selection and reservation through this saved host. One 49,999-start run took 61.7, 42.3, 29.1, and 27.3 ms at one, two, four, and six workers, with matching saved-state fingerprints. It does not measure the complete campaign.
+
+Set `LEGACY_SCHEDULED=1` on that benchmark to include 500 ms of scheduled advancement and three decision points. A 50,000-person run took 113, 73, 50, and 40 ms at those worker counts, with matching fingerprints. This is a limited-core workload and remains sublinear.
 
 The ignored `composed_core_progress_benchmark` with `LEGACY_CORE_ARRIVALS=1` measures publication of 50,000 arrivals among 100,000 people. One run took 5.87, 2.86, 1.58, and 1.25 ms with one, two, four, and six workers, with matching fingerprints. This measures only arrival publication in the limited core.
 

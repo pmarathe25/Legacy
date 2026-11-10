@@ -443,6 +443,7 @@ fn core_host_autonomous_work_benchmark() {
         .ok()
         .and_then(|value| value.parse().ok())
         .unwrap_or(1);
+    let scheduled = std::env::var_os("LEGACY_SCHEDULED").is_some();
     assert!(count > 1);
     let mut initial = fixture();
     let person = initial.people[0].clone();
@@ -478,6 +479,7 @@ fn core_host_autonomous_work_benchmark() {
     let snapshot = CoreHostSnapshot {
         core: initial,
         tool_wear: None,
+        schedule: None,
         autowork: Some(game_autowork::Autowork {
             next_id: 2,
             policies: (2..=count)
@@ -500,8 +502,24 @@ fn core_host_autonomous_work_benchmark() {
             for round in 0..4 {
                 let mut host = CoreHost::begin(snapshot.clone(), &[(1, 1)]).unwrap();
                 host.progress(400).unwrap();
+                if scheduled {
+                    host.enable_schedule(200, 1).unwrap();
+                }
                 let start = std::time::Instant::now();
-                let outcomes = host.start_autonomous_work(&[], 1).unwrap();
+                let outcomes = if scheduled {
+                    let run = host.advance_scheduled(500, &[]).unwrap();
+                    assert_eq!(run.failure, None);
+                    assert_eq!((run.elapsed_millis, run.decisions), (500, 3));
+                    run.events
+                        .into_iter()
+                        .find_map(|event| match event {
+                            game_economy::core_interval::CoreRunEvent::Starts(rows) => Some(rows),
+                            _ => None,
+                        })
+                        .unwrap()
+                } else {
+                    host.start_autonomous_work(&[], 1).unwrap()
+                };
                 let elapsed = start.elapsed().as_secs_f64();
                 assert_eq!(
                     outcomes.iter().filter(|row| row.1).count(),
@@ -520,7 +538,7 @@ fn core_host_autonomous_work_benchmark() {
             }
             samples.sort_by(f64::total_cmp);
             println!(
-                "workers={workers} host_autonomous_starts={} elapsed={:.6}",
+                "workers={workers} host_autonomous_starts={} scheduled={scheduled} elapsed={:.6}",
                 count - 1,
                 samples[1]
             );
@@ -1249,6 +1267,7 @@ fn saved_core_host_coordinates_personal_work_meals_and_tool_ownership() {
                     .sort_by_key(|row| row.place);
                 let snapshot = CoreHostSnapshot {
                     core: initial,
+                    schedule: None,
                     autowork: Some(game_autowork::Autowork {
                         next_id: 2,
                         policies: vec![game_autowork::Policy {
@@ -1360,6 +1379,7 @@ fn core_host_rejects_unowned_identified_consumption_without_mutation() {
             core: initial,
             autowork: None,
             tool_wear: None,
+            schedule: None,
         },
         &[(1, 2)],
     )
@@ -1368,6 +1388,251 @@ fn core_host_rejects_unowned_identified_consumption_without_mutation() {
     let before = host.snapshot();
     assert!(host.publish_early_work().is_err());
     assert_eq!(host.snapshot(), before);
+}
+
+#[test]
+fn scheduled_core_host_is_partition_independent_at_tied_deadlines() {
+    let run = |workers, chunks: &[u64], reload| {
+        rayon::ThreadPoolBuilder::new().num_threads(workers).build().unwrap().install(|| {
+        let mut initial = fixture();
+        initial.people[0].willing_to_work = true;
+        initial.people[1].willing_to_work = true;
+        initial.travel.as_mut().unwrap().journeys[0].progress_millis = 500;
+        let stock = initial.physical.custody.containers.iter_mut().find(|row| row.place == Place::Stock { region: 2, good: 1 }).unwrap();
+        *stock = Container::new(stock.place, 10, vec![Lot { item: None, good: 1, quantity: 2, expires_at: None }]).unwrap();
+        let snapshot = CoreHostSnapshot {
+            core: initial,
+            autowork: Some(game_autowork::Autowork { next_id: 2, policies: vec![game_autowork::Policy { person: 2, recipe: 1, enabled: true, disregard_claims: false }], requests: None }),
+            tool_wear: None, schedule: None,
+        };
+        let mut host = CoreHost::begin(snapshot, &[(1, 2)]).unwrap();
+        host.progress(100).unwrap();
+        host.enable_schedule(200, 2).unwrap();
+        let mut events = Vec::new();
+        let mut decisions = 0;
+        for &chunk in chunks {
+            let result = host.advance_scheduled(chunk, &[]).unwrap();
+            assert_eq!(result.elapsed_millis, chunk);
+            assert_eq!(result.failure, None);
+            decisions += result.decisions;
+            events.extend(result.events);
+            if reload {
+                let saved = serde_json::to_string(&host.snapshot()).unwrap();
+                host = CoreHost::resume(serde_json::from_str(&saved).unwrap()).unwrap();
+            }
+        }
+        assert_eq!(decisions, 5);
+        assert!(matches!(&events[0], game_economy::core_interval::CoreRunEvent::Arrivals(arrival) if arrival.people == vec![2]));
+        assert!(matches!(&events[1], game_economy::core_interval::CoreRunEvent::Work(work) if work.finished == vec![1]));
+        assert!(matches!(&events[2], game_economy::core_interval::CoreRunEvent::Starts(starts) if starts == &vec![(2, true)]));
+        let boundary = host.snapshot();
+        assert_eq!(boundary.core.physical.work_interval.as_ref().unwrap().elapsed_millis, 1000);
+        let events_at_boundary = host.settle().unwrap();
+        assert_eq!(events_at_boundary.finished, vec![2]);
+        assert_eq!(events_at_boundary.delivered, vec![1]);
+        (host.snapshot(), events)
+    })
+    };
+    assert_eq!(run(1, &[900], false), run(6, &[200, 200, 500], true));
+}
+
+#[test]
+fn scheduled_decision_resumes_after_work_failure_without_repeating_meal() {
+    let mut initial = fixture();
+    initial.travel = None;
+    initial.nutrition = None;
+    initial.pending_food.clear();
+    initial.people[1].region = Some(1);
+    initial.people[1].seek_meals = true;
+    initial.people[1].willing_to_work = true;
+    let mut third = initial.people[0].clone();
+    third.id = 3;
+    third.willing_to_work = true;
+    initial.people.push(third);
+    initial.physical.goods[1].food = Some(game_production_model::FoodProfile {
+        portion: 1,
+        hunger_relief: 1,
+        nutrients: Default::default(),
+        health_effect: 0,
+        shelf_days: None,
+    });
+    let stock = initial
+        .physical
+        .custody
+        .containers
+        .iter_mut()
+        .find(|row| row.place == Place::Stock { region: 1, good: 1 })
+        .unwrap();
+    *stock = Container::new(
+        stock.place,
+        10,
+        vec![Lot {
+            item: None,
+            good: 1,
+            quantity: 2,
+            expires_at: None,
+        }],
+    )
+    .unwrap();
+    initial.physical.custody.containers.push(
+        Container::new(
+            Place::Person(2),
+            2,
+            vec![Lot {
+                item: None,
+                good: 2,
+                quantity: 2,
+                expires_at: None,
+            }],
+        )
+        .unwrap(),
+    );
+    initial
+        .physical
+        .custody
+        .containers
+        .sort_by_key(|row| row.place);
+    let snapshot = CoreHostSnapshot {
+        core: initial,
+        tool_wear: None,
+        schedule: None,
+        autowork: Some(game_autowork::Autowork {
+            next_id: u64::MAX,
+            policies: vec![game_autowork::Policy {
+                person: 3,
+                recipe: 1,
+                enabled: true,
+                disregard_claims: false,
+            }],
+            requests: None,
+        }),
+    };
+    let mut host = CoreHost::begin(snapshot, &[(1, 1)]).unwrap();
+    host.progress(100).unwrap();
+    host.enable_schedule(200, 1).unwrap();
+    let result = host.advance_scheduled(0, &[]).unwrap();
+    assert_eq!(result.elapsed_millis, 0);
+    assert!(result.failure.is_some());
+    assert!(
+        matches!(&result.events[..], [game_economy::core_interval::CoreRunEvent::Meals(meals)] if meals == &vec![(2, 2)])
+    );
+    let mut saved = host.snapshot();
+    assert!(matches!(
+        saved.schedule.as_ref().unwrap().phase,
+        game_economy::core_interval::DecisionPhase::Work { .. }
+    ));
+    saved.autowork.as_mut().unwrap().next_id = 2;
+    let saved = serde_json::to_string(&saved).unwrap();
+    let mut host = CoreHost::resume(serde_json::from_str(&saved).unwrap()).unwrap();
+    let result = host.advance_scheduled(0, &[]).unwrap();
+    assert_eq!(result.failure, None);
+    assert_eq!(result.decisions, 1);
+    assert!(
+        matches!(&result.events[..], [game_economy::core_interval::CoreRunEvent::Starts(starts)] if starts == &vec![(2, true)])
+    );
+    let snapshot = host.snapshot();
+    assert_eq!(
+        snapshot
+            .core
+            .physical
+            .custody
+            .containers
+            .iter()
+            .find(|row| row.place == Place::Person(2))
+            .unwrap()
+            .used,
+        1
+    );
+    assert_eq!(snapshot.core.people[1].hunger, 1);
+    assert_eq!(snapshot.core.physical.work[1].job.worker, 3);
+}
+
+#[test]
+fn scheduled_runner_defers_perishable_work_and_publishes_other_completion() {
+    let mut initial = fixture();
+    initial.people[1].region = Some(1);
+    initial.travel = None;
+    initial.nutrition = None;
+    initial.pending_food.clear();
+    initial.physical.goods.push(Good {
+        id: 3,
+        name: "perishable".into(),
+        food: Some(game_production_model::FoodProfile {
+            portion: 1,
+            hunger_relief: 1,
+            nutrients: Default::default(),
+            health_effect: 0,
+            shelf_days: Some(1),
+        }),
+    });
+    let mut recipe = initial.physical.recipes[0].clone();
+    recipe.id = 2;
+    recipe.outputs[0].good = 3;
+    initial.physical.recipes.push(recipe);
+    let stock = initial
+        .physical
+        .custody
+        .containers
+        .iter_mut()
+        .find(|row| row.place == Place::Stock { region: 1, good: 1 })
+        .unwrap();
+    *stock = Container::new(
+        stock.place,
+        10,
+        vec![Lot {
+            item: None,
+            good: 1,
+            quantity: 2,
+            expires_at: None,
+        }],
+    )
+    .unwrap();
+    initial
+        .physical
+        .custody
+        .containers
+        .push(Container::new(Place::Stock { region: 1, good: 3 }, 10, vec![]).unwrap());
+    initial
+        .physical
+        .custody
+        .containers
+        .sort_by_key(|row| row.place);
+    let mut physical = Runtime::compile(initial.physical).unwrap();
+    physical
+        .start(
+            &[Start {
+                id: 2,
+                worker: 2,
+                region: 1,
+                recipe: 2,
+                units: 1,
+            }],
+            7,
+        )
+        .unwrap();
+    initial.physical = physical.snapshot();
+    let mut host = CoreHost::begin(
+        CoreHostSnapshot {
+            core: initial,
+            autowork: None,
+            tool_wear: None,
+            schedule: None,
+        },
+        &[(1, 2), (2, 2)],
+    )
+    .unwrap();
+    host.progress(100).unwrap();
+    host.enable_schedule(600, 1).unwrap();
+    let result = host.advance_scheduled(900, &[]).unwrap();
+    assert_eq!(result.failure, None);
+    assert!(result.boundary);
+    assert!(
+        matches!(&result.events[0], game_economy::core_interval::CoreRunEvent::Deferred(jobs) if jobs == &vec![2])
+    );
+    assert!(
+        matches!(&result.events[1], game_economy::core_interval::CoreRunEvent::Work(events) if events.finished == vec![1])
+    );
+    assert_eq!(host.settle().unwrap().finished, vec![2]);
 }
 
 #[test]

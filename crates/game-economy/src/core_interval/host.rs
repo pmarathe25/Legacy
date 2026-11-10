@@ -2,6 +2,8 @@
 use super::*;
 use game_autowork::Autowork;
 use game_economy_work::tool_wear::ToolWear;
+mod scheduler;
+pub use scheduler::{CoreRun, CoreRunEvent, CoreSchedule, DecisionPhase};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -11,6 +13,8 @@ pub struct CoreHostSnapshot {
     pub autowork: Option<Autowork>,
     #[serde(default)]
     pub tool_wear: Option<ToolWear>,
+    #[serde(default)]
+    pub schedule: Option<CoreSchedule>,
 }
 
 /// This host composes only the owners listed in `CoreHostSnapshot`.
@@ -18,6 +22,7 @@ pub struct CoreHost {
     core: CoreInterval,
     autowork: Option<Autowork>,
     tool_wear: Option<ToolWear>,
+    schedule: Option<CoreSchedule>,
 }
 impl CoreHost {
     pub fn begin(snapshot: CoreHostSnapshot, rates: &[(u64, u64)]) -> Result<Self, String> {
@@ -25,23 +30,26 @@ impl CoreHost {
             core,
             autowork,
             tool_wear,
+            schedule,
         } = snapshot;
         let core = CoreInterval::begin(core, rates)?;
-        Self::compile(core, autowork, tool_wear)
+        Self::compile(core, autowork, tool_wear, schedule)
     }
     pub fn resume(snapshot: CoreHostSnapshot) -> Result<Self, String> {
         let CoreHostSnapshot {
             core,
             autowork,
             tool_wear,
+            schedule,
         } = snapshot;
         let core = CoreInterval::resume(core)?;
-        Self::compile(core, autowork, tool_wear)
+        Self::compile(core, autowork, tool_wear, schedule)
     }
     fn compile(
         core: CoreInterval,
         autowork: Option<Autowork>,
         tool_wear: Option<ToolWear>,
+        schedule: Option<CoreSchedule>,
     ) -> Result<Self, String> {
         if let Some(owner) = &autowork {
             let people: Vec<_> = core
@@ -67,10 +75,14 @@ impl CoreHost {
             let people: HashSet<_> = core.people.par_iter().map(|person| person.id).collect();
             owner.validate(&core.physical, &goods, &people, core.physical.tick())?;
         }
+        if let Some(schedule) = &schedule {
+            schedule.validate(&core)?;
+        }
         Ok(Self {
             core,
             autowork,
             tool_wear,
+            schedule,
         })
     }
     pub fn snapshot(&self) -> CoreHostSnapshot {
@@ -78,12 +90,16 @@ impl CoreHost {
             core: self.core.snapshot(),
             autowork: self.autowork.clone(),
             tool_wear: self.tool_wear.clone(),
+            schedule: self.schedule.clone(),
         }
     }
     pub fn core(&self) -> &CoreInterval {
         &self.core
     }
     pub fn progress(&mut self, millis: u64) -> Result<u64, String> {
+        if self.schedule.is_some() {
+            return Err("use scheduled advancement while a schedule is active".into());
+        }
         self.core.progress(millis)
     }
     pub fn next_deadline(&self, hunger: Option<u32>) -> Result<CoreDeadline, String> {
@@ -224,6 +240,7 @@ impl CoreHost {
         if let Some(tools) = tools {
             self.tool_wear = Some(tools);
         }
+        self.schedule = None;
         Ok(events)
     }
 }
