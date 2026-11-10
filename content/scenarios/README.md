@@ -89,3 +89,5 @@ policies = [{ person = 2, blueprint = 1, target_sites = 1, willing = true }]
 `economy-core-aspirations.toml` adds a named personal aspiration and an inheritable inclination to learn from witnessed work.
 
 `economy-core-shared-work.toml` demonstrates individually chosen assistance on a job with physically reserved workshop capacity.
+
+`economy-core-succession.toml` adds a personal takeover preference to the shared-work scenario.

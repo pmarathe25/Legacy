@@ -91,6 +91,17 @@ impl Runtime {
         newborns: &[(u64, u64)],
         deceased: &[u64],
     ) -> Result<(), String> {
+        self.stage_interval_people_with_suspension(draft, newborns, deceased, &[], 0)
+    }
+    /// Preserve eligible deceased workers' reserved work before interrupting other jobs.
+    pub fn stage_interval_people_with_suspension(
+        &mut self,
+        draft: &mut IntervalSettlementDraft,
+        newborns: &[(u64, u64)],
+        deceased: &[u64],
+        eligible_jobs: &[u64],
+        until: u64,
+    ) -> Result<(), String> {
         self.validate_interval_settlement(draft)?;
         let interval = self.work_interval.take().expect("validated interval");
         let result = (|| {
@@ -98,6 +109,7 @@ impl Runtime {
                 self.add_people_in(&mut draft.advance, newborns)?;
             }
             if !deceased.is_empty() {
+                self.suspend_workers_in(&mut draft.advance, deceased, eligible_jobs, until)?;
                 self.interrupt_workers_in(&mut draft.advance, deceased)?;
             }
             Ok(())

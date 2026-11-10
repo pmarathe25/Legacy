@@ -365,6 +365,119 @@ impl Runtime {
         self.epoch = epoch;
         Ok(())
     }
+    /// Preserve an unfinished job and its inputs for a personally chosen successor.
+    pub fn suspend_interval_work(&mut self, requests: &[crate::Suspension]) -> Result<(), String> {
+        let interval = self
+            .work_interval
+            .as_ref()
+            .ok_or("no physical work interval")?;
+        if interval.tick != self.tick()
+            || interval.custody_revision != self.store.revision()
+            || interval.elapsed_millis >= self.tick_millis
+        {
+            return Err("invalid interval for work suspension".into());
+        }
+        let mut ordered = requests.to_vec();
+        ordered.par_sort_unstable_by_key(|row| row.job);
+        if ordered
+            .par_windows(2)
+            .any(|rows| rows[0].job == rows[1].job)
+            || ordered.par_iter().any(|request| {
+                request.until <= self.tick().saturating_add(1)
+                    || self
+                        .work
+                        .binary_search_by_key(&request.job, |row| row.job.id)
+                        .ok()
+                        .is_none_or(|i| {
+                            let work = &self.work[i];
+                            work.phase != Phase::Working
+                                || work.job.worker != request.worker
+                                || work.job.remaining == 0
+                        })
+            })
+        {
+            return Err("invalid interval work suspension".into());
+        }
+        if ordered.is_empty() {
+            return Ok(());
+        }
+        let epoch = self
+            .epoch
+            .checked_add(1)
+            .ok_or("physical work revision overflow")?;
+        let rates: Vec<_> = interval
+            .rates
+            .par_iter()
+            .copied()
+            .filter(|(job, _)| ordered.binary_search_by_key(job, |row| row.job).is_err())
+            .collect();
+        self.work.par_iter_mut().for_each(|work| {
+            if let Ok(i) = ordered.binary_search_by_key(&work.job.id, |row| row.job) {
+                work.phase = Phase::Suspended {
+                    until: ordered[i].until,
+                };
+            }
+        });
+        self.work_interval.as_mut().expect("checked interval").rates = rates;
+        self.epoch = epoch;
+        Ok(())
+    }
+    /// Admit independent successors without recreating or transferring reserved inputs.
+    pub fn adopt_interval_work(
+        &mut self,
+        requests: &[(crate::Adoption, u64)],
+    ) -> Result<(), String> {
+        let interval = self
+            .work_interval
+            .as_ref()
+            .ok_or("no physical work interval")?;
+        if interval.tick != self.tick()
+            || interval.custody_revision != self.store.revision()
+            || interval.elapsed_millis >= self.tick_millis
+        {
+            return Err("invalid interval for work adoption".into());
+        }
+        let mut ordered = requests.to_vec();
+        ordered.par_sort_unstable_by_key(|row| row.0.job);
+        let mut workers: Vec<_> = ordered.par_iter().map(|row| row.0.worker).collect();
+        workers.par_sort_unstable();
+        let mut busy: Vec<_> = self
+            .work
+            .par_iter()
+            .filter(|row| row.phase == Phase::Working)
+            .map(|row| row.job.worker)
+            .collect();
+        busy.par_sort_unstable();
+        if ordered.par_windows(2).any(|rows| rows[0].0.job == rows[1].0.job)
+            || workers.par_windows(2).any(|rows| rows[0] == rows[1])
+            || ordered.par_iter().any(|(request,rate)| *rate == 0 || request.worker == 0 || request.worker == request.previous_worker
+                || busy.binary_search(&request.worker).is_ok()
+                || self.work.binary_search_by_key(&request.job, |row| row.job.id).ok().is_none_or(|i| {
+                    let work = &self.work[i]; work.job.remaining == 0 || work.job.worker != request.previous_worker || !matches!(work.phase, Phase::Suspended { until } if until > self.tick())
+                })) { return Err("invalid interval work adoption".into()); }
+        if ordered.is_empty() {
+            return Ok(());
+        }
+        let epoch = self
+            .epoch
+            .checked_add(1)
+            .ok_or("physical work revision overflow")?;
+        let mut rates = interval.rates.clone();
+        rates.par_extend(ordered.par_iter().map(|(row, rate)| (row.job, *rate)));
+        rates.par_sort_unstable_by_key(|row| row.0);
+        if rates.par_windows(2).any(|rows| rows[0].0 == rows[1].0) {
+            return Err("duplicate interval work rate".into());
+        }
+        self.work.par_iter_mut().for_each(|work| {
+            if let Ok(i) = ordered.binary_search_by_key(&work.job.id, |row| row.0.job) {
+                work.job.worker = ordered[i].0.worker;
+                work.phase = Phase::Working;
+            }
+        });
+        self.work_interval.as_mut().expect("checked interval").rates = rates;
+        self.epoch = epoch;
+        Ok(())
+    }
     /// Reserve new physical work inside a partial interval after the host has
     /// admitted its actors. Rejected reservations leave no custody changes.
     pub fn start_interval_work(

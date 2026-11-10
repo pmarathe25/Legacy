@@ -1257,6 +1257,7 @@ impl CoreHost {
         let sites = self.stage_sites(&[], &ended, false);
         self.core.abandon_work(tick, offset, requests)?;
         self.finished_shared_jobs(&ended, &[]);
+        self.prune_successions();
         self.record_early_work_outcomes(&[], &ended);
         self.paused_work_rates
             .retain(|row| ended.binary_search(&row.0).is_err());
@@ -1364,6 +1365,7 @@ impl CoreHost {
         self.core.validate_early_work(&draft)?;
         let events = self.core.commit_early_work(draft)?;
         self.finished_shared_jobs(&ended, &events.finished);
+        self.prune_successions();
         self.remember_skill_completions(skill_completions);
         self.record_early_work_outcomes(&events.finished, &events.interrupted);
         if let Some(progress) = purpose_progress {
@@ -1825,6 +1827,43 @@ impl CoreHost {
         }
         let skills = self.stage_skills(&draft.events().finished, draft.events().tick);
         let family = self.stage_family(&mut draft)?;
+        if family.is_none() {
+            let mut deceased: Vec<_> = self
+                .core
+                .physical
+                .work()
+                .par_iter()
+                .filter(|work| work.phase == game_lot_runtime::Phase::Working)
+                .filter_map(|work| {
+                    let id = work.job.worker;
+                    let old = self
+                        .core
+                        .people
+                        .binary_search_by_key(&id, |person| person.id)
+                        .ok()?;
+                    let current = draft
+                        .people
+                        .people
+                        .binary_search_by_key(&id, |person| person.id)
+                        .ok()?;
+                    (self.core.people[old].health > 0 && draft.people.people[current].health == 0)
+                        .then_some(id)
+                })
+                .collect();
+            deceased.par_sort_unstable();
+            deceased.dedup();
+            if !deceased.is_empty() {
+                let (eligible, until) =
+                    self.succession_death_suspensions(&deceased, draft.events().tick)?;
+                self.core.physical.stage_interval_people_with_suspension(
+                    &mut draft.physical,
+                    &[],
+                    &deceased,
+                    &eligible,
+                    until,
+                )?;
+            }
+        }
         let personality = self.stage_personality_births(family.as_ref());
         let skills = self.stage_skill_births(skills, family.as_ref(), draft.events().tick)?;
         crate::purpose::enroll(
@@ -2030,6 +2069,7 @@ impl CoreHost {
             .events()
             .interrupted
             .par_iter()
+            .chain(draft.events().suspended.par_iter())
             .chain(draft.events().abandoned.par_iter())
             .copied()
             .collect();
@@ -2038,6 +2078,7 @@ impl CoreHost {
         let mut ended = draft.events().finished.clone();
         ended.par_extend(draft.events().interrupted.par_iter().copied());
         ended.par_extend(draft.events().abandoned.par_iter().copied());
+        ended.par_extend(self.core.physical.work().par_iter().filter(|work| matches!(work.phase, game_lot_runtime::Phase::Suspended { until } if until <= draft.events().tick)).map(|work| work.job.id));
         let sites = self.stage_sites(&draft.events().finished, &ended, true);
         let agreements = self.agreements.as_ref().and_then(|owner| {
             (!owner.events.is_empty()
@@ -2074,6 +2115,7 @@ impl CoreHost {
         if let Some(owner) = shared_work {
             self.shared_work = Some(owner);
         }
+        self.prune_successions();
         if let Some(dreams) = dreams {
             self.dreams = Some(dreams);
         }

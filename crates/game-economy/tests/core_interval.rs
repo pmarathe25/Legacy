@@ -13180,6 +13180,7 @@ fn core_host_shared_work_benchmark() {
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(1);
+    let succession = std::env::var_os("LEGACY_SHARED_SUCCESSION").is_some();
     let concentrated = std::env::var_os("LEGACY_SHARED_CONTEST").is_some();
     assert!(count >= 4 && count.is_multiple_of(2));
     let jobs = if concentrated { 1 } else { count / 2 };
@@ -13286,17 +13287,33 @@ fn core_host_shared_work_benchmark() {
             }],
             preferences,
             events: vec![],
-            succession: None,
+            succession: succession.then(|| game_economy_work::succession::Succession {
+                retention: 3,
+                engagements: vec![],
+                preferences: (jobs + 1..=count)
+                    .map(|person| game_economy_work::succession::Preference {
+                        person,
+                        job: if concentrated { 1 } else { person - jobs },
+                        willing: true,
+                        fear_at_least: None,
+                        obligation_at_least: None,
+                        disregard_claims: false,
+                    })
+                    .collect(),
+            }),
         },
         sessions: vec![],
         records: vec![],
     });
     rayon::ThreadPoolBuilder::new().num_threads(workers).build().unwrap().install(|| {
         let mut host=CoreHost::begin(snapshot, &rates).unwrap();
-        let start=std::time::Instant::now(); let helpers=host.assist_work_autonomously(&[]).unwrap(); let elapsed=start.elapsed();
-        assert_eq!(helpers.len(), if concentrated {8} else {jobs as usize});
+        if succession { let suspensions: Vec<_> = (1..=jobs).map(|id|(id,id)).collect(); host.suspend_shared_work(&suspensions).unwrap(); }
+        let start=std::time::Instant::now();
+        let selected = if succession { host.take_over_work_autonomously(&[],1).unwrap().len() } else { host.assist_work_autonomously(&[]).unwrap().len() };
+        let elapsed=start.elapsed();
+        assert_eq!(selected, if concentrated {if succession {1} else {8}} else {jobs as usize});
         let mut hash=std::collections::hash_map::DefaultHasher::new(); serde_json::to_vec(&host.snapshot()).unwrap().hash(&mut hash);
-        println!("workers={workers} candidates={} helpers={} concentrated={concentrated} elapsed={:.6} fingerprint={:016x}",count-jobs,helpers.len(),elapsed.as_secs_f64(),hash.finish());
+        println!("workers={workers} candidates={} helpers={} concentrated={concentrated} succession={succession} elapsed={:.6} fingerprint={:016x}",count-jobs,selected,elapsed.as_secs_f64(),hash.finish());
     });
 }
 
@@ -13333,6 +13350,151 @@ fn helpers_respect_personal_pressure_and_reserved_site_capacity() {
                     vec![(1, 1)]
                 );
                 assert_eq!(CoreHost::resume(state.clone()).unwrap().snapshot(), state);
+                serde_json::to_value(state).unwrap()
+            })
+    };
+    assert_eq!(run(1), run(6));
+}
+
+#[test]
+fn suspended_work_keeps_its_reserved_inputs_and_an_individual_can_take_over() {
+    fn run(workers: usize, pressured: bool) -> serde_json::Value {
+        rayon::ThreadPoolBuilder::new().num_threads(workers).build().unwrap().install(|| {
+            let mut snapshot = shared_interval_fixture(false);
+            snapshot.core.physical.recipes[0].ticks = 2;
+            snapshot.core.physical.work[0].job.remaining = 2;
+            let owner = &mut snapshot.shared_work.as_mut().unwrap().owner;
+            owner.preferences.clear();
+            owner.succession = Some(serde_json::from_value(serde_json::json!({"retention":3,"preferences":[
+                {"person":2,"job":1,"willing":!pressured,"fear_at_least":if pressured {Some(1)} else {None}}]})).unwrap());
+            if pressured { snapshot.opinions.as_mut().unwrap().records[0].fear = 2; }
+            let mut host = CoreHost::begin(snapshot, &[(1,1)]).unwrap();
+            host.progress(250).unwrap();
+            let before = host.snapshot();
+            assert!(host.suspend_shared_work(&[(1,2)]).is_err());
+            assert_eq!(host.snapshot(), before);
+            let custody = host.snapshot().core.physical.custody;
+            host.suspend_shared_work(&[(1,1)]).unwrap();
+            let suspended = host.snapshot();
+            assert!(matches!(suspended.core.physical.work[0].phase, game_lot_runtime::Phase::Suspended {until:4}));
+            assert_eq!(suspended.core.physical.custody,custody);
+            assert_eq!(suspended.sites.as_ref().unwrap().facilities.bindings.len(),1);
+            let saved = serde_json::to_string(&suspended).unwrap();
+            let mut restored = CoreHost::resume(serde_json::from_str(&saved).unwrap()).unwrap();
+            let expected = vec![game_lot_runtime::Adoption {job:1,previous_worker:1,worker:2}];
+            assert_eq!(host.take_over_work_autonomously(&[],1).unwrap(),expected);
+            assert_eq!(restored.take_over_work_autonomously(&[],1).unwrap(),expected);
+            assert_eq!(host.snapshot(),restored.snapshot());
+            host.progress(750).unwrap(); restored.progress(750).unwrap(); host.settle().unwrap(); restored.settle().unwrap();
+            let state=host.snapshot(); assert_eq!(state,restored.snapshot());
+            assert_eq!(state.core.physical.work[0].job.worker,2);
+            assert_eq!(state.core.physical.work[0].job.remaining,1);
+            let mut host=CoreHost::begin(state, &[(1,1)]).unwrap();
+            host.progress(1000).unwrap(); host.settle().unwrap();
+            let finished=host.snapshot();
+            assert_eq!(finished.core.physical.work[0].phase, game_lot_runtime::Phase::Waiting);
+            let mut host=CoreHost::begin(finished,&[]).unwrap(); host.progress(1000).unwrap(); host.settle().unwrap();
+            let done=host.snapshot();
+            assert!(done.shared_work.as_ref().unwrap().owner.succession.as_ref().unwrap().engagements.is_empty());
+            assert_eq!(done.core.physical.custody.containers.iter().find(|row| row.place == Place::Stock {region:1,good:2}).unwrap().used,1);
+            serde_json::to_value(done).unwrap()
+        })
+    }
+    for pressured in [false, true] {
+        assert_eq!(run(1, pressured), run(6, pressured));
+    }
+}
+
+#[test]
+fn deceased_leads_reserved_work_can_be_adopted_or_expire_and_return_inputs() {
+    fn run(workers: usize, adopt: bool) -> serde_json::Value {
+        rayon::ThreadPoolBuilder::new().num_threads(workers).build().unwrap().install(|| {
+            let mut snapshot = shared_interval_fixture(false);
+            snapshot.core.people[0].health = 1;
+            snapshot.core.physical.recipes[0].ticks = 3; snapshot.core.physical.work[0].job.remaining = 3;
+            let shared = &mut snapshot.shared_work.as_mut().unwrap().owner;
+            shared.preferences.clear();
+            shared.succession = Some(serde_json::from_value(serde_json::json!({"retention":1,"preferences":[{"person":2,"job":1,"willing":true}]})).unwrap());
+            let mut host=CoreHost::begin(snapshot,&[(1,1)]).unwrap();
+            host.progress(1000).unwrap(); let events=host.settle().unwrap();
+            assert_eq!(events.suspended,vec![1]);
+            let state=host.snapshot();
+            assert!(matches!(state.core.physical.work[0].phase, game_lot_runtime::Phase::Suspended {until:3}));
+            assert_eq!(state.sites.as_ref().unwrap().facilities.bindings.len(),1);
+            let mut host=CoreHost::begin(state,&[]).unwrap();
+            if adopt {
+                let rows=host.take_over_work_autonomously(&[],1).unwrap(); assert_eq!(rows.len(),1); assert_eq!(rows[0].worker,2);
+                assert_eq!(host.snapshot().core.physical.work[0].job.remaining,2);
+                let saved=serde_json::to_string(&host.snapshot()).unwrap();
+                assert_eq!(CoreHost::resume(serde_json::from_str(&saved).unwrap()).unwrap().snapshot(),host.snapshot());
+                return serde_json::to_value(host.snapshot()).unwrap();
+            }
+            host.progress(1000).unwrap(); host.settle().unwrap();
+            let mut host=CoreHost::begin(host.snapshot(),&[]).unwrap();
+            host.progress(1000).unwrap(); host.settle().unwrap();
+            let state=host.snapshot();
+            assert!(state.sites.as_ref().unwrap().facilities.bindings.is_empty());
+            assert_eq!(state.core.physical.custody.containers.iter().find(|row| row.place == Place::Stock {region:1,good:1}).unwrap().used,2);
+            serde_json::to_value(state).unwrap()
+        })
+    }
+    for adopt in [false, true] {
+        assert_eq!(run(1, adopt), run(6, adopt));
+    }
+}
+
+#[test]
+fn competing_successors_are_selected_once_and_reconsider_their_own_choice() {
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut snapshot = shared_interval_fixture(false);
+                let mut third = snapshot.core.people[1].clone();
+                third.id = 3;
+                snapshot.core.people.push(third);
+                snapshot.core.physical.recipes[0].ticks = 3;
+                snapshot.core.physical.work[0].job.remaining = 3;
+                let shared = &mut snapshot.shared_work.as_mut().unwrap().owner;
+                shared.preferences.clear();
+                shared.succession = Some(
+                    serde_json::from_value(serde_json::json!({"retention":2,"preferences":[
+            {"person":2,"job":1,"willing":true},{"person":3,"job":1,"willing":true}]}))
+                    .unwrap(),
+                );
+                let mut host = CoreHost::begin(snapshot, &[(1, 1)]).unwrap();
+                host.progress(250).unwrap();
+                host.suspend_shared_work(&[(1, 1)]).unwrap();
+                let selected = host.take_over_work_autonomously(&[], 1).unwrap();
+                assert_eq!(selected.len(), 1);
+                assert!(host.take_over_work_autonomously(&[], 1).unwrap().is_empty());
+                let mut state = host.snapshot();
+                let selected_person = selected[0].worker;
+                state
+                    .shared_work
+                    .as_mut()
+                    .unwrap()
+                    .owner
+                    .succession
+                    .as_mut()
+                    .unwrap()
+                    .preferences
+                    .iter_mut()
+                    .find(|p| p.person == selected_person)
+                    .unwrap()
+                    .willing = false;
+                let mut host = CoreHost::resume(state).unwrap();
+                host.enable_schedule(500, 1).unwrap();
+                let result = host.advance_scheduled(0, &[]).unwrap();
+                assert_eq!(result.failure, None);
+                let state = host.snapshot();
+                assert_ne!(state.core.physical.work[0].job.worker, selected_person);
+                assert_eq!(
+                    state.core.physical.work[0].phase,
+                    game_lot_runtime::Phase::Working
+                );
                 serde_json::to_value(state).unwrap()
             })
     };

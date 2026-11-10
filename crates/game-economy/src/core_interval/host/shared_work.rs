@@ -43,8 +43,8 @@ impl CoreSharedWork {
         let recipes: HashSet<_> = core.physical.recipes().par_iter().map(|r| r.id).collect();
         self.owner
             .validate(&people, &recipes, core.physical.tick())?;
-        if self.owner.succession.is_some() {
-            return Err("shared work succession is not yet supported".into());
+        if let Some(succession) = &self.owner.succession {
+            succession.validate_links(core.physical.work())?;
         }
         let interval = core
             .physical
@@ -467,5 +467,269 @@ impl CoreHost {
                 }
             });
         }
+    }
+}
+
+impl CoreHost {
+    /// A lead may leave unfinished reserved work available for someone else.
+    pub fn suspend_shared_work(&mut self, requests: &[(u64, u64)]) -> Result<(), String> {
+        let succession = self
+            .shared_work
+            .as_ref()
+            .and_then(|owner| owner.owner.succession.as_ref())
+            .ok_or("work succession is disabled")?;
+        if requests.is_empty() {
+            return Ok(());
+        }
+        let tick = self.core.physical.tick();
+        let offset = self.core.elapsed_millis().ok_or("no physical interval")?;
+        if offset >= self.core.physical.tick_millis()
+            || self.core.next_deadline(None)?.after_millis == 0
+        {
+            return Err("publish pending interval events before suspending work".into());
+        }
+        let until = tick
+            .checked_add(succession.retention)
+            .and_then(|tick| tick.checked_add(1))
+            .ok_or("work retention overflow")?;
+        let facilities = &self
+            .sites
+            .as_ref()
+            .ok_or("shared work requires work sites")?
+            .facilities;
+        if requests.par_iter().any(|(job, _)| {
+            facilities
+                .bindings
+                .binary_search_by_key(job, |binding| binding.job)
+                .is_err()
+        }) {
+            return Err("work suspension requires a reserved site".into());
+        }
+        let transitions: Vec<_> = requests
+            .par_iter()
+            .map(|&(job, worker)| game_lot_runtime::Suspension { job, worker, until })
+            .collect();
+        let outcomes: Vec<_> = requests.par_iter().map(|&(job, _)| (job, false)).collect();
+        let resolved = self.stage_request_resolution(&outcomes, tick, &self.core.people, false);
+        let mut ended: Vec<_> = requests.par_iter().map(|row| row.0).collect();
+        ended.par_sort_unstable();
+        self.core.physical.suspend_interval_work(&transitions)?;
+        self.finished_shared_jobs(&ended, &[]);
+        self.paused_work_rates
+            .retain(|row| ended.binary_search(&row.0).is_err());
+        self.record_early_work_outcomes(&[], &ended);
+        self.publish_request_resolution(resolved);
+        self.prune_successions();
+        self.work_checked_revision = None;
+        Ok(())
+    }
+    /// Select successors by their own preferences and actual access to the reserved job.
+    pub fn take_over_work_autonomously(
+        &mut self,
+        blocked: &[u64],
+        rate: u64,
+    ) -> Result<Vec<game_lot_runtime::Adoption>, String> {
+        if rate == 0 || blocked.par_windows(2).any(|pair| pair[0] >= pair[1]) {
+            return Err("invalid work succession batch".into());
+        }
+        let Some(owner) = self
+            .shared_work
+            .as_ref()
+            .and_then(|owner| owner.owner.succession.as_ref())
+        else {
+            return Ok(Vec::new());
+        };
+        if owner.preferences.is_empty()
+            || !self
+                .core
+                .physical
+                .work()
+                .par_iter()
+                .any(|work| matches!(work.phase, game_lot_runtime::Phase::Suspended { .. }))
+        {
+            return Ok(Vec::new());
+        }
+        let tick = self.core.physical.tick();
+        let offset = self.core.elapsed_millis().ok_or("no physical interval")?;
+        if offset >= self.core.physical.tick_millis()
+            || self.core.next_deadline(None)?.after_millis == 0
+        {
+            return Err("publish pending interval events before succession".into());
+        }
+        let sites = self
+            .sites
+            .as_ref()
+            .ok_or("shared work requires work sites")?;
+        let mut busy = self
+            .blocked_with_rest(blocked)
+            .unwrap_or_else(|| blocked.to_vec());
+        busy.par_extend(
+            self.core
+                .physical
+                .work()
+                .par_iter()
+                .filter(|work| work.phase == game_lot_runtime::Phase::Working)
+                .map(|work| work.job.worker),
+        );
+        busy.par_sort_unstable();
+        busy.dedup();
+        let resting = self
+            .fatigue
+            .as_ref()
+            .map_or_else(Vec::new, |owner| owner.fatigue.resting());
+        let unavailable = sites
+            .maintenance
+            .as_ref()
+            .map_or_else(Vec::new, |owner| owner.broken(&sites.facilities));
+        let claims = self.claims.as_ref().map(|owner| owner.index());
+        let classes = claims
+            .as_ref()
+            .map_or_else(Vec::new, |index| index.site_classes());
+        let view = self.core.physical.view(tick)?;
+        let adoptions = game_economy_work::succession::Context {
+            owner,
+            people: &self.core.people,
+            work: self.core.physical.work(),
+            busy: &busy,
+            resting: &resting,
+            manual: None,
+            sites: &sites.facilities,
+            unavailable_sites: &unavailable,
+            site_classes: &classes,
+            claims: claims.as_ref(),
+            injuries: None,
+            family: self.family.as_ref(),
+            tools: &self.tool_requirements,
+            tool_wear: self.tool_wear.as_ref(),
+            physical: &self.core.physical,
+            view: &view,
+            opinions: self.opinions.as_ref(),
+            max_hunger: self.core.rules.max_work_hunger,
+            seed: self.core.seed,
+            tick,
+        }
+        .prepare();
+        if adoptions.is_empty() {
+            return Ok(adoptions);
+        }
+        let requests: Vec<_> = adoptions
+            .par_iter()
+            .map(|adoption| -> Result<_, String> {
+                let job = self
+                    .core
+                    .physical
+                    .work()
+                    .binary_search_by_key(&adoption.job, |work| work.job.id)
+                    .map_err(|_| "missing suspended job")?;
+                let recipe = self.core.physical.work()[job].job.recipe;
+                let multiplier = self
+                    .skill_rates
+                    .as_ref()
+                    .map_or(1, |index| index.rate(adoption.worker, recipe));
+                Ok((
+                    *adoption,
+                    rate.checked_mul(multiplier)
+                        .ok_or("skill work rate overflow")?,
+                ))
+            })
+            .collect::<Result<_, _>>()?;
+        self.core.physical.adopt_interval_work(&requests)?;
+        let succession = self
+            .shared_work
+            .as_mut()
+            .expect("checked shared work")
+            .owner
+            .succession
+            .as_mut()
+            .expect("checked succession");
+        succession
+            .engagements
+            .par_extend(adoptions.par_iter().map(|row| {
+                game_economy_work::succession::Engagement {
+                    job: row.job,
+                    person: row.worker,
+                    former_worker: row.previous_worker,
+                }
+            }));
+        succession
+            .engagements
+            .par_sort_unstable_by_key(|row| row.job);
+        self.work_checked_revision = None;
+        Ok(adoptions)
+    }
+    pub(super) fn prune_successions(&mut self) {
+        if let Some(succession) = self
+            .shared_work
+            .as_mut()
+            .and_then(|owner| owner.owner.succession.as_mut())
+        {
+            let work = self.core.physical.work();
+            succession.engagements = succession
+                .engagements
+                .par_iter()
+                .filter(|row| {
+                    work.binary_search_by_key(&row.job, |work| work.job.id)
+                        .ok()
+                        .is_some_and(|i| {
+                            work[i].phase == game_lot_runtime::Phase::Working
+                                && work[i].job.worker == row.person
+                        })
+                })
+                .cloned()
+                .collect();
+        }
+    }
+}
+
+impl CoreHost {
+    pub(super) fn succession_death_suspensions(
+        &self,
+        deceased: &[u64],
+        tick: u64,
+    ) -> Result<(Vec<u64>, u64), String> {
+        if deceased.is_empty() {
+            return Ok((Vec::new(), 0));
+        }
+        let Some((owner, sites)) = self
+            .shared_work
+            .as_ref()
+            .and_then(|owner| owner.owner.succession.as_ref())
+            .zip(self.sites.as_ref())
+        else {
+            return Ok((Vec::new(), 0));
+        };
+        let broken = sites
+            .maintenance
+            .as_ref()
+            .map_or_else(Vec::new, |owner| owner.broken(&sites.facilities));
+        let eligible: Vec<_> = sites
+            .facilities
+            .bindings
+            .par_iter()
+            .filter(|binding| {
+                broken.binary_search(&binding.site).is_err()
+                    && self
+                        .core
+                        .physical
+                        .work()
+                        .binary_search_by_key(&binding.job, |work| work.job.id)
+                        .ok()
+                        .is_some_and(|i| {
+                            let work = &self.core.physical.work()[i];
+                            work.phase == game_lot_runtime::Phase::Working
+                                && work.job.remaining > 0
+                                && deceased.binary_search(&work.job.worker).is_ok()
+                        })
+            })
+            .map(|binding| binding.job)
+            .collect();
+        if eligible.is_empty() {
+            return Ok((eligible, 0));
+        }
+        let until = tick
+            .checked_add(owner.retention)
+            .and_then(|tick| tick.checked_add(1))
+            .ok_or("work retention overflow")?;
+        Ok((eligible, until))
     }
 }

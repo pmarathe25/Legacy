@@ -100,6 +100,7 @@ pub enum CoreRunEvent {
     Requests(Vec<game_autowork::requests::Event>),
     Starts(Vec<(u64, bool)>),
     Assists(Vec<u64>),
+    Adoptions(Vec<game_lot_runtime::Adoption>),
     Departures(Vec<travel::DepartureOutcome>),
     FoodSearch(Vec<travel::DepartureOutcome>),
     Boundary(Box<Events>),
@@ -537,11 +538,47 @@ impl CoreHost {
                         self.schedule.as_mut().expect("active schedule").phase =
                             DecisionPhase::Work { meal_people };
                     }
-                    DecisionPhase::Work { meal_people } => {
+                    DecisionPhase::Work { mut meal_people } => {
+                        let stopping = self
+                            .shared_work
+                            .as_ref()
+                            .and_then(|shared| shared.owner.succession.as_ref())
+                            .map_or_else(Vec::new, |owner| {
+                                let continuing = owner.continuing(self.opinions.as_ref());
+                                owner
+                                    .engagements
+                                    .par_iter()
+                                    .filter(|engagement| {
+                                        continuing.binary_search(&engagement.person).is_err()
+                                            && self
+                                                .core
+                                                .physical
+                                                .work()
+                                                .binary_search_by_key(&engagement.job, |work| {
+                                                    work.job.id
+                                                })
+                                                .ok()
+                                                .is_some_and(|i| {
+                                                    self.core.physical.work()[i].job.remaining > 0
+                                                })
+                                    })
+                                    .map(|engagement| (engagement.job, engagement.person))
+                                    .collect::<Vec<_>>()
+                            });
+                        if !stopping.is_empty() {
+                            attempt!('run, self.suspend_shared_work(&stopping));
+                        }
                         let mut busy = blocked.to_vec();
                         busy.extend(meal_people.iter().copied());
                         busy.par_sort_unstable();
                         busy.dedup();
+                        let adoptions = attempt!('run, self.take_over_work_autonomously(&busy, schedule.work_rate));
+                        if !adoptions.is_empty() {
+                            meal_people.par_extend(adoptions.par_iter().map(|row| row.worker));
+                            meal_people.par_sort_unstable();
+                            meal_people.dedup();
+                            run.events.push(CoreRunEvent::Adoptions(adoptions));
+                        }
                         let starts =
                             attempt!('run, self.start_autonomous_work(&busy, schedule.work_rate));
                         if !starts.is_empty() {

@@ -96,9 +96,15 @@ impl CoreHost {
             .map(|person| person.id)
             .collect();
         if !newborns.is_empty() || !deceased.is_empty() {
-            self.core
-                .physical
-                .stage_interval_people(&mut draft.physical, &newborns, &deceased)?;
+            let (eligible, until) =
+                self.succession_death_suspensions(&deceased, draft.events().tick)?;
+            self.core.physical.stage_interval_people_with_suspension(
+                &mut draft.physical,
+                &newborns,
+                &deceased,
+                &eligible,
+                until,
+            )?;
         }
         let births = if self.health.as_ref().is_some_and(|health| {
             !health.owner.cases.is_empty()

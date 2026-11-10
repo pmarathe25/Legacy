@@ -1020,3 +1020,27 @@ fn authored_shared_work_resolves_recipe_and_produces_real_output() {
     }
     assert_eq!(run(1), run(6));
 }
+
+#[test]
+fn authored_succession_keeps_real_site_and_inputs_until_personal_takeover() {
+    fn run(workers: usize) -> serde_json::Value {
+        rayon::ThreadPoolBuilder::new().num_threads(workers).build().unwrap().install(|| {
+            let root = root();
+            let mut host = game_economy_cli::core_scenario(&root.join("content/scenarios/economy-core-succession.toml"), &root.join("content")).unwrap();
+            let first=host.advance_scheduled(900_000,&[]).unwrap(); assert_eq!(first.failure,None);
+            assert!(first.events.iter().any(|event| matches!(event, game_economy::core_interval::CoreRunEvent::Assists(people) if people == &[1])));
+            host.suspend_shared_work(&[(1,2)]).unwrap();
+            let state=host.snapshot();
+            assert!(matches!(state.core.physical.work[0].phase, game_lot_runtime::Phase::Suspended {..}));
+            assert_eq!(state.sites.as_ref().unwrap().facilities.bindings.len(),1);
+            let saved=serde_json::to_string(&state).unwrap();
+            let mut restored=game_economy::core_interval::CoreHost::resume(serde_json::from_str(&saved).unwrap()).unwrap();
+            let chosen=host.take_over_work_autonomously(&[],1).unwrap();
+            assert_eq!(chosen.len(),1); assert_eq!(chosen[0].worker,1);
+            assert_eq!(restored.take_over_work_autonomously(&[],1).unwrap(),chosen);
+            assert_eq!(host.snapshot(),restored.snapshot());
+            serde_json::to_value(host.snapshot()).unwrap()
+        })
+    }
+    assert_eq!(run(1), run(6));
+}
