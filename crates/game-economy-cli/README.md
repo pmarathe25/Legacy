@@ -303,3 +303,5 @@ The interval host can load fresh authored scenarios through `game_economy_cli::c
 The interval scenario also contains renewable animal-product rules and a personal collection policy. Collection depends on the animal's handling response and an accepted physical transfer.
 
 Scenarios may author `[goals]` directly, with `[[goals.people]]` entries naming a person, a recipe by content key, priority, and target. Optional retry and planning settings control the individual goal owner. A failed eligible goal-work attempt is recorded and can delay retry; it does not compel anyone to work.
+
+The interval scenario loads a personal medical preference and a data-defined disease and remedy. A caregiver needs an actual accepted transfer of their medicine for treatment or contact to occur; their willingness and any social pressure remain personal choices.

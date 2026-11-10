@@ -25,6 +25,7 @@ fn run_scenario(workers: usize) -> serde_json::Value {
             assert_eq!(snapshot.core.people[0].health, 94);
             assert_eq!(snapshot.family.as_ref().unwrap().totals.births, 1);
             assert!(snapshot.animal_restraints.is_some());
+            assert_eq!(snapshot.medical.as_ref().unwrap().policies.len(), 1);
             assert_eq!(snapshot.goals.as_ref().unwrap().people.len(), 1);
             let purpose = &snapshot.purpose.as_ref().unwrap().owner;
             assert_eq!(purpose.people.len(), 3);
@@ -328,4 +329,140 @@ fn forced_animal_collection_requires_a_real_hold_and_preserves_subjective_reacti
             })
     }
     assert_eq!(run(1), run(6));
+}
+
+#[test]
+fn medical_help_consumes_real_medicine_and_can_transmit_infection() {
+    fn run(workers: usize, willing: bool) -> serde_json::Value {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let root = root();
+                let initial = game_economy_cli::core_scenario(
+                    &root.join("content/scenarios/economy-core.toml"),
+                    &root.join("content"),
+                )
+                .unwrap();
+                let mut snapshot = initial.snapshot();
+                snapshot.dependent_care = None;
+                let medicine = snapshot
+                    .core
+                    .physical
+                    .goods
+                    .iter()
+                    .find(|good| good.name == "grain")
+                    .unwrap()
+                    .id;
+                let container = snapshot
+                    .core
+                    .physical
+                    .custody
+                    .containers
+                    .iter_mut()
+                    .find(|container| container.place == game_lots::Place::Person(2))
+                    .unwrap();
+                *container = game_lots::Container::new(
+                    game_lots::Place::Person(2),
+                    100,
+                    vec![game_lots::Lot {
+                        item: None,
+                        good: medicine,
+                        quantity: 1,
+                        expires_at: None,
+                    }],
+                )
+                .unwrap();
+                snapshot.health = Some(game_economy::core_interval::CoreHealth {
+                    owner: game_disease::Disease {
+                        strains: vec![game_disease::Strain {
+                            id: 1,
+                            name: "illness".into(),
+                            incubation: 0,
+                            infectious_ticks: 5,
+                            immunity_ticks: 0,
+                            damage_per_tick: 0,
+                            transmission_per_million: 1_000_000,
+                            combat_transmission_per_million: 0,
+                            birth_transmission_per_million: 0,
+                        }],
+                        treatments: vec![game_disease::Treatment {
+                            strain: 1,
+                            medicine,
+                        }],
+                        cases: vec![game_disease::Case {
+                            person: 1,
+                            strain: 1,
+                            infected_at: 0,
+                            source: None,
+                        }],
+                        events: vec![],
+                    },
+                    treatment: vec![],
+                    last_tick: None,
+                });
+                snapshot.opinions = Some(serde_json::from_value(serde_json::json!({
+                    "rules": {"minimum": -10, "maximum": 10, "initial": 0, "fulfilled_gain": 1, "default_loss": 1,
+                        "gratitude_gain": 5, "affinity": {"limit": 10}},
+                    "sensitivities": [{"person": 1, "gratitude_gain": 0, "affinity_help": -2}],
+                    "records": []
+                })).unwrap());
+                snapshot.medical = Some(game_economy::Medical {
+                    policies: vec![game_economy::MedicalPolicy {
+                        person: 2,
+                        patient: 1,
+                        medicine,
+                        quantity: 1,
+                        willing,
+                        patient_health_at_most: None,
+                        pressured_by: None,
+                        pressure_threshold: None,
+                    }],
+                    acquaintances: vec![],
+                });
+                let saved = serde_json::to_string(&snapshot).unwrap();
+                let mut host = game_economy::core_interval::CoreHost::resume(snapshot).unwrap();
+                let mut resumed = game_economy::core_interval::CoreHost::resume(
+                    serde_json::from_str(&saved).unwrap(),
+                )
+                .unwrap();
+                assert_eq!(
+                    host.advance_continuous(3_600_000, &[]).unwrap().failure,
+                    None
+                );
+                assert_eq!(
+                    resumed.advance_continuous(3_600_000, &[]).unwrap().failure,
+                    None
+                );
+                let result = host.snapshot();
+                assert_eq!(result, resumed.snapshot());
+                assert!(game_economy::core_interval::CoreHost::resume(result.clone()).is_ok());
+                let relationship = result.opinions.as_ref().unwrap().records.iter()
+                    .find(|record| record.observer == 1 && record.target == 2);
+                if willing {
+                    let relationship = relationship.unwrap();
+                    assert_eq!(relationship.affinity, -2);
+                    assert_eq!(relationship.obligation, 0);
+                } else {
+                    assert!(relationship.is_none());
+                }
+                let cases = &result.health.as_ref().unwrap().owner.cases;
+                assert_eq!(cases.iter().any(|case| case.person == 1), !willing);
+                assert_eq!(cases.iter().any(|case| case.person == 2), willing);
+                assert!(!cases.iter().any(|case| case.person == 3));
+                let container = result
+                    .core
+                    .physical
+                    .custody
+                    .containers
+                    .iter()
+                    .find(|container| container.place == game_lots::Place::Person(2))
+                    .unwrap();
+                assert_eq!(container.used, u64::from(!willing));
+                serde_json::to_value(result).unwrap()
+            })
+    }
+    assert_eq!(run(1, true), run(6, true));
+    assert_eq!(run(1, false), run(6, false));
 }

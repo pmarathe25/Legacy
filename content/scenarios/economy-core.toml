@@ -166,3 +166,26 @@ person = 2
 recipe = "fixture-tool"
 priority = 1
 target = 1
+
+[[dynamics.disease.strains]]
+id = 1
+name = "fever"
+incubation = 0
+infectious_ticks = 5
+immunity_ticks = 0
+damage_per_tick = 0
+transmission_per_million = 1000000
+
+[[remedies]]
+strain = 1
+medicine = "grain"
+quantity = 1
+people = []
+
+[medical]
+[[medical.policies]]
+person = 2
+patient = 1
+medicine = "grain"
+quantity = 1
+willing = false

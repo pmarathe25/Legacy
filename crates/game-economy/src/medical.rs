@@ -435,7 +435,51 @@ impl Context<'_> {
         })
     }
 }
+/// Accepted physical treatments shared by disease, contact, and subjective experience.
+pub struct Resolved {
+    accepted: Vec<Choice>,
+    episodes: Vec<(u64, u32, u64)>,
+}
+impl Resolved {
+    pub fn is_empty(&self) -> bool {
+        self.accepted.is_empty()
+    }
+    pub fn contacts(&self) -> Vec<(u64, u64)> {
+        self.accepted
+            .par_iter()
+            .filter(|choice| choice.actor != choice.patient)
+            .map(|choice| (choice.actor, choice.patient))
+            .collect()
+    }
+    pub fn help(&self) -> Vec<(u64, u64)> {
+        self.accepted
+            .par_iter()
+            .filter(|choice| choice.actor != choice.patient)
+            .map(|choice| (choice.patient, choice.actor))
+            .collect()
+    }
+    pub fn apply(&self, disease: Option<&mut Disease>, tick: u64) {
+        game_economy_dynamics::treatment::apply_episodes(disease, &self.episodes, tick);
+    }
+}
+
 impl Plan {
+    pub fn resolve(&self, events: &Events) -> Resolved {
+        let accepted = self.accepted(events);
+        let mut patients: Vec<_> = accepted
+            .par_iter()
+            .map(|choice| (choice.patient, choice.medicine))
+            .collect();
+        patients.par_sort_unstable();
+        let mut episodes: Vec<_> = self
+            .targets
+            .par_iter()
+            .filter(|row| patients.binary_search(&(row.0, row.1)).is_ok())
+            .map(|row| (row.0, row.2, row.3))
+            .collect();
+        episodes.par_sort_unstable();
+        Resolved { accepted, episodes }
+    }
     pub fn accepted_treatments(&self, events: &Events) -> Vec<(u64, u32, u64)> {
         self.accepted(events)
             .into_par_iter()
@@ -448,6 +492,23 @@ impl Plan {
     fn accepted(&self, events: &Events) -> Vec<Choice> {
         if self.records.is_empty() {
             return Vec::new();
+        }
+        if let Some(start) = events
+            .physical_actions
+            .par_iter()
+            .position_any(|event| event.id == self.records[0].0)
+            && let Some(end) = start.checked_add(self.records.len())
+            && let Some(receipts) = events.physical_actions.get(start..end)
+            && receipts
+                .par_iter()
+                .zip(self.records.par_iter())
+                .all(|(receipt, record)| receipt.id == record.0)
+        {
+            return receipts
+                .par_iter()
+                .zip(self.records.par_iter())
+                .filter_map(|(receipt, record)| receipt.accepted.then_some(record.1))
+                .collect();
         }
         let mut accepted: Vec<_> = events
             .physical_actions
@@ -503,5 +564,110 @@ impl Plan {
             .filter(|choice| choice.actor != choice.patient)
             .map(|choice| (choice.patient, choice.actor))
             .collect()
+    }
+}
+
+#[cfg(test)]
+mod receipt_tests {
+    use super::*;
+    use game_lots::TransactionOutcome;
+
+    fn events(physical_actions: Vec<TransactionOutcome>) -> Events {
+        Events {
+            tick: 1,
+            started: vec![],
+            start_denied: vec![],
+            abandoned: vec![],
+            suspended: vec![],
+            adopted: vec![],
+            finished: vec![],
+            delivered: vec![],
+            output_lost: vec![],
+            interrupted: vec![],
+            returned: vec![],
+            empty_returns: vec![],
+            spoiled: vec![],
+            physical_actions,
+            physical_movements: Default::default(),
+        }
+    }
+
+    #[test]
+    fn resolved_receipts_match_ordered_shuffled_and_missing_actions() {
+        let plan = Plan {
+            actors: vec![1, 2, 3, 4],
+            actions: vec![],
+            records: vec![
+                (
+                    10,
+                    Choice {
+                        actor: 1,
+                        patient: 2,
+                        medicine: 1,
+                        quantity: 1,
+                    },
+                ),
+                (
+                    11,
+                    Choice {
+                        actor: 3,
+                        patient: 4,
+                        medicine: 1,
+                        quantity: 1,
+                    },
+                ),
+            ],
+            targets: vec![(2, 1, 1, 0), (4, 1, 1, 0)],
+        };
+        let receipt = |id, accepted| TransactionOutcome { id, accepted };
+        let disease = Disease {
+            strains: vec![game_disease::Strain {
+                id: 1,
+                name: "fever".into(),
+                incubation: 0,
+                infectious_ticks: 4,
+                immunity_ticks: 0,
+                damage_per_tick: 0,
+                transmission_per_million: 0,
+                combat_transmission_per_million: 0,
+                birth_transmission_per_million: 0,
+            }],
+            treatments: vec![game_disease::Treatment {
+                strain: 1,
+                medicine: 1,
+            }],
+            cases: vec![
+                game_disease::Case {
+                    person: 2,
+                    strain: 1,
+                    infected_at: 0,
+                    source: None,
+                },
+                game_disease::Case {
+                    person: 4,
+                    strain: 1,
+                    infected_at: 0,
+                    source: None,
+                },
+            ],
+            events: vec![],
+        };
+        for receipts in [
+            vec![receipt(10, true), receipt(11, false)],
+            vec![receipt(11, false), receipt(10, true)],
+            vec![receipt(10, true)],
+        ] {
+            let events = events(receipts);
+            let resolved = plan.resolve(&events);
+            assert_eq!(resolved.contacts(), vec![(1, 2)]);
+            assert_eq!(resolved.help(), vec![(2, 1)]);
+            let mut expected = disease.clone();
+            let mut actual = disease.clone();
+            plan.apply(Some(&mut expected), &events);
+            resolved.apply(Some(&mut actual), events.tick);
+            assert_eq!(actual, expected);
+            assert_eq!(actual.cases.len(), 1);
+            assert_eq!(actual.cases[0].person, 4);
+        }
     }
 }
