@@ -84,6 +84,28 @@ impl Runtime {
         result
     }
 
+    /// Stage newborn custody and interrupt deceased workers in this boundary.
+    pub fn stage_interval_people(
+        &mut self,
+        draft: &mut IntervalSettlementDraft,
+        newborns: &[(u64, u64)],
+        deceased: &[u64],
+    ) -> Result<(), String> {
+        self.validate_interval_settlement(draft)?;
+        let interval = self.work_interval.take().expect("validated interval");
+        let result = (|| {
+            if !newborns.is_empty() {
+                self.add_people_in(&mut draft.advance, newborns)?;
+            }
+            if !deceased.is_empty() {
+                self.interrupt_workers_in(&mut draft.advance, deceased)?;
+            }
+            Ok(())
+        })();
+        self.work_interval = Some(interval);
+        result
+    }
+
     /// Commit after all other owners have staged and validated their changes.
     pub fn commit_interval_settlement(
         &mut self,

@@ -31,6 +31,9 @@ impl CoreHost {
         let rest = self.blocked_with_rest(occupied);
         let occupied = rest.as_deref().unwrap_or(occupied);
         let mut busy = occupied.to_vec();
+        if let Some(family) = &self.family {
+            busy.par_extend(game_economy_work::underage(family));
+        }
         busy.par_extend(farm.actors.par_iter().copied());
         busy.par_extend(farm.requesters.par_iter().copied());
         busy.par_extend(
@@ -159,6 +162,9 @@ impl CoreHost {
         let rest = self.blocked_with_rest(occupied);
         let occupied = rest.as_deref().unwrap_or(occupied);
         let mut busy = occupied.to_vec();
+        if let Some(family) = &self.family {
+            busy.par_extend(game_economy_work::underage(family));
+        }
         busy.par_extend(
             self.core
                 .physical

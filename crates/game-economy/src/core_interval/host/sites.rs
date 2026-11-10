@@ -132,6 +132,15 @@ impl CoreHost {
         &mut self,
         starts: &[(game_production_model::Start, u64)],
     ) -> Result<Vec<(u64, bool)>, String> {
+        if let Some(family) = &self.family {
+            let underage = game_economy_work::underage(family);
+            if starts
+                .par_iter()
+                .any(|(start, _)| underage.binary_search(&start.worker).is_ok())
+            {
+                return Err("an underage person cannot start work".into());
+            }
+        }
         let tick = self.core.physical.tick();
         let offset = self.core.elapsed_millis().ok_or("no physical interval")?;
         if self.sites.is_none() && self.tool_requirements.is_empty() {

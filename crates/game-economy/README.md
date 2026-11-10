@@ -20,6 +20,8 @@ Optional `CoreSocial` runs one social generation per physical tick, starting at 
 
 Optional `CoreHealth` advances data-defined diseases once per physical tick, even if personal decisions occur less often. Actual meetings can transmit infection when social and health are both enabled; existing cases can progress without social. Damage and new infections publish with the same staged generation, and a worker killed by disease stops progressing immediately. People can choose to consume medicine they carry; controlled people can choose treatment explicitly. Only matching infection episodes are treated, so an ineffective medicine can be consumed without curing another strain. This slice does not yet include exposure through other actions or the other world owners absent from the limited host.
 
+Optional family lifecycle advances personal ages, partnerships, pregnancies, births, and mortality at boundaries. Newborn people and empty personal custody are staged together; a child born during travel joins the mother’s actual journey. A death interrupts ongoing work in the same physical generation. The configured minimum work age gates production and farming. This slice does not yet integrate dependent care, inherited autonomy policies, or birth-related disease transmission in this host.
+
 Chosen living people can eat food they actually carry at a partial offset. Only accepted consumption reduces hunger immediately; health and nutrition effects are retained for the next boundary. Failed consumption and invalid batches do not grant effects, and a resumed interval preserves both the custody and pending effects.
 
 The host can also stage autonomous meal choices at an offset: hungry people with `seek_meals` select an unexpired portion from their own custody. Controlled people are excluded, and the host supplies people occupied by other activities. This does not yet schedule the rest of their decisions or food acquisition.
@@ -83,6 +85,8 @@ With `LEGACY_WORK_CLAIMS=1`, each worker chooses to disregard a claim to the sha
 The ignored `core_host_cultivation_benchmark` measures a boundary with 49,999 plantings competing for one regional seed stock. One run took 65.7, 42.9, 30.4, and 29.1 ms at one, two, four, and six workers, with matching fingerprints; setup and interval progress are excluded.
 
 With `LEGACY_IRRIGATION=1`, it instead measures 49,999 watering attempts competing for 25,000 water units while opening moisture gates field growth. One run took 72.2, 46.8, 35.2, and 32.4 ms at those worker counts, with matching fingerprints and setup excluded.
+
+With `LEGACY_FAMILY=1`, 50,000 people age through one boundary. An isolated optimized test-profile run took 7.2, 4.5, 2.9, and 3.0 ms at one, two, four, and six workers. With `LEGACY_FAMILY_BIRTHS=1`, 25,000 actual births and newborn inventories took 25.2, 16.4, 12.4, and 11.7 ms. A 100,000-birth run took 105.9, 64.5, 47.6, and 45.3 ms. Fingerprints matched across workers and setup is excluded. These samples remain sublinear.
 
 With `LEGACY_ENVIRONMENT=1`, the planting workload also applies regional exposure to 50,000 people with 25,000 shelter places. One run took 66.6, 44.0, 33.3, and 30.5 ms at the same worker counts, with matching fingerprints and setup excluded.
 

@@ -349,32 +349,53 @@ pub fn advance_validated_with_partition(
         }
     });
     let newborns: Vec<_> = next.births.par_iter().map(|birth| birth.id).collect();
-    for birth in &next.births {
-        let willingness = people
-            .binary_search_by_key(&birth.mother, |p| p.id)
-            .ok()
-            .is_some_and(|i| people[i].willing_to_work);
-        if birth.region.is_none() {
-            let travel = travel.as_mut().ok_or("traveling newborn has no journey")?;
-            let index = travel
-                .journeys
-                .binary_search_by_key(&birth.mother, |j| j.person)
-                .map_err(|_| "traveling mother has no journey")?;
-            let mut journey = travel.journeys[index].clone();
-            journey.person = birth.id;
-            travel.journeys.push(journey);
-        }
-        people.push(Person {
+    let traveling: Vec<_> = next
+        .births
+        .par_iter()
+        .filter(|birth| birth.region.is_none())
+        .collect();
+    let journeys = if traveling.is_empty() {
+        Vec::new()
+    } else {
+        let travel = travel.as_ref().ok_or("traveling newborn has no journey")?;
+        traveling
+            .par_iter()
+            .map(|birth| {
+                let index = travel
+                    .journeys
+                    .binary_search_by_key(&birth.mother, |journey| journey.person)
+                    .map_err(|_| "traveling mother has no journey")?;
+                let mut journey = travel.journeys[index].clone();
+                journey.person = birth.id;
+                Ok(journey)
+            })
+            .collect::<Result<Vec<_>, &str>>()?
+    };
+    let infants: Vec<_> = next
+        .births
+        .par_iter()
+        .map(|birth| Person {
             id: birth.id,
             region: birth.region,
             health: birth.health,
             hunger: 0,
             hunger_remainder: 0,
             immortal: None,
-            willing_to_work: willingness,
+            willing_to_work: people
+                .binary_search_by_key(&birth.mother, |person| person.id)
+                .ok()
+                .is_some_and(|index| people[index].willing_to_work),
             seek_meals: newborns_seek_meals,
             controlled: false,
-        });
+        })
+        .collect();
+    people.par_extend(infants);
+    if !journeys.is_empty() {
+        travel
+            .as_mut()
+            .expect("traveling newborns have journeys")
+            .journeys
+            .par_extend(journeys);
     }
     if people.par_windows(2).any(|rows| rows[0].id > rows[1].id) {
         people.par_sort_unstable_by_key(|p| p.id);

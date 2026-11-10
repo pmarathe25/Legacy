@@ -6,6 +6,7 @@ mod agriculture;
 mod animal_care;
 mod animal_handling;
 mod claims;
+mod family;
 mod fatigue;
 mod fauna;
 mod food_search;
@@ -72,6 +73,8 @@ pub struct CoreHostSnapshot {
     #[serde(default)]
     pub animal_handling: Option<crate::AnimalHandling>,
     #[serde(default)]
+    pub family: Option<game_economy_family::Families>,
+    #[serde(default)]
     pub opinions: Option<game_opinions::Opinions>,
     #[serde(default)]
     pub goals: Option<game_goals::Goals>,
@@ -106,6 +109,7 @@ pub struct CoreHost {
     animal_feelings: Option<crate::AnimalFeelings>,
     animal_care: Option<crate::AnimalCare>,
     animal_handling: Option<crate::AnimalHandling>,
+    family: Option<game_economy_family::Families>,
     work_checked_revision: Option<u64>,
     work_checked_blocked: Vec<u64>,
     opinions: Option<game_opinions::Opinions>,
@@ -135,6 +139,7 @@ struct CoreRuntimeOptions {
     animal_feelings: Option<crate::AnimalFeelings>,
     animal_care: Option<crate::AnimalCare>,
     animal_handling: Option<crate::AnimalHandling>,
+    family: Option<game_economy_family::Families>,
 }
 impl CoreHost {
     pub fn begin(snapshot: CoreHostSnapshot, rates: &[(u64, u64)]) -> Result<Self, String> {
@@ -160,6 +165,7 @@ impl CoreHost {
             animal_feelings,
             animal_care,
             animal_handling,
+            family,
             opinions,
             goals,
             agreements,
@@ -195,6 +201,7 @@ impl CoreHost {
                 animal_feelings,
                 animal_care,
                 animal_handling,
+                family,
             },
         )
     }
@@ -221,6 +228,7 @@ impl CoreHost {
             animal_feelings,
             animal_care,
             animal_handling,
+            family,
             opinions,
             goals,
             agreements,
@@ -256,6 +264,7 @@ impl CoreHost {
                 animal_feelings,
                 animal_care,
                 animal_handling,
+                family,
             },
         )
     }
@@ -289,6 +298,7 @@ impl CoreHost {
             mut animal_feelings,
             animal_care,
             mut animal_handling,
+            family,
         } = options;
         if let Some(legacy) = food_search.as_mut().and_then(|owner| owner.claims.take()) {
             if claims.is_some() {
@@ -533,6 +543,18 @@ impl CoreHost {
             let people: HashSet<_> = core.people.par_iter().map(|person| person.id).collect();
             owner.normalize_and_validate(&people, fauna.as_ref())?;
         }
+        if let Some(owner) = &family {
+            game_economy_family::validate(
+                owner,
+                &core.people,
+                core.physical.tick(),
+                core.rules.max_health,
+            )?;
+            game_economy_work::validate_age(
+                &game_economy_work::underage(owner),
+                core.physical.work(),
+            )?;
+        }
         if let Some(owner) = &mut animal_handling {
             let people: HashSet<_> = core.people.par_iter().map(|person| person.id).collect();
             owner.validate(&people, fauna.as_ref(), core.physical.tick())?;
@@ -612,6 +634,7 @@ impl CoreHost {
             animal_feelings,
             animal_care,
             animal_handling,
+            family,
             work_checked_revision: None,
             work_checked_blocked: Vec::new(),
             opinions,
@@ -644,6 +667,7 @@ impl CoreHost {
             animal_feelings: self.animal_feelings.clone(),
             animal_care: self.animal_care.clone(),
             animal_handling: self.animal_handling.clone(),
+            family: self.family.clone(),
             opinions: self.opinions.clone(),
             goals: self.goals.clone(),
             agreements: self.agreements.clone(),
@@ -926,6 +950,14 @@ impl CoreHost {
         }
         let occupied = self.blocked_with_rest(blocked);
         let blocked = occupied.as_deref().unwrap_or(blocked);
+        let underage = self.family.as_ref().map(game_economy_work::underage);
+        let unavailable = underage.filter(|rows| !rows.is_empty()).map(|mut rows| {
+            rows.par_extend(blocked.par_iter().copied());
+            rows.par_sort_unstable();
+            rows.dedup();
+            rows
+        });
+        let blocked = unavailable.as_deref().unwrap_or(blocked);
         if let Some(result) = self.start_claim_aware_work(blocked, rate)? {
             return Ok(result);
         }
@@ -1070,6 +1102,7 @@ impl CoreHost {
                 tick,
             );
         }
+        let family = self.stage_family(&mut draft)?;
         let irrigation = self
             .irrigation
             .as_ref()
@@ -1178,6 +1211,9 @@ impl CoreHost {
         }
         if let Some(owner) = gathering {
             self.gathering = Some(owner);
+        }
+        if let Some(owner) = family {
+            self.family = Some(owner);
         }
         self.publish_fauna(fauna);
         if let Some(plan) = handling {
