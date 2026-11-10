@@ -3,7 +3,10 @@ name = "game-market-auto"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+[features]
+profile = ["dep:game-diagnostics"]
 [dependencies]
+game-diagnostics = { path = "../game-diagnostics", optional = true }
 game-property = { path = "../game-property" }
 game-market = { path = "../game-market" }
 game-market-proposals = { path = "../game-market-proposals" }

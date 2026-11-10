@@ -4593,7 +4593,15 @@ impl Economy {
                 } => Some(Some(id)),
                 LocalLocation::Walking { .. } => None,
             };
-        let together = |a, b| self.local_people_together(a, b);
+        // `people` is projected in the same order as `self.people`. Its
+        // indexed lookup can use dense ID ranges without changing locations.
+        let together = |a, b| {
+            game_production_model::person_index(&people, a)
+                .zip(game_production_model::person_index(&people, b))
+                .is_some_and(|(a, b)| {
+                    local_walking::people_together(walking, &self.people[a], &self.people[b])
+                })
+        };
         #[cfg(feature = "profile")]
         let exchange_cargo_phase = game_diagnostics::span("economy.exchange.cargo");
         let exchange_cargo = self

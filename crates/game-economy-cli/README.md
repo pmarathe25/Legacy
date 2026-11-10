@@ -104,6 +104,8 @@ On the same machine, a separately sampled one-worker process reached about 118 M
 
 With generated reproduction restored to 80 percent and the same 24-boundary mixed workload, the population grew from 10,000 to 19,401, with 3,791 deliveries and 14,298 relationships. An instrumented run measured medians of 1,006, 759, 644 and 618 ms at one, two, four and six workers, with matching fingerprints. Instrumentation adds overhead, so these timings should be compared with other instrumented runs.
 
+For this mixed workload, the profile feature breaks market acceptance into setup, candidate evaluation, feasibility, selection and decision staging. A person-index fast path in local trade reduced six-worker candidate evaluation from 0.352 to 0.323 ms per boundary in one repeated comparison, with matching fingerprints. Whole-run timings varied, so this is not evidence of linear whole-world scaling.
+
 Set `LEGACY_TAKING_INQUIRIES=1` to stage a boundary of real takings, create personal requests only from noticed accounts, and let the selected individuals choose to seek relevant contacts during subsequent mixed campaign boundaries. The output distinguishes accepted, declined, and expired requests as well as witness answers. A pending request count alone does not measure active decision or testimony throughput. This option changes the initial state and fingerprint.
 
 With inquiries enabled, `LEGACY_INQUIRY_ASSESSMENTS=1` also gives each recipient an individual interpretation for matching, unassessed testimony. The output counts completed personal assessments; this option changes the initial state and fingerprint.

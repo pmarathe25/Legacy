@@ -70,6 +70,8 @@ fn prepare_acceptance(
     if market.policies.is_empty() || market.offers.is_empty() {
         return Ok(None);
     }
+    #[cfg(feature = "profile")]
+    let mut phase = game_diagnostics::span("market.accept.setup");
     let mut policies: Vec<_> = market.policies.par_iter().filter(|p| p.enabled).collect();
     policies.par_sort_unstable_by_key(|policy| policy.person);
     let mut influences: Vec<_> = policies
@@ -86,6 +88,11 @@ fn prepare_acceptance(
     let opinions = opinions
         .filter(|owner| !owner.records.is_empty())
         .map(|owner| owner.index());
+    #[cfg(feature = "profile")]
+    {
+        drop(phase);
+        phase = game_diagnostics::span("market.accept.candidates");
+    }
     let rows: Vec<Option<(Offer, Exchange)>> = market
         .offers
         .par_iter()
@@ -144,7 +151,17 @@ fn prepare_acceptance(
         .par_iter()
         .map(|(_, exchange)| exchange.clone())
         .collect();
+    #[cfg(feature = "profile")]
+    {
+        drop(phase);
+        phase = game_diagnostics::span("market.accept.feasibility");
+    }
     let feasible = cargo.assess_exchanges(people, goods, busy, &exchanges)?;
+    #[cfg(feature = "profile")]
+    {
+        drop(phase);
+        phase = game_diagnostics::span("market.accept.selection");
+    }
     // Each participant's first sorted claim has their lowest feasible offer ID.
     let mut claims: Vec<_> = candidates
         .par_iter()
@@ -181,6 +198,11 @@ fn prepare_acceptance(
         .collect();
     if selected.is_empty() {
         return Ok(None);
+    }
+    #[cfg(feature = "profile")]
+    {
+        drop(phase);
+        phase = game_diagnostics::span("market.accept.publish_plan");
     }
     selected.par_sort_unstable_by_key(|(offer, _)| offer.id);
     let decisions: Vec<_> = selected
@@ -233,6 +255,8 @@ fn prepare_acceptance(
             .collect();
         custody::apply(cargo, &actors, changes)
     });
+    #[cfg(feature = "profile")]
+    drop(phase);
     Ok(Some(Accepted {
         market,
         cargo,
