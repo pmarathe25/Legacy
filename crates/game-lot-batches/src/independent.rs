@@ -4,6 +4,7 @@ use game_lot_model::{
 };
 use game_lot_planning::Draft;
 use rayon::prelude::*;
+use std::borrow::Borrow;
 
 #[derive(Clone, Copy)]
 struct Row {
@@ -44,16 +45,17 @@ fn after(container: &Container, tick: u64, good: u32, mut debit: u64) -> Contain
     }
 }
 
-pub fn prepare(
+pub fn prepare<T: Borrow<Transaction> + Sync>(
     state: &State,
     instance: u64,
-    transactions: &[Transaction],
+    transactions: &[T],
     compact: &[u64],
     advance: bool,
 ) -> Result<Option<Draft>, String> {
     if transactions.len() < 128
         || (!compact.is_empty() && compact.len() != transactions.len())
         || transactions.par_iter().any(|t| {
+            let t = t.borrow();
             t.movements.len() != 1
                 || !t.creations.is_empty()
                 || t.movements[0].to.is_some()
@@ -77,6 +79,7 @@ pub fn prepare(
     let rows: Option<Vec<_>> = transactions
         .par_iter()
         .map(|t| {
+            let t = t.borrow();
             let movement = t.movements[0];
             state
                 .containers

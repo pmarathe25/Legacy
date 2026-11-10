@@ -995,18 +995,18 @@ impl CoreHost {
                 .map_or(Ok(1), |id| {
                     id.checked_add(1).ok_or("animal action overflow")
                 })?;
-            let care = self.plan_animal_care(
+            let mut care = self.plan_animal_care(
                 occupied,
                 cultivation.as_ref(),
                 irrigation_plan.as_ref(),
                 gathering.as_ref().map(|(plan, _)| plan),
                 next_action,
             )?;
-            if let Some(plan) = &care {
+            if let Some(plan) = &mut care {
                 next_action = next_action
                     .checked_add(plan.actions.len() as u64)
                     .ok_or("animal action overflow")?;
-                actions.par_extend(plan.actions.par_iter().cloned());
+                actions.par_extend(std::mem::take(&mut plan.actions).into_par_iter());
             }
             let hunting = self.plan_hunting(
                 occupied,

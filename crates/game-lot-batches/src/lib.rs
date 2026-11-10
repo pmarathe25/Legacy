@@ -11,6 +11,7 @@ mod grouped_sources;
 mod independent;
 mod independent_transfer;
 mod local_creation;
+mod mixed_consumption;
 mod partitioned;
 
 /// Try no-time, disjoint fungible transformations after item validation.
@@ -340,6 +341,14 @@ fn prepare_impl(
     if partition
         && additions.is_empty()
         && let Some(draft) = independent::prepare(state, instance, transactions, &compact, advance)?
+    {
+        return Ok((draft, additions));
+    }
+    if partition
+        && additions.is_empty()
+        && compact.is_empty()
+        && let Some(draft) =
+            mixed_consumption::prepare(state, instance, seed, transactions, advance)?
     {
         return Ok((draft, additions));
     }
