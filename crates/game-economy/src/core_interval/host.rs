@@ -563,8 +563,12 @@ impl CoreHost {
             )?;
         }
         if let Some(owner) = &giving {
-            if owner.practices.is_some() {
-                return Err("sharing practices are not yet supported by the interval host".into());
+            if owner
+                .practices
+                .as_ref()
+                .is_some_and(|practices| practices.minds.par_iter().any(|mind| mind.work.is_some()))
+            {
+                return Err("work practices are not yet supported by the interval host".into());
             }
             let people: HashSet<_> = core.people.par_iter().map(|person| person.id).collect();
             owner.validate(
@@ -1505,11 +1509,15 @@ impl CoreHost {
             .as_ref()
             .map_or_else(Vec::new, |resolved| resolved.contacts());
         contacts.par_extend(giving_help.par_iter().copied());
+        if let Some(frame) = &giving {
+            contacts.par_extend(frame.contacts.par_iter().copied());
+        }
         let birth_health =
             self.stage_contact_health(birth_health, &contacts, draft.events().tick)?;
         let birth_health =
             self.stage_medical_health(birth_health, medical_resolved.as_ref(), draft.events().tick);
         if let Some(frame) = &mut giving {
+            self.stage_practices(frame, &contacts, draft.events(), draft.events().tick)?;
             frame.plan.learn_sharing(
                 &mut frame.owner,
                 draft.events(),

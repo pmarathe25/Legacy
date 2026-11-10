@@ -5,6 +5,7 @@ pub(super) struct GivingFrame {
     pub owner: crate::Giving,
     pub plan: crate::giving::Plan,
     pub actors: Vec<u64>,
+    pub contacts: Vec<(u64, u64)>,
 }
 
 impl CoreHost {
@@ -53,12 +54,16 @@ impl CoreHost {
             before: None,
             after: None,
         };
+        let practices = owner.practices.take();
         let mut actors = if owner.asking.is_empty()
             && owner.requests.is_empty()
             && owner
                 .learning
                 .par_iter()
                 .all(|learning| learning.ask_helper.is_none())
+            && practices
+                .as_ref()
+                .is_none_or(|owner| owner.minds.par_iter().all(|mind| !mind.ask_willing))
         {
             Vec::new()
         } else {
@@ -66,11 +71,12 @@ impl CoreHost {
                 &self.core.people,
                 self.core.physical.goods(),
                 &view,
-                (&asking_busy, None, &communication),
+                (&asking_busy, practices.as_ref(), &communication),
                 tick,
                 (&locations, None),
             )?
         };
+        owner.practices = practices;
         asking_busy.par_extend(actors.par_iter().copied());
         asking_busy.par_sort_unstable();
         asking_busy.dedup();
@@ -95,6 +101,14 @@ impl CoreHost {
             },
         )?;
         actors.par_extend(discovered.into_par_iter());
+        actors.par_sort_unstable();
+        actors.dedup();
+        let contacts: Vec<_> = owner
+            .requests
+            .par_iter()
+            .filter(|request| actors.binary_search(&request.requester).is_ok())
+            .map(|request| (request.requester, request.target))
+            .collect();
         busy.par_extend(actors.par_iter().copied());
         busy.par_sort_unstable();
         busy.dedup();
@@ -122,6 +136,92 @@ impl CoreHost {
             owner,
             plan,
             actors,
+            contacts,
         }))
+    }
+    pub(super) fn stage_practices(
+        &self,
+        frame: &mut GivingFrame,
+        contacts: &[(u64, u64)],
+        events: &game_lot_runtime::Events,
+        tick: u64,
+    ) -> Result<(), String> {
+        let Some(opening) = self.giving.as_ref() else {
+            return Ok(());
+        };
+        let Some(practices) = opening.practices.as_ref() else {
+            return Ok(());
+        };
+        let view = self.core.physical.view(tick)?;
+        let locations = game_economy_person::travel::Colocation::new(self.core.travel.as_ref());
+        let pairs: Vec<_> = contacts.par_iter().copied().collect();
+        let mut encounters: Vec<_> = pairs
+            .into_par_iter()
+            .map(|(first, second)| -> Result<_, String> {
+                let a = self
+                    .core
+                    .people
+                    .binary_search_by_key(&first, |row| row.id)
+                    .map_err(|_| "unknown practice contact")?;
+                let b = self
+                    .core
+                    .people
+                    .binary_search_by_key(&second, |row| row.id)
+                    .map_err(|_| "unknown practice contact")?;
+                let a = &self.core.people[a];
+                let b = &self.core.people[b];
+                let region = locations
+                    .region((a.id, a.region), (b.id, b.region))
+                    .ok_or("practice contact lost location")?;
+                Ok(game_social::Encounter {
+                    tick,
+                    region,
+                    a: first.min(second),
+                    b: first.max(second),
+                    pressured: None,
+                    also_pressured: None,
+                })
+            })
+            .collect::<Result<Vec<_>, String>>()?;
+        if let Some(social) = self
+            .social
+            .as_ref()
+            .filter(|owner| owner.last_tick == Some(tick - 1))
+        {
+            encounters.par_extend(social.owner.events.par_iter().cloned().map(|mut event| {
+                event.tick = tick;
+                event
+            }));
+        }
+        encounters.par_sort_unstable_by_key(|event| (event.a, event.b));
+        encounters.dedup_by_key(|event| (event.a, event.b));
+        let (next, reactions) = crate::giving_practices::advance(
+            practices,
+            crate::giving_practices::Context {
+                giving: opening,
+                people: &self.core.people,
+                goods: self.core.physical.goods(),
+                view: &view,
+                opinions: self.opinions.as_ref(),
+                goals: self.goals.as_ref(),
+                requests: self
+                    .autowork
+                    .as_ref()
+                    .and_then(|owner| owner.requests.as_ref()),
+                work_asks: &[],
+                practice_requests: &[],
+                started_work: &[],
+                encounters: &encounters,
+                gifts: &frame.plan,
+                promise_deliveries: &[],
+                events,
+                tick,
+            },
+        )?;
+        if !reactions.is_empty() {
+            return Err("unexpected work-practice reaction".into());
+        }
+        frame.owner.practices = Some(next);
+        Ok(())
     }
 }

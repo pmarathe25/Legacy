@@ -306,4 +306,6 @@ Scenarios may author `[goals]` directly, with `[[goals.people]]` entries naming 
 
 The interval scenario loads a personal medical preference and a data-defined disease and remedy. A caregiver needs an actual accepted transfer of their medicine for treatment or contact to occur; their willingness and any social pressure remain personal choices.
 
-The interval scenario also authors a food request and a personal response. The responder may refuse, and its independent willingness, affinity, fear, or felt obligation can affect its choice. Personal practices are not yet available in the interval host and are rejected explicitly.
+The interval scenario also authors a food request and a personal response. The responder may refuse, and its independent willingness, affinity, fear, or felt obligation can affect its choice. Food-sharing practices and personal readiness reports are available; work practices are rejected until their related owners are integrated.
+
+`content/scenarios/economy-core-practices.toml` demonstrates a private adopted food-sharing proposal and a false readiness report with no corresponding goods. Practice good references may use content names, including inside proposals and experiences.

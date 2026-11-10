@@ -5008,8 +5008,10 @@ fn core_host_cultivation_benchmark() {
         .and_then(|v| v.parse().ok())
         .unwrap_or(1);
     assert!(count > 1);
+    let practice_reports = std::env::var_os("LEGACY_PRACTICE_REPORTS").is_some();
     let giving_contested = std::env::var_os("LEGACY_GIVING_CONTEST").is_some();
-    let giving = std::env::var_os("LEGACY_GIVING").is_some() || giving_contested;
+    let giving =
+        std::env::var_os("LEGACY_GIVING").is_some() || giving_contested || practice_reports;
     assert!(!giving || count.is_multiple_of(2));
     let medical_contested = std::env::var_os("LEGACY_MEDICAL_CONTEST").is_some();
     let medical = std::env::var_os("LEGACY_MEDICAL").is_some() || medical_contested;
@@ -5074,7 +5076,7 @@ fn core_host_cultivation_benchmark() {
             .custody
             .containers
             .extend((2..=count).map(|person| {
-                let lots = if person <= count / 2 {
+                let lots = if person <= count / 2 && !practice_reports {
                     vec![Lot {
                         item: None,
                         good: 1,
@@ -5255,12 +5257,35 @@ fn core_host_cultivation_benchmark() {
         paused_work_rates: vec![],
         fatigue: None,
         activity: vec![], giving: giving.then(|| game_economy::Giving {
-            practices: None, inherit_births: false,
-            policies: (2..=count / 2).map(|person| game_economy::GivingPolicy {
+            practices: practice_reports.then(|| {
+                let author: game_practices::Mind = serde_json::from_value(serde_json::json!({
+                    "person":2,"invent":false,"approve":true,"willing":true,"shortage_threshold":1,
+                    "minimum_shortages":1,"review_interval":2,"proposal_lifetime":8,"report_attitude":"trust","sequence":1
+                })).unwrap();
+                let adopter: game_practices::Mind = serde_json::from_value(serde_json::json!({
+                    "person":2,"invent":false,"approve":true,"willing":true,"shortage_threshold":1,
+                    "minimum_shortages":1,"review_interval":2,"proposal_lifetime":8,"reporting":"lie"
+                })).unwrap();
+                let mut minds = Vec::new();
+                for person in 2..=count / 2 {
+                    let proposal = game_practices::Proposal { author: person, sequence: 1, recipient: person + count / 2,
+                        good: 1, quantity: 1, reserve: 0, ask_hunger: 1, created: 0, expires: 5 };
+                    let mut author = author.clone(); author.person = person; author.authored = vec![proposal.clone()].into();
+                    let mut adopter = adopter.clone(); adopter.person = person + count / 2;
+                    adopter.inbox = vec![game_practices::Received { proposal, decision: game_practices::Decision::Adopted, approved: true, delivered: 0 }].into();
+                    minds.push(author); minds.push(adopter);
+                }
+                minds.sort_unstable_by_key(|mind| mind.person);
+                game_practices::Practices { minds }
+            }), inherit_births: false,
+            policies: (2..=if practice_reports { 1 } else { count / 2 }).map(|person| game_economy::GivingPolicy {
                 person, recipient: if giving_contested { count / 2 + 1 } else { person + count / 2 },
                 good: 1, quantity: 1, recipient_hunger_at_least: 0, willing: true,
                 requires_request: false, pressured_by: None, pressure_threshold: None,
-            }).collect::<Vec<_>>().into(), responses: vec![].into(), learning: vec![], asking: vec![],
+            }).collect::<Vec<_>>().into(), responses: vec![].into(), learning: vec![], asking: (2..=if practice_reports { count / 2 } else { 1 }).map(|person| game_economy::FoodAsking {
+                person, target: person + count / 2, alternatives: vec![], next_target: 0, min_hunger: 1,
+                enabled: true, retry_ticks: 2, request_lifetime: 3, next_review: 0,
+            }).collect(),
             requests: vec![], acquaintance_asking: vec![],
         }), medical: medical.then(|| game_economy::Medical {
             policies: (2..=count / 2).map(|person| game_economy::MedicalPolicy {
@@ -5546,7 +5571,9 @@ fn core_host_cultivation_benchmark() {
                     .iter()
                     .filter(|row| row.accepted)
                     .count(),
-                if giving {
+                if practice_reports {
+                    0
+                } else if giving {
                     if giving_contested { 1 } else { (count / 2 - 1) as usize }
                 } else if medical {
                     if medical_contested {
@@ -5579,7 +5606,11 @@ fn core_host_cultivation_benchmark() {
                 }
             );
             let state = host.snapshot();
-            if giving {
+            if practice_reports {
+                let practices = state.giving.as_ref().unwrap().practices.as_ref().unwrap();
+                assert_eq!(practices.minds.iter().filter(|mind| mind.sent_reports.iter().any(|report| report.claimed_ready)).count(), (count / 2 - 1) as usize);
+            }
+            if giving && !practice_reports {
                 assert_eq!(state.core.physical.custody.containers.iter()
                     .filter(|container| matches!(container.place, Place::Person(id) if id > count / 2) && container.used == 1).count(),
                     if giving_contested { 1 } else { (count / 2 - 1) as usize });

@@ -510,7 +510,7 @@ fn personal_food_requests_and_pressured_giving_use_real_custody() {
                 .find(|container| container.place == game_lots::Place::Person(1)).unwrap();
             assert_eq!(recipient.used, if shared { 2 } else { 0 });
             assert_eq!(result.giving.as_ref().unwrap().requests.is_empty(), shared);
-            assert_eq!(result.health.as_ref().unwrap().owner.cases.iter().any(|case| case.person == 2), shared);
+            assert!(result.health.as_ref().unwrap().owner.cases.iter().any(|case| case.person == 2));
             let relation = result.opinions.as_ref().unwrap().records.iter()
                 .find(|record| record.observer == 1 && record.target == 2);
             if shared { let relation = relation.unwrap(); assert_eq!((relation.affinity, relation.obligation), (-2, 0)); }
@@ -521,4 +521,90 @@ fn personal_food_requests_and_pressured_giving_use_real_custody() {
     for (willing, pressured) in [(true, false), (false, false), (false, true)] {
         assert_eq!(run(1, willing, pressured), run(6, willing, pressured));
     }
+}
+
+#[test]
+fn personal_practice_can_report_false_readiness_without_creating_goods() {
+    fn run(workers: usize) -> serde_json::Value {
+        rayon::ThreadPoolBuilder::new().num_threads(workers).build().unwrap().install(|| {
+            let root = root();
+            let initial = game_economy_cli::core_scenario(
+                &root.join("content/scenarios/economy-core.toml"), &root.join("content"),
+            ).unwrap();
+            let mut snapshot = initial.snapshot();
+            snapshot.dependent_care = None;
+            snapshot.medical = None;
+            snapshot.core.people[0].hunger = 5;
+            let bread = snapshot.core.physical.goods.iter().find(|good| good.name == "bread").unwrap().id;
+            let proposal = serde_json::json!({"author":1,"sequence":1,"recipient":2,"good":bread,
+                "quantity":2,"reserve":1,"ask_hunger":5,"created":0,"expires":5});
+            let practices = serde_json::from_value(serde_json::json!({"minds":[
+                {"person":1,"invent":false,"approve":true,"willing":true,"ask_willing":true,
+                 "shortage_threshold":5,"minimum_shortages":1,"review_interval":2,"proposal_lifetime":8,
+                 "sequence":1,"authored":[proposal.clone()],"report_attitude":"trust"},
+                {"person":2,"invent":false,"approve":true,"willing":true,"shortage_threshold":5,
+                 "minimum_shortages":1,"review_interval":2,"proposal_lifetime":8,"reporting":"lie",
+                 "inbox":[{"proposal":proposal,"decision":"adopted","approved":true,"delivered":0}]}
+            ]})).unwrap();
+            snapshot.giving.as_mut().unwrap().practices = Some(practices);
+            let saved = serde_json::to_string(&snapshot).unwrap();
+            let mut host = game_economy::core_interval::CoreHost::resume(snapshot).unwrap();
+            let mut resumed = game_economy::core_interval::CoreHost::resume(serde_json::from_str(&saved).unwrap()).unwrap();
+            assert_eq!(host.advance_continuous(3_600_000, &[]).unwrap().failure, None);
+            assert_eq!(resumed.advance_continuous(3_600_000, &[]).unwrap().failure, None);
+            let result = host.snapshot();
+            assert_eq!(result, resumed.snapshot());
+            assert!(game_economy::core_interval::CoreHost::resume(result.clone()).is_ok());
+            let practices = result.giving.as_ref().unwrap().practices.as_ref().unwrap();
+            assert!(practices.minds[1].sent_reports[0].claimed_ready);
+            assert!(practices.minds[0].reports[0].statement.claimed_ready);
+            let inventory = result.core.physical.custody.containers.iter()
+                .find(|container| container.place == game_lots::Place::Person(2)).unwrap();
+            assert_eq!(inventory.used, 0);
+            let recipient = result.core.physical.custody.containers.iter()
+                .find(|container| container.place == game_lots::Place::Person(1)).unwrap();
+            assert_eq!(recipient.used, 0);
+            let mut moved = result.clone();
+            moved.core.people[0].region = Some(2);
+            moved.core.physical.custody.containers.push(game_lots::Container::new(
+                game_lots::Place::Stock { region: 2, good: bread }, 100, vec![],
+            ).unwrap());
+            moved.core.physical.custody.containers.sort_unstable_by_key(|row| row.place);
+            let minds = &mut moved.giving.as_mut().unwrap().practices.as_mut().unwrap().minds;
+            std::sync::Arc::make_mut(&mut minds[0].reports).clear();
+            std::sync::Arc::make_mut(&mut minds[1].sent_reports).clear();
+            moved.social = Some(game_economy::core_interval::CoreSocial {
+                owner: game_social::Social {
+                    rules: game_social::Rules { interval: 1, min_health: 1, max_hunger: 100,
+                        familiarity_gain: 1, familiarity_max: 10, relationship_retention: None },
+                    participants: vec![game_social::Participant { person: 1, willing: false }, game_social::Participant { person: 2, willing: false }], pressures: vec![], relationships: vec![],
+                    events: vec![game_social::Encounter { tick: 1, region: 1, a: 1, b: 2,
+                        pressured: None, also_pressured: None }], needs: None,
+                }, last_tick: Some(1),
+            });
+            let mut moved = game_economy::core_interval::CoreHost::resume(moved).unwrap();
+            assert_eq!(moved.advance_continuous(3_600_000, &[]).unwrap().failure, None);
+            assert!(moved.snapshot().giving.unwrap().practices.unwrap().minds[1].sent_reports[0].claimed_ready);
+            serde_json::to_value(result).unwrap()
+        })
+    }
+    assert_eq!(run(1), run(6));
+}
+
+#[test]
+fn authored_practice_can_lie_about_readiness() {
+    let root = root();
+    let mut host = game_economy_cli::core_scenario(
+        &root.join("content/scenarios/economy-core-practices.toml"),
+        &root.join("content"),
+    )
+    .unwrap();
+    assert_eq!(
+        host.advance_continuous(3_600_000, &[]).unwrap().failure,
+        None
+    );
+    let state = host.snapshot();
+    let practices = state.giving.unwrap().practices.unwrap();
+    assert!(practices.minds[1].sent_reports[0].claimed_ready);
+    assert!(practices.minds[0].reports[0].statement.claimed_ready);
 }

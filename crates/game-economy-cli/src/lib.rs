@@ -528,7 +528,7 @@ struct ResourceConfig {
 #[serde(deny_unknown_fields)]
 struct GivingConfig {
     #[serde(default)]
-    practices: Option<game_economy::PersonalPractices>,
+    practices: Option<toml::Value>,
     #[serde(default)]
     inherit_births: bool,
     #[serde(default)]
@@ -542,6 +542,36 @@ struct GivingConfig {
     #[serde(default)]
     acquaintance_asking: Vec<game_economy::AcquaintanceAsking>,
 }
+fn resolve_practice_goods(
+    value: &mut toml::Value,
+    goods: &BTreeMap<&str, u32>,
+) -> Result<(), String> {
+    match value {
+        toml::Value::Table(table) => {
+            for (key, value) in table.iter_mut() {
+                if key == "good"
+                    && let Some(name) = value.as_str()
+                {
+                    *value = toml::Value::Integer(i64::from(
+                        *goods
+                            .get(name)
+                            .ok_or_else(|| format!("unknown practice good {name}"))?,
+                    ));
+                } else {
+                    resolve_practice_goods(value, goods)?;
+                }
+            }
+        }
+        toml::Value::Array(rows) => {
+            for row in rows {
+                resolve_practice_goods(row, goods)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
 #[derive(Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct FoodResponseConfig {
@@ -1358,6 +1388,15 @@ pub fn scenario_with_options(
     let giving = scenario
         .giving
         .map(|config| -> Result<_, String> {
+            let practices = config
+                .practices
+                .map(|mut value| {
+                    resolve_practice_goods(&mut value, &goods)?;
+                    value
+                        .try_into()
+                        .map_err(|error: toml::de::Error| error.to_string())
+                })
+                .transpose()?;
             let policies = config
                 .policies
                 .into_iter()
@@ -1408,7 +1447,7 @@ pub fn scenario_with_options(
                 })
                 .collect::<Result<Vec<_>, String>>()?;
             Ok(game_economy::Giving {
-                practices: config.practices,
+                practices,
                 inherit_births: config.inherit_births,
                 policies: policies.into(),
                 responses: responses.into(),
