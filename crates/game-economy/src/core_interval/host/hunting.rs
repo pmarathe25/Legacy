@@ -51,7 +51,7 @@ impl CoreHost {
             fauna: self.fauna.as_ref(),
             people: &self.core.people,
             opinions: self.opinions.as_ref(),
-            animal_feelings: None,
+            animal_feelings: self.animal_feelings.as_ref(),
             view: &view,
             requests: &[],
             busy: &busy,
@@ -63,5 +63,28 @@ impl CoreHost {
         }
         .prepare(base)
         .map(Some)
+    }
+    pub(super) fn stage_animal_feelings(
+        &self,
+        plan: Option<&crate::hunting::Plan>,
+        hunted: &[u64],
+    ) -> Option<crate::AnimalFeelings> {
+        let owner = self.animal_feelings.as_ref()?;
+        let plan = plan?;
+        let events = owner.relevant(
+            plan.yields
+                .par_iter()
+                .filter_map(|yield_| {
+                    hunted.binary_search(&yield_.animal).is_ok().then_some(
+                        crate::animal_feelings::Event {
+                            person: yield_.hunter,
+                            animal: yield_.animal,
+                            kind: crate::animal_feelings::Experience::Hunt,
+                        },
+                    )
+                })
+                .collect(),
+        );
+        (!events.is_empty()).then(|| owner.advance(&events))
     }
 }

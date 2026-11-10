@@ -64,6 +64,8 @@ pub struct CoreHostSnapshot {
     #[serde(default)]
     pub hunting: Option<crate::Hunting>,
     #[serde(default)]
+    pub animal_feelings: Option<crate::AnimalFeelings>,
+    #[serde(default)]
     pub opinions: Option<game_opinions::Opinions>,
     #[serde(default)]
     pub goals: Option<game_goals::Goals>,
@@ -95,6 +97,7 @@ pub struct CoreHost {
     gathering: Option<crate::Gathering>,
     fauna: Option<game_fauna::Fauna>,
     hunting: Option<crate::Hunting>,
+    animal_feelings: Option<crate::AnimalFeelings>,
     work_checked_revision: Option<u64>,
     work_checked_blocked: Vec<u64>,
     opinions: Option<game_opinions::Opinions>,
@@ -121,6 +124,7 @@ struct CoreRuntimeOptions {
     gathering: Option<crate::Gathering>,
     fauna: Option<game_fauna::Fauna>,
     hunting: Option<crate::Hunting>,
+    animal_feelings: Option<crate::AnimalFeelings>,
 }
 impl CoreHost {
     pub fn begin(snapshot: CoreHostSnapshot, rates: &[(u64, u64)]) -> Result<Self, String> {
@@ -143,6 +147,7 @@ impl CoreHost {
             gathering,
             fauna,
             hunting,
+            animal_feelings,
             opinions,
             goals,
             agreements,
@@ -175,6 +180,7 @@ impl CoreHost {
                 gathering,
                 fauna,
                 hunting,
+                animal_feelings,
             },
         )
     }
@@ -198,6 +204,7 @@ impl CoreHost {
             gathering,
             fauna,
             hunting,
+            animal_feelings,
             opinions,
             goals,
             agreements,
@@ -230,6 +237,7 @@ impl CoreHost {
                 gathering,
                 fauna,
                 hunting,
+                animal_feelings,
             },
         )
     }
@@ -260,6 +268,7 @@ impl CoreHost {
             gathering,
             fauna,
             hunting,
+            mut animal_feelings,
         } = options;
         if let Some(legacy) = food_search.as_mut().and_then(|owner| owner.claims.take()) {
             if claims.is_some() {
@@ -500,6 +509,10 @@ impl CoreHost {
                 .validate(&regions, &goods, core.physical.tick())
                 .map_err(str::to_owned)?;
         }
+        if let Some(owner) = &mut animal_feelings {
+            let people: HashSet<_> = core.people.par_iter().map(|person| person.id).collect();
+            owner.normalize_and_validate(&people, fauna.as_ref())?;
+        }
         if let Some(owner) = &hunting {
             let people: HashSet<_> = core.people.par_iter().map(|person| person.id).collect();
             let goods: HashSet<_> = core
@@ -562,6 +575,7 @@ impl CoreHost {
             gathering,
             fauna,
             hunting,
+            animal_feelings,
             work_checked_revision: None,
             work_checked_blocked: Vec::new(),
             opinions,
@@ -591,6 +605,7 @@ impl CoreHost {
             gathering: self.gathering.clone(),
             fauna: self.fauna.clone(),
             hunting: self.hunting.clone(),
+            animal_feelings: self.animal_feelings.clone(),
             opinions: self.opinions.clone(),
             goals: self.goals.clone(),
             agreements: self.agreements.clone(),
@@ -1008,6 +1023,7 @@ impl CoreHost {
         let hunted = hunting
             .as_ref()
             .map_or_else(Vec::new, |plan| plan.accepted(draft.events()));
+        let animal_feelings = self.stage_animal_feelings(hunting.as_ref(), &hunted);
         let fauna = self.stage_fauna(&mut gathering, &hunted, draft.events().tick)?;
         let mut tools = self.stage_tools(
             draft.produced_items(),
@@ -1093,6 +1109,9 @@ impl CoreHost {
             self.gathering = Some(owner);
         }
         self.publish_fauna(fauna);
+        if let Some(feelings) = animal_feelings {
+            self.animal_feelings = Some(feelings);
+        }
         if let Some((owner, opinions)) = claims {
             self.claims = Some(owner);
             self.opinions = opinions;
