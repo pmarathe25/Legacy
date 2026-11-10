@@ -608,3 +608,88 @@ fn authored_practice_can_lie_about_readiness() {
     assert!(practices.minds[1].sent_reports[0].claimed_ready);
     assert!(practices.minds[0].reports[0].statement.claimed_ready);
 }
+
+#[test]
+fn personal_taking_respects_resistance_and_subjective_reactions() {
+    fn run(workers: usize, notices: bool, resist: bool, stocked: bool) -> serde_json::Value {
+        rayon::ThreadPoolBuilder::new().num_threads(workers).build().unwrap().install(|| {
+            let root = root();
+            let initial = game_economy_cli::core_scenario(&root.join("content/scenarios/economy-core.toml"), &root.join("content")).unwrap();
+            let mut snapshot = initial.snapshot();
+            snapshot.dependent_care = None;
+            snapshot.family = None;
+            let mut witness = snapshot.core.people[0].clone();
+            witness.id = 3;
+            snapshot.core.people.push(witness);
+            snapshot.core.physical.custody.containers.push(game_lots::Container::new(game_lots::Place::Person(3), 100, vec![]).unwrap());
+            snapshot.core.physical.custody.containers.sort_unstable_by_key(|container| container.place);
+            snapshot.medical = None;
+            snapshot.giving = None;
+            snapshot.gathering = None;
+            let bread = snapshot.core.physical.goods.iter().find(|good| good.name == "bread").unwrap().id;
+            let target = snapshot.core.physical.custody.containers.iter_mut().find(|container| container.place == game_lots::Place::Person(1)).unwrap();
+            *target = game_lots::Container::new(game_lots::Place::Person(1), 100, if stocked { vec![game_lots::Lot { item: None, good: bread, quantity: 2, expires_at: None }] } else { vec![] }).unwrap();
+            snapshot.taking = Some(serde_json::from_value(serde_json::json!({
+                "policies": [{"person":2,"target":1,"good":bread,"quantity":2,"willing":true,"interval":1}],
+                "responses": [{"person":1,"notices":notices,"resist":resist}],
+                "reactions": [{"person":1,"as_target":{"transferred":{"affinity":3},"resisted":{"affinity":-2}}}],
+                "witnesses": [{"person":3,"actor":2,"target":1,"notices":true,"toward_actor":{"transferred":{"affinity":-4}}}]
+            })).unwrap());
+            snapshot.opinions = Some(serde_json::from_value(serde_json::json!({
+                "rules": {"minimum":-10,"maximum":10,"initial":0,"fulfilled_gain":1,"default_loss":1,"affinity":{"limit":10}}
+            })).unwrap());
+            let saved = serde_json::to_string(&snapshot).unwrap();
+            let mut host = game_economy::core_interval::CoreHost::resume(snapshot).unwrap();
+            let mut restored = game_economy::core_interval::CoreHost::resume(serde_json::from_str(&saved).unwrap()).unwrap();
+            assert_eq!(host.advance_continuous(3_600_000, &[]).unwrap().failure, None);
+            assert_eq!(restored.advance_continuous(3_600_000, &[]).unwrap().failure, None);
+            let result = host.snapshot();
+            assert_eq!(result, restored.snapshot());
+            assert!(game_economy::core_interval::CoreHost::resume(result.clone()).is_ok());
+            let event = &result.taking.as_ref().unwrap().events[0];
+            let outcome = if notices && resist { "resisted" } else if stocked { "transferred" } else { "unavailable" };
+            assert_eq!(serde_json::to_value(event.outcome).unwrap(), outcome);
+            let received = result.core.physical.custody.containers.iter().find(|container| container.place == game_lots::Place::Person(2)).unwrap();
+            assert_eq!(received.used, if outcome == "transferred" { 2 } else { 0 });
+            assert!(result.taking.as_ref().unwrap().witnesses[0].last_seen.is_some());
+            let witness_opinion = result.opinions.as_ref().unwrap().records.iter().find(|record| record.observer == 3 && record.target == 2);
+            if outcome == "transferred" { assert_eq!(witness_opinion.unwrap().affinity, -4); } else { assert!(witness_opinion.is_none()); }
+            let relationship = result.opinions.as_ref().unwrap().records.iter().find(|record| record.observer == 1 && record.target == 2);
+            if notices && outcome == "transferred" { assert_eq!(relationship.unwrap().affinity, 3); }
+            else if outcome == "resisted" { assert_eq!(relationship.unwrap().affinity, -2); }
+            else { assert!(relationship.is_none()); }
+            serde_json::to_value(result).unwrap()
+        })
+    }
+    for (notices, resist, stocked) in [
+        (false, true, true),
+        (true, false, true),
+        (true, true, true),
+        (true, false, false),
+    ] {
+        assert_eq!(
+            run(1, notices, resist, stocked),
+            run(6, notices, resist, stocked)
+        );
+    }
+}
+
+#[test]
+fn authored_taking_loads_named_goods() {
+    let root = root();
+    let host = game_economy_cli::core_scenario(
+        &root.join("content/scenarios/economy-core-taking.toml"),
+        &root.join("content"),
+    )
+    .unwrap();
+    let state = host.snapshot();
+    let bread = state
+        .core
+        .physical
+        .goods
+        .iter()
+        .find(|good| good.name == "bread")
+        .unwrap()
+        .id;
+    assert_eq!(state.taking.unwrap().policies[0].good, bread);
+}
