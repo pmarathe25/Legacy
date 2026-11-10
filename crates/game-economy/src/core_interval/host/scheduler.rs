@@ -85,6 +85,7 @@ pub enum CoreRunEvent {
     Meals(Vec<(u64, u32)>),
     Provisions(Vec<game_lots::TransactionOutcome>),
     Meetings(Vec<game_social::Encounter>),
+    Disease(Vec<game_disease::Event>),
     Repairs(Vec<game_economy_building::maintenance::Event>),
     ToolRepairs(Vec<game_economy_work::tool_wear::RepairEvent>),
     Deliveries(Vec<game_lots::TransactionOutcome>),
@@ -109,7 +110,7 @@ pub struct CoreRun {
 }
 impl CoreHost {
     fn after_provision(&self, meal_people: Vec<u64>) -> DecisionPhase {
-        if self.social.is_some() {
+        if self.social.is_some() || self.health.is_some() {
             DecisionPhase::Social { meal_people }
         } else {
             self.after_food(meal_people)
@@ -280,6 +281,33 @@ impl CoreHost {
                 continue;
             }
             let schedule = self.schedule.as_ref().expect("active schedule").clone();
+            // Periodic physiological owners advance even when the next personal
+            // decision lies beyond this entire physical tick.
+            if offset == 0
+                && schedule.next_decision_millis != Some(0)
+                && self.core.physical.tick() > 0
+            {
+                let tick = self.core.physical.tick();
+                let due = self
+                    .social
+                    .as_ref()
+                    .is_some_and(|owner| owner.last_tick != Some(tick))
+                    || self
+                        .health
+                        .as_ref()
+                        .is_some_and(|owner| owner.last_tick != Some(tick));
+                if due {
+                    let dynamics = attempt!('run, self.advance_dynamics_autonomously(blocked));
+                    if !dynamics.meetings.is_empty() {
+                        run.events.push(CoreRunEvent::Meetings(dynamics.meetings));
+                    }
+                    if !dynamics.disease_events.is_empty() {
+                        run.events
+                            .push(CoreRunEvent::Disease(dynamics.disease_events));
+                    }
+                    continue;
+                }
+            }
             if schedule.next_decision_millis == Some(u128::from(offset)) {
                 match schedule.phase {
                     DecisionPhase::Meals => {
@@ -319,7 +347,8 @@ impl CoreHost {
                         busy.extend(meal_people.iter().copied());
                         busy.par_sort_unstable();
                         busy.dedup();
-                        let meetings = attempt!('run, self.meet_autonomously(&busy));
+                        let dynamics = attempt!('run, self.advance_dynamics_autonomously(&busy));
+                        let meetings = dynamics.meetings;
                         if !meetings.is_empty() {
                             meal_people.par_extend(
                                 meetings
@@ -329,6 +358,10 @@ impl CoreHost {
                             meal_people.par_sort_unstable();
                             meal_people.dedup();
                             run.events.push(CoreRunEvent::Meetings(meetings));
+                        }
+                        if !dynamics.disease_events.is_empty() {
+                            run.events
+                                .push(CoreRunEvent::Disease(dynamics.disease_events));
                         }
                         let next = self.after_food(meal_people);
                         self.schedule.as_mut().expect("active schedule").phase = next;

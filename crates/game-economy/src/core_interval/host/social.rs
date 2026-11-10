@@ -9,21 +9,59 @@ pub struct CoreSocial {
     pub last_tick: Option<u64>,
 }
 
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CoreHealth {
+    pub owner: game_disease::Disease,
+    #[serde(default)]
+    pub last_tick: Option<u64>,
+}
+impl Clone for CoreHealth {
+    fn clone(&self) -> Self {
+        Self {
+            owner: game_disease::Disease {
+                strains: self.owner.strains.par_iter().cloned().collect(),
+                treatments: self.owner.treatments.par_iter().cloned().collect(),
+                cases: self.owner.cases.par_iter().cloned().collect(),
+                events: self.owner.events.par_iter().cloned().collect(),
+            },
+            last_tick: self.last_tick,
+        }
+    }
+}
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct CoreDynamicsResults {
+    pub meetings: Vec<game_social::Encounter>,
+    pub disease_events: Vec<game_disease::Event>,
+}
+
 impl CoreHost {
     /// Run at most one personal social generation per physical tick.
     pub fn meet_autonomously(
         &mut self,
         occupied: &[u64],
     ) -> Result<Vec<game_social::Encounter>, String> {
+        Ok(self.advance_dynamics_autonomously(occupied)?.meetings)
+    }
+    /// Advance social and disease owners once per tick, sharing actual meetings.
+    pub fn advance_dynamics_autonomously(
+        &mut self,
+        occupied: &[u64],
+    ) -> Result<CoreDynamicsResults, String> {
         if occupied.par_windows(2).any(|rows| rows[0] >= rows[1]) {
             return Err("invalid occupied people".into());
         }
-        let Some(social) = &self.social else {
-            return Ok(Vec::new());
-        };
         let tick = self.core.physical.tick();
-        if tick == 0 || social.last_tick == Some(tick) {
-            return Ok(Vec::new());
+        let social = self
+            .social
+            .as_ref()
+            .filter(|owner| owner.last_tick != Some(tick));
+        let health = self
+            .health
+            .as_ref()
+            .filter(|owner| owner.last_tick != Some(tick));
+        if tick == 0 || (social.is_none() && health.is_none()) {
+            return Ok(CoreDynamicsResults::default());
         }
         let offset = self.core.elapsed_millis().ok_or("no physical interval")?;
         if offset >= self.core.physical.tick_millis()
@@ -45,9 +83,9 @@ impl CoreHost {
         busy.par_sort_unstable();
         busy.dedup();
         let opening = game_economy_dynamics::Dynamics {
-            social: Some(social.owner.clone()),
+            social: social.map(|owner| owner.owner.clone()),
             personality: None,
-            disease: None,
+            disease: health.map(|owner| owner.clone().owner),
             treatment: vec![],
             claims: None,
         };
@@ -74,14 +112,16 @@ impl CoreHost {
         let meetings: Vec<_> = next
             .social
             .as_ref()
-            .expect("social owner")
-            .events
-            .par_iter()
-            .cloned()
-            .collect();
-        let mut opinions = self.opinions.clone();
-        game_economy_dynamics::learn_social(&mut opinions, Some(&next), tick);
-        let knowledge = if let Some(owner) = &self.knowledge {
+            .map_or_else(Vec::new, |owner| owner.events.par_iter().cloned().collect());
+        let disease_events: Vec<_> = next
+            .disease
+            .as_ref()
+            .map_or_else(Vec::new, |owner| owner.events.par_iter().cloned().collect());
+        let mut opinions = next.social.as_ref().map(|_| self.opinions.clone());
+        if let Some(opinions) = &mut opinions {
+            game_economy_dynamics::learn_social(opinions, Some(&next), tick);
+        }
+        let knowledge = if let (Some(owner), Some(_)) = (&self.knowledge, &next.social) {
             let view = self.core.physical.view(tick)?;
             game_economy_knowledge::advance(
                 Some(owner),
@@ -116,17 +156,49 @@ impl CoreHost {
         if let Some(travel) = &mut travel {
             travel.receive_reports(&route_reports);
         }
-        self.social = Some(CoreSocial {
-            owner: next.social.expect("social owner"),
-            last_tick: Some(tick),
-        });
-        self.opinions = opinions;
+        let changed = people
+            .par_iter()
+            .zip(self.core.people.par_iter())
+            .any(|(a, b)| a != b);
+        let generation = if changed {
+            Some(
+                self.core
+                    .generation
+                    .checked_add(1)
+                    .ok_or("core revision overflow")?,
+            )
+        } else {
+            None
+        };
+        if let Some(owner) = next.social {
+            self.social = Some(CoreSocial {
+                owner,
+                last_tick: Some(tick),
+            });
+        }
+        if let Some(owner) = next.disease {
+            self.health = Some(CoreHealth {
+                owner,
+                last_tick: Some(tick),
+            });
+        }
+        if let Some(opinions) = opinions {
+            self.opinions = opinions;
+        }
         if let Some(knowledge) = knowledge {
             self.knowledge = Some(knowledge);
         }
         if let Some(travel) = travel {
             self.core.travel = Some(travel);
         }
-        Ok(meetings)
+        if let Some(generation) = generation {
+            self.core.people = people;
+            self.core.generation = generation;
+            self.work_checked_revision = None;
+        }
+        Ok(CoreDynamicsResults {
+            meetings,
+            disease_events,
+        })
     }
 }

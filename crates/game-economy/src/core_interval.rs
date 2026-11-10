@@ -16,9 +16,9 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 mod host;
 pub use host::{
-    CoreDeliveryResults, CoreFoodProvision, CoreFoodSearch, CoreHost, CoreHostSnapshot,
-    CoreRepairResults, CoreRequestResults, CoreRun, CoreRunEvent, CoreSchedule, CoreSites,
-    CoreSocial, CoreSocialResults, CoreToolRepairResults, DecisionPhase,
+    CoreDeliveryResults, CoreDynamicsResults, CoreFoodProvision, CoreFoodSearch, CoreHealth,
+    CoreHost, CoreHostSnapshot, CoreRepairResults, CoreRequestResults, CoreRun, CoreRunEvent,
+    CoreSchedule, CoreSites, CoreSocial, CoreSocialResults, CoreToolRepairResults, DecisionPhase,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

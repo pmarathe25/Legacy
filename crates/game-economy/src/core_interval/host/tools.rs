@@ -10,7 +10,7 @@ pub struct CoreToolRepairResults {
 impl CoreHost {
     /// Combine rest and tool blockers while retaining one desired work rate.
     pub(super) fn sync_work_rates(&mut self, blocked: &[u64]) -> Result<(), String> {
-        if self.tool_requirements.is_empty() && self.fatigue.is_none() {
+        if self.tool_requirements.is_empty() && self.fatigue.is_none() && self.health.is_none() {
             return Ok(());
         }
         let interval = self
@@ -67,19 +67,20 @@ impl CoreHost {
                     )
                 });
                 let rests = resting.binary_search(&work.job.worker).is_ok();
-                let able = self
+                let worker = self
                     .core
                     .people
                     .binary_search_by_key(&work.job.worker, |person| person.id)
                     .ok()
-                    .is_some_and(|i| {
-                        let person = &self.core.people[i];
-                        person.health > 0
-                            && person.hunger <= self.core.rules.max_work_hunger
-                            && person.region == Some(work.job.region)
-                            && blocked.binary_search(&person.id).is_err()
-                    });
-                Some((id, rate, !present || rests || (was_paused && !able)))
+                    .map(|i| &self.core.people[i]);
+                let able = worker.is_some_and(|person| {
+                    person.health > 0
+                        && person.hunger <= self.core.rules.max_work_hunger
+                        && person.region == Some(work.job.region)
+                        && blocked.binary_search(&person.id).is_err()
+                });
+                let dead = worker.is_none_or(|person| person.health == 0);
+                Some((id, rate, !present || rests || dead || (was_paused && !able)))
             })
             .collect();
         let enabled: Vec<_> = choices

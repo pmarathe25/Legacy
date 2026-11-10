@@ -16,7 +16,7 @@ pub use offers::CoreSocialResults;
 pub use requests::{CoreDeliveryResults, CoreRequestResults};
 pub use scheduler::{CoreRun, CoreRunEvent, CoreSchedule, DecisionPhase};
 pub use sites::{CoreRepairResults, CoreSites};
-pub use social::CoreSocial;
+pub use social::{CoreDynamicsResults, CoreHealth, CoreSocial};
 pub use tools::CoreToolRepairResults;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -44,6 +44,8 @@ pub struct CoreHostSnapshot {
     #[serde(default)]
     pub knowledge: Option<game_economy_knowledge::Knowledge>,
     #[serde(default)]
+    pub health: Option<CoreHealth>,
+    #[serde(default)]
     pub opinions: Option<game_opinions::Opinions>,
     #[serde(default)]
     pub goals: Option<game_goals::Goals>,
@@ -68,6 +70,7 @@ pub struct CoreHost {
     claims: Option<game_economy_claims::Claims>,
     social: Option<CoreSocial>,
     knowledge: Option<game_economy_knowledge::Knowledge>,
+    health: Option<CoreHealth>,
     work_checked_revision: Option<u64>,
     work_checked_blocked: Vec<u64>,
     opinions: Option<game_opinions::Opinions>,
@@ -87,6 +90,7 @@ struct CoreRuntimeOptions {
     claims: Option<game_economy_claims::Claims>,
     social: Option<CoreSocial>,
     knowledge: Option<game_economy_knowledge::Knowledge>,
+    health: Option<CoreHealth>,
 }
 impl CoreHost {
     pub fn begin(snapshot: CoreHostSnapshot, rates: &[(u64, u64)]) -> Result<Self, String> {
@@ -102,6 +106,7 @@ impl CoreHost {
             claims,
             social,
             knowledge,
+            health,
             opinions,
             goals,
             agreements,
@@ -127,6 +132,7 @@ impl CoreHost {
                 claims,
                 social,
                 knowledge,
+                health,
             },
         )
     }
@@ -143,6 +149,7 @@ impl CoreHost {
             claims,
             social,
             knowledge,
+            health,
             opinions,
             goals,
             agreements,
@@ -168,6 +175,7 @@ impl CoreHost {
                 claims,
                 social,
                 knowledge,
+                health,
             },
         )
     }
@@ -191,6 +199,7 @@ impl CoreHost {
             mut claims,
             social,
             mut knowledge,
+            health,
         } = options;
         if let Some(legacy) = food_search.as_mut().and_then(|owner| owner.claims.take()) {
             if claims.is_some() {
@@ -251,7 +260,10 @@ impl CoreHost {
             .work_interval()
             .ok_or("no physical interval")?
             .rates;
-        if (tool_requirements.is_empty() && fatigue.is_none() && !paused_work_rates.is_empty())
+        if (tool_requirements.is_empty()
+            && fatigue.is_none()
+            && health.is_none()
+            && !paused_work_rates.is_empty())
             || paused_work_rates
                 .par_windows(2)
                 .any(|rows| rows[0].0 >= rows[1].0)
@@ -343,6 +355,32 @@ impl CoreHost {
                 return Err("invalid social decision time".into());
             }
         }
+        if let Some(health) = &health {
+            let people: HashSet<_> = core.people.par_iter().map(|person| person.id).collect();
+            health.owner.validate(&people, core.physical.tick())?;
+            let goods: HashSet<_> = core
+                .physical
+                .goods()
+                .par_iter()
+                .map(|good| good.id)
+                .collect();
+            if health
+                .owner
+                .treatments
+                .par_iter()
+                .any(|treatment| !goods.contains(&treatment.medicine))
+                || health
+                    .last_tick
+                    .is_some_and(|tick| tick == 0 || tick > core.physical.tick())
+                || health
+                    .owner
+                    .events
+                    .par_iter()
+                    .any(|event| Some(event.tick) != health.last_tick)
+            {
+                return Err("invalid disease decision state".into());
+            }
+        }
         if let Some(owner) = &goals {
             let people: HashSet<_> = core.people.par_iter().map(|person| person.id).collect();
             let recipes: HashSet<_> = core
@@ -388,6 +426,7 @@ impl CoreHost {
             claims,
             social,
             knowledge,
+            health,
             work_checked_revision: None,
             work_checked_blocked: Vec::new(),
             opinions,
@@ -410,6 +449,7 @@ impl CoreHost {
             claims: self.claims.clone(),
             social: self.social.clone(),
             knowledge: self.knowledge.clone(),
+            health: self.health.clone(),
             opinions: self.opinions.clone(),
             goals: self.goals.clone(),
             agreements: self.agreements.clone(),
