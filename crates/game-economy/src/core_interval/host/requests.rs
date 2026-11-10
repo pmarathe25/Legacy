@@ -490,10 +490,24 @@ impl CoreHost {
                 )
             })
             .collect();
+        let mut visible: Vec<_> = requests
+            .pending
+            .par_iter()
+            .filter(|request| {
+                together(
+                    &self.core.people,
+                    request.requester,
+                    request.worker,
+                    request.region,
+                )
+            })
+            .map(|request| request.id)
+            .collect();
+        visible.par_sort_unstable();
         let outcomes = if starts.is_empty() {
             Vec::new()
         } else {
-            self.core.start_work(tick, offset, &starts)?
+            self.start_with_sites(&starts)?
         };
         let mut events: Vec<_> = draft
             .decisions
@@ -525,20 +539,6 @@ impl CoreHost {
             .collect();
         events.par_extend(draft.expired);
         events.par_sort_unstable_by_key(|event| event.request);
-        let mut visible: Vec<_> = requests
-            .pending
-            .par_iter()
-            .filter(|request| {
-                together(
-                    &self.core.people,
-                    request.requester,
-                    request.worker,
-                    request.region,
-                )
-            })
-            .map(|request| request.id)
-            .collect();
-        visible.par_sort_unstable();
         let auto = self.autowork.as_mut().expect("checked work owner");
         if !starts.is_empty() {
             auto.next_id = next;

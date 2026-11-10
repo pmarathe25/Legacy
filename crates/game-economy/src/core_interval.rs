@@ -16,8 +16,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 mod host;
 pub use host::{
-    CoreDeliveryResults, CoreHost, CoreHostSnapshot, CoreRequestResults, CoreRun, CoreRunEvent,
-    CoreSchedule, CoreSocialResults, DecisionPhase,
+    CoreDeliveryResults, CoreHost, CoreHostSnapshot, CoreRepairResults, CoreRequestResults,
+    CoreRun, CoreRunEvent, CoreSchedule, CoreSites, CoreSocialResults, DecisionPhase,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -448,6 +448,28 @@ impl CoreInterval {
         blocked: &[u64],
         rate: u64,
     ) -> Result<Vec<(u64, bool)>, String> {
+        let Some(plan) = self.plan_autonomous_work(tick, offset_millis, owner, blocked, rate)?
+        else {
+            return Ok(Vec::new());
+        };
+        let requests: Vec<_> = plan
+            .requests
+            .par_iter()
+            .map(|start| (*start, rate))
+            .collect();
+        let results = self.start_work(tick, offset_millis, &requests)?;
+        owner.next_id = plan.next_id;
+        Ok(results)
+    }
+    /// Prepare personal choices without admitting physical work yet.
+    pub fn plan_autonomous_work(
+        &self,
+        tick: u64,
+        offset_millis: u64,
+        owner: &game_autowork::Autowork,
+        blocked: &[u64],
+        rate: u64,
+    ) -> Result<Option<game_autowork::Plan>, String> {
         if self.physical.tick() != tick
             || self.elapsed_millis() != Some(offset_millis)
             || offset_millis >= self.physical.tick_millis()
@@ -485,17 +507,7 @@ impl CoreInterval {
         let production =
             game_lot_projection::production(&self.physical, &view, self.rules.max_work_hunger);
         let max_job = self.physical.work().last().map(|row| row.job.id);
-        let Some(plan) = owner.plan(&people, &production, &busy, max_job)? else {
-            return Ok(Vec::new());
-        };
-        let requests: Vec<_> = plan
-            .requests
-            .par_iter()
-            .map(|start| (*start, rate))
-            .collect();
-        let results = self.start_work(tick, offset_millis, &requests)?;
-        owner.next_id = plan.next_id;
-        Ok(results)
+        owner.plan(&people, &production, &busy, max_job)
     }
     /// Stop chosen jobs at this offset. Inputs stay in job custody until the
     /// boundary, where their return can succeed or remain blocked.

@@ -162,10 +162,10 @@ impl Runtime {
         }
         game_lot_work::validate_actions(&self.catalog, actions)?;
         if actions.par_iter().any(|action| {
-            action
-                .movements
-                .iter()
-                .any(|movement| !matches!(movement.from, Place::Person(_)) || movement.to.is_some())
+            !action.creations.is_empty()
+                || action.movements.iter().any(|movement| {
+                    !matches!(movement.from, Place::Person(_)) || movement.to.is_some()
+                })
         }) {
             return Err("interval consumption requires personal custody".into());
         }

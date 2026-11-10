@@ -5,9 +5,11 @@ use game_economy_work::tool_wear::ToolWear;
 mod offers;
 mod requests;
 mod scheduler;
+mod sites;
 pub use offers::CoreSocialResults;
 pub use requests::{CoreDeliveryResults, CoreRequestResults};
 pub use scheduler::{CoreRun, CoreRunEvent, CoreSchedule, DecisionPhase};
+pub use sites::{CoreRepairResults, CoreSites};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -24,6 +26,8 @@ pub struct CoreHostSnapshot {
     #[serde(default)]
     pub agreements: Option<game_agreements::Agreements>,
     #[serde(default)]
+    pub sites: Option<CoreSites>,
+    #[serde(default)]
     pub schedule: Option<CoreSchedule>,
 }
 
@@ -35,6 +39,7 @@ pub struct CoreHost {
     opinions: Option<game_opinions::Opinions>,
     goals: Option<game_goals::Goals>,
     agreements: Option<game_agreements::Agreements>,
+    sites: Option<CoreSites>,
     schedule: Option<CoreSchedule>,
 }
 impl CoreHost {
@@ -46,11 +51,18 @@ impl CoreHost {
             opinions,
             goals,
             agreements,
+            sites,
             schedule,
         } = snapshot;
         let core = CoreInterval::begin(core, rates)?;
         Self::compile(
-            core, autowork, tool_wear, opinions, goals, agreements, schedule,
+            core,
+            autowork,
+            tool_wear,
+            opinions,
+            goals,
+            agreements,
+            (sites, schedule),
         )
     }
     pub fn resume(snapshot: CoreHostSnapshot) -> Result<Self, String> {
@@ -61,11 +73,18 @@ impl CoreHost {
             opinions,
             goals,
             agreements,
+            sites,
             schedule,
         } = snapshot;
         let core = CoreInterval::resume(core)?;
         Self::compile(
-            core, autowork, tool_wear, opinions, goals, agreements, schedule,
+            core,
+            autowork,
+            tool_wear,
+            opinions,
+            goals,
+            agreements,
+            (sites, schedule),
         )
     }
     fn compile(
@@ -75,8 +94,9 @@ impl CoreHost {
         opinions: Option<game_opinions::Opinions>,
         goals: Option<game_goals::Goals>,
         agreements: Option<game_agreements::Agreements>,
-        schedule: Option<CoreSchedule>,
+        site_and_schedule: (Option<CoreSites>, Option<CoreSchedule>),
     ) -> Result<Self, String> {
+        let (mut sites, schedule) = site_and_schedule;
         if let Some(owner) = &autowork {
             let people: Vec<_> = core
                 .people
@@ -131,6 +151,12 @@ impl CoreHost {
                 .validate(&people, &goods, core.physical.tick())
                 .map_err(str::to_owned)?;
         }
+        if let Some(owner) = &mut sites {
+            owner.validate(&core)?;
+            if let Some(maintenance) = &mut owner.maintenance {
+                maintenance.enroll(&owner.facilities);
+            }
+        }
         if let Some(schedule) = &schedule {
             schedule.validate(&core)?;
         }
@@ -141,6 +167,7 @@ impl CoreHost {
             opinions,
             goals,
             agreements,
+            sites,
             schedule,
         })
     }
@@ -152,6 +179,7 @@ impl CoreHost {
             opinions: self.opinions.clone(),
             goals: self.goals.clone(),
             agreements: self.agreements.clone(),
+            sites: self.sites.clone(),
             schedule: self.schedule.clone(),
         }
     }
@@ -179,9 +207,7 @@ impl CoreHost {
         &mut self,
         requests: &[(game_production_model::Start, u64)],
     ) -> Result<Vec<(u64, bool)>, String> {
-        let tick = self.core.physical.tick();
-        let offset = self.core.elapsed_millis().ok_or("no physical interval")?;
-        self.core.start_work(tick, offset, requests)
+        self.start_with_sites(requests)
     }
     /// A worker may independently stop work; inputs return at the boundary.
     pub fn abandon_work(&mut self, requests: &[(u64, u64)]) -> Result<(), String> {
@@ -189,8 +215,13 @@ impl CoreHost {
         let offset = self.core.elapsed_millis().ok_or("no physical interval")?;
         let stopped: Vec<_> = requests.par_iter().map(|&(job, _)| (job, false)).collect();
         let next = self.stage_request_resolution(&stopped, tick, &self.core.people, false);
+        let ended: Vec<_> = requests.par_iter().map(|&(job, _)| job).collect();
+        let sites = self.stage_sites(&[], &ended, false);
         self.core.abandon_work(tick, offset, requests)?;
         self.publish_request_resolution(next);
+        if let Some(sites) = sites {
+            self.sites = Some(sites);
+        }
         Ok(())
     }
     /// Physical transfers do not imply any social consent or ownership rule.
@@ -270,6 +301,8 @@ impl CoreHost {
         );
         let requests =
             self.stage_request_resolution(&outcomes, draft.events().tick, &self.core.people, false);
+        let ended: Vec<_> = outcomes.par_iter().map(|&(job, _)| job).collect();
+        let sites = self.stage_sites(&draft.events().finished, &ended, false);
         let goals = self.stage_goals(
             &draft.events().finished,
             draft.events().tick,
@@ -282,6 +315,9 @@ impl CoreHost {
             self.tool_wear = Some(tools);
         }
         self.publish_request_resolution(requests);
+        if let Some(sites) = sites {
+            self.sites = Some(sites);
+        }
         if let Some(goals) = goals {
             self.goals = Some(goals);
         }
@@ -325,6 +361,32 @@ impl CoreHost {
         blocked: &[u64],
         rate: u64,
     ) -> Result<Vec<(u64, bool)>, String> {
+        if self.sites.is_some() {
+            let Some(owner) = &self.autowork else {
+                return Ok(Vec::new());
+            };
+            let tick = self.core.physical.tick();
+            let offset = self.core.elapsed_millis().ok_or("no physical interval")?;
+            let effective = self.goals.as_ref().map(|goals| goals.policies(owner, tick));
+            let Some(plan) = self.core.plan_autonomous_work(
+                tick,
+                offset,
+                effective.as_ref().unwrap_or(owner),
+                blocked,
+                rate,
+            )?
+            else {
+                return Ok(Vec::new());
+            };
+            let requests: Vec<_> = plan
+                .requests
+                .par_iter()
+                .map(|start| (*start, rate))
+                .collect();
+            let outcomes = self.start_with_sites(&requests)?;
+            self.autowork.as_mut().expect("checked work owner").next_id = plan.next_id;
+            return Ok(outcomes);
+        }
         let Some(owner) = &mut self.autowork else {
             return Ok(Vec::new());
         };
@@ -389,6 +451,10 @@ impl CoreHost {
             &draft.people.people,
             true,
         )?;
+        let mut ended = draft.events().finished.clone();
+        ended.par_extend(draft.events().interrupted.par_iter().copied());
+        ended.par_extend(draft.events().abandoned.par_iter().copied());
+        let sites = self.stage_sites(&draft.events().finished, &ended, true);
         let agreements = self.agreements.as_ref().and_then(|owner| {
             (!owner.events.is_empty()
                 || owner.contracts.par_iter().any(|contract| {
@@ -406,6 +472,9 @@ impl CoreHost {
             self.tool_wear = Some(tools);
         }
         self.publish_request_resolution(requests);
+        if let Some(sites) = sites {
+            self.sites = Some(sites);
+        }
         if let Some(goals) = goals {
             self.goals = Some(goals);
         }

@@ -232,14 +232,12 @@ impl Maintenance {
             .ok()
             .is_some_and(|i| condition.wear >= self.rules[i].wear_limit)
     }
-    pub fn finish(
-        &mut self,
-        prior: &Facilities,
-        current: &Facilities,
-        events: &Events,
-        repairs: Vec<Event>,
-    ) {
-        let finished: HashSet<_> = events.finished.par_iter().copied().collect();
+    /// Add wear only for work physically completed at a bound site.
+    pub fn record_work(&mut self, prior: &Facilities, completed: &[u64]) {
+        if completed.is_empty() {
+            return;
+        }
+        let finished: HashSet<_> = completed.par_iter().copied().collect();
         let mut usage: Vec<_> = prior
             .bindings
             .par_iter()
@@ -258,11 +256,6 @@ impl Maintenance {
                 )
             })
             .collect();
-        let mut repaired: Vec<_> = repairs
-            .par_iter()
-            .filter(|e| e.repaired)
-            .map(|e| e.site)
-            .collect();
         if !totals.is_empty() {
             self.conditions.par_iter_mut().for_each(|c| {
                 if let Ok(i) = totals.binary_search_by_key(&c.site, |r| r.0)
@@ -279,6 +272,33 @@ impl Maintenance {
                 }
             });
         }
+    }
+    pub fn finish(
+        &mut self,
+        prior: &Facilities,
+        current: &Facilities,
+        events: &Events,
+        repairs: Vec<Event>,
+    ) {
+        self.record_work(prior, &events.finished);
+        self.record_repairs(repairs);
+        if prior.sites.len() != current.sites.len()
+            || prior
+                .sites
+                .par_iter()
+                .zip(current.sites.par_iter())
+                .any(|(a, b)| a.id != b.id || a.kind != b.kind)
+        {
+            self.sync(current);
+        }
+    }
+    /// Apply personally chosen repairs only when physical consumption succeeded.
+    pub fn record_repairs(&mut self, repairs: Vec<Event>) {
+        let mut repaired: Vec<_> = repairs
+            .par_iter()
+            .filter(|e| e.repaired)
+            .map(|e| e.site)
+            .collect();
         if !repaired.is_empty() {
             if repaired.par_windows(2).any(|w| w[0] > w[1]) {
                 repaired.par_sort_unstable();
@@ -298,15 +318,6 @@ impl Maintenance {
             }
         }
         self.events = repairs;
-        if prior.sites.len() != current.sites.len()
-            || prior
-                .sites
-                .par_iter()
-                .zip(current.sites.par_iter())
-                .any(|(a, b)| a.id != b.id || a.kind != b.kind)
-        {
-            self.sync(current);
-        }
     }
 }
 #[derive(Clone, Copy)]
@@ -475,18 +486,23 @@ impl Context<'_> {
 }
 impl Plan {
     pub fn publish(self, tick: u64, events: &Events) -> Vec<Event> {
+        self.publish_outcomes(tick, &events.physical_actions)
+    }
+    /// Interpret only the actual receipts for these selected repairs.
+    pub fn publish_outcomes(
+        self,
+        tick: u64,
+        outcomes: &[game_lots::TransactionOutcome],
+    ) -> Vec<Event> {
         if self.rows.is_empty() {
             return Vec::new();
         }
         // Composed actions often retain their contiguous order. Verify the whole
         // range before using it; mixed boundaries can arrange receipts differently.
         let first = self.actions[0].id;
-        if let Some(start) = events
-            .physical_actions
-            .par_iter()
-            .position_any(|r| r.id == first)
+        if let Some(start) = outcomes.par_iter().position_any(|r| r.id == first)
             && let Some(end) = start.checked_add(self.actions.len())
-            && let Some(receipts) = events.physical_actions.get(start..end)
+            && let Some(receipts) = outcomes.get(start..end)
             && receipts
                 .par_iter()
                 .zip(self.actions.par_iter())
@@ -504,8 +520,7 @@ impl Plan {
                 })
                 .collect();
         }
-        let accepted: HashSet<_> = events
-            .physical_actions
+        let accepted: HashSet<_> = outcomes
             .par_iter()
             .filter(|r| r.accepted)
             .map(|r| r.id)

@@ -5,6 +5,7 @@ use super::*;
 #[serde(tag = "phase", rename_all = "snake_case")]
 pub enum DecisionPhase {
     Meals,
+    Maintenance { meal_people: Vec<u64> },
     Delivery { meal_people: Vec<u64> },
     Offers { meal_people: Vec<u64> },
     Acceptance { meal_people: Vec<u64> },
@@ -47,7 +48,8 @@ impl CoreSchedule {
         {
             return Err("invalid core decision schedule".into());
         }
-        if let DecisionPhase::Delivery { meal_people }
+        if let DecisionPhase::Maintenance { meal_people }
+        | DecisionPhase::Delivery { meal_people }
         | DecisionPhase::Offers { meal_people }
         | DecisionPhase::Acceptance { meal_people }
         | DecisionPhase::Asking { meal_people }
@@ -71,6 +73,7 @@ pub enum CoreRunEvent {
     Deferred(Vec<u64>),
     Work(game_lot_runtime::EarlyWorkEvents),
     Meals(Vec<(u64, u32)>),
+    Repairs(Vec<game_economy_building::maintenance::Event>),
     Deliveries(Vec<game_lots::TransactionOutcome>),
     Offers(Vec<u64>),
     Acceptances(Vec<u64>),
@@ -232,7 +235,11 @@ impl CoreHost {
                             ));
                         }
                         self.schedule.as_mut().expect("active schedule").phase =
-                            if self.agreements.is_some() {
+                            if self.sites.is_some() {
+                                DecisionPhase::Maintenance {
+                                    meal_people: people,
+                                }
+                            } else if self.agreements.is_some() {
                                 DecisionPhase::Delivery {
                                     meal_people: people,
                                 }
@@ -248,6 +255,31 @@ impl CoreHost {
                                 DecisionPhase::Work {
                                     meal_people: people,
                                 }
+                            };
+                    }
+                    DecisionPhase::Maintenance { mut meal_people } => {
+                        let mut busy = blocked.to_vec();
+                        busy.extend(meal_people.iter().copied());
+                        busy.par_sort_unstable();
+                        busy.dedup();
+                        let result = attempt!('run, self.repair_sites_autonomously(&busy));
+                        meal_people.extend(result.actors);
+                        meal_people.par_sort_unstable();
+                        meal_people.dedup();
+                        if !result.events.is_empty() {
+                            run.events.push(CoreRunEvent::Repairs(result.events));
+                        }
+                        self.schedule.as_mut().expect("active schedule").phase =
+                            if self.agreements.is_some() {
+                                DecisionPhase::Delivery { meal_people }
+                            } else if self
+                                .autowork
+                                .as_ref()
+                                .is_some_and(|owner| owner.requests.is_some())
+                            {
+                                DecisionPhase::Asking { meal_people }
+                            } else {
+                                DecisionPhase::Work { meal_people }
                             };
                     }
                     DecisionPhase::Delivery { mut meal_people } => {

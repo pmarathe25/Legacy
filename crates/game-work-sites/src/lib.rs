@@ -50,6 +50,36 @@ impl Clone for Facilities {
     }
 }
 impl Facilities {
+    /// Publish only provisional bindings whose physical jobs actually started.
+    pub fn record_started(&mut self, plan: &Plan, outcomes: &[(u64, bool)]) {
+        let mut accepted: Vec<_> = outcomes
+            .par_iter()
+            .filter_map(|&(id, yes)| yes.then_some(id))
+            .collect();
+        accepted.par_sort_unstable();
+        self.bindings.par_extend(
+            plan.bindings
+                .par_iter()
+                .filter(|binding| accepted.binary_search(&binding.job).is_ok())
+                .cloned(),
+        );
+        self.bindings
+            .par_sort_unstable_by_key(|binding| binding.job);
+    }
+
+    /// Release slots for ended jobs after their physical outcome is committed.
+    pub fn release_jobs(&mut self, jobs: &[u64]) {
+        if jobs.is_empty() {
+            return;
+        }
+        let mut ended = jobs.to_vec();
+        ended.par_sort_unstable();
+        self.bindings = std::mem::take(&mut self.bindings)
+            .into_par_iter()
+            .filter(|binding| ended.binary_search(&binding.job).is_err())
+            .collect();
+    }
+
     /// Destroy an unoccupied physical site without recovering any materials.
     pub fn destroy_idle(&mut self, id: u64) -> bool {
         if self.bindings.par_iter().any(|binding| binding.site == id) {
