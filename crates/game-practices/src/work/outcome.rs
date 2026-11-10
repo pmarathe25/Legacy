@@ -69,6 +69,14 @@ pub struct Reaction {
     pub obligation: i64,
 }
 
+/// Optional exact times for actions published within the current interval.
+pub struct Timing<'a> {
+    /// Job, physical tick, millisecond offset, and action order.
+    pub starts: &'a [(u64, u64, u64, u64)],
+    /// Recipient, action, physical tick, millisecond offset, and action order.
+    pub gifts: &'a [(u64, u64, u64, u64, u64)],
+}
+
 /// Observe started and finished jobs and directly received gifts. Choices read
 /// prior personal knowledge; the caller publishes this detached generation atomically.
 pub fn advance(
@@ -80,6 +88,19 @@ pub fn advance(
     gifts: &[GiftObservation],
     tick: u64,
 ) -> Vec<Reaction> {
+    advance_with_timing(prior, next, starts, finished, failed, gifts, (tick, None))
+}
+
+pub fn advance_with_timing(
+    prior: &Practices,
+    next: &mut Practices,
+    starts: &[Start],
+    finished: &[u64],
+    failed: &[u64],
+    gifts: &[GiftObservation],
+    clock: (u64, Option<&Timing<'_>>),
+) -> Vec<Reaction> {
+    let (tick, timing) = clock;
     if starts.is_empty()
         && finished.is_empty()
         && failed.is_empty()
@@ -101,6 +122,24 @@ pub fn advance(
     {
         return Vec::new();
     }
+    let start_times: std::collections::HashMap<_, _> =
+        timing.map_or_else(Default::default, |timing| {
+            timing
+                .starts
+                .par_iter()
+                .map(|&(job, tick, offset, order)| (job, (tick, offset, order)))
+                .collect()
+        });
+    let gift_times: std::collections::HashMap<_, _> =
+        timing.map_or_else(Default::default, |timing| {
+            timing
+                .gifts
+                .par_iter()
+                .map(|&(person, action, tick, offset, order)| {
+                    ((person, action), (tick, offset, order))
+                })
+                .collect()
+        });
     let mut sorted_starts;
     let starts = if starts.par_windows(2).any(|pair| {
         (pair[0].worker, pair[0].request, pair[0].job)
@@ -137,6 +176,10 @@ pub fn advance(
     gifts.par_sort_unstable_by_key(|row| {
         (
             row.person,
+            gift_times
+                .get(&(row.person, row.action))
+                .copied()
+                .unwrap_or((tick, u64::MAX, u64::MAX)),
             row.action,
             row.gift.other,
             row.gift.good,
@@ -172,50 +215,52 @@ pub fn advance(
             let Some(existing) = person.work.as_ref() else {
                 return Vec::new();
             };
-            let start = starts
-                .binary_search_by_key(&person.person, |row| row.worker)
-                .ok()
-                .map(|i| starts[i]);
-            let proposed = start.and_then(|start| {
-                let old_work = if aligned {
-                    prior.minds[index].work.as_ref()
-                } else {
-                    old.binary_search_by_key(&person.person, |row| row.person)
-                        .ok()
-                        .and_then(|i| old[i].work.as_ref())
-                }?;
-                old_work.outcome_policy?;
-                if existing.experiences.iter().any(|experience| {
-                    experience.request == start.request || experience.job == start.job
-                }) {
-                    return None;
-                }
-                let received = old_work
-                    .inbox
-                    .iter()
-                    .filter(|received| {
-                        received.decision == Decision::Adopted
-                            && received.delivered < tick
-                            && received.proposal.expires >= tick
-                            && received.proposal.author == start.requester
-                            && received.proposal.worker == start.worker
-                            && received.proposal.recipe == start.recipe
+            let s0 = starts.partition_point(|row| row.worker < person.person);
+            let s1 = starts.partition_point(|row| row.worker <= person.person);
+            let proposed: Vec<_> = starts[s0..s1]
+                .iter()
+                .filter_map(|&start| {
+                    let old_work = if aligned {
+                        prior.minds[index].work.as_ref()
+                    } else {
+                        old.binary_search_by_key(&person.person, |row| row.person)
+                            .ok()
+                            .and_then(|i| old[i].work.as_ref())
+                    }?;
+                    old_work.outcome_policy?;
+                    if existing.experiences.iter().any(|experience| {
+                        experience.request == start.request || experience.job == start.job
+                    }) {
+                        return None;
+                    }
+                    let started_at = start_times.get(&start.job).map_or(tick, |row| row.0);
+                    let received = old_work
+                        .inbox
+                        .iter()
+                        .filter(|received| {
+                            received.decision == Decision::Adopted
+                                && received.delivered < started_at
+                                && received.proposal.expires >= started_at
+                                && received.proposal.author == start.requester
+                                && received.proposal.worker == start.worker
+                                && received.proposal.recipe == start.recipe
+                        })
+                        .max_by_key(|received| (received.delivered, received.proposal.sequence))?;
+                    Some(Experience {
+                        proposal: received.proposal.clone(),
+                        request: start.request,
+                        job: start.job,
+                        delivered: received.delivered,
+                        started: started_at,
+                        completed: None,
+                        received: 0,
+                        assessed: false,
                     })
-                    .max_by_key(|received| (received.delivered, received.proposal.sequence))?;
-                Some(Experience {
-                    proposal: received.proposal.clone(),
-                    request: start.request,
-                    job: start.job,
-                    delivered: received.delivered,
-                    started: tick,
-                    completed: None,
-                    received: 0,
-                    assessed: false,
                 })
-            });
+                .collect();
             let g0 = gifts.partition_point(|row| row.person < person.person);
             let g1 = gifts.partition_point(|row| row.person <= person.person);
-            let needs_update = proposed.is_some()
+            let needs_update = !proposed.is_empty()
                 || existing.experiences.iter().any(|experience| {
                     (experience.completed.is_none()
                         && finished.binary_search(&experience.job).is_ok())
@@ -242,12 +287,21 @@ pub fn advance(
                 return Vec::new();
             }
             let work = std::sync::Arc::make_mut(person.work.as_mut().expect("work mind"));
-            if let Some(experience) = proposed {
-                work.experiences.push(experience);
+            if !proposed.is_empty() {
+                for experience in proposed {
+                    if !work
+                        .experiences
+                        .iter()
+                        .any(|old| old.request == experience.request || old.job == experience.job)
+                    {
+                        work.experiences.push(experience);
+                    }
+                }
                 work.experiences
                     .sort_unstable_by_key(|row| (row.started, row.request, row.job));
                 if work.experiences.len() > MAX_PROPOSALS {
-                    work.experiences.remove(0);
+                    work.experiences
+                        .drain(..work.experiences.len() - MAX_PROPOSALS);
                 }
             }
             work.experiences.retain(|experience| {
@@ -265,8 +319,20 @@ pub fn advance(
                     if remaining == 0 {
                         break;
                     }
+                    let after_start = gift_times.get(&(gift.person, gift.action)).map_or(
+                        experience.started < tick,
+                        |&(gift_tick, gift_offset, gift_order)| {
+                            gift_tick > experience.started
+                                || (gift_tick == experience.started
+                                    && start_times.get(&experience.job).is_some_and(
+                                        |&(_, start_offset, start_order)| {
+                                            (gift_offset, gift_order) > (start_offset, start_order)
+                                        },
+                                    ))
+                        },
+                    );
                     if experience.assessed
-                        || experience.started >= tick
+                        || !after_start
                         || experience.proposal.author != gift.gift.other
                         || experience.proposal.good != gift.gift.good
                     {

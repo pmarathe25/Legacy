@@ -17,9 +17,9 @@ use std::collections::HashSet;
 mod host;
 pub use host::{
     CoreDeliveryResults, CoreDynamicsResults, CoreFoodProvision, CoreFoodSearch, CoreHealth,
-    CoreHost, CoreHostSnapshot, CorePurpose, CoreRepairResults, CoreRequestResults, CoreRun,
-    CoreRunEvent, CoreSchedule, CoreSites, CoreSocial, CoreSocialResults, CoreToolRepairResults,
-    CoreTreatmentResults, DecisionPhase,
+    CoreHost, CoreHostSnapshot, CorePracticeWorkEvidence, CorePurpose, CoreRepairResults,
+    CoreRequestResults, CoreRun, CoreRunEvent, CoreSchedule, CoreSites, CoreSocial,
+    CoreSocialResults, CoreToolRepairResults, CoreTreatmentResults, DecisionPhase,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

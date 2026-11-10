@@ -243,6 +243,33 @@ impl CoreHost {
             .physical
             .validate_interval_consumption(&physical)?;
         self.core.physical.commit_interval_consumption(physical)?;
+        if self.tracks_work_expectations() {
+            let base = (self.practice_work_evidence.starts.len()
+                + self.practice_work_evidence.gifts.len()) as u64;
+            let admitted: Vec<_> = ordered
+                .par_iter()
+                .zip(transfers.par_iter())
+                .filter(|(delivery, _)| accepted.binary_search(&delivery.contract).is_ok())
+                .map(|(_, transfer)| transfer)
+                .collect();
+            self.practice_work_evidence
+                .gifts
+                .par_extend(
+                    admitted
+                        .into_par_iter()
+                        .enumerate()
+                        .map(|(index, transfer)| {
+                            (
+                                transfer.creditor,
+                                transfer.debtor,
+                                transfer.good,
+                                transfer.quantity,
+                                offset,
+                                base + index as u64,
+                            )
+                        }),
+                );
+        }
         self.agreements = Some(next);
         Ok(outcomes)
     }
@@ -645,6 +672,36 @@ impl CoreHost {
             .collect();
         events.par_extend(draft.expired);
         events.par_sort_unstable_by_key(|event| event.request);
+        let practice_starts: Vec<_> = if self.tracks_work_expectations() {
+            let owner = self
+                .autowork
+                .as_ref()
+                .and_then(|auto| auto.requests.as_ref())
+                .expect("checked request owner");
+            let mut pending: Vec<_> = owner.pending.par_iter().collect();
+            pending.par_sort_unstable_by_key(|request| request.id);
+            events
+                .par_iter()
+                .filter_map(|event| {
+                    let Outcome::Started { job } = event.outcome else {
+                        return None;
+                    };
+                    let request = pending
+                        .binary_search_by_key(&event.request, |row| row.id)
+                        .ok()
+                        .map(|index| pending[index])?;
+                    Some(game_economy_work::StartedRequest {
+                        request: request.id,
+                        requester: request.requester,
+                        worker: request.worker,
+                        recipe: request.recipe,
+                        job,
+                    })
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
         let auto = self.autowork.as_mut().expect("checked work owner");
         if !starts.is_empty() {
             auto.next_id = next;
@@ -658,6 +715,17 @@ impl CoreHost {
             .filter(|request| ended.binary_search(&request.id).is_err())
             .collect();
         requests.events = events.clone();
+        let base = (self.practice_work_evidence.starts.len()
+            + self.practice_work_evidence.gifts.len()) as u64;
+        self.practice_work_evidence.start_times.par_extend(
+            practice_starts
+                .par_iter()
+                .enumerate()
+                .map(|(index, row)| (row.job, tick, offset, base + index as u64)),
+        );
+        self.practice_work_evidence
+            .starts
+            .par_extend(practice_starts);
         Ok(CoreRequestResults { actors, events })
     }
 

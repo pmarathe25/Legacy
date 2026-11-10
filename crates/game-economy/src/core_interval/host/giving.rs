@@ -1,6 +1,23 @@
 //! Personal requests and sharing move real possessions without binding either person.
 use super::*;
 
+/// Evidence published early in the current physical interval.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CorePracticeWorkEvidence {
+    #[serde(default)]
+    pub starts: Vec<game_economy_work::StartedRequest>,
+    #[serde(default)]
+    pub start_times: Vec<(u64, u64, u64, u64)>,
+    #[serde(default)]
+    pub finished: Vec<u64>,
+    #[serde(default)]
+    pub failed: Vec<u64>,
+    /// Recipient, giver, good, quantity, offset, and order of an accepted delivery.
+    #[serde(default)]
+    pub gifts: Vec<(u64, u64, u32, u64, u64, u64)>,
+}
+
 pub(super) struct GivingFrame {
     pub owner: crate::Giving,
     pub plan: crate::giving::Plan,
@@ -9,6 +26,33 @@ pub(super) struct GivingFrame {
 }
 
 impl CoreHost {
+    pub(super) fn tracks_work_expectations(&self) -> bool {
+        self.giving
+            .as_ref()
+            .and_then(|owner| owner.practices.as_ref())
+            .is_some_and(|owner| {
+                owner.minds.par_iter().any(|mind| {
+                    mind.work.as_ref().is_some_and(|work| {
+                        work.outcome_policy.is_some() || !work.experiences.is_empty()
+                    })
+                })
+            })
+    }
+    pub(super) fn record_early_work_outcomes(&mut self, finished: &[u64], failed: &[u64]) {
+        if (finished.is_empty() && failed.is_empty()) || !self.tracks_work_expectations() {
+            return;
+        }
+        self.practice_work_evidence
+            .finished
+            .par_extend(finished.par_iter().copied());
+        self.practice_work_evidence
+            .failed
+            .par_extend(failed.par_iter().copied());
+        self.practice_work_evidence.finished.par_sort_unstable();
+        self.practice_work_evidence.finished.dedup();
+        self.practice_work_evidence.failed.par_sort_unstable();
+        self.practice_work_evidence.failed.dedup();
+    }
     pub(super) fn plan_giving(
         &self,
         external: &[u64],
@@ -148,12 +192,12 @@ impl CoreHost {
         contacts: &[(u64, u64)],
         events: &game_lot_runtime::Events,
         tick: u64,
-    ) -> Result<(), String> {
+    ) -> Result<Vec<game_opinions::PersonalChange>, String> {
         let Some(opening) = self.giving.as_ref() else {
-            return Ok(());
+            return Ok(Vec::new());
         };
         let Some(practices) = opening.practices.as_ref() else {
-            return Ok(());
+            return Ok(Vec::new());
         };
         let view = self.core.physical.view(tick)?;
         let locations = game_economy_person::travel::Colocation::new(self.core.travel.as_ref());
@@ -223,7 +267,11 @@ impl CoreHost {
                     .and_then(|owner| owner.requests.as_ref()),
                 work_asks: &self.practice_work_asks,
                 practice_requests: &practice_requests,
-                started_work: &[],
+                started_work: &self.practice_work_evidence.starts,
+                early_start_times: &self.practice_work_evidence.start_times,
+                early_finished: &self.practice_work_evidence.finished,
+                early_failed: &self.practice_work_evidence.failed,
+                early_gifts: &self.practice_work_evidence.gifts,
                 encounters: &encounters,
                 gifts: &frame.plan,
                 promise_deliveries: &[],
@@ -231,10 +279,17 @@ impl CoreHost {
                 tick,
             },
         )?;
-        if !reactions.is_empty() {
-            return Err("unexpected work-practice reaction".into());
-        }
         frame.owner.practices = Some(next);
-        Ok(())
+        Ok(reactions
+            .into_par_iter()
+            .map(|row| game_opinions::PersonalChange {
+                observer: row.observer,
+                target: row.target,
+                trust: row.trust,
+                affinity: row.affinity,
+                fear: row.fear,
+                obligation: row.obligation,
+            })
+            .collect())
     }
 }

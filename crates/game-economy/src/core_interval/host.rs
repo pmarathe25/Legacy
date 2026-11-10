@@ -29,6 +29,7 @@ mod taking;
 mod tools;
 mod treatment;
 pub use food_search::{CoreFoodProvision, CoreFoodSearch};
+pub use giving::CorePracticeWorkEvidence;
 pub use offers::CoreSocialResults;
 pub use purpose::CorePurpose;
 pub use requests::{CoreDeliveryResults, CoreRequestResults};
@@ -70,6 +71,8 @@ pub struct CoreHostSnapshot {
     pub giving: Option<crate::Giving>,
     #[serde(default)]
     pub practice_work_asks: Vec<game_autowork::requests::Request>,
+    #[serde(default)]
+    pub practice_work_evidence: CorePracticeWorkEvidence,
     #[serde(default)]
     pub taking: Option<game_economy_taking::Taking>,
     #[serde(default)]
@@ -134,6 +137,7 @@ pub struct CoreHost {
     medical: Option<crate::Medical>,
     giving: Option<crate::Giving>,
     practice_work_asks: Vec<game_autowork::requests::Request>,
+    practice_work_evidence: CorePracticeWorkEvidence,
     taking: Option<game_economy_taking::Taking>,
     agriculture: Option<game_economy_agriculture::Agriculture>,
     irrigation: Option<game_economy_agriculture::irrigation::Irrigation>,
@@ -174,6 +178,7 @@ struct CoreRuntimeOptions {
     medical: Option<crate::Medical>,
     giving: Option<crate::Giving>,
     practice_work_asks: Vec<game_autowork::requests::Request>,
+    practice_work_evidence: CorePracticeWorkEvidence,
     taking: Option<game_economy_taking::Taking>,
     agriculture: Option<game_economy_agriculture::Agriculture>,
     irrigation: Option<game_economy_agriculture::irrigation::Irrigation>,
@@ -210,6 +215,7 @@ impl CoreHost {
             medical,
             giving,
             practice_work_asks,
+            practice_work_evidence,
             taking,
             agriculture,
             irrigation,
@@ -256,6 +262,7 @@ impl CoreHost {
                 medical,
                 giving,
                 practice_work_asks,
+                practice_work_evidence,
                 taking,
                 agriculture,
                 irrigation,
@@ -293,6 +300,7 @@ impl CoreHost {
             medical,
             giving,
             practice_work_asks,
+            practice_work_evidence,
             taking,
             agriculture,
             irrigation,
@@ -339,6 +347,7 @@ impl CoreHost {
                 medical,
                 giving,
                 practice_work_asks,
+                practice_work_evidence,
                 taking,
                 agriculture,
                 irrigation,
@@ -383,6 +392,7 @@ impl CoreHost {
             medical,
             giving,
             practice_work_asks,
+            practice_work_evidence,
             taking,
             agriculture,
             irrigation,
@@ -582,18 +592,6 @@ impl CoreHost {
             )?;
         }
         if let Some(owner) = &giving {
-            if owner.practices.as_ref().is_some_and(|practices| {
-                practices.minds.par_iter().any(|mind| {
-                    mind.work.as_ref().is_some_and(|work| {
-                        work.outcome_policy.is_some() || !work.experiences.is_empty()
-                    })
-                })
-            }) {
-                return Err(
-                    "work practice outcome experiences are not yet supported by the interval host"
-                        .into(),
-                );
-            }
             let people: HashSet<_> = core.people.par_iter().map(|person| person.id).collect();
             owner.validate(
                 &people,
@@ -632,6 +630,112 @@ impl CoreHost {
                     .any(|rows| rows[0].id >= rows[1].id)
             {
                 return Err("invalid pending practice work asks".into());
+            }
+        }
+        if practice_work_evidence != CorePracticeWorkEvidence::default() {
+            if giving
+                .as_ref()
+                .and_then(|owner| owner.practices.as_ref())
+                .is_none()
+            {
+                return Err("work evidence requires personal practices".into());
+            }
+            let people: HashSet<_> = core.people.par_iter().map(|person| person.id).collect();
+            let recipes: HashSet<_> = core
+                .physical
+                .recipes()
+                .par_iter()
+                .map(|recipe| recipe.id)
+                .collect();
+            let goods: HashSet<_> = core
+                .physical
+                .goods()
+                .par_iter()
+                .map(|good| good.id)
+                .collect();
+            let elapsed = core.elapsed_millis().ok_or("no physical interval")?;
+            let mut ordered_offsets: Vec<_> = practice_work_evidence
+                .start_times
+                .par_iter()
+                .map(|&(_, _, offset, order)| (order, offset))
+                .collect();
+            ordered_offsets.par_extend(
+                practice_work_evidence
+                    .gifts
+                    .par_iter()
+                    .map(|&(_, _, _, _, offset, order)| (order, offset)),
+            );
+            ordered_offsets.par_sort_unstable_by_key(|row| row.0);
+            let mut timed_jobs: Vec<_> = practice_work_evidence
+                .start_times
+                .par_iter()
+                .map(|&(job, _, _, _)| job)
+                .collect();
+            timed_jobs.par_sort_unstable();
+            let mut recorded_jobs: Vec<_> = practice_work_evidence
+                .starts
+                .par_iter()
+                .map(|row| row.job)
+                .collect();
+            recorded_jobs.par_sort_unstable();
+            let mut start_ids: Vec<_> = practice_work_evidence
+                .starts
+                .par_iter()
+                .map(|row| row.request)
+                .collect();
+            start_ids.par_sort_unstable();
+            if ordered_offsets
+                .par_windows(2)
+                .any(|rows| rows[0].1 > rows[1].1)
+                || ordered_offsets
+                    .par_iter()
+                    .enumerate()
+                    .any(|(index, &(order, _))| order != index as u64)
+                || timed_jobs != recorded_jobs
+                || timed_jobs.par_windows(2).any(|rows| rows[0] == rows[1])
+                || practice_work_evidence
+                    .start_times
+                    .par_iter()
+                    .any(|&(_, tick, offset, _)| {
+                        tick != core.physical.tick()
+                            || offset >= core.physical.tick_millis()
+                            || offset > elapsed
+                    })
+                || start_ids.par_windows(2).any(|rows| rows[0] == rows[1])
+                || practice_work_evidence.starts.par_iter().any(|row| {
+                    row.request == 0
+                        || row.job == 0
+                        || row.requester == row.worker
+                        || !people.contains(&row.requester)
+                        || !people.contains(&row.worker)
+                        || !recipes.contains(&row.recipe)
+                })
+                || practice_work_evidence
+                    .finished
+                    .par_windows(2)
+                    .any(|rows| rows[0] >= rows[1])
+                || practice_work_evidence
+                    .failed
+                    .par_windows(2)
+                    .any(|rows| rows[0] >= rows[1])
+                || practice_work_evidence
+                    .finished
+                    .par_iter()
+                    .any(|id| *id == 0 || practice_work_evidence.failed.binary_search(id).is_ok())
+                || practice_work_evidence.failed.par_iter().any(|id| *id == 0)
+                || practice_work_evidence.gifts.par_iter().any(
+                    |&(recipient, giver, good, quantity, offset, _)| {
+                        recipient == giver
+                            || !people.contains(&recipient)
+                            || !people.contains(&giver)
+                            || !goods.contains(&good)
+                            || quantity == 0
+                            || offset >= core.physical.tick_millis()
+                            || offset > elapsed
+                    },
+                )
+            {
+                return Err("invalid pending work practice evidence".into());
             }
         }
         if let Some(owner) = &taking {
@@ -856,6 +960,7 @@ impl CoreHost {
             medical,
             giving,
             practice_work_asks,
+            practice_work_evidence,
             taking,
             agriculture,
             irrigation,
@@ -899,6 +1004,7 @@ impl CoreHost {
             medical: self.medical.clone(),
             giving: self.giving.clone(),
             practice_work_asks: self.practice_work_asks.clone(),
+            practice_work_evidence: self.practice_work_evidence.clone(),
             taking: self.taking.clone(),
             agriculture: self.agriculture.clone(),
             irrigation: self.irrigation.clone(),
@@ -1046,6 +1152,7 @@ impl CoreHost {
         ended.par_sort_unstable();
         let sites = self.stage_sites(&[], &ended, false);
         self.core.abandon_work(tick, offset, requests)?;
+        self.record_early_work_outcomes(&[], &ended);
         self.paused_work_rates
             .retain(|row| ended.binary_search(&row.0).is_err());
         self.work_checked_revision = None;
@@ -1143,6 +1250,7 @@ impl CoreHost {
         )?;
         self.core.validate_early_work(&draft)?;
         let events = self.core.commit_early_work(draft)?;
+        self.record_early_work_outcomes(&events.finished, &events.interrupted);
         if let Some(progress) = purpose_progress {
             self.purpose.as_mut().expect("purpose owner").progress = progress;
         }
@@ -1605,7 +1713,7 @@ impl CoreHost {
         if let Some(frame) = &giving {
             contacts.par_extend(frame.contacts.par_iter().copied());
         }
-        let taking_changes = if let Some(frame) = &mut taking {
+        let mut taking_changes = if let Some(frame) = &mut taking {
             frame.owner.events = frame.plan.publish(draft.events(), &[]);
             contacts.par_extend(
                 frame
@@ -1630,7 +1738,12 @@ impl CoreHost {
         let birth_health =
             self.stage_medical_health(birth_health, medical_resolved.as_ref(), draft.events().tick);
         if let Some(frame) = &mut giving {
-            self.stage_practices(frame, &contacts, draft.events(), draft.events().tick)?;
+            taking_changes.par_extend(self.stage_practices(
+                frame,
+                &contacts,
+                draft.events(),
+                draft.events().tick,
+            )?);
             frame.plan.learn_sharing(
                 &mut frame.owner,
                 draft.events(),
@@ -1792,6 +1905,7 @@ impl CoreHost {
         let events = self.core.commit_settlement(draft)?;
         self.goal_setbacks.clear();
         self.practice_work_asks.clear();
+        self.practice_work_evidence = CorePracticeWorkEvidence::default();
         if let Some(owner) = purpose {
             self.purpose = Some(owner);
         }

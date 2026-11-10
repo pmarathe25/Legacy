@@ -28,7 +28,8 @@ pub struct Plan {
     asks: Option<asking::Draft>,
 }
 /// A request that led to an actually started job, visible to its worker.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct StartedRequest {
     pub request: u64,
     pub requester: u64,

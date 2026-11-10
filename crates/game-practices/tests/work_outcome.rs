@@ -437,3 +437,124 @@ fn worker_start_observation_handles_reordered_staged_people() {
     reordered.minds.sort_unstable_by_key(|person| person.person);
     assert_eq!(reordered, expected);
 }
+
+#[test]
+fn terms_received_after_the_start_do_not_create_an_expectation() {
+    use game_practices::work::outcome::{Start, Timing, advance_with_timing};
+    let prior = fixture();
+    let mut next = prior.clone();
+    let start = Start {
+        requester: 1,
+        worker: 2,
+        recipe: 7,
+        request: 10,
+        job: 20,
+    };
+    let timing = Timing {
+        starts: &[(20, 1, 10, 0)],
+        gifts: &[],
+    };
+    assert!(
+        advance_with_timing(
+            &prior,
+            &mut next,
+            &[start],
+            &[20],
+            &[],
+            &[],
+            (2, Some(&timing))
+        )
+        .is_empty()
+    );
+    assert!(next.minds[1].work.as_ref().unwrap().experiences.is_empty());
+}
+
+#[test]
+fn multiple_starts_by_one_worker_in_a_boundary_are_distinct() {
+    use game_practices::work::outcome::Start;
+    let first = Start {
+        requester: 1,
+        worker: 2,
+        recipe: 7,
+        request: 10,
+        job: 20,
+    };
+    let second = Start {
+        request: 11,
+        job: 21,
+        ..first
+    };
+    let (state, reactions) = advance(&fixture(), &[first, second], &[20, 21], &[], 2);
+    assert!(reactions.is_empty());
+    let experiences = &state.minds[1].work.as_ref().unwrap().experiences;
+    assert_eq!(
+        experiences
+            .iter()
+            .map(|row| (row.request, row.job, row.completed))
+            .collect::<Vec<_>>(),
+        vec![(10, 20, Some(2)), (11, 21, Some(2))]
+    );
+}
+
+#[test]
+fn early_and_boundary_gifts_follow_their_actual_order() {
+    use game_practices::work::{
+        Gift, GiftObservation,
+        outcome::{Start, Timing, advance_with_timing},
+    };
+    let prior = fixture();
+    let mut next = prior.clone();
+    let first = Start {
+        requester: 1,
+        worker: 2,
+        recipe: 7,
+        request: 10,
+        job: 20,
+    };
+    let second = Start {
+        request: 11,
+        job: 21,
+        ..first
+    };
+    let early = GiftObservation {
+        person: 2,
+        action: 99,
+        gift: Gift {
+            tick: 2,
+            other: 1,
+            good: 4,
+            quantity: 2,
+            given: false,
+        },
+    };
+    let boundary = GiftObservation {
+        person: 2,
+        action: 1,
+        gift: Gift {
+            tick: 3,
+            ..early.gift
+        },
+    };
+    let timing = Timing {
+        starts: &[(20, 2, 1, 0), (21, 2, 3, 2)],
+        gifts: &[(2, 99, 2, 2, 1)],
+    };
+    let reactions = advance_with_timing(
+        &prior,
+        &mut next,
+        &[first, second],
+        &[20, 21],
+        &[],
+        &[boundary, early],
+        (3, Some(&timing)),
+    );
+    let experiences = &next.minds[1].work.as_ref().unwrap().experiences;
+    assert_eq!(
+        experiences
+            .iter()
+            .map(|row| row.received)
+            .collect::<Vec<_>>(),
+        vec![2, 2]
+    );
+    assert!(reactions.is_empty());
+}

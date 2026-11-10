@@ -9683,6 +9683,10 @@ impl Economy {
                     work_asks: work.as_ref().map_or(&[][..], |plan| plan.asks()),
                     practice_requests: &practice_requests,
                     started_work: &started_work,
+                    early_start_times: &[],
+                    early_finished: &[],
+                    early_failed: &[],
+                    early_gifts: &[],
                     encounters,
                     gifts: &giving_plan,
                     promise_deliveries: promises

@@ -20,6 +20,10 @@ pub struct Context<'a> {
     pub work_asks: &'a [game_autowork::requests::Request],
     pub practice_requests: &'a [game_economy_work::PracticeRequest],
     pub started_work: &'a [game_economy_work::StartedRequest],
+    pub early_start_times: &'a [(u64, u64, u64, u64)],
+    pub early_finished: &'a [u64],
+    pub early_failed: &'a [u64],
+    pub early_gifts: &'a [(u64, u64, u32, u64, u64, u64)],
     pub encounters: &'a [Encounter],
     pub gifts: &'a Plan,
     /// Other personally received transfers, such as delivery of a promise.
@@ -328,6 +332,49 @@ pub fn advance(
             // through a promise rather than the direct-gift action. The
             // sender's private reason for transferring it is not consulted.
             let mut receipts = std::borrow::Cow::Borrowed(observed_gifts.as_slice());
+            let mut gift_times = Vec::new();
+            if !context.early_gifts.is_empty() {
+                let base = context
+                    .events
+                    .physical_actions
+                    .par_iter()
+                    .map(|row| row.id)
+                    .max()
+                    .unwrap_or(0)
+                    .checked_add(1)
+                    .ok_or("practice gift action overflow")?;
+                base.checked_add(context.early_gifts.len() as u64)
+                    .ok_or("practice gift action overflow")?;
+                let early_tick = context
+                    .tick
+                    .checked_sub(1)
+                    .ok_or("invalid early gift tick")?;
+                gift_times = context
+                    .early_gifts
+                    .par_iter()
+                    .enumerate()
+                    .map(|(index, &(person, _, _, _, offset, order))| {
+                        (person, base + index as u64, early_tick, offset, order)
+                    })
+                    .collect();
+                receipts
+                    .to_mut()
+                    .par_extend(context.early_gifts.par_iter().enumerate().map(
+                        |(index, &(person, giver, good, quantity, _, _))| {
+                            game_practices::work::GiftObservation {
+                                person,
+                                action: base + index as u64,
+                                gift: game_practices::work::Gift {
+                                    tick: early_tick,
+                                    other: giver,
+                                    good,
+                                    quantity,
+                                    given: false,
+                                },
+                            }
+                        },
+                    ));
+            }
             if !context.promise_deliveries.is_empty() {
                 let accepted: HashSet<_> = context
                     .events
@@ -374,21 +421,30 @@ pub fn advance(
                     job: row.job,
                 })
                 .collect();
-            let failed: Vec<_> = context
+            let mut failed: Vec<_> = context
                 .events
                 .interrupted
                 .par_iter()
                 .chain(context.events.abandoned.par_iter())
                 .copied()
                 .collect();
-            reactions = game_practices::work::outcome::advance(
+            failed.par_extend(context.early_failed.par_iter().copied());
+            let mut finished = context.events.finished.clone();
+            finished.par_extend(context.early_finished.par_iter().copied());
+            reactions = game_practices::work::outcome::advance_with_timing(
                 owner,
                 &mut next,
                 &starts,
-                &context.events.finished,
+                &finished,
                 &failed,
                 &receipts,
-                context.tick,
+                (
+                    context.tick,
+                    Some(&game_practices::work::outcome::Timing {
+                        starts: context.early_start_times,
+                        gifts: &gift_times,
+                    }),
+                ),
             );
         }
         game_practices::work::remember_gifts(&mut next, &observed_gifts);
