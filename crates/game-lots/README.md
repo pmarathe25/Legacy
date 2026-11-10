@@ -22,6 +22,8 @@ When independent source and destination ranges are each ordered and disjoint, ch
 
 The normal transaction path can similarly isolate exclusive single-leg transfers when other actions consume goods, create lots, contain multiple legs, or use newly staged custody. An entire complex transaction stays in the general arbiter, and every source and destination it touches excludes overlapping transfers from the fast group. Transfers involving new custody also stay in the general group. The ignored `mixed_atomic_action_benchmark` compares both paths; `LEGACY_ATTEMPTS` and `LEGACY_WORKERS` select the workload and worker count, and `LEGACY_ADDITIONS` stages new custody.
 
+On the 10,000-person mixed campaign, replacing sorted contested-action IDs with parallel flags reduced the instrumented classification phase from 0.570 to 0.489 ms per boundary on one worker and from 0.352 to 0.306 ms on six in one repeated comparison. Fingerprints matched; whole-run timings overlapped. A mostly independent 100,000-transfer benchmark also showed overlapping timings.
+
 Independent transfers keep moved cohorts in immutable chunk-owned receipt arenas. Each outcome exposes only its own exact slice, and serialized outcomes retain their ordinary flat lot arrays. Copies of a receipt remain valid after the source draft is dropped.
 
 Independent transfers merge already ordered dated cohorts in linear time. Work is divided into fixed logical chunks that also expose parallelism in smaller, cohort-heavy batches. The ignored `many_cohort_transfer_benchmark` accepts `LEGACY_ATTEMPTS`, `LEGACY_COHORTS`, and `LEGACY_WORKERS` to measure this path.

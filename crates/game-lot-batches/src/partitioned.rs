@@ -2,6 +2,7 @@
 use game_lot_model::{Container, Place, SimpleTransfer, State, Transaction};
 use game_lot_planning::Draft;
 use rayon::prelude::*;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 /// Isolate simple transactions only when no other physical leg touches their
 /// custody. Multi-leg actions remain together in the general arbiter.
@@ -67,24 +68,25 @@ pub fn prepare_transactions(
         })
         .collect();
     endpoints.par_sort_unstable();
-    let mut contested: Vec<_> = endpoints
+    // Groups can share transaction indices, so mark them independently; the
+    // completed parallel pass precedes every subsequent flag read.
+    let contested: Vec<_> = (0..transactions.len())
+        .into_par_iter()
+        .map(|_| AtomicBool::new(false))
+        .collect();
+    endpoints
         .par_chunk_by(|a, b| a.0 == b.0)
         .filter(|group| group.len() > 1)
-        .flat_map_iter(|group| group.iter().map(|row| row.1))
-        .collect();
-    contested.par_sort_unstable();
-    let contested: Vec<_> = contested
-        .par_iter()
-        .enumerate()
-        .filter_map(|(index, &value)| {
-            (index == 0 || contested[index - 1] != value).then_some(value)
-        })
-        .collect();
+        .for_each(|group| {
+            for &(_, index) in group {
+                contested[index].store(true, Ordering::Relaxed);
+            }
+        });
     let eligible: Vec<_> = transactions
         .par_iter()
         .enumerate()
         .map(|(index, row)| {
-            if contested.binary_search(&index).is_ok()
+            if contested[index].load(Ordering::Relaxed)
                 || compact.binary_search(&row.id).is_ok()
                 || row.movements.len() != 1
                 || !row.creations.is_empty()
