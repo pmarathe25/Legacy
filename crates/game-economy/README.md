@@ -385,3 +385,5 @@ The interval host can track authored individual purpose as a representative slic
 With `LEGACY_DEPENDENT_DISEASE=1 LEGACY_RECOVERY=1 LEGACY_PURPOSE=1 LEGACY_PEOPLE=60000`, the ignored `core_host_cultivation_benchmark` measures dependent care, disease exposure, recovery, and purpose together. One run took 68.1, 46.2, 34.1, and 31.9 ms at one, two, four, and six workers; fingerprints matched. Setup is excluded and scaling remains sublinear.
 
 The ignored `core_host_autonomous_work_benchmark` with `LEGACY_GOAL_SETBACKS=1 LEGACY_PEOPLE=50000` measures 49,999 personally chosen goal-work attempts competing for absent inputs. Samples at one, two, four, and six workers took 7.7, 4.9, 3.1, and 2.8 ms, with the two-worker sample from a separate repeat; fingerprints matched and setup is excluded.
+
+With `LEGACY_GOAL_PLANNING=1 LEGACY_PEOPLE=50000`, the ignored `core_host_autonomous_work_benchmark` measures prerequisite recipe selection and physical admission for 49,999 people sharing a single input stock. One run took 69.9, 43.2, 30.6, and 27.3 ms at one, two, four, and six workers; fingerprints matched, setup is excluded, and scaling remains sublinear.

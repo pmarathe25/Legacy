@@ -262,6 +262,88 @@ fn timed_fatigue_tracks_early_completion_across_save_and_workers() {
                     }],
                     events: vec![],
                 });
+                let mut plan_goal = failed_goal.clone();
+                plan_goal.goals.as_mut().unwrap().plan_inputs = true;
+                plan_goal.fatigue = None;
+                plan_goal.core.physical.recipes.push(Recipe {
+                    id: 2,
+                    name: "make input".into(),
+                    ticks: 1,
+                    inputs: vec![Amount {
+                        good: 2,
+                        quantity: 1,
+                    }],
+                    outputs: vec![Amount {
+                        good: 1,
+                        quantity: 2,
+                    }],
+                });
+                let stock = plan_goal
+                    .core
+                    .physical
+                    .custody
+                    .containers
+                    .iter_mut()
+                    .find(|row| row.place == (Place::Stock { region: 1, good: 2 }))
+                    .unwrap();
+                *stock = Container::new(
+                    stock.place,
+                    10,
+                    vec![Lot {
+                        item: None,
+                        good: 2,
+                        quantity: 1,
+                        expires_at: None,
+                    }],
+                )
+                .unwrap();
+                let mut planned = CoreHost::begin(plan_goal, &[(1, 1)]).unwrap();
+                assert!(
+                    planned
+                        .start_autonomous_work(&[], 1)
+                        .unwrap()
+                        .iter()
+                        .any(|row| row.1)
+                );
+                let state = planned.snapshot();
+                assert!(state.goal_setbacks.is_empty());
+                assert!(
+                    state
+                        .core
+                        .physical
+                        .work
+                        .iter()
+                        .any(|work| work.job.worker == 2 && work.job.recipe == 2)
+                );
+                let saved = serde_json::to_string(&state).unwrap();
+                let mut reloaded = CoreHost::resume(serde_json::from_str(&saved).unwrap()).unwrap();
+                planned.progress(1000).unwrap();
+                reloaded.progress(1000).unwrap();
+                planned.settle().unwrap();
+                reloaded.settle().unwrap();
+                assert_eq!(planned.snapshot(), reloaded.snapshot());
+                assert_eq!(
+                    planned.snapshot().goals.as_ref().unwrap().people[0].progress,
+                    0
+                );
+                let mut delivering = CoreHost::begin(planned.snapshot(), &[]).unwrap();
+                delivering.progress(1000).unwrap();
+                delivering.settle().unwrap();
+                let mut next = CoreHost::begin(delivering.snapshot(), &[]).unwrap();
+                assert!(
+                    next.start_autonomous_work(&[], 1)
+                        .unwrap()
+                        .iter()
+                        .any(|row| row.1)
+                );
+                assert!(
+                    next.snapshot()
+                        .core
+                        .physical
+                        .work
+                        .iter()
+                        .any(|work| work.job.worker == 2 && work.job.recipe == 1)
+                );
                 let mut occupied = CoreHost::begin(failed_goal.clone(), &[(1, 1)]).unwrap();
                 occupied.start_autonomous_work(&[2], 1).unwrap();
                 assert!(occupied.snapshot().goal_setbacks.is_empty());
@@ -1472,7 +1554,8 @@ fn core_host_autonomous_work_benchmark() {
         .ok()
         .and_then(|value| value.parse().ok())
         .unwrap_or(1);
-    let goal_setbacks = std::env::var_os("LEGACY_GOAL_SETBACKS").is_some();
+    let goal_planning = std::env::var_os("LEGACY_GOAL_PLANNING").is_some();
+    let goal_setbacks = std::env::var_os("LEGACY_GOAL_SETBACKS").is_some() || goal_planning;
     let scheduled = std::env::var_os("LEGACY_SCHEDULED").is_some();
     let continuous = std::env::var_os("LEGACY_CONTINUOUS").is_some();
     let chosen = std::env::var_os("LEGACY_CHOSEN").is_some();
@@ -1519,13 +1602,46 @@ fn core_host_autonomous_work_benchmark() {
         },
     )
     .unwrap();
+    if goal_planning {
+        initial.physical.recipes.push(Recipe {
+            id: 2,
+            name: "make input".into(),
+            ticks: 1,
+            inputs: vec![Amount {
+                good: 2,
+                quantity: 1,
+            }],
+            outputs: vec![Amount {
+                good: 1,
+                quantity: 2,
+            }],
+        });
+        let stock = initial
+            .physical
+            .custody
+            .containers
+            .iter_mut()
+            .find(|row| row.place == (Place::Stock { region: 1, good: 2 }))
+            .unwrap();
+        *stock = Container::new(
+            stock.place,
+            count,
+            vec![Lot {
+                item: None,
+                good: 2,
+                quantity: count - 1,
+                expires_at: None,
+            }],
+        )
+        .unwrap();
+    }
     let snapshot = CoreHostSnapshot {
         core: initial,
         tool_wear: None,
         opinions: None,
         goals: goal_setbacks.then(|| game_goals::Goals {
             retry_interval: 1,
-            plan_inputs: false,
+            plan_inputs: goal_planning,
             people: (2..=count)
                 .map(|person| game_goals::Goal {
                     person,
@@ -1635,9 +1751,9 @@ fn core_host_autonomous_work_benchmark() {
                 let elapsed = start.elapsed().as_secs_f64();
                 assert_eq!(
                     outcomes.iter().filter(|row| row.1).count(),
-                    if goal_setbacks { 0 } else { (count - 1) as usize }
+                    if goal_setbacks && !goal_planning { 0 } else { (count - 1) as usize }
                 );
-                if goal_setbacks { assert_eq!(host.snapshot().goal_setbacks.len(), (count - 1) as usize); }
+                if goal_setbacks { assert_eq!(host.snapshot().goal_setbacks.len(), if goal_planning { 0 } else { (count - 1) as usize }); }
                 if round == 3 {
                     let mut hash = std::collections::hash_map::DefaultHasher::new();
                     serde_json::to_vec(&host.snapshot())

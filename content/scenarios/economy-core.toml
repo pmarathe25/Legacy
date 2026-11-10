@@ -160,6 +160,7 @@ deprivation = 0
 
 [goals]
 retry_interval = 3
+plan_inputs = true
 [[goals.people]]
 person = 2
 recipe = "fixture-tool"

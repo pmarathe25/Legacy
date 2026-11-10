@@ -1076,6 +1076,32 @@ impl CoreHost {
             .zip(self.autowork.as_ref())
             .map(|(goals, owner)| goals.policies(owner, self.core.physical.tick()));
         let candidates = self.goal_work_candidates(blocked, effective.as_ref());
+        if let (Some(goals), Some(base), Some(planned)) = (
+            self.goals.as_ref().filter(|goals| goals.plan_inputs),
+            self.autowork.as_ref(),
+            effective.as_mut(),
+        ) {
+            let tick = self.core.physical.tick();
+            let view = self.core.physical.view(tick)?;
+            let production = game_lot_projection::production(
+                &self.core.physical,
+                &view,
+                self.core.rules.max_work_hunger,
+            );
+            let people: Vec<_> = self
+                .core
+                .people
+                .par_iter()
+                .map(|person| (person.id, person.region, person.health, person.hunger))
+                .collect();
+            game_goals::planning::plan_at(
+                planned,
+                base,
+                &production,
+                &people,
+                tick / goals.retry_interval,
+            );
+        }
         let outcomes = self.start_autonomous_work_inner(blocked, rate, effective.as_mut())?;
         self.record_goal_setbacks(&candidates, &outcomes);
         Ok(outcomes)
