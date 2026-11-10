@@ -728,3 +728,97 @@ fn food_request_can_carry_a_doubted_taking_account() {
     }
     assert_eq!(run(1), run(6));
 }
+
+#[test]
+fn authored_work_practice_loads_named_recipe_and_good() {
+    let root = root();
+    let host = game_economy_cli::core_scenario(
+        &root.join("content/scenarios/economy-core-work-practices.toml"),
+        &root.join("content"),
+    )
+    .unwrap();
+    let snapshot = host.snapshot();
+    let proposal = snapshot
+        .giving
+        .as_ref()
+        .unwrap()
+        .practices
+        .as_ref()
+        .unwrap()
+        .minds[0]
+        .work
+        .as_ref()
+        .unwrap()
+        .authored
+        .as_ref()
+        .unwrap();
+    assert_eq!(
+        proposal.good,
+        snapshot
+            .core
+            .physical
+            .goods
+            .iter()
+            .find(|good| good.name == "bread")
+            .unwrap()
+            .id
+    );
+    assert_eq!(
+        proposal.recipe,
+        snapshot
+            .core
+            .physical
+            .recipes
+            .iter()
+            .find(|recipe| recipe.name == "fixture-tool")
+            .unwrap()
+            .id
+    );
+}
+
+#[test]
+fn work_terms_emerge_from_personal_experience_and_can_be_adopted_under_pressure() {
+    fn run(workers: usize) -> serde_json::Value {
+        rayon::ThreadPoolBuilder::new().num_threads(workers).build().unwrap().install(|| {
+            let root = root();
+            let initial = game_economy_cli::core_scenario(&root.join("content/scenarios/economy-core-work-practices.toml"), &root.join("content")).unwrap();
+            let mut snapshot = initial.snapshot();
+            snapshot.dependent_care = None;
+            snapshot.medical = None;
+            snapshot.gathering = None;
+            snapshot.family = None;
+            snapshot.core.people[0].hunger = 5;
+            let bread = snapshot.core.physical.goods.iter().find(|good| good.name == "bread").unwrap().id;
+            let recipe = snapshot.core.physical.recipes.iter().find(|recipe| recipe.name == "fixture-tool").unwrap().id;
+            let requests = snapshot.autowork.as_mut().unwrap().requests.as_mut().unwrap();
+            requests.next_id = 2;
+            requests.memories = vec![serde_json::from_value(serde_json::json!({"observer":2,"worker":1,"recipe":recipe,"successes":1,"failures":0,"last_tick":0,"last_success_at":0,"last_success":{"request":1,"job":1}})).unwrap()];
+            snapshot.opinions = Some(serde_json::from_value(serde_json::json!({"rules":{"minimum":-10,"maximum":10,"initial":0,"fulfilled_gain":1,"default_loss":1},"records":[{"observer":1,"target":2,"trust":0,"fear":2}]})).unwrap());
+            snapshot.giving.as_mut().unwrap().practices = Some(serde_json::from_value(serde_json::json!({"minds":[
+                {"person":1,"invent":false,"approve":false,"willing":false,"shortage_threshold":5,"minimum_shortages":1,"review_interval":2,"proposal_lifetime":8,
+                 "work":{"invent":false,"approve":false,"willing":false,"ask_willing":false,"review_interval":2,"proposal_lifetime":8,"pressure_threshold":1}},
+                {"person":2,"invent":false,"approve":false,"willing":false,"shortage_threshold":5,"minimum_shortages":1,"review_interval":2,"proposal_lifetime":8,
+                 "work":{"invent":true,"approve":false,"willing":false,"ask_willing":false,"review_interval":2,"proposal_lifetime":8,
+                         "gifts":[{"tick":0,"other":1,"good":bread,"quantity":1,"given":true}]}}
+            ]})).unwrap());
+            let mut host = game_economy::core_interval::CoreHost::resume(snapshot).unwrap();
+            assert_eq!(host.advance_continuous(3_600_000, &[]).unwrap().failure, None);
+            let first = host.snapshot();
+            let minds = &first.giving.as_ref().unwrap().practices.as_ref().unwrap().minds;
+            let proposal = minds[1].work.as_ref().unwrap().authored.as_ref().unwrap();
+            assert_eq!((proposal.author, proposal.worker, proposal.recipe, proposal.good), (2, 1, recipe, bread));
+            assert_eq!(serde_json::to_value(minds[0].work.as_ref().unwrap().inbox[0].decision).unwrap(), "pending");
+            let saved = serde_json::to_string(&first).unwrap();
+            let mut restored = game_economy::core_interval::CoreHost::resume(serde_json::from_str(&saved).unwrap()).unwrap();
+            assert_eq!(host.advance_continuous(3_600_000, &[]).unwrap().failure, None);
+            assert_eq!(restored.advance_continuous(3_600_000, &[]).unwrap().failure, None);
+            let result = host.snapshot();
+            assert_eq!(result, restored.snapshot());
+            let reception = &result.giving.as_ref().unwrap().practices.as_ref().unwrap().minds[0].work.as_ref().unwrap().inbox[0];
+            assert!(!reception.approved);
+            assert_eq!(serde_json::to_value(reception.decision).unwrap(), "adopted");
+            serde_json::to_value(result).unwrap()
+        })
+    }
+    assert_eq!(run(1), run(6));
+}

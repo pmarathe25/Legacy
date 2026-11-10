@@ -69,6 +69,8 @@ pub struct CoreHostSnapshot {
     #[serde(default)]
     pub giving: Option<crate::Giving>,
     #[serde(default)]
+    pub practice_work_asks: Vec<game_autowork::requests::Request>,
+    #[serde(default)]
     pub taking: Option<game_economy_taking::Taking>,
     #[serde(default)]
     pub agriculture: Option<game_economy_agriculture::Agriculture>,
@@ -131,6 +133,7 @@ pub struct CoreHost {
     health: Option<CoreHealth>,
     medical: Option<crate::Medical>,
     giving: Option<crate::Giving>,
+    practice_work_asks: Vec<game_autowork::requests::Request>,
     taking: Option<game_economy_taking::Taking>,
     agriculture: Option<game_economy_agriculture::Agriculture>,
     irrigation: Option<game_economy_agriculture::irrigation::Irrigation>,
@@ -170,6 +173,7 @@ struct CoreRuntimeOptions {
     health: Option<CoreHealth>,
     medical: Option<crate::Medical>,
     giving: Option<crate::Giving>,
+    practice_work_asks: Vec<game_autowork::requests::Request>,
     taking: Option<game_economy_taking::Taking>,
     agriculture: Option<game_economy_agriculture::Agriculture>,
     irrigation: Option<game_economy_agriculture::irrigation::Irrigation>,
@@ -205,6 +209,7 @@ impl CoreHost {
             health,
             medical,
             giving,
+            practice_work_asks,
             taking,
             agriculture,
             irrigation,
@@ -250,6 +255,7 @@ impl CoreHost {
                 health,
                 medical,
                 giving,
+                practice_work_asks,
                 taking,
                 agriculture,
                 irrigation,
@@ -286,6 +292,7 @@ impl CoreHost {
             health,
             medical,
             giving,
+            practice_work_asks,
             taking,
             agriculture,
             irrigation,
@@ -331,6 +338,7 @@ impl CoreHost {
                 health,
                 medical,
                 giving,
+                practice_work_asks,
                 taking,
                 agriculture,
                 irrigation,
@@ -374,6 +382,7 @@ impl CoreHost {
             health,
             medical,
             giving,
+            practice_work_asks,
             taking,
             agriculture,
             irrigation,
@@ -573,12 +582,17 @@ impl CoreHost {
             )?;
         }
         if let Some(owner) = &giving {
-            if owner
-                .practices
-                .as_ref()
-                .is_some_and(|practices| practices.minds.par_iter().any(|mind| mind.work.is_some()))
-            {
-                return Err("work practices are not yet supported by the interval host".into());
+            if owner.practices.as_ref().is_some_and(|practices| {
+                practices.minds.par_iter().any(|mind| {
+                    mind.work.as_ref().is_some_and(|work| {
+                        work.outcome_policy.is_some() || !work.experiences.is_empty()
+                    })
+                })
+            }) {
+                return Err(
+                    "work practice outcome experiences are not yet supported by the interval host"
+                        .into(),
+                );
             }
             let people: HashSet<_> = core.people.par_iter().map(|person| person.id).collect();
             owner.validate(
@@ -587,6 +601,38 @@ impl CoreHost {
                 core.physical.recipes(),
                 core.physical.tick(),
             )?;
+        }
+        if !practice_work_asks.is_empty() {
+            let Some(requests) = autowork.as_ref().and_then(|auto| auto.requests.as_ref()) else {
+                return Err("practice work asks require work requests".into());
+            };
+            let people: HashSet<_> = core.people.par_iter().map(|person| person.id).collect();
+            let recipes: HashSet<_> = core
+                .physical
+                .recipes()
+                .par_iter()
+                .map(|recipe| recipe.id)
+                .collect();
+            if giving
+                .as_ref()
+                .and_then(|owner| owner.practices.as_ref())
+                .is_none()
+                || practice_work_asks.par_iter().any(|ask| {
+                    ask.id == 0
+                        || ask.id >= requests.next_id
+                        || !people.contains(&ask.requester)
+                        || !people.contains(&ask.worker)
+                        || ask.requester == ask.worker
+                        || !recipes.contains(&ask.recipe)
+                        || ask.created_at != core.physical.tick()
+                        || ask.expires < ask.created_at
+                })
+                || practice_work_asks
+                    .par_windows(2)
+                    .any(|rows| rows[0].id >= rows[1].id)
+            {
+                return Err("invalid pending practice work asks".into());
+            }
         }
         if let Some(owner) = &taking {
             if owner.policies.par_iter().any(|policy| policy.escalate) {
@@ -809,6 +855,7 @@ impl CoreHost {
             health,
             medical,
             giving,
+            practice_work_asks,
             taking,
             agriculture,
             irrigation,
@@ -851,6 +898,7 @@ impl CoreHost {
             health: self.health.clone(),
             medical: self.medical.clone(),
             giving: self.giving.clone(),
+            practice_work_asks: self.practice_work_asks.clone(),
             taking: self.taking.clone(),
             agriculture: self.agriculture.clone(),
             irrigation: self.irrigation.clone(),
@@ -1743,6 +1791,7 @@ impl CoreHost {
         self.core.validate_settlement(&draft)?;
         let events = self.core.commit_settlement(draft)?;
         self.goal_setbacks.clear();
+        self.practice_work_asks.clear();
         if let Some(owner) = purpose {
             self.purpose = Some(owner);
         }

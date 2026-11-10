@@ -268,7 +268,35 @@ impl CoreHost {
         else {
             return Ok(Vec::new());
         };
-        if self.goals.is_none() || owner.askers.is_empty() {
+        let practices: Vec<_> = self
+            .giving
+            .as_ref()
+            .and_then(|giving| giving.practices.as_ref())
+            .map_or(&[][..], |owner| owner.minds.as_slice())
+            .par_iter()
+            .filter_map(|mind| {
+                let work = mind.work.as_ref()?;
+                let proposal = work.authored.as_ref()?;
+                let person = self
+                    .core
+                    .people
+                    .binary_search_by_key(&mind.person, |person| person.id)
+                    .ok()
+                    .map(|index| &self.core.people[index])?;
+                (work.ask_willing
+                    && work.engagement.is_none()
+                    && proposal.expires > tick
+                    && person.health > 0
+                    && !person.controlled)
+                    .then_some(game_economy_work::PracticeRequest {
+                        requester: mind.person,
+                        worker: proposal.worker,
+                        recipe: proposal.recipe,
+                        expires: proposal.expires,
+                    })
+            })
+            .collect();
+        if self.goals.is_none() || (owner.askers.is_empty() && practices.is_empty()) {
             return Ok(Vec::new());
         }
         let mut busy = blocked.to_vec();
@@ -300,12 +328,13 @@ impl CoreHost {
             .map(|person| (person.id, person.region, person.health, person.hunger))
             .collect();
         let offers = owner.offer_index(self.agreements.as_ref(), tick);
-        let Some(draft) = game_work_asking::prepare(
+        let Some(draft) = game_work_asking::prepare_with_practices(
             owner,
             self.goals.as_ref(),
             &people,
             &busy,
             offers.as_ref(),
+            &practices,
             tick,
         )
         .map_err(str::to_owned)?
@@ -313,6 +342,26 @@ impl CoreHost {
             return Ok(Vec::new());
         };
         let actors = draft.actors.clone();
+        if !practices.is_empty() {
+            let mut intentions: Vec<_> = practices
+                .par_iter()
+                .map(|row| (row.requester, row.worker, row.recipe))
+                .collect();
+            intentions.par_sort_unstable();
+            self.practice_work_asks.par_extend(
+                draft
+                    .requests
+                    .par_iter()
+                    .filter(|request| {
+                        intentions
+                            .binary_search(&(request.requester, request.worker, request.recipe))
+                            .is_ok()
+                    })
+                    .cloned(),
+            );
+            self.practice_work_asks
+                .par_sort_unstable_by_key(|request| request.id);
+        }
         game_work_asking::publish(
             self.autowork
                 .as_mut()

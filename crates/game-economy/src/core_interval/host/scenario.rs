@@ -120,6 +120,7 @@ impl CoreHostSnapshot {
             health,
             medical: state.medical,
             giving: state.giving,
+            practice_work_asks: vec![],
             taking: state.taking,
             agriculture: state.agriculture,
             irrigation: state.irrigation,

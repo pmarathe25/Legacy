@@ -542,9 +542,10 @@ struct GivingConfig {
     #[serde(default)]
     acquaintance_asking: Vec<game_economy::AcquaintanceAsking>,
 }
-fn resolve_practice_goods(
+fn resolve_practice_names(
     value: &mut toml::Value,
     goods: &BTreeMap<&str, u32>,
+    recipes: &BTreeMap<&str, u32>,
 ) -> Result<(), String> {
     match value {
         toml::Value::Table(table) => {
@@ -557,14 +558,22 @@ fn resolve_practice_goods(
                             .get(name)
                             .ok_or_else(|| format!("unknown practice good {name}"))?,
                     ));
+                } else if key == "recipe"
+                    && let Some(name) = value.as_str()
+                {
+                    *value = toml::Value::Integer(i64::from(
+                        *recipes
+                            .get(name)
+                            .ok_or_else(|| format!("unknown practice recipe {name}"))?,
+                    ));
                 } else {
-                    resolve_practice_goods(value, goods)?;
+                    resolve_practice_names(value, goods, recipes)?;
                 }
             }
         }
         toml::Value::Array(rows) => {
             for row in rows {
-                resolve_practice_goods(row, goods)?;
+                resolve_practice_names(row, goods, recipes)?;
             }
         }
         _ => {}
@@ -1391,7 +1400,7 @@ pub fn scenario_with_options(
             let practices = config
                 .practices
                 .map(|mut value| {
-                    resolve_practice_goods(&mut value, &goods)?;
+                    resolve_practice_names(&mut value, &goods, &recipes)?;
                     value
                         .try_into()
                         .map_err(|error: toml::de::Error| error.to_string())

@@ -117,7 +117,10 @@ impl CoreHost {
             missions: None,
             people: &self.core.people,
             opinions: self.opinions.as_ref(),
-            work_requests: None,
+            work_requests: self
+                .autowork
+                .as_ref()
+                .and_then(|owner| owner.requests.as_ref()),
             goods: self.core.physical.goods(),
             view: &view,
             busy: &busy,
@@ -195,6 +198,16 @@ impl CoreHost {
         }
         encounters.par_sort_unstable_by_key(|event| (event.a, event.b));
         encounters.dedup_by_key(|event| (event.a, event.b));
+        let practice_requests: Vec<_> = self
+            .practice_work_asks
+            .par_iter()
+            .map(|ask| game_economy_work::PracticeRequest {
+                requester: ask.requester,
+                worker: ask.worker,
+                recipe: ask.recipe,
+                expires: ask.expires,
+            })
+            .collect();
         let (next, reactions) = crate::giving_practices::advance(
             practices,
             crate::giving_practices::Context {
@@ -208,8 +221,8 @@ impl CoreHost {
                     .autowork
                     .as_ref()
                     .and_then(|owner| owner.requests.as_ref()),
-                work_asks: &[],
-                practice_requests: &[],
+                work_asks: &self.practice_work_asks,
+                practice_requests: &practice_requests,
                 started_work: &[],
                 encounters: &encounters,
                 gifts: &frame.plan,
