@@ -157,3 +157,11 @@ deprivation = 0
 [[purpose.people]]
 person = 2
 deprivation = 0
+
+[goals]
+retry_interval = 3
+[[goals.people]]
+person = 2
+recipe = "fixture-tool"
+priority = 1
+target = 1

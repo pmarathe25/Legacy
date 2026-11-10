@@ -141,6 +141,7 @@ impl CoreHostSnapshot {
             dependent_care: state.care,
             opinions: state.opinions,
             goals: state.goals,
+            goal_setbacks: vec![],
             agreements: state.agreements,
             sites,
             schedule: None,

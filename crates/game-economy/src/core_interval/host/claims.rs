@@ -6,6 +6,7 @@ impl CoreHost {
         &mut self,
         blocked: &[u64],
         rate: u64,
+        effective: Option<&Autowork>,
     ) -> Result<Option<Vec<(u64, bool)>>, String> {
         let Some(claims) = self
             .claims
@@ -19,8 +20,7 @@ impl CoreHost {
         };
         let tick = self.core.physical.tick();
         let offset = self.core.elapsed_millis().ok_or("no physical interval")?;
-        let effective = self.goals.as_ref().map(|goals| goals.policies(owner, tick));
-        let effective = effective.as_ref().unwrap_or(owner);
+        let effective = effective.unwrap_or(owner);
         let index = claims.index();
         let recipes: std::collections::HashMap<_, _> = self
             .core

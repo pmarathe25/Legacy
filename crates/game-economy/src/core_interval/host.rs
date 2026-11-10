@@ -14,6 +14,7 @@ mod fatigue;
 mod fauna;
 mod food_search;
 mod gathering;
+mod goals;
 mod hunting;
 mod offers;
 mod purpose;
@@ -95,6 +96,8 @@ pub struct CoreHostSnapshot {
     #[serde(default)]
     pub goals: Option<game_goals::Goals>,
     #[serde(default)]
+    pub goal_setbacks: Vec<(u64, u32)>,
+    #[serde(default)]
     pub agreements: Option<game_agreements::Agreements>,
     #[serde(default)]
     pub sites: Option<CoreSites>,
@@ -111,6 +114,7 @@ pub struct CoreHost {
     paused_work_rates: Vec<(u64, u64)>,
     fatigue: Option<game_economy_fatigue::TimedFatigue>,
     activity: Vec<game_economy_fatigue::TimedActivity>,
+    goal_setbacks: Vec<(u64, u32)>,
     food_search: Option<CoreFoodSearch>,
     claims: Option<game_economy_claims::Claims>,
     social: Option<CoreSocial>,
@@ -146,6 +150,7 @@ struct CoreRuntimeOptions {
     paused_work_rates: Vec<(u64, u64)>,
     fatigue: Option<game_economy_fatigue::TimedFatigue>,
     activity: Vec<game_economy_fatigue::TimedActivity>,
+    goal_setbacks: Vec<(u64, u32)>,
     food_search: Option<CoreFoodSearch>,
     claims: Option<game_economy_claims::Claims>,
     social: Option<CoreSocial>,
@@ -177,6 +182,7 @@ impl CoreHost {
             paused_work_rates,
             fatigue,
             activity,
+            goal_setbacks,
             food_search,
             claims,
             social,
@@ -218,6 +224,7 @@ impl CoreHost {
                 paused_work_rates,
                 fatigue,
                 activity,
+                goal_setbacks,
                 food_search,
                 claims,
                 social,
@@ -250,6 +257,7 @@ impl CoreHost {
             paused_work_rates,
             fatigue,
             activity,
+            goal_setbacks,
             food_search,
             claims,
             social,
@@ -291,6 +299,7 @@ impl CoreHost {
                 paused_work_rates,
                 fatigue,
                 activity,
+                goal_setbacks,
                 food_search,
                 claims,
                 social,
@@ -330,6 +339,7 @@ impl CoreHost {
             paused_work_rates,
             fatigue,
             mut activity,
+            goal_setbacks,
             mut food_search,
             mut claims,
             social,
@@ -679,9 +689,22 @@ impl CoreHost {
         if let Some(owner) = &purpose {
             let people: HashSet<_> = core.people.par_iter().map(|person| person.id).collect();
             owner.validate(&people)?;
-            if goals.is_some() && owner.owner.rules.blocked_increase > 0 {
-                return Err("purpose with goal setbacks is not yet supported".into());
-            }
+        }
+        if !goal_setbacks.is_empty()
+            && (goals.is_none()
+                || goal_setbacks.par_windows(2).any(|rows| rows[0] >= rows[1])
+                || goal_setbacks.par_iter().any(|&(person, recipe)| {
+                    core.people
+                        .binary_search_by_key(&person, |row| row.id)
+                        .is_err()
+                        || core
+                            .physical
+                            .recipes()
+                            .binary_search_by_key(&recipe, |row| row.id)
+                            .is_err()
+                }))
+        {
+            return Err("invalid pending goal setbacks".into());
         }
         if recovery.as_ref().is_some_and(|rules| rules.interval == 0) {
             return Err("invalid recovery rules".into());
@@ -703,6 +726,7 @@ impl CoreHost {
             paused_work_rates,
             fatigue,
             activity,
+            goal_setbacks,
             food_search,
             claims,
             social,
@@ -741,6 +765,7 @@ impl CoreHost {
             paused_work_rates: self.paused_work_rates.clone(),
             fatigue: self.fatigue.clone(),
             activity: self.activity.clone(),
+            goal_setbacks: self.goal_setbacks.clone(),
             food_search: self.food_search.clone(),
             claims: self.claims.clone(),
             social: self.social.clone(),
@@ -1045,6 +1070,25 @@ impl CoreHost {
         if blocked.par_windows(2).any(|rows| rows[0] >= rows[1]) {
             return Err("invalid occupied people".into());
         }
+        let mut effective = self
+            .goals
+            .as_ref()
+            .zip(self.autowork.as_ref())
+            .map(|(goals, owner)| goals.policies(owner, self.core.physical.tick()));
+        let candidates = self.goal_work_candidates(blocked, effective.as_ref());
+        let outcomes = self.start_autonomous_work_inner(blocked, rate, effective.as_mut())?;
+        self.record_goal_setbacks(&candidates, &outcomes);
+        Ok(outcomes)
+    }
+    fn start_autonomous_work_inner(
+        &mut self,
+        blocked: &[u64],
+        rate: u64,
+        effective: Option<&mut Autowork>,
+    ) -> Result<Vec<(u64, bool)>, String> {
+        if blocked.par_windows(2).any(|rows| rows[0] >= rows[1]) {
+            return Err("invalid occupied people".into());
+        }
         let occupied = self.blocked_with_rest(blocked);
         let blocked = occupied.as_deref().unwrap_or(blocked);
         let underage = self.family.as_ref().map(game_economy_work::underage);
@@ -1055,7 +1099,7 @@ impl CoreHost {
             rows
         });
         let blocked = unavailable.as_deref().unwrap_or(blocked);
-        if let Some(result) = self.start_claim_aware_work(blocked, rate)? {
+        if let Some(result) = self.start_claim_aware_work(blocked, rate, effective.as_deref())? {
             return Ok(result);
         }
         if self.sites.is_some() || !self.tool_requirements.is_empty() {
@@ -1064,11 +1108,10 @@ impl CoreHost {
             };
             let tick = self.core.physical.tick();
             let offset = self.core.elapsed_millis().ok_or("no physical interval")?;
-            let effective = self.goals.as_ref().map(|goals| goals.policies(owner, tick));
             let Some(plan) = self.core.plan_autonomous_work(
                 tick,
                 offset,
-                effective.as_ref().unwrap_or(owner),
+                effective.as_deref().unwrap_or(owner),
                 blocked,
                 rate,
             )?
@@ -1089,11 +1132,10 @@ impl CoreHost {
         };
         let tick = self.core.physical.tick();
         let offset = self.core.elapsed_millis().ok_or("no physical interval")?;
-        if let Some(goals) = &self.goals {
-            let mut effective = goals.policies(owner, tick);
-            let result =
-                self.core
-                    .start_autonomous_work(tick, offset, &mut effective, blocked, rate)?;
+        if let Some(effective) = effective {
+            let result = self
+                .core
+                .start_autonomous_work(tick, offset, effective, blocked, rate)?;
             owner.next_id = effective.next_id;
             Ok(result)
         } else {
@@ -1446,6 +1488,7 @@ impl CoreHost {
         });
         self.core.validate_settlement(&draft)?;
         let events = self.core.commit_settlement(draft)?;
+        self.goal_setbacks.clear();
         if let Some(owner) = purpose {
             self.purpose = Some(owner);
         }

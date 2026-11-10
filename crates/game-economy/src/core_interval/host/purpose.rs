@@ -52,13 +52,21 @@ impl CoreHost {
         let progress = self
             .stage_purpose_progress(finished)
             .expect("purpose owner");
-        let events: Vec<_> = progress
+        let mut events: Vec<_> = progress
             .par_iter()
             .map(|&person| game_purpose::Event {
                 person,
                 outcome: game_purpose::Outcome::Progress,
             })
             .collect();
+        events.par_extend(
+            self.goal_setbacks
+                .par_iter()
+                .map(|&(person, _)| game_purpose::Event {
+                    person,
+                    outcome: game_purpose::Outcome::Blocked,
+                }),
+        );
         let next = current.owner.prepare(&events, tick, |id| {
             people
                 .binary_search_by_key(&id, |person| person.id)

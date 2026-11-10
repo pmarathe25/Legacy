@@ -72,6 +72,8 @@ struct Scenario {
     #[serde(default)]
     aspirations: Vec<Aspiration>,
     #[serde(default)]
+    goals: Option<AuthoredGoals>,
+    #[serde(default)]
     aspiration_learning: Vec<game_economy::Learning>,
     #[serde(default)]
     inherit_aspiration_learning: bool,
@@ -133,6 +135,40 @@ struct Scenario {
     hauling: Option<HaulingConfig>,
     #[serde(default)]
     local_transport: Option<LocalTransportConfig>,
+}
+
+fn goal_retry_interval() -> u64 {
+    3
+}
+fn goal_enabled() -> bool {
+    true
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AuthoredGoals {
+    #[serde(default = "goal_retry_interval")]
+    retry_interval: u64,
+    #[serde(default)]
+    plan_inputs: bool,
+    people: Vec<AuthoredGoal>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AuthoredGoal {
+    person: u64,
+    recipe: String,
+    priority: i32,
+    target: u64,
+    #[serde(default)]
+    progress: u64,
+    #[serde(default)]
+    next_review: u64,
+    #[serde(default = "goal_enabled")]
+    enabled: bool,
+    #[serde(default)]
+    recognize_help: bool,
 }
 
 #[derive(Deserialize)]
@@ -1675,6 +1711,37 @@ pub fn scenario_with_options(
         })
         .collect::<Result<_, String>>()?;
     let has_dreams = !dreams.is_empty() || !scenario.aspiration_learning.is_empty();
+    let authored_goals = scenario
+        .goals
+        .take()
+        .map(|owner| {
+            let people = owner
+                .people
+                .into_iter()
+                .map(|goal| {
+                    let recipe = *recipes
+                        .get(goal.recipe.as_str())
+                        .ok_or_else(|| format!("unknown recipe {}", goal.recipe))?;
+                    Ok(game_economy::Goal {
+                        person: goal.person,
+                        recipe,
+                        priority: goal.priority,
+                        target: goal.target,
+                        progress: goal.progress,
+                        next_review: goal.next_review,
+                        enabled: goal.enabled,
+                        recognize_help: goal.recognize_help,
+                    })
+                })
+                .collect::<Result<Vec<_>, String>>()?;
+            Ok::<_, String>(Goals {
+                retry_interval: owner.retry_interval,
+                plan_inputs: owner.plan_inputs,
+                people,
+                events: vec![],
+            })
+        })
+        .transpose()?;
     for resident in scenario.people {
         let mut lots = Vec::new();
         for (name, quantity) in resident.goods {
@@ -1754,11 +1821,13 @@ pub fn scenario_with_options(
         work_sites,
         construction,
         confinement: scenario.confinement,
-        goals: has_dreams.then_some(Goals {
-            retry_interval: 3,
-            plan_inputs: true,
-            people: vec![],
-            events: vec![],
+        goals: authored_goals.or_else(|| {
+            has_dreams.then_some(Goals {
+                retry_interval: 3,
+                plan_inputs: true,
+                people: vec![],
+                events: vec![],
+            })
         }),
         dreams: has_dreams.then_some(Dreams {
             inherit_births: scenario.inherit_aspiration_learning,

@@ -25,6 +25,7 @@ fn run_scenario(workers: usize) -> serde_json::Value {
             assert_eq!(snapshot.core.people[0].health, 94);
             assert_eq!(snapshot.family.as_ref().unwrap().totals.births, 1);
             assert!(snapshot.animal_restraints.is_some());
+            assert_eq!(snapshot.goals.as_ref().unwrap().people.len(), 1);
             let purpose = &snapshot.purpose.as_ref().unwrap().owner;
             assert_eq!(purpose.people.len(), 3);
             assert_eq!(purpose.people[0].deprivation, 2);

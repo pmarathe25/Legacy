@@ -336,7 +336,15 @@ impl CoreHost {
         let Some(goals) = &self.goals else {
             return Ok(None);
         };
-        if finished.is_empty() {
+        let blocked: Vec<_> = if clear_events {
+            self.goal_setbacks
+                .par_iter()
+                .map(|&(person, recipe)| game_goals::Completion { person, recipe })
+                .collect()
+        } else {
+            Vec::new()
+        };
+        if finished.is_empty() && blocked.is_empty() {
             if clear_events && !goals.events.is_empty() {
                 let mut next = goals.clone();
                 next.events.clear();
@@ -374,7 +382,7 @@ impl CoreHost {
             completed.par_extend(goals.recognized_help(&observed));
         }
         if let Some(next) = goals
-            .prepare(&completed, &[], tick)
+            .prepare(&completed, &blocked, tick)
             .map_err(str::to_owned)?
         {
             return Ok(Some(next));

@@ -301,3 +301,5 @@ After grouping social encounters by local endpoint, two repeat runs of the same 
 The interval host can load fresh authored scenarios through `game_economy_cli::core_scenario` (or `core_scenario_with_options` for seed and population overlays). `content/scenarios/economy-core.toml` exercises family birth, dependent care, gathering, and wildlife. Import currently rejects scenario owners the host does not implement, naming them in the error; it does not silently discard those owners. The existing command-line runner still uses the whole-boundary host and is not yet connected to this API.
 
 The interval scenario also contains renewable animal-product rules and a personal collection policy. Collection depends on the animal's handling response and an accepted physical transfer.
+
+Scenarios may author `[goals]` directly, with `[[goals.people]]` entries naming a person, a recipe by content key, priority, and target. Optional retry and planning settings control the individual goal owner. A failed eligible goal-work attempt is recorded and can delay retry; it does not compel anyone to work.
