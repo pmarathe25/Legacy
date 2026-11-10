@@ -420,4 +420,4 @@ Work-practice outcome evidence retains job starts, early completion or abandonme
 
 With `LEGACY_WORK_EXPECTATION_GIFTS=1 LEGACY_PEOPLE=50000`, `core_host_cultivation_benchmark` measures 24,999 personal gifts and corresponding worker relationship responses. One run took 146.1, 95.5, 65.4, and 58.1 ms at one, two, four, and six workers; fingerprints matched and setup was excluded. This scales sublinearly.
 
-With `LEGACY_WORK_EXPECTATION_TIMING=1 LEGACY_PEOPLE=50000`, the same benchmark stages 24,999 saved early job starts and accepted deliveries, with physical custody already reflecting those deliveries. One run took 84.6, 61.2, 41.5, and 40.1 ms at one, two, four, and six workers. Fingerprints matched and setup was excluded; scaling is sublinear.
+With `LEGACY_WORK_EXPECTATION_TIMING=1 LEGACY_PEOPLE=50000`, the same benchmark stages 24,999 saved early job starts and accepted deliveries, with physical custody already reflecting those deliveries. One run took 88.4, 54.5, 41.5, and 36.3 ms at one, two, four, and six workers. Fingerprints matched and setup was excluded; scaling is sublinear.

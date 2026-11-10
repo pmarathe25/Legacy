@@ -168,27 +168,34 @@ pub fn advance_with_timing(
         failed
     };
 
+    // Resolve each receipt's exact time once, rather than during every sort comparison.
     let mut gifts: Vec<_> = gifts
         .par_iter()
         .filter(|row| !row.gift.given)
-        .copied()
-        .collect();
-    gifts.par_sort_unstable_by_key(|row| {
-        (
-            row.person,
-            gift_times
+        .map(|row| {
+            let time = gift_times
                 .get(&(row.person, row.action))
                 .copied()
-                .unwrap_or((tick, u64::MAX, u64::MAX)),
-            row.action,
-            row.gift.other,
-            row.gift.good,
-            row.gift.quantity,
-        )
-    });
+                .unwrap_or((tick, u64::MAX, u64::MAX));
+            (
+                (
+                    row.person,
+                    time,
+                    row.action,
+                    row.gift.other,
+                    row.gift.good,
+                    row.gift.quantity,
+                ),
+                *row,
+            )
+        })
+        .collect();
+    if gifts.par_windows(2).any(|pair| pair[0].0 > pair[1].0) {
+        gifts.par_sort_unstable_by_key(|row| row.0);
+    }
     let gifts: Vec<_> = gifts
-        .par_chunk_by(|a, b| (a.person, a.action) == (b.person, b.action))
-        .map(|rows| rows[0])
+        .par_chunk_by(|a, b| (a.1.person, a.1.action) == (b.1.person, b.1.action))
+        .map(|rows| rows[0].1)
         .collect();
     let aligned = !starts.is_empty()
         && prior.minds.len() == next.minds.len()
