@@ -31,6 +31,7 @@ pub struct CoreSnapshot {
 }
 
 pub struct CoreInterval {
+    generation: u64,
     seed: u64,
     physical: Runtime,
     people: Vec<Person>,
@@ -42,9 +43,25 @@ pub struct CoreInterval {
 /// Detached boundary state; an item owner may stage metadata from its physical
 /// changes before the host commits either owner.
 pub struct CoreSettlementDraft {
+    generation: u64,
     physical: game_lot_runtime::IntervalSettlementDraft,
     people: game_economy_person::Draft,
     travel: Option<Travel>,
+}
+/// A meal's physical and physiological effects, unpublished until commit.
+pub struct CoreMealDraft {
+    generation: u64,
+    physical: game_lot_runtime::IntervalConsumptionDraft,
+    people: Vec<Person>,
+    pending_food: Vec<FoodEffect>,
+}
+impl CoreMealDraft {
+    pub fn transactions(&self) -> &[game_lots::TransactionOutcome] {
+        self.physical.transactions()
+    }
+    pub fn item_updates(&self) -> &[(u64, Option<game_lots::Place>)] {
+        self.physical.item_updates()
+    }
 }
 impl CoreSettlementDraft {
     pub fn events(&self) -> &Events {
@@ -206,6 +223,7 @@ impl CoreInterval {
         }
         game_lot_diet::validate_pending(&pending_food, &ids, physical.tick())?;
         Ok(Self {
+            generation: 0,
             seed,
             physical,
             people,
@@ -316,6 +334,9 @@ impl CoreInterval {
         let Some(draft) = self.physical.prepare_early_work(self.seed)? else {
             return Ok(None);
         };
+        if !draft.item_updates().is_empty() {
+            return Err("identified work requires a staged item owner".into());
+        }
         self.physical.commit_early_work(draft).map(Some)
     }
     /// Stage early production so an item owner can prepare metadata before it
@@ -362,10 +383,17 @@ impl CoreInterval {
         if offset == 0 || offset >= self.physical.tick_millis() {
             return Err("early arrival requires a partial interval".into());
         }
+        let next_generation = self
+            .generation
+            .checked_add(1)
+            .ok_or("core revision overflow")?;
         let Some(travel) = &mut self.travel else {
             return Ok(None);
         };
         let people = travel.publish_arrivals(&mut self.people);
+        if !people.is_empty() {
+            self.generation = next_generation;
+        }
         Ok((!people.is_empty()).then_some(CoreArrivals {
             tick: self.physical.tick(),
             offset_millis: offset,
@@ -466,14 +494,13 @@ impl CoreInterval {
         }
         self.physical.transfer_interval(actions, self.seed)
     }
-    /// Let chosen living people consume food they physically hold. Hunger
-    /// relief applies now; nutrition and health effects settle at the boundary.
-    pub fn eat(
-        &mut self,
+    /// Stage chosen meals and expose item removals for other owners.
+    pub fn prepare_meals(
+        &self,
         tick: u64,
         offset_millis: u64,
         meals: &[game_lot_diet::Meal],
-    ) -> Result<game_lot_runtime::PhysicalOutcomes, String> {
+    ) -> Result<Option<CoreMealDraft>, String> {
         #[cfg(feature = "profile")]
         let mut phase = game_diagnostics::span("core.meal.validate");
         if self.physical.tick() != tick
@@ -487,11 +514,7 @@ impl CoreInterval {
             return Err("publish pending interval events before eating".into());
         }
         if meals.is_empty() {
-            return Ok(game_lot_runtime::PhysicalOutcomes {
-                transactions: vec![],
-                movements: vec![],
-                spoiled: vec![],
-            });
+            return Ok(None);
         }
         if meals.par_iter().any(|meal| {
             self.people
@@ -544,16 +567,56 @@ impl CoreInterval {
         let mut pending_food = self.pending_food.clone();
         pending_food.extend(effects.pending);
         #[cfg(feature = "profile")]
-        {
-            drop(phase);
-            phase = game_diagnostics::span("core.meal.commit");
-        }
-        let result = self.physical.commit_interval_consumption(draft)?;
-        #[cfg(feature = "profile")]
         drop(phase);
-        self.people = people;
-        self.pending_food = pending_food;
+        Ok(Some(CoreMealDraft {
+            generation: self.generation,
+            physical: draft,
+            people,
+            pending_food,
+        }))
+    }
+    pub fn validate_meals(&self, draft: &CoreMealDraft) -> Result<(), String> {
+        if self.generation != draft.generation {
+            return Err("stale meal draft".into());
+        }
+        self.physical.validate_interval_consumption(&draft.physical)
+    }
+    /// Commit only after any item owner has staged its metadata changes.
+    pub fn commit_meals(
+        &mut self,
+        draft: CoreMealDraft,
+    ) -> Result<game_lot_runtime::PhysicalOutcomes, String> {
+        #[cfg(feature = "profile")]
+        let _phase = game_diagnostics::span("core.meal.commit");
+        self.validate_meals(&draft)?;
+        let generation = self
+            .generation
+            .checked_add(1)
+            .ok_or("core revision overflow")?;
+        let result = self.physical.commit_interval_consumption(draft.physical)?;
+        self.people = draft.people;
+        self.pending_food = draft.pending_food;
+        self.generation = generation;
         Ok(result)
+    }
+    /// Eat ordinary fungible food; identified consumption needs a staged owner.
+    pub fn eat(
+        &mut self,
+        tick: u64,
+        offset_millis: u64,
+        meals: &[game_lot_diet::Meal],
+    ) -> Result<game_lot_runtime::PhysicalOutcomes, String> {
+        let Some(draft) = self.prepare_meals(tick, offset_millis, meals)? else {
+            return Ok(game_lot_runtime::PhysicalOutcomes {
+                transactions: vec![],
+                movements: vec![],
+                spoiled: vec![],
+            });
+        };
+        if !draft.item_updates().is_empty() {
+            return Err("identified meals require a staged item owner".into());
+        }
+        self.commit_meals(draft)
     }
     /// Progress without repeating decisions, publishing arrivals, or completing work.
     /// Failed validation leaves all owners unchanged.
@@ -568,6 +631,10 @@ impl CoreInterval {
         if consumed == 0 {
             return Ok(0);
         }
+        let generation = self
+            .generation
+            .checked_add(1)
+            .ok_or("core revision overflow")?;
         let mut people: Vec<_> = self.people.par_iter().cloned().collect();
         let mut travel = self.travel.clone();
         if let Some(travel) = &mut travel {
@@ -586,6 +653,7 @@ impl CoreInterval {
         debug_assert_eq!(advanced, consumed);
         self.people = people;
         self.travel = travel;
+        self.generation = generation;
         Ok(consumed)
     }
     /// Stage the full quantum without publishing physical or personal changes.
@@ -618,6 +686,7 @@ impl CoreInterval {
             .physical
             .prepare_interval_settlement(self.seed, identified)?;
         Ok(CoreSettlementDraft {
+            generation: self.generation,
             physical,
             people: draft,
             travel,
@@ -625,22 +694,33 @@ impl CoreInterval {
     }
     /// Validate the physical generation after other owners have staged changes.
     pub fn validate_settlement(&mut self, draft: &CoreSettlementDraft) -> Result<(), String> {
+        if self.generation != draft.generation {
+            return Err("stale core settlement draft".into());
+        }
         self.physical.validate_interval_settlement(&draft.physical)
     }
     /// Publish after all other owners have validated their own staged state.
     pub fn commit_settlement(&mut self, draft: CoreSettlementDraft) -> Result<Events, String> {
         self.validate_settlement(&draft)?;
+        let generation = self
+            .generation
+            .checked_add(1)
+            .ok_or("core revision overflow")?;
         let events = self.physical.commit_interval_settlement(draft.physical)?;
         self.people = draft.people.people;
         self.nutrition = draft.people.nutrition;
         self.pending_food = draft.people.pending;
         self.travel = draft.travel;
+        self.generation = generation;
         Ok(events)
     }
     /// Settle without identified production; callers with an item owner must
     /// use the staged API with that owner's persistent configuration.
     pub fn settle(&mut self) -> Result<Events, String> {
         let draft = self.prepare_settlement(None)?;
+        if draft.item_updates().iter().any(|row| row.1.is_none()) {
+            return Err("identified consumption requires a staged item owner".into());
+        }
         self.commit_settlement(draft)
     }
 }

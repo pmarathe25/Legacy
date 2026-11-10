@@ -12,6 +12,8 @@ The core can also commit transfers between people in the same region, or between
 
 Chosen living people can eat food they actually carry at a partial offset. Only accepted consumption reduces hunger immediately; health and nutrition effects are retained for the next boundary. Failed consumption and invalid batches do not grant effects, and a resumed interval preserves both the custody and pending effects.
 
+When a meal consumes identified property, the host uses `prepare_meals` to stage its item-owner changes before committing the physical and physiological effects. The `eat` convenience method rejects identified consumption. Likewise, ordinary early-work and boundary convenience calls reject identified input consumption; the host must use their staged forms to update item owners.
+
 `CoreInterval::next_deadline` observes the earliest work completion, traveler arrival, optional hunger threshold, or quantum boundary, including ties. `progress_to_deadline` stops at that time. The core can publish nonperishable work and arrivals at the offset; other early deadlines remain pending until settlement.
 
 The host can defer selected completed jobs, including perishable production, until the boundary. Deferred jobs keep their inputs and workers reserved, and no longer block other early completions. The host chooses which outputs require deferral.
@@ -39,6 +41,8 @@ Set `LEGACY_IDENTIFIED_SETTLE=1` to stage and commit identified output with tool
 Set `LEGACY_IDENTIFIED_EARLY=1` to stage and publish identified nonperishable output before the boundary. A 49,999-job run including staged tool conditions took 161, 95, 67, and 59 ms at those worker counts, with matching combined fingerprints. Earlier admission and later delivery are excluded.
 
 The ignored `interval_shared_transfer_benchmark` measures transfers from one stock into existing personal custody. A 50,000-transfer run took 27.4, 16.3, 10.6, and 10.4 ms at one, two, four, and six workers, with matching fingerprints. It excludes social choices and is not a campaign measurement.
+
+The ignored `interval_identified_meals_benchmark` measures identified consumption and tool-condition cleanup. One 50,000-person run took 64.9, 43.6, 34.5, and 30.7 ms at one, two, four, and six workers, with matching combined fingerprints. Setup is excluded and scaling is sublinear.
 
 Set `LEGACY_MEALS=1` to time the same people consuming their received food after the transfer. One 50,000-meal run took 63.8, 39.9, 31.2, and 28.4 ms at one, two, four, and six workers, with matching fingerprints. This excludes the earlier transfer and remains sublinear.
 

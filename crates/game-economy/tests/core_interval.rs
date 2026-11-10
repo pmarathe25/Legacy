@@ -308,6 +308,122 @@ fn interval_shared_transfer_benchmark() {
 }
 
 #[test]
+#[ignore = "manual identified meal owner scaling benchmark"]
+fn interval_identified_meals_benchmark() {
+    use std::hash::{Hash, Hasher};
+    let count = std::env::var("LEGACY_PEOPLE")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(50_000);
+    let workers = std::env::var("LEGACY_WORKERS")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(1);
+    assert!(count > 0);
+    let mut initial = fixture();
+    initial.physical.goods[1].food = Some(game_production_model::FoodProfile {
+        portion: 1,
+        hunger_relief: 1,
+        nutrients: Default::default(),
+        health_effect: 0,
+        shelf_days: None,
+    });
+    let person = initial.people[0].clone();
+    initial.people = (1..=count)
+        .map(|id| {
+            let mut row = person.clone();
+            row.id = id;
+            row
+        })
+        .collect();
+    initial.travel = None;
+    initial.nutrition = None;
+    initial.pending_food.clear();
+    initial
+        .physical
+        .custody
+        .containers
+        .extend((1..=count).map(|id| {
+            Container::new(
+                Place::Person(id),
+                1,
+                vec![Lot {
+                    item: Some(id),
+                    good: 2,
+                    quantity: 1,
+                    expires_at: None,
+                }],
+            )
+            .unwrap()
+        }));
+    initial
+        .physical
+        .custody
+        .containers
+        .sort_by_key(|row| row.place);
+    let owner = game_economy_work::tool_wear::ToolWear {
+        next_item: count + 1,
+        rules: vec![game_economy_work::tool_wear::Rule {
+            good: 2,
+            durability: 10,
+            wear: 1,
+            repair_good: 1,
+            repair_quantity: 1,
+        }],
+        conditions: (1..=count)
+            .map(|item| game_economy_work::tool_wear::Condition {
+                item,
+                good: 2,
+                damage: 0,
+            })
+            .collect(),
+        repairs: vec![],
+        events: vec![],
+    };
+    let meals: Vec<_> = (1..=count)
+        .map(|id| game_lot_diet::Meal {
+            action: id,
+            person: id,
+            good: 2,
+        })
+        .collect();
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(workers)
+        .build()
+        .unwrap()
+        .install(|| {
+            let mut samples = Vec::new();
+            for round in 0..4 {
+                let mut core = CoreInterval::begin(initial.clone(), &[(1, 1)]).unwrap();
+                core.progress(300).unwrap();
+                let start = std::time::Instant::now();
+                let draft = core.prepare_meals(0, 300, &meals).unwrap().unwrap();
+                let next_owner = owner
+                    .stage_identified_outputs(&[], owner.next_item, draft.item_updates())
+                    .unwrap();
+                core.commit_meals(draft).unwrap();
+                let elapsed = start.elapsed().as_secs_f64();
+                assert!(next_owner.conditions.is_empty());
+                if round == 3 {
+                    let mut hash = std::collections::hash_map::DefaultHasher::new();
+                    serde_json::to_vec(&(core.snapshot(), &next_owner))
+                        .unwrap()
+                        .hash(&mut hash);
+                    println!("fingerprint={:016x}", hash.finish());
+                }
+                if round > 0 {
+                    samples.push(elapsed);
+                }
+            }
+            samples.sort_by(f64::total_cmp);
+            println!(
+                "workers={workers} identified_meals={count} elapsed={:.6}",
+                samples[1]
+            );
+        });
+}
+
+#[test]
 fn interval_abandonment_stops_progress_and_returns_real_inputs_at_boundary() {
     let run = |workers| {
         rayon::ThreadPoolBuilder::new()
@@ -630,6 +746,119 @@ fn interval_meals_consume_real_food_and_apply_effects_at_the_right_time() {
                 assert_eq!(result.people[0].health, 97);
                 assert!(result.pending_food.is_empty());
                 result
+            })
+    };
+    assert_eq!(run(1), run(6));
+}
+
+#[test]
+fn identified_meals_stage_item_removal_with_hunger_and_later_production() {
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut initial = fixture();
+                initial.physical.goods[1].food = Some(game_production_model::FoodProfile {
+                    portion: 1,
+                    hunger_relief: 1,
+                    nutrients: Default::default(),
+                    health_effect: 0,
+                    shelf_days: None,
+                });
+                initial.physical.custody.containers.push(
+                    Container::new(
+                        Place::Person(1),
+                        2,
+                        vec![Lot {
+                            item: Some(10),
+                            good: 2,
+                            quantity: 1,
+                            expires_at: None,
+                        }],
+                    )
+                    .unwrap(),
+                );
+                initial
+                    .physical
+                    .custody
+                    .containers
+                    .sort_by_key(|row| row.place);
+                let mut owner = game_economy_work::tool_wear::ToolWear {
+                    next_item: 11,
+                    rules: vec![game_economy_work::tool_wear::Rule {
+                        good: 2,
+                        durability: 10,
+                        wear: 1,
+                        repair_good: 1,
+                        repair_quantity: 1,
+                    }],
+                    conditions: vec![game_economy_work::tool_wear::Condition {
+                        item: 10,
+                        good: 2,
+                        damage: 0,
+                    }],
+                    repairs: vec![],
+                    events: vec![],
+                };
+                let mut core = CoreInterval::begin(initial, &[(1, 1)]).unwrap();
+                core.progress(400).unwrap();
+                let meal = [game_lot_diet::Meal {
+                    action: 1,
+                    person: 1,
+                    good: 2,
+                }];
+                let before = core.snapshot();
+                assert!(core.eat(0, 400, &meal).is_err());
+                assert_eq!(core.snapshot(), before);
+                let stale = core.prepare_meals(0, 400, &meal).unwrap().unwrap();
+                let draft = core.prepare_meals(0, 400, &meal).unwrap().unwrap();
+                assert_eq!(draft.item_updates(), &[(10, None)]);
+                let next_owner = owner
+                    .stage_identified_outputs(&[], owner.next_item, draft.item_updates())
+                    .unwrap();
+                core.validate_meals(&draft).unwrap();
+                assert!(core.commit_meals(draft).unwrap().transactions[0].accepted);
+                owner = next_owner;
+                assert!(owner.conditions.is_empty());
+                let after = core.snapshot();
+                assert_eq!(after.people[0].hunger, 1);
+                assert!(core.commit_meals(stale).is_err());
+                assert_eq!(core.snapshot(), after);
+                let saved = serde_json::to_string(&(after, owner)).unwrap();
+                let (snapshot, mut owner): (CoreSnapshot, game_economy_work::tool_wear::ToolWear) =
+                    serde_json::from_str(&saved).unwrap();
+                let mut core = CoreInterval::resume(snapshot).unwrap();
+                core.progress(600).unwrap();
+                let draft = core
+                    .prepare_settlement(Some(game_lot_runtime::IdentifiedProduction {
+                        goods: &[2],
+                        next_item: owner.next_item,
+                    }))
+                    .unwrap();
+                let next_owner = owner
+                    .stage_identified_outputs(
+                        draft.produced_items(),
+                        draft.next_produced_item().unwrap(),
+                        draft.item_updates(),
+                    )
+                    .unwrap();
+                core.commit_settlement(draft).unwrap();
+                owner = next_owner;
+                let result = core.snapshot();
+                let physical = Runtime::compile(result.physical.clone()).unwrap();
+                assert_eq!(physical.item_place(10), None);
+                assert_eq!(physical.item_place(11), Some(Place::JobOutput(1)));
+                owner
+                    .validate(
+                        &physical,
+                        &[1, 2].into_iter().collect(),
+                        &[1, 2].into_iter().collect(),
+                        1,
+                    )
+                    .unwrap();
+                (result, owner)
             })
     };
     assert_eq!(run(1), run(6));
@@ -999,6 +1228,87 @@ fn identified_early_work_stages_tool_owner_and_survives_later_delivery() {
             })
     };
     assert_eq!(run(1), run(6));
+}
+
+#[test]
+fn early_work_consuming_identified_inputs_requires_owner_staging() {
+    let mut initial = fixture();
+    let input = initial
+        .physical
+        .custody
+        .containers
+        .iter_mut()
+        .find(|row| row.place == Place::JobInput(1))
+        .unwrap();
+    *input = Container::new(
+        input.place,
+        2,
+        vec![
+            Lot {
+                item: Some(10),
+                good: 1,
+                quantity: 1,
+                expires_at: None,
+            },
+            Lot {
+                item: Some(11),
+                good: 1,
+                quantity: 1,
+                expires_at: None,
+            },
+        ],
+    )
+    .unwrap();
+    let owner = game_economy_work::tool_wear::ToolWear {
+        next_item: 12,
+        rules: vec![game_economy_work::tool_wear::Rule {
+            good: 1,
+            durability: 10,
+            wear: 1,
+            repair_good: 2,
+            repair_quantity: 1,
+        }],
+        conditions: vec![
+            game_economy_work::tool_wear::Condition {
+                item: 10,
+                good: 1,
+                damage: 0,
+            },
+            game_economy_work::tool_wear::Condition {
+                item: 11,
+                good: 1,
+                damage: 0,
+            },
+        ],
+        repairs: vec![],
+        events: vec![],
+    };
+    let mut boundary = CoreInterval::begin(initial.clone(), &[(1, 1)]).unwrap();
+    boundary.progress(1000).unwrap();
+    let before_boundary = boundary.snapshot();
+    assert!(boundary.settle().is_err());
+    assert_eq!(boundary.snapshot(), before_boundary);
+    let draft = boundary.prepare_settlement(None).unwrap();
+    let boundary_owner = owner
+        .stage_identified_outputs(&[], owner.next_item, draft.item_updates())
+        .unwrap();
+    boundary.commit_settlement(draft).unwrap();
+    assert!(boundary_owner.conditions.is_empty());
+    let mut core = CoreInterval::begin(initial, &[(1, 2)]).unwrap();
+    core.progress(500).unwrap();
+    let before = core.snapshot();
+    assert!(core.publish_early_work().is_err());
+    assert_eq!(core.snapshot(), before);
+    let draft = core.prepare_early_work(None).unwrap().unwrap();
+    assert_eq!(draft.item_updates(), &[(10, None), (11, None)]);
+    let owner = owner
+        .stage_identified_outputs(&[], owner.next_item, draft.item_updates())
+        .unwrap();
+    core.commit_early_work(draft).unwrap();
+    assert!(owner.conditions.is_empty());
+    let physical = Runtime::compile(core.snapshot().physical).unwrap();
+    assert_eq!(physical.item_place(10), None);
+    assert_eq!(physical.item_place(11), None);
 }
 
 #[test]

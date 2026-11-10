@@ -74,6 +74,9 @@ impl IntervalConsumptionDraft {
     pub fn movements(&self) -> Vec<game_lots::Outcome> {
         self.custody.outcomes()
     }
+    pub fn item_updates(&self) -> &[(u64, Option<Place>)] {
+        self.custody.item_updates()
+    }
 }
 impl EarlyWorkDraft {
     pub fn events(&self) -> &EarlyWorkEvents {
@@ -182,11 +185,11 @@ impl Runtime {
         })
     }
 
-    /// Commit only if neither the physical generation nor its time has changed.
-    pub fn commit_interval_consumption(
-        &mut self,
-        draft: IntervalConsumptionDraft,
-    ) -> Result<PhysicalOutcomes, String> {
+    /// Validate a consumption draft before another owner publishes metadata.
+    pub fn validate_interval_consumption(
+        &self,
+        draft: &IntervalConsumptionDraft,
+    ) -> Result<(), String> {
         let interval = self
             .work_interval
             .as_ref()
@@ -198,11 +201,23 @@ impl Runtime {
         {
             return Err("stale interval consumption draft".into());
         }
+        self.epoch
+            .checked_add(1)
+            .ok_or("physical work revision overflow")?;
+        self.store.validate_commit(&draft.custody)?;
+        Ok(())
+    }
+
+    /// Commit only if neither the physical generation nor its time has changed.
+    pub fn commit_interval_consumption(
+        &mut self,
+        draft: IntervalConsumptionDraft,
+    ) -> Result<PhysicalOutcomes, String> {
+        self.validate_interval_consumption(&draft)?;
         let epoch = self
             .epoch
             .checked_add(1)
             .ok_or("physical work revision overflow")?;
-        self.store.validate_commit(&draft.custody)?;
         let transactions = draft.custody.transactions().to_vec();
         let (movements, spoiled) = self.store.commit(draft.custody)?;
         self.work_interval
