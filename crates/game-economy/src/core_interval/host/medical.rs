@@ -66,79 +66,92 @@ impl CoreHost {
         .map(Some)
     }
 
+    pub(super) fn stage_contact_health(
+        &self,
+        staged: Option<CoreHealth>,
+        contacts: &[(u64, u64)],
+        tick: u64,
+    ) -> Result<Option<CoreHealth>, String> {
+        let Some(health) = self.health.as_ref().filter(|health| {
+            !contacts.is_empty()
+                && !health.owner.cases.is_empty()
+                && health
+                    .owner
+                    .strains
+                    .iter()
+                    .any(|strain| strain.transmission_per_million > 0)
+        }) else {
+            return Ok(staged);
+        };
+        let locations = game_economy_person::travel::Colocation::new(self.core.travel.as_ref());
+        let mut encounters: Vec<_> = contacts
+            .par_iter()
+            .map(|&(actor, patient)| -> Result<_, String> {
+                let first = self
+                    .core
+                    .people
+                    .binary_search_by_key(&actor, |row| row.id)
+                    .map_err(|_| "unknown contact actor")?;
+                let second = self
+                    .core
+                    .people
+                    .binary_search_by_key(&patient, |row| row.id)
+                    .map_err(|_| "unknown contact recipient")?;
+                let a = &self.core.people[first];
+                let b = &self.core.people[second];
+                let region = locations
+                    .region((a.id, a.region), (b.id, b.region))
+                    .ok_or("contact lost location")?;
+                Ok(game_social::Encounter {
+                    tick,
+                    region,
+                    a: actor.min(patient),
+                    b: actor.max(patient),
+                    pressured: None,
+                    also_pressured: None,
+                })
+            })
+            .collect::<Result<Vec<_>, String>>()?;
+        encounters.par_sort_unstable_by_key(|row| (row.a, row.b));
+        encounters.dedup_by_key(|row| (row.a, row.b));
+        let people: Vec<_> = self
+            .core
+            .people
+            .par_iter()
+            .map(|person| game_disease::Person {
+                id: person.id,
+                health: person.health,
+            })
+            .collect();
+        let mut next = staged.unwrap_or_else(|| health.clone());
+        next.owner
+            .admit_contacts_validated(
+                &health.owner,
+                &people,
+                &encounters,
+                self.core.seed,
+                tick - 1,
+            )
+            .map_err(str::to_owned)?;
+        Ok(Some(next))
+    }
+
     pub(super) fn stage_medical_health(
         &self,
         staged: Option<CoreHealth>,
         resolved: Option<&crate::medical::Resolved>,
-        events: &game_lot_runtime::Events,
         tick: u64,
-    ) -> Result<Option<CoreHealth>, String> {
-        let Some((health, resolved)) = self.health.as_ref().zip(resolved) else {
-            return Ok(staged);
+    ) -> Option<CoreHealth> {
+        let Some((health, resolved)) = self
+            .health
+            .as_ref()
+            .zip(resolved)
+            .filter(|(_, resolved)| !resolved.is_empty())
+        else {
+            return staged;
         };
-        let contacts = resolved.contacts();
-        if resolved.is_empty() {
-            return Ok(staged);
-        }
         let mut next = staged.unwrap_or_else(|| health.clone());
-        if !contacts.is_empty()
-            && health
-                .owner
-                .strains
-                .iter()
-                .any(|strain| strain.transmission_per_million > 0)
-        {
-            let locations = game_economy_person::travel::Colocation::new(self.core.travel.as_ref());
-            let mut encounters: Vec<_> = contacts
-                .par_iter()
-                .map(|&(actor, patient)| -> Result<_, String> {
-                    let first = self
-                        .core
-                        .people
-                        .binary_search_by_key(&actor, |row| row.id)
-                        .map_err(|_| "unknown medical actor")?;
-                    let second = self
-                        .core
-                        .people
-                        .binary_search_by_key(&patient, |row| row.id)
-                        .map_err(|_| "unknown medical patient")?;
-                    let a = &self.core.people[first];
-                    let b = &self.core.people[second];
-                    let region = locations
-                        .region((a.id, a.region), (b.id, b.region))
-                        .ok_or("medical contact lost location")?;
-                    Ok(game_social::Encounter {
-                        tick,
-                        region,
-                        a: actor.min(patient),
-                        b: actor.max(patient),
-                        pressured: None,
-                        also_pressured: None,
-                    })
-                })
-                .collect::<Result<Vec<_>, String>>()?;
-            encounters.par_sort_unstable_by_key(|row| (row.a, row.b));
-            encounters.dedup_by_key(|row| (row.a, row.b));
-            let people: Vec<_> = self
-                .core
-                .people
-                .par_iter()
-                .map(|person| game_disease::Person {
-                    id: person.id,
-                    health: person.health,
-                })
-                .collect();
-            next.owner
-                .admit_contacts_validated(
-                    &health.owner,
-                    &people,
-                    &encounters,
-                    self.core.seed,
-                    tick - 1,
-                )
-                .map_err(str::to_owned)?;
-        }
-        resolved.apply(Some(&mut next.owner), events.tick);
-        Ok(Some(next))
+        resolved.apply(Some(&mut next.owner), tick);
+        Some(next)
     }
 }

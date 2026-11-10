@@ -14,6 +14,7 @@ mod fatigue;
 mod fauna;
 mod food_search;
 mod gathering;
+mod giving;
 mod goals;
 mod hunting;
 mod medical;
@@ -64,6 +65,8 @@ pub struct CoreHostSnapshot {
     pub health: Option<CoreHealth>,
     #[serde(default)]
     pub medical: Option<crate::Medical>,
+    #[serde(default)]
+    pub giving: Option<crate::Giving>,
     #[serde(default)]
     pub agriculture: Option<game_economy_agriculture::Agriculture>,
     #[serde(default)]
@@ -124,6 +127,7 @@ pub struct CoreHost {
     knowledge: Option<game_economy_knowledge::Knowledge>,
     health: Option<CoreHealth>,
     medical: Option<crate::Medical>,
+    giving: Option<crate::Giving>,
     agriculture: Option<game_economy_agriculture::Agriculture>,
     irrigation: Option<game_economy_agriculture::irrigation::Irrigation>,
     environment: Option<game_environment::Environment>,
@@ -161,6 +165,7 @@ struct CoreRuntimeOptions {
     knowledge: Option<game_economy_knowledge::Knowledge>,
     health: Option<CoreHealth>,
     medical: Option<crate::Medical>,
+    giving: Option<crate::Giving>,
     agriculture: Option<game_economy_agriculture::Agriculture>,
     irrigation: Option<game_economy_agriculture::irrigation::Irrigation>,
     environment: Option<game_environment::Environment>,
@@ -194,6 +199,7 @@ impl CoreHost {
             knowledge,
             health,
             medical,
+            giving,
             agriculture,
             irrigation,
             environment,
@@ -237,6 +243,7 @@ impl CoreHost {
                 knowledge,
                 health,
                 medical,
+                giving,
                 agriculture,
                 irrigation,
                 environment,
@@ -271,6 +278,7 @@ impl CoreHost {
             knowledge,
             health,
             medical,
+            giving,
             agriculture,
             irrigation,
             environment,
@@ -314,6 +322,7 @@ impl CoreHost {
                 knowledge,
                 health,
                 medical,
+                giving,
                 agriculture,
                 irrigation,
                 environment,
@@ -355,6 +364,7 @@ impl CoreHost {
             mut knowledge,
             health,
             medical,
+            giving,
             agriculture,
             irrigation,
             environment,
@@ -550,6 +560,18 @@ impl CoreHost {
                 Some(&health.owner),
                 &people,
                 &goods,
+            )?;
+        }
+        if let Some(owner) = &giving {
+            if owner.practices.is_some() {
+                return Err("sharing practices are not yet supported by the interval host".into());
+            }
+            let people: HashSet<_> = core.people.par_iter().map(|person| person.id).collect();
+            owner.validate(
+                &people,
+                core.physical.goods(),
+                core.physical.recipes(),
+                core.physical.tick(),
             )?;
         }
         if let Some(owner) = &medical {
@@ -759,6 +781,7 @@ impl CoreHost {
             knowledge,
             health,
             medical,
+            giving,
             agriculture,
             irrigation,
             environment,
@@ -799,6 +822,7 @@ impl CoreHost {
             knowledge: self.knowledge.clone(),
             health: self.health.clone(),
             medical: self.medical.clone(),
+            giving: self.giving.clone(),
             agriculture: self.agriculture.clone(),
             irrigation: self.irrigation.clone(),
             environment: self.environment.clone(),
@@ -1223,7 +1247,7 @@ impl CoreHost {
             active
         });
         let occupied = active.as_deref().unwrap_or(occupied);
-        let dependents = if self.medical.is_some() {
+        let dependents = if self.medical.is_some() || self.giving.is_some() {
             self.dependent_care
                 .as_ref()
                 .zip(self.family.as_ref())
@@ -1250,6 +1274,29 @@ impl CoreHost {
                 busy
             });
         let occupied = medical_busy.as_deref().unwrap_or(occupied);
+        let giving_base = u64::try_from(actions.len())
+            .map_err(|_| "sharing action overflow")?
+            .checked_add(1)
+            .ok_or("sharing action overflow")?;
+        let mut giving = self.plan_giving(
+            external,
+            occupied,
+            &dependents,
+            medical.as_ref(),
+            giving_base,
+        )?;
+        let giving_busy = giving
+            .as_mut()
+            .filter(|frame| !frame.actors.is_empty())
+            .map(|frame| {
+                let mut busy = occupied.to_vec();
+                busy.par_extend(frame.actors.par_iter().copied());
+                busy.par_sort_unstable();
+                busy.dedup();
+                actions.par_extend(std::mem::take(&mut frame.plan.actions).into_par_iter());
+                busy
+            });
+        let occupied = giving_busy.as_deref().unwrap_or(occupied);
         let base = u64::try_from(actions.len())
             .map_err(|_| "care action overflow")?
             .checked_add(1)
@@ -1451,12 +1498,30 @@ impl CoreHost {
         let birth_health = self.stage_birth_health(family.as_ref(), draft.events().tick);
         let birth_health =
             self.stage_care_health(birth_health, dependent.as_ref(), draft.events().tick)?;
-        let birth_health = self.stage_medical_health(
-            birth_health,
-            medical_resolved.as_ref(),
-            draft.events(),
-            draft.events().tick,
-        )?;
+        let giving_help = giving
+            .as_ref()
+            .map_or_else(Vec::new, |frame| frame.plan.help(draft.events()));
+        let mut contacts = medical_resolved
+            .as_ref()
+            .map_or_else(Vec::new, |resolved| resolved.contacts());
+        contacts.par_extend(giving_help.par_iter().copied());
+        let birth_health =
+            self.stage_contact_health(birth_health, &contacts, draft.events().tick)?;
+        let birth_health =
+            self.stage_medical_health(birth_health, medical_resolved.as_ref(), draft.events().tick);
+        if let Some(frame) = &mut giving {
+            frame.plan.learn_sharing(
+                &mut frame.owner,
+                draft.events(),
+                self.core.physical.goods(),
+                draft.events().tick,
+            );
+            frame.plan.clear_fulfilled_requests(
+                &mut frame.owner,
+                draft.events(),
+                self.core.physical.goods(),
+            );
+        }
         let irrigation = self
             .irrigation
             .as_ref()
@@ -1468,19 +1533,20 @@ impl CoreHost {
         let (agriculture, mut claims) =
             self.stage_cultivation(cultivation, draft.events(), care_uses)?;
         let mut medical_opinions = None;
-        if let Some(resolved) = &medical_resolved {
-            let help = resolved.help();
-            if !help.is_empty() {
-                if let Some((_, opinions)) = &mut claims {
-                    if let Some(opinions) = opinions.as_mut().filter(|owner| owner.tracks_help()) {
-                        opinions.learn_help(&help);
-                    }
-                } else if let Some(mut opinions) =
-                    self.opinions.clone().filter(|owner| owner.tracks_help())
-                {
+        let mut help = medical_resolved
+            .as_ref()
+            .map_or_else(Vec::new, |resolved| resolved.help());
+        help.par_extend(giving_help.into_par_iter());
+        if !help.is_empty() {
+            if let Some((_, opinions)) = &mut claims {
+                if let Some(opinions) = opinions.as_mut().filter(|owner| owner.tracks_help()) {
                     opinions.learn_help(&help);
-                    medical_opinions = Some(opinions);
                 }
+            } else if let Some(mut opinions) =
+                self.opinions.clone().filter(|owner| owner.tracks_help())
+            {
+                opinions.learn_help(&help);
+                medical_opinions = Some(opinions);
             }
         }
         let mut gathering = gathering
@@ -1630,6 +1696,9 @@ impl CoreHost {
         };
         if let Some(health) = birth_health {
             self.health = Some(health);
+        }
+        if let Some(frame) = giving {
+            self.giving = Some(frame.owner);
         }
         if let Some(plan) = dependent {
             plan.publish(self.dependent_care.as_mut().expect("care owner"));

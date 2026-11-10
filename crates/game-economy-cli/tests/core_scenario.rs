@@ -466,3 +466,59 @@ fn medical_help_consumes_real_medicine_and_can_transmit_infection() {
     assert_eq!(run(1, true), run(6, true));
     assert_eq!(run(1, false), run(6, false));
 }
+
+#[test]
+fn personal_food_requests_and_pressured_giving_use_real_custody() {
+    fn run(workers: usize, willing: bool, pressured: bool) -> serde_json::Value {
+        rayon::ThreadPoolBuilder::new().num_threads(workers).build().unwrap().install(|| {
+            let root = root();
+            let initial = game_economy_cli::core_scenario(
+                &root.join("content/scenarios/economy-core.toml"), &root.join("content"),
+            ).unwrap();
+            let mut snapshot = initial.snapshot();
+            snapshot.dependent_care = None;
+            snapshot.medical = None;
+            snapshot.core.people[0].hunger = 5;
+            let bread = snapshot.core.physical.goods.iter().find(|good| good.name == "bread").unwrap().id;
+            let container = snapshot.core.physical.custody.containers.iter_mut()
+                .find(|container| container.place == game_lots::Place::Person(2)).unwrap();
+            *container = game_lots::Container::new(game_lots::Place::Person(2), 100,
+                vec![game_lots::Lot { item: None, good: bread, quantity: 2, expires_at: None }]).unwrap();
+            let giving = snapshot.giving.as_mut().unwrap();
+            let policy = &mut giving.policies_mut()[0];
+            policy.willing = willing;
+            if pressured { policy.pressured_by = Some(1); policy.pressure_threshold = Some(2); }
+            snapshot.opinions = Some(serde_json::from_value(serde_json::json!({
+                "rules": {"minimum": -10, "maximum": 10, "initial": 0, "fulfilled_gain": 1, "default_loss": 1,
+                    "gratitude_gain": 5, "affinity": {"limit": 10}},
+                "sensitivities": [{"person": 1, "gratitude_gain": 0, "affinity_help": -2}],
+                "records": if pressured { vec![serde_json::json!({"observer":2,"target":1,"trust":0,"fear":3})] } else { vec![] }
+            })).unwrap());
+            snapshot.health.as_mut().unwrap().owner.cases = vec![game_disease::Case {
+                person: 1, strain: 1, infected_at: 0, source: None,
+            }];
+            let saved = serde_json::to_string(&snapshot).unwrap();
+            let mut host = game_economy::core_interval::CoreHost::resume(snapshot).unwrap();
+            let mut resumed = game_economy::core_interval::CoreHost::resume(serde_json::from_str(&saved).unwrap()).unwrap();
+            assert_eq!(host.advance_continuous(3_600_000, &[]).unwrap().failure, None);
+            assert_eq!(resumed.advance_continuous(3_600_000, &[]).unwrap().failure, None);
+            let result = host.snapshot();
+            assert_eq!(result, resumed.snapshot());
+            assert!(game_economy::core_interval::CoreHost::resume(result.clone()).is_ok());
+            let shared = willing || pressured;
+            let recipient = result.core.physical.custody.containers.iter()
+                .find(|container| container.place == game_lots::Place::Person(1)).unwrap();
+            assert_eq!(recipient.used, if shared { 2 } else { 0 });
+            assert_eq!(result.giving.as_ref().unwrap().requests.is_empty(), shared);
+            assert_eq!(result.health.as_ref().unwrap().owner.cases.iter().any(|case| case.person == 2), shared);
+            let relation = result.opinions.as_ref().unwrap().records.iter()
+                .find(|record| record.observer == 1 && record.target == 2);
+            if shared { let relation = relation.unwrap(); assert_eq!((relation.affinity, relation.obligation), (-2, 0)); }
+            else { assert!(relation.is_none()); }
+            serde_json::to_value(result).unwrap()
+        })
+    }
+    for (willing, pressured) in [(true, false), (false, false), (false, true)] {
+        assert_eq!(run(1, willing, pressured), run(6, willing, pressured));
+    }
+}

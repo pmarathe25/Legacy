@@ -22,7 +22,6 @@ impl CoreHostSnapshot {
             ("writing", state.writing.is_some()),
             ("combat", state.combat.is_some()),
             ("taking", state.taking.is_some()),
-            ("giving", state.giving.is_some()),
             ("hauling", state.hauling.is_some()),
             ("local_transport", state.local_transport.is_some()),
         ] {
@@ -121,6 +120,7 @@ impl CoreHostSnapshot {
             knowledge: state.knowledge,
             health,
             medical: state.medical,
+            giving: state.giving,
             agriculture: state.agriculture,
             irrigation: state.irrigation,
             environment: state.environment,

@@ -189,3 +189,21 @@ patient = 1
 medicine = "grain"
 quantity = 1
 willing = false
+
+[giving]
+[[giving.policies]]
+person = 2
+recipient = 1
+good = "bread"
+quantity = 2
+recipient_hunger_at_least = 5
+willing = false
+requires_request = true
+
+[[giving.asking]]
+person = 1
+target = 2
+min_hunger = 5
+enabled = true
+retry_ticks = 2
+request_lifetime = 3

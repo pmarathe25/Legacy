@@ -1207,6 +1207,9 @@ impl Plan {
             });
     }
     pub fn clear_fulfilled_requests(&self, giving: &mut Giving, events: &Events, goods: &[Good]) {
+        if giving.requests.is_empty() || self.records.is_empty() {
+            return;
+        }
         let accepted: HashSet<_> = events
             .physical_actions
             .par_iter()
