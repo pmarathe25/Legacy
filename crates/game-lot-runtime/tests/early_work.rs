@@ -154,6 +154,35 @@ fn starting_interval_work_invalidates_an_existing_completion_draft() {
     );
     assert_eq!(runtime.work_interval().unwrap().rates, vec![(2, 1)]);
 }
+
+#[test]
+fn rejected_interval_starts_retire_both_new_holders() {
+    let mut runtime = fixture(false, 1);
+    runtime.begin_work_interval(&[(1, 1)]).unwrap();
+    runtime.progress_work_interval(400).unwrap();
+    let requests: Vec<_> = (2..=257)
+        .map(|id| {
+            (
+                Start {
+                    id,
+                    worker: id,
+                    region: 1,
+                    recipe: 1,
+                    units: 1,
+                },
+                1,
+            )
+        })
+        .collect();
+    let outcomes = runtime.start_interval_work(&requests, 7).unwrap();
+    assert_eq!(outcomes.iter().filter(|row| row.1).count(), 1);
+    for (id, accepted) in outcomes {
+        assert_eq!(runtime.custody(Place::JobInput(id)).is_some(), accepted);
+        assert_eq!(runtime.custody(Place::JobOutput(id)).is_some(), accepted);
+    }
+    let saved = runtime.snapshot();
+    assert_eq!(Runtime::compile(saved.clone()).unwrap().snapshot(), saved);
+}
 #[test]
 fn early_completions_preserve_other_jobs_and_the_quantum_boundary() {
     let mut runtime = fixture(false, 1);

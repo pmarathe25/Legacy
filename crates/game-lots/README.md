@@ -34,6 +34,8 @@ Set `LEGACY_REVERSE_TRANSFERS=1` to exercise nonordered endpoints in the mixed a
 
 `LEGACY_COMPLEX_STRIDE=3` makes every third transaction multi-leg. For 100,000 reversed actions, borrowing the general partition instead of cloning its transactions reduced preparation from 194–198 to 187–189 ms on one worker in repeated runs; six-worker results overlapped at roughly 56–59 ms. Untouched identified items are preserved when the custody owner validates the batch.
 
+The shared-source path also accepts validated empty new destinations, including unused added holders. It preserves the general arbiter's source-grant order even when a destination lacks capacity, and maps changes into the merged custody order. Unsupported shapes fall back to general arbitration.
+
 Independent transfers keep moved cohorts in immutable chunk-owned receipt arenas. Each outcome exposes only its own exact slice, and serialized outcomes retain their ordinary flat lot arrays. Copies of a receipt remain valid after the source draft is dropped.
 
 Independent transfers merge already ordered dated cohorts in linear time. Work is divided into fixed logical chunks that also expose parallelism in smaller, cohort-heavy batches. The ignored `many_cohort_transfer_benchmark` accepts `LEGACY_ATTEMPTS`, `LEGACY_COHORTS`, and `LEGACY_WORKERS` to measure this path.

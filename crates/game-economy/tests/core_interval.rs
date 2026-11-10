@@ -535,6 +535,11 @@ fn interval_work_admission_benchmark() {
         .and_then(|v| v.parse::<u64>().ok())
         .unwrap_or(50_000);
     assert!(count >= 2);
+    let stock_units = std::env::var("LEGACY_ADMISSION_STOCK")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(count - 1)
+        .min(count - 1);
     let mut initial = fixture();
     let person = initial.people[0].clone();
     initial.people = (1..=count)
@@ -557,12 +562,16 @@ fn interval_work_admission_benchmark() {
     *stock = Container::new(
         stock.place,
         count * 2,
-        vec![Lot {
-            item: None,
-            good: 1,
-            quantity: (count - 1) * 2,
-            expires_at: None,
-        }],
+        if stock_units == 0 {
+            vec![]
+        } else {
+            vec![Lot {
+                item: None,
+                good: 1,
+                quantity: stock_units * 2,
+                expires_at: None,
+            }]
+        },
     )
     .unwrap();
     let starts: Vec<_> = (2..=count)
@@ -592,7 +601,10 @@ fn interval_work_admission_benchmark() {
                 let result = core.start_work(0, 400, &starts).unwrap();
                 let elapsed = start.elapsed().as_secs_f64();
                 assert_eq!(result.len(), starts.len());
-                assert!(result.iter().all(|row| row.1));
+                assert_eq!(
+                    result.iter().filter(|row| row.1).count() as u64,
+                    stock_units
+                );
                 if round == 3 {
                     let mut hash = std::collections::hash_map::DefaultHasher::new();
                     serde_json::to_vec(&core.snapshot())
@@ -606,10 +618,21 @@ fn interval_work_admission_benchmark() {
             }
             samples.sort_by(f64::total_cmp);
             println!(
-                "workers={workers} starts={} elapsed={:.6}",
+                "workers={workers} starts={} stock_units={stock_units} elapsed={:.6}",
                 starts.len(),
                 samples[1]
             );
+            #[cfg(feature = "profile")]
+            if std::env::var_os("LEGACY_PROFILE").is_some() {
+                for (name, sample) in game_diagnostics::snapshot() {
+                    if name.starts_with("physical.") {
+                        println!(
+                            "{name}: {:.3} ms/call",
+                            sample.nanoseconds as f64 / sample.calls as f64 / 1_000_000.0
+                        );
+                    }
+                }
+            }
         });
 }
 

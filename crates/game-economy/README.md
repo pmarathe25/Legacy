@@ -10,7 +10,7 @@ The separate `core_interval` API composes already-admitted physical work, travel
 
 The ignored `composed_core_progress_benchmark` with `LEGACY_CORE_ARRIVALS=1` measures publication of 50,000 arrivals among 100,000 people. One run took 5.87, 2.86, 1.58, and 1.25 ms with one, two, four, and six workers, with matching fingerprints. This measures only arrival publication in the limited core.
 
-The ignored `interval_work_admission_benchmark` starts 49,999 jobs from one shared stock within a partial interval. One run took 111, 68, 52, and 48 ms with one, two, four, and six workers, with matching fingerprints. This isolated admission workload is sublinear and does not measure whole-economy time advancement.
+The ignored `interval_work_admission_benchmark` starts 49,999 jobs from one shared stock within a partial interval. A specialized physical path reduced one instrumented run from 111, 70, 52, and 46 ms to 73, 45, 35, and 31 ms with one, two, four, and six workers, with matching fingerprints. Set `LEGACY_ADMISSION_STOCK=25000` to admit only 25,000 jobs; one run took 83, 52, 37, and 34 ms with matching fingerprints across worker counts. These isolated admission workloads are sublinear and do not measure whole-economy time advancement.
 
 An incapacitated traveler does not move during the core interval, even if an immortal recovers at its closing boundary. The existing coarse economy path can move such a traveler after recovery in the same boundary, so this case is not equivalent between the two paths.
 

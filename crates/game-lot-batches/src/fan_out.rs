@@ -1,8 +1,8 @@
 //! Resolve one contested source feeding distinct destinations in parallel.
 use crate::independent_transfer::after;
 use game_lot_model::{
-    Lot, Movement, OutcomeBatch, OutcomeChunk, Place, SimpleTransfer, Spoilage, State, Transaction,
-    TransactionOutcome,
+    Container, Lot, Movement, OutcomeBatch, OutcomeChunk, Place, PlaceIndex, SimpleTransfer,
+    Spoilage, State, Transaction, TransactionOutcome,
 };
 use game_lot_planning::Draft;
 use rayon::prelude::*;
@@ -17,11 +17,65 @@ struct Row {
     rank: u64,
 }
 
-pub fn prepare(
+/// Canonical custody indices include staged additions, without cloning holders.
+struct Containers<'a> {
+    base: &'a [Container],
+    merged: Option<Vec<&'a Container>>,
+}
+impl<'a> Containers<'a> {
+    fn new(base: &'a [Container], additions: &'a [Container]) -> Self {
+        let merged = (!additions.is_empty()).then(|| {
+            let mut rows: Vec<_> = base.par_iter().chain(additions.par_iter()).collect();
+            if rows
+                .par_windows(2)
+                .any(|pair| pair[0].place > pair[1].place)
+            {
+                rows.par_sort_unstable_by_key(|row| row.place);
+            }
+            rows
+        });
+        Self { base, merged }
+    }
+    fn len(&self) -> usize {
+        self.merged.as_ref().map_or(self.base.len(), Vec::len)
+    }
+    fn get(&self, index: usize) -> Option<&Container> {
+        self.merged
+            .as_ref()
+            .map_or_else(|| self.base.get(index), |rows| rows.get(index).copied())
+    }
+    fn lower_bound(&self, place: Place) -> usize {
+        self.merged.as_ref().map_or_else(
+            || self.base.partition_point(|row| row.place < place),
+            |rows| rows.partition_point(|row| row.place < place),
+        )
+    }
+    fn find(&self, place: Place) -> Option<usize> {
+        self.merged.as_ref().map_or_else(
+            || self.base.binary_search_by_key(&place, |row| row.place).ok(),
+            |rows| rows.binary_search_by_key(&place, |row| row.place).ok(),
+        )
+    }
+}
+
+#[cfg(test)]
+fn prepare(
     state: &State,
     instance: u64,
     seed: u64,
     transactions: &[Transaction],
+    advance: bool,
+) -> Result<Option<Draft>, String> {
+    prepare_with_additions(state, instance, seed, transactions, &[], advance)
+}
+
+/// Outer batch validation has checked that additions are unique and empty.
+pub(crate) fn prepare_with_additions(
+    state: &State,
+    instance: u64,
+    seed: u64,
+    transactions: &[Transaction],
+    additions: &[Container],
     advance: bool,
 ) -> Result<Option<Draft>, String> {
     if transactions.len() < 128 {
@@ -50,6 +104,19 @@ pub fn prepare(
     {
         return Ok(None);
     }
+    if !additions.is_empty() {
+        let index = PlaceIndex::new(additions, |row| row.place);
+        if state
+            .containers
+            .binary_search_by_key(&first.from, |row| row.place)
+            .is_err()
+            || transactions
+                .par_iter()
+                .any(|row| index.locate(row.movements[0].to.unwrap()).is_none())
+        {
+            return Ok(None);
+        }
+    }
     prepare_rows(
         state,
         instance,
@@ -59,6 +126,7 @@ pub fn prepare(
             let transaction = &transactions[index];
             (transaction.id, transaction.movements[0])
         },
+        additions,
         advance,
     )
 }
@@ -92,6 +160,7 @@ pub fn prepare_flat(
             let row = transfers[index];
             (row.action, row.movement)
         },
+        &[],
         advance,
     )
 }
@@ -102,6 +171,7 @@ fn prepare_rows(
     seed: u64,
     len: usize,
     row_at: impl Fn(usize) -> (u64, Movement) + Sync,
+    additions: &[Container],
     advance: bool,
 ) -> Result<Option<Draft>, String> {
     let first = row_at(0).1;
@@ -116,32 +186,22 @@ fn prepare_rows(
         .ok_or("lot revision overflow")?;
     #[cfg(feature = "profile")]
     let mut phase = game_diagnostics::span("physical.fan_out.locate");
-    let Some(source_index) = state
-        .containers
-        .binary_search_by_key(&first.from, |row| row.place)
-        .ok()
-    else {
+    let containers = Containers::new(&state.containers, additions);
+    let Some(source_index) = containers.find(first.from) else {
         return Ok(None);
     };
-    let people_start = state
-        .containers
-        .partition_point(|c| c.place < Place::Person(1));
+    let people_start = containers.lower_bound(Place::Person(1));
     let find = |place| {
         if let Place::Person(id) = place
             && let Ok(offset) = usize::try_from(id - 1)
             && let Some(index) = people_start.checked_add(offset)
-            && state
-                .containers
-                .get(index)
-                .is_some_and(|c| c.place == place)
+            && containers.get(index).is_some_and(|c| c.place == place)
         {
             return Some(index);
         }
-        state
-            .containers
-            .binary_search_by_key(&place, |c| c.place)
-            .ok()
+        containers.find(place)
     };
+    let added_index = (!additions.is_empty()).then(|| PlaceIndex::new(additions, |row| row.place));
     let rows: Option<Vec<_>> = (0..len)
         .into_par_iter()
         .map(|original| {
@@ -150,7 +210,12 @@ fn prepare_rows(
                 original,
                 transaction,
                 movement,
-                destination: find(movement.to?)?,
+                destination: if let Some(index) = &added_index {
+                    let place = movement.to?;
+                    index.locate(place)? + state.containers.partition_point(|row| row.place < place)
+                } else {
+                    find(movement.to?)?
+                },
                 rank: game_genetics::random(seed, transaction, next),
             })
         })
@@ -180,7 +245,7 @@ fn prepare_rows(
         phase = game_diagnostics::span("physical.fan_out.arbitrate");
     }
     rows.par_sort_unstable_by_key(|row| (row.rank, row.movement.id));
-    let source = &state.containers[source_index];
+    let source = containers.get(source_index).expect("located source");
     let lots: Vec<_> = if source.lots.len() >= 2048 {
         source
             .lots
@@ -203,7 +268,9 @@ fn prepare_rows(
         .par_iter()
         .zip(source_grants.par_iter())
         .map(|(row, &granted)| {
-            let destination = &state.containers[row.destination];
+            let destination = containers
+                .get(row.destination)
+                .expect("located destination");
             let used: u64 = if destination.next_expiry.is_none_or(|at| at > next) {
                 destination.used
             } else {
@@ -242,9 +309,9 @@ fn prepare_rows(
         drop(phase);
         phase = game_diagnostics::span("physical.fan_out.materialize");
     }
-    let mut spoiled: Vec<_> = state
-        .containers
-        .par_iter()
+    let mut spoiled: Vec<_> = (0..containers.len())
+        .into_par_iter()
+        .map(|index| containers.get(index).expect("custody index"))
         .filter(|container| container.next_expiry.is_some_and(|at| at <= next))
         .flat_map_iter(|container| {
             container.lots.iter().filter_map(move |lot| {
@@ -296,7 +363,9 @@ fn prepare_rows(
                     id: row.transaction,
                     accepted,
                 });
-                let destination = &state.containers[row.destination];
+                let destination = containers
+                    .get(row.destination)
+                    .expect("located destination");
                 if accepted || destination.next_expiry.is_some_and(|at| at <= next) {
                     changes.push((
                         row.destination,
@@ -331,14 +400,13 @@ fn prepare_rows(
         changes.push((source_index, after(source, next, first.good, consumed, &[])));
     }
     if !spoiled.is_empty() {
-        changes.par_extend(state.containers.par_iter().enumerate().filter_map(
-            |(index, container)| {
-                (index != source_index
-                    && destinations.binary_search(&index).is_err()
-                    && container.next_expiry.is_some_and(|at| at <= next))
-                .then(|| (index, after(container, next, 0, 0, &[])))
-            },
-        ));
+        changes.par_extend((0..containers.len()).into_par_iter().filter_map(|index| {
+            let container = containers.get(index).expect("custody index");
+            (index != source_index
+                && destinations.binary_search(&index).is_err()
+                && container.next_expiry.is_some_and(|at| at <= next))
+            .then(|| (index, after(container, next, 0, 0, &[])))
+        }));
     }
     if changes.par_windows(2).any(|pair| pair[0].0 > pair[1].0) {
         changes.par_sort_unstable_by_key(|row| row.0);

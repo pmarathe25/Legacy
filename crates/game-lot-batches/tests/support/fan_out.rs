@@ -69,3 +69,147 @@ fn shared_source_path_resolves_shortage_and_declines_other_topologies() {
     changed[0].movements.push(extra);
     assert!(prepare(&state, 1, 17, &changed, true).unwrap().is_none());
 }
+
+#[test]
+fn new_empty_destinations_match_general_arbitration_and_expiry() {
+    let source = Place::Stock { region: 1, good: 1 };
+    let state = State {
+        tick: 0,
+        revision: 0,
+        containers: vec![
+            Container::new(
+                source,
+                1000,
+                vec![
+                    Lot {
+                        item: None,
+                        good: 1,
+                        quantity: 40,
+                        expires_at: Some(1),
+                    },
+                    Lot {
+                        item: None,
+                        good: 1,
+                        quantity: 180,
+                        expires_at: Some(4),
+                    },
+                ],
+            )
+            .unwrap(),
+            Container::new(
+                Place::Person(9001),
+                10,
+                vec![Lot {
+                    item: None,
+                    good: 1,
+                    quantity: 2,
+                    expires_at: Some(1),
+                }],
+            )
+            .unwrap(),
+            Container::new(Place::JobInput(9999), 10, vec![]).unwrap(),
+        ],
+    };
+    let mut additions: Vec<_> = (1..=256)
+        .map(|id| {
+            Container::new(
+                Place::JobInput(id),
+                if id % 11 == 0 { 1 } else { 5 },
+                vec![],
+            )
+            .unwrap()
+        })
+        .collect();
+    additions.extend((1..=256).map(|id| Container::new(Place::JobOutput(id), 5, vec![]).unwrap()));
+    let actions: Vec<_> = (1..=256)
+        .rev()
+        .map(|id| Transaction {
+            id,
+            movements: vec![Movement {
+                id,
+                item: None,
+                from: source,
+                to: Some(Place::JobInput(id)),
+                good: 1,
+                quantity: 1 + id % 3,
+            }],
+            creations: vec![],
+        })
+        .collect();
+    for workers in [1, 2, 4, 6] {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                for advance in [false, true] {
+                    let fast = prepare_with_additions(&state, 1, 17, &actions, &additions, advance)
+                        .unwrap()
+                        .expect("eligible additions");
+                    let (general, _) = crate::prepare_unpartitioned_validated(
+                        &state,
+                        1,
+                        17,
+                        &actions,
+                        advance,
+                        additions.clone(),
+                        &[],
+                    )
+                    .unwrap();
+                    assert_eq!(fast.transactions, general.transactions);
+                    assert_eq!(fast.outcomes.into_owned(), general.outcomes.into_owned());
+                    assert_eq!(fast.spoiled, general.spoiled);
+                    assert_eq!(fast.changes.into_flat(), general.changes.into_flat());
+                }
+            });
+    }
+}
+
+#[test]
+fn added_destinations_can_sort_before_the_existing_source() {
+    let source = Place::Stock { region: 1, good: 1 };
+    let state = State {
+        tick: 0,
+        revision: 0,
+        containers: vec![
+            Container::new(
+                source,
+                256,
+                vec![Lot {
+                    item: None,
+                    good: 1,
+                    quantity: 128,
+                    expires_at: None,
+                }],
+            )
+            .unwrap(),
+        ],
+    };
+    let additions: Vec<_> = (1..=128)
+        .map(|id| Container::new(Place::Inventory(id), 2, vec![]).unwrap())
+        .collect();
+    let actions: Vec<_> = (1..=128)
+        .rev()
+        .map(|id| Transaction {
+            id,
+            movements: vec![Movement {
+                id,
+                item: None,
+                from: source,
+                to: Some(Place::Inventory(id)),
+                good: 1,
+                quantity: 1,
+            }],
+            creations: vec![],
+        })
+        .collect();
+    let fast = prepare_with_additions(&state, 1, 7, &actions, &additions, true)
+        .unwrap()
+        .unwrap();
+    let (general, _) =
+        crate::prepare_unpartitioned_validated(&state, 1, 7, &actions, true, additions, &[])
+            .unwrap();
+    assert_eq!(fast.transactions, general.transactions);
+    assert_eq!(fast.outcomes.into_owned(), general.outcomes.into_owned());
+    assert_eq!(fast.changes.into_flat(), general.changes.into_flat());
+}

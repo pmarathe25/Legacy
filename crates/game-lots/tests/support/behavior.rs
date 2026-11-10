@@ -1498,6 +1498,94 @@ fn mixed_atomic_actions_match_general_arbitration() {
 }
 
 #[test]
+fn shared_stock_to_new_custody_matches_general_commit_and_stale_checks() {
+    let source = Place::Stock { region: 1, good: 1 };
+    for available in [0, 120, 600] {
+        for advance in [false, true] {
+            let mut lots = vec![lot(1, 20, Some(1))];
+            if available > 0 {
+                lots.push(lot(1, available, Some(4)));
+            }
+            let initial = vec![
+                container(source, 1000, lots),
+                container(Place::Person(9001), 10, vec![lot(1, 2, Some(1))]),
+                container(
+                    Place::Person(9002),
+                    10,
+                    vec![Lot {
+                        item: Some(42),
+                        good: 1,
+                        quantity: 1,
+                        expires_at: None,
+                    }],
+                ),
+                container(Place::JobInput(9999), 10, vec![]),
+            ];
+            let mut additions: Vec<_> = (1..=256)
+                .map(|id| {
+                    container(
+                        Place::JobInput(id),
+                        if id % 11 == 0 { 1 } else { 5 },
+                        vec![],
+                    )
+                })
+                .collect();
+            additions.extend((1..=256).map(|id| container(Place::JobOutput(id), 5, vec![])));
+            let actions: Vec<_> = (1..=256)
+                .rev()
+                .map(|id| Transaction {
+                    id,
+                    movements: vec![Movement {
+                        id,
+                        item: None,
+                        from: source,
+                        to: Some(Place::JobInput(id)),
+                        good: 1,
+                        quantity: 1 + id % 3,
+                    }],
+                    creations: vec![],
+                })
+                .collect();
+            for workers in [1, 4, 6] {
+                rayon::ThreadPoolBuilder::new()
+                    .num_threads(workers)
+                    .build()
+                    .unwrap()
+                    .install(|| {
+                        let mut expected = store(initial.clone());
+                        let mut actual = store(initial.clone());
+                        let (inner, added) = game_lot_batches::prepare_unpartitioned_validated(
+                            &expected.state,
+                            expected.instance,
+                            17,
+                            &actions,
+                            advance,
+                            additions.clone(),
+                            &[],
+                        )
+                        .unwrap();
+                        let reference = expected.item_draft(inner, added, false).unwrap();
+                        let draft = actual
+                            .prepare_with_empty(17, &actions, additions.clone(), advance)
+                            .unwrap();
+                        let stale = actual
+                            .prepare_with_empty(17, &actions, additions.clone(), advance)
+                            .unwrap();
+                        assert_eq!(draft.transactions(), reference.transactions());
+                        assert_eq!(draft.outcomes(), reference.outcomes());
+                        assert_eq!(draft.spoiled(), reference.spoiled());
+                        expected.commit(reference).unwrap();
+                        actual.commit(draft).unwrap();
+                        assert!(actual.commit(stale).is_err());
+                        assert_eq!(actual.export(), expected.export());
+                        assert_eq!(actual.item_place(42), Some(Place::Person(9002)));
+                    });
+            }
+        }
+    }
+}
+
+#[test]
 #[ignore = "manual mixed atomic action benchmark"]
 fn mixed_atomic_action_benchmark() {
     let count = std::env::var("LEGACY_ATTEMPTS")

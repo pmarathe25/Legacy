@@ -33,6 +33,8 @@ impl Runtime {
         requests: &[(Start, u64)],
         seed: u64,
     ) -> Result<Vec<(u64, bool)>, String> {
+        #[cfg(feature = "profile")]
+        let mut phase = game_diagnostics::span("physical.interval_start.validate");
         let interval = self
             .work_interval
             .as_ref()
@@ -54,7 +56,17 @@ impl Runtime {
             .ok_or("physical work revision overflow")?;
         let starts: Vec<_> = requests.par_iter().map(|(start, _)| *start).collect();
         game_lot_work::validate_starts(&self.work, &starts)?;
+        #[cfg(feature = "profile")]
+        {
+            drop(phase);
+            phase = game_diagnostics::span("physical.interval_start.plan");
+        }
         let plan = game_lot_work::start(&starts, &self.recipes)?;
+        #[cfg(feature = "profile")]
+        {
+            drop(phase);
+            phase = game_diagnostics::span("physical.interval_start.custody");
+        }
         let mut custody =
             self.store
                 .prepare_with_empty(seed, &plan.transactions, plan.containers, false)?;
@@ -69,6 +81,11 @@ impl Runtime {
             .collect();
         if results.iter().all(|row| !row.1) {
             return Ok(results);
+        }
+        #[cfg(feature = "profile")]
+        {
+            drop(phase);
+            phase = game_diagnostics::span("physical.interval_start.bookkeeping");
         }
         let accepted = |id| {
             results
@@ -105,11 +122,18 @@ impl Runtime {
         rates.par_sort_unstable_by_key(|row| row.0);
         let mut next_interval = interval.clone();
         next_interval.rates = rates;
+        #[cfg(feature = "profile")]
+        {
+            drop(phase);
+            phase = game_diagnostics::span("physical.interval_start.commit");
+        }
         self.store.commit(custody)?;
         next_interval.custody_revision = self.store.revision();
         self.work = work;
         self.work_interval = Some(next_interval);
         self.epoch = epoch;
+        #[cfg(feature = "profile")]
+        drop(phase);
         Ok(results)
     }
     /// Stage only already completed, admitted work without advancing the tick.

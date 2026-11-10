@@ -309,9 +309,15 @@ fn prepare_impl(
         return Ok((draft, additions));
     }
     if partition
-        && additions.is_empty()
         && compact.is_empty()
-        && let Some(draft) = fan_out::prepare(state, instance, seed, transactions, advance)?
+        && let Some(draft) = fan_out::prepare_with_additions(
+            state,
+            instance,
+            seed,
+            transactions,
+            &additions,
+            advance,
+        )?
     {
         return Ok((draft, additions));
     }
