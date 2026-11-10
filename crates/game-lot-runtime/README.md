@@ -22,6 +22,8 @@ Within a partial interval, `prepare_early_work` stages completed admitted jobs u
 
 The caller must exclude jobs whose outputs need separately owned item identities. The early physical-only path creates fungible lots and does not allocate or update identified items.
 
+`start_interval_work` reserves inputs for a batch of host-admitted jobs without advancing the tick. Accepted jobs join the interval with positive frozen rates and zero prior progress; entirely rejected batches leave the state unchanged. The host checks actor availability and resolves other due events before calling this physical-only operation.
+
 The early operation reports job outcomes rather than individual consumed cohorts. If the no-time custody draft would publish already-due spoilage, preparation fails without mutation; the caller can defer work to ordinary boundary settlement instead.
 
 The ignored `early_work_completion_benchmark` measures completion of 50,000 independent jobs with `LEGACY_WORKERS` controlling concurrency. One run took 81, 51, 35, and 31 ms at one, two, four, and six workers respectively, with identical fingerprints. This isolated workload remains sublinear.

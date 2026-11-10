@@ -313,6 +313,39 @@ impl CoreInterval {
             people,
         }))
     }
+    /// Start explicitly chosen work at the current partial-interval offset.
+    /// Due arrivals and work completions must be published first.
+    pub fn start_work(
+        &mut self,
+        tick: u64,
+        offset_millis: u64,
+        requests: &[(game_production_model::Start, u64)],
+    ) -> Result<Vec<(u64, bool)>, String> {
+        if self.physical.tick() != tick
+            || self.elapsed_millis() != Some(offset_millis)
+            || offset_millis == 0
+            || offset_millis >= self.physical.tick_millis()
+        {
+            return Err("work start has a stale or invalid interval time".into());
+        }
+        if self.next_deadline(None)?.after_millis == 0 {
+            return Err("publish pending interval events before starting work".into());
+        }
+        if requests.par_iter().any(|(start, _)| {
+            self.people
+                .binary_search_by_key(&start.worker, |person| person.id)
+                .ok()
+                .is_none_or(|index| {
+                    let person = &self.people[index];
+                    person.health == 0
+                        || person.hunger > self.rules.max_work_hunger
+                        || person.region != Some(start.region)
+                })
+        }) {
+            return Err("work start requires an able local person".into());
+        }
+        self.physical.start_interval_work(requests, self.seed)
+    }
     /// Progress without repeating decisions, publishing arrivals, or completing work.
     /// Failed validation leaves all owners unchanged.
     pub fn progress(&mut self, requested_millis: u64) -> Result<u64, String> {

@@ -261,6 +261,359 @@ fn early_arrival_is_resumable_and_does_not_run_periodic_effects() {
 }
 
 #[test]
+fn arrival_can_start_work_that_completes_before_the_boundary() {
+    let run = |workers, chunks: &[u64]| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut initial = fixture();
+                initial.travel.as_mut().unwrap().journeys[0].progress_millis = 600;
+                let input = initial
+                    .physical
+                    .custody
+                    .containers
+                    .iter_mut()
+                    .find(|row| row.place == Place::Stock { region: 2, good: 1 })
+                    .unwrap();
+                *input = Container::new(
+                    input.place,
+                    10,
+                    vec![Lot {
+                        item: None,
+                        good: 1,
+                        quantity: 2,
+                        expires_at: None,
+                    }],
+                )
+                .unwrap();
+                let start = Start {
+                    id: 2,
+                    worker: 2,
+                    region: 2,
+                    recipe: 1,
+                    units: 1,
+                };
+                let mut core = CoreInterval::begin(initial, &[(1, 1)]).unwrap();
+                assert_eq!(core.progress_to_deadline(400, None).unwrap(), 400);
+                let before = core.snapshot();
+                assert!(core.start_work(0, 400, &[(start, 2)]).is_err());
+                assert_eq!(core.snapshot(), before);
+                assert_eq!(core.publish_arrivals().unwrap().unwrap().people, vec![2]);
+                let saved = serde_json::to_string(&core.snapshot()).unwrap();
+                let mut core = CoreInterval::resume(serde_json::from_str(&saved).unwrap()).unwrap();
+                let before = core.snapshot();
+                assert!(core.start_work(0, 399, &[(start, 2)]).is_err());
+                assert!(core.start_work(0, 400, &[(start, 0)]).is_err());
+                assert_eq!(core.snapshot(), before);
+                assert_eq!(
+                    core.start_work(0, 400, &[(start, 2)]).unwrap(),
+                    vec![(2, true)]
+                );
+                let after = core.snapshot();
+                assert_eq!(after.physical.custody.tick, 0);
+                assert_eq!(
+                    after
+                        .physical
+                        .work_interval
+                        .as_ref()
+                        .unwrap()
+                        .elapsed_millis,
+                    400
+                );
+                assert_eq!(
+                    after.physical.work_interval.as_ref().unwrap().rates,
+                    vec![(1, 1), (2, 2)]
+                );
+                assert!(core.start_work(0, 400, &[(start, 2)]).is_err());
+                let mut core = CoreInterval::resume(
+                    serde_json::from_str(&serde_json::to_string(&after).unwrap()).unwrap(),
+                )
+                .unwrap();
+                for &chunk in chunks {
+                    assert_eq!(core.progress_to_deadline(chunk, None).unwrap(), chunk);
+                }
+                assert_eq!(core.elapsed_millis(), Some(900));
+                assert_eq!(
+                    core.publish_early_work().unwrap().unwrap().finished,
+                    vec![2]
+                );
+                let intermediate = core.snapshot();
+                assert_eq!(intermediate.people[1].health, 100);
+                assert!(intermediate.physical.custody.containers.iter().any(|row| {
+                    row.place == Place::JobOutput(2)
+                        && row
+                            .lots
+                            .iter()
+                            .any(|lot| lot.good == 2 && lot.quantity == 1)
+                }));
+                assert_eq!(core.progress_to_deadline(100, None).unwrap(), 100);
+                let events = core.settle().unwrap();
+                (core.snapshot(), events)
+            })
+    };
+    assert_eq!(run(1, &[500]), run(4, &[100, 150, 250]));
+}
+
+#[test]
+fn rejected_interval_work_reservation_is_inert() {
+    let mut initial = fixture();
+    initial.travel.as_mut().unwrap().journeys[0].progress_millis = 600;
+    let mut core = CoreInterval::begin(initial, &[(1, 1)]).unwrap();
+    core.progress_to_deadline(400, None).unwrap();
+    core.publish_arrivals().unwrap();
+    let before = core.snapshot();
+    let start = Start {
+        id: 2,
+        worker: 2,
+        region: 2,
+        recipe: 1,
+        units: 1,
+    };
+    let remote = Start { region: 1, ..start };
+    assert!(core.start_work(0, 400, &[(remote, 2)]).is_err());
+    let busy = Start {
+        worker: 1,
+        region: 1,
+        ..start
+    };
+    assert!(core.start_work(0, 400, &[(busy, 2)]).is_err());
+    assert_eq!(
+        core.start_work(0, 400, &[(start, 2)]).unwrap(),
+        vec![(2, false)]
+    );
+    assert_eq!(core.snapshot(), before);
+}
+
+#[test]
+fn interval_work_rejects_incapacitated_or_overhungry_people() {
+    for (health, hunger) in [(0, 0), (100, 11)] {
+        let mut initial = fixture();
+        let mut person = initial.people[0].clone();
+        person.id = 3;
+        person.health = health;
+        person.hunger = hunger;
+        initial.people.push(person);
+        initial.nutrition = None;
+        let mut core = CoreInterval::begin(initial, &[(1, 1)]).unwrap();
+        core.progress(400).unwrap();
+        let before = core.snapshot();
+        let start = Start {
+            id: 2,
+            worker: 3,
+            region: 1,
+            recipe: 1,
+            units: 1,
+        };
+        assert!(core.start_work(0, 400, &[(start, 1)]).is_err());
+        assert_eq!(core.snapshot(), before);
+    }
+}
+
+#[test]
+fn mixed_interval_admission_preserves_rejected_stock_and_resumes() {
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut initial = fixture();
+                initial.travel.as_mut().unwrap().journeys[0].progress_millis = 600;
+                let mut third = initial.people[0].clone();
+                third.id = 3;
+                third.region = Some(2);
+                initial.people.push(third);
+                initial.nutrition = None;
+                let input = initial
+                    .physical
+                    .custody
+                    .containers
+                    .iter_mut()
+                    .find(|row| row.place == Place::Stock { region: 2, good: 1 })
+                    .unwrap();
+                *input = Container::new(
+                    input.place,
+                    10,
+                    vec![Lot {
+                        item: None,
+                        good: 1,
+                        quantity: 2,
+                        expires_at: None,
+                    }],
+                )
+                .unwrap();
+                let mut core = CoreInterval::begin(initial, &[(1, 1)]).unwrap();
+                core.progress_to_deadline(400, None).unwrap();
+                core.publish_arrivals().unwrap();
+                let requests = [2, 3].map(|id| {
+                    (
+                        Start {
+                            id,
+                            worker: id,
+                            region: 2,
+                            recipe: 1,
+                            units: 1,
+                        },
+                        2,
+                    )
+                });
+                let results = core.start_work(0, 400, &requests).unwrap();
+                assert_eq!(results.iter().filter(|row| row.1).count(), 1);
+                let saved = core.snapshot();
+                assert_eq!(saved.physical.work.len(), 2);
+                assert_eq!(
+                    saved.physical.work_interval.as_ref().unwrap().rates.len(),
+                    2
+                );
+                let mut core = CoreInterval::resume(
+                    serde_json::from_str(&serde_json::to_string(&saved).unwrap()).unwrap(),
+                )
+                .unwrap();
+                core.progress_to_deadline(500, None).unwrap();
+                core.publish_early_work().unwrap();
+                core.progress_to_deadline(100, None).unwrap();
+                core.settle().unwrap();
+                (results, core.snapshot())
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
+fn a_worker_can_start_again_after_early_completion() {
+    let mut initial = fixture();
+    let stock = initial
+        .physical
+        .custody
+        .containers
+        .iter_mut()
+        .find(|row| row.place == Place::Stock { region: 1, good: 1 })
+        .unwrap();
+    *stock = Container::new(
+        stock.place,
+        10,
+        vec![Lot {
+            item: None,
+            good: 1,
+            quantity: 2,
+            expires_at: None,
+        }],
+    )
+    .unwrap();
+    let mut core = CoreInterval::begin(initial, &[(1, 2)]).unwrap();
+    core.progress_to_deadline(500, None).unwrap();
+    let second = Start {
+        id: 2,
+        worker: 1,
+        region: 1,
+        recipe: 1,
+        units: 1,
+    };
+    assert!(core.start_work(0, 500, &[(second, 2)]).is_err());
+    core.publish_early_work().unwrap();
+    assert_eq!(
+        core.start_work(0, 500, &[(second, 2)]).unwrap(),
+        vec![(2, true)]
+    );
+    core.progress_to_deadline(500, None).unwrap();
+    let events = core.settle().unwrap();
+    assert_eq!(events.finished, vec![2]);
+}
+
+#[test]
+#[ignore = "manual interval work admission scaling benchmark"]
+fn interval_work_admission_benchmark() {
+    use std::hash::{Hash, Hasher};
+    let workers = std::env::var("LEGACY_WORKERS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(1);
+    let count = std::env::var("LEGACY_PEOPLE")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(50_000);
+    assert!(count >= 2);
+    let mut initial = fixture();
+    let person = initial.people[0].clone();
+    initial.people = (1..=count)
+        .map(|id| {
+            let mut p = person.clone();
+            p.id = id;
+            p
+        })
+        .collect();
+    initial.travel = None;
+    initial.nutrition = None;
+    initial.pending_food.clear();
+    let stock = initial
+        .physical
+        .custody
+        .containers
+        .iter_mut()
+        .find(|row| row.place == Place::Stock { region: 1, good: 1 })
+        .unwrap();
+    *stock = Container::new(
+        stock.place,
+        count * 2,
+        vec![Lot {
+            item: None,
+            good: 1,
+            quantity: (count - 1) * 2,
+            expires_at: None,
+        }],
+    )
+    .unwrap();
+    let starts: Vec<_> = (2..=count)
+        .map(|id| {
+            (
+                Start {
+                    id,
+                    worker: id,
+                    region: 1,
+                    recipe: 1,
+                    units: 1,
+                },
+                1,
+            )
+        })
+        .collect();
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(workers)
+        .build()
+        .unwrap()
+        .install(|| {
+            let mut samples = Vec::new();
+            for round in 0..4 {
+                let mut core = CoreInterval::begin(initial.clone(), &[(1, 1)]).unwrap();
+                assert_eq!(core.progress(400).unwrap(), 400);
+                let start = std::time::Instant::now();
+                let result = core.start_work(0, 400, &starts).unwrap();
+                let elapsed = start.elapsed().as_secs_f64();
+                assert_eq!(result.len(), starts.len());
+                assert!(result.iter().all(|row| row.1));
+                if round == 3 {
+                    let mut hash = std::collections::hash_map::DefaultHasher::new();
+                    serde_json::to_vec(&core.snapshot())
+                        .unwrap()
+                        .hash(&mut hash);
+                    println!("fingerprint={:016x}", hash.finish());
+                }
+                if round > 0 {
+                    samples.push(elapsed);
+                }
+            }
+            samples.sort_by(f64::total_cmp);
+            println!(
+                "workers={workers} starts={} elapsed={:.6}",
+                starts.len(),
+                samples[1]
+            );
+        });
+}
+
+#[test]
 fn core_publishes_early_work_without_advancing_periodic_systems() {
     let run = |workers, chunks: &[u64]| {
         rayon::ThreadPoolBuilder::new()
