@@ -406,6 +406,8 @@ fn core_host_departure_benchmark() {
     assert!(count > 1);
     let automatic = std::env::var_os("LEGACY_AUTO_TRAVEL").is_some();
     let acquire = std::env::var_os("LEGACY_FOOD_ACQUIRE").is_some();
+    let claimed = std::env::var_os("LEGACY_FOOD_CLAIMS").is_some();
+    assert!(!claimed || acquire);
     let food_search = std::env::var_os("LEGACY_FOOD_SEARCH").is_some() || acquire;
     assert!(!(automatic && food_search));
     let mut initial = fixture();
@@ -470,6 +472,24 @@ fn core_host_departure_benchmark() {
             .containers
             .sort_by_key(|row| row.place);
         game_economy::core_interval::CoreFoodSearch {
+            claims: claimed.then(|| game_economy_claims::Claims {
+                claims: vec![game_economy_claims::Claim {
+                    person: 1,
+                    region: 1,
+                    good: 2,
+                }],
+                preferences: (2..=count)
+                    .map(|person| game_economy_claims::Preference {
+                        person,
+                        disregard_others: true,
+                        assert_outputs: false,
+                        assert_built_sites: false,
+                        assert_cultivated_fields: false,
+                        desperate_hunger: None,
+                    })
+                    .collect(),
+                ..Default::default()
+            }),
             search: game_economy::FoodSearch {
                 min_hunger: 5,
                 min_report_food: 1,
@@ -545,6 +565,18 @@ fn core_host_departure_benchmark() {
                     results.outcomes.iter().filter(|row| row.accepted).count(),
                     (count / 2) as usize
                 );
+                if claimed {
+                    assert_eq!(
+                        host.snapshot()
+                            .food_search
+                            .unwrap()
+                            .claims
+                            .unwrap()
+                            .events
+                            .len(),
+                        (count / 2) as usize
+                    );
+                }
                 let mut hash = std::collections::hash_map::DefaultHasher::new();
                 serde_json::to_vec(&host.snapshot())
                     .unwrap()
@@ -697,7 +729,7 @@ fn food_search_follows_personal_report_even_when_it_is_stale() {
         };
         let snapshot = CoreHostSnapshot {
             core: initial, autowork: None, tool_wear: None, tool_requirements: vec![], paused_work_rates: vec![],
-            fatigue: None, activity: vec![], food_search: Some(game_economy::core_interval::CoreFoodSearch {search, knowledge}),
+            fatigue: None, activity: vec![], food_search: Some(game_economy::core_interval::CoreFoodSearch {search, knowledge, claims: None}),
             opinions: None, goals: None, agreements: None, sites: None, schedule: None,
         };
         let mut failing = snapshot.clone();
@@ -756,10 +788,45 @@ fn personal_food_acquisition_contends_for_real_stock_then_eats() {
         let snapshot = CoreHostSnapshot {
             core: initial, autowork: None, tool_wear: None, tool_requirements: vec![], paused_work_rates: vec![],
             fatigue: None, activity: vec![], food_search: Some(game_economy::core_interval::CoreFoodSearch {
+                claims: None,
                 search: game_economy::FoodSearch {min_hunger: 5, min_report_food: 1, max_report_age: 10, retry_ticks: 1, inherit_births: false, people: vec![]},
                 knowledge: game_economy_knowledge::Knowledge {max_records: 1, minds: vec![], retention: vec![]},
             }), opinions: None, goals: None, agreements: None, sites: None, schedule: None,
         };
+        let mut claim_snapshot = snapshot.clone();
+        claim_snapshot.food_search.as_mut().unwrap().claims = Some(game_economy_claims::Claims {
+            claims: vec![game_economy_claims::Claim {person: 1, region: 1, good: 2}],
+            preferences: vec![game_economy_claims::Preference {
+                person: 3, disregard_others: true, assert_outputs: false, assert_built_sites: false,
+                assert_cultivated_fields: false, desperate_hunger: None,
+            }],
+            ..Default::default()
+        });
+        let mut manual = CoreHost::begin(claim_snapshot.clone(), &[(1, 1)]).unwrap();
+        manual.progress(1).unwrap();
+        let taking = game_lots::Transaction {
+            id: 99,
+            movements: vec![game_lots::Movement {id: 99, from: Place::Stock {region: 1, good: 2}, to: Some(Place::Person(2)), good: 2, quantity: 1, item: None}],
+            creations: vec![],
+        };
+        assert!(manual.transfer_goods(&[taking]).unwrap().transactions[0].accepted);
+        let mut disputed = claim_snapshot.clone();
+        let claims = disputed.food_search.as_mut().unwrap().claims.as_mut().unwrap();
+        let mut second_preference = claims.preferences[0].clone();
+        second_preference.person = 2;
+        claims.preferences.push(second_preference);
+        let mut disputed = CoreHost::begin(disputed, &[(1, 1)]).unwrap();
+        let attempts = disputed.acquire_food_autonomously(&[]).unwrap();
+        assert_eq!(attempts.actors.len(), 2);
+        assert_eq!(attempts.outcomes.iter().filter(|row| row.accepted).count(), 1);
+        assert_eq!(disputed.snapshot().food_search.unwrap().claims.unwrap().events.len(), 1);
+        let mut claimed = CoreHost::begin(claim_snapshot, &[(1, 1)]).unwrap();
+        let provision = claimed.acquire_food_autonomously(&[]).unwrap();
+        assert_eq!(provision.actors, vec![3]);
+        assert!(provision.outcomes[0].accepted);
+        let claims = claimed.snapshot().food_search.unwrap().claims.unwrap();
+        assert_eq!(claims.events.len(), 1);
+        assert_eq!((claims.events[0].claimant, claims.events[0].person), (1, 3));
         let mut host = CoreHost::begin(snapshot, &[(1, 1)]).unwrap();
         host.enable_schedule(500, 1).unwrap();
         let run = host.advance_scheduled(0, &[]).unwrap();

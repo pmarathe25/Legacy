@@ -6,6 +6,8 @@ use super::*;
 pub struct CoreFoodSearch {
     pub search: crate::FoodSearch,
     pub knowledge: game_economy_knowledge::Knowledge,
+    #[serde(default)]
+    pub claims: Option<game_economy_claims::Claims>,
 }
 
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -18,6 +20,7 @@ impl Clone for CoreFoodSearch {
     fn clone(&self) -> Self {
         Self {
             search: self.search.clone(),
+            claims: self.claims.clone(),
             knowledge: game_economy_knowledge::Knowledge {
                 max_records: self.knowledge.max_records,
                 minds: self.knowledge.minds.par_iter().cloned().collect(),
@@ -60,6 +63,11 @@ impl CoreHost {
         busy.dedup();
         let tick = self.core.physical.tick();
         let view = self.core.physical.view(tick)?;
+        let claims = self
+            .food_search
+            .as_ref()
+            .and_then(|owner| owner.claims.as_ref());
+        let index = claims.map(game_economy_claims::Claims::index);
         let plan = game_economy_person::provision::prepare(
             &self.core.people,
             &self.core.rules,
@@ -67,7 +75,11 @@ impl CoreHost {
             (&view, &[], None),
             &busy,
             1,
-            |_, _, _| Some(0),
+            |person, region, good| {
+                index
+                    .as_ref()
+                    .map_or(Some(0), |index| index.food_access(person, region, good))
+            },
         )?;
         if plan.actions.is_empty() {
             return Ok(CoreFoodProvision::default());
@@ -76,7 +88,51 @@ impl CoreHost {
             .core
             .physical
             .prepare_interval_transfer(&plan.actions, self.core.seed)?;
+        let mut staged_claims = claims.cloned();
+        let mut staged_opinions = claims.is_some().then(|| self.opinions.clone());
+        if let Some(claims) = &mut staged_claims {
+            let uses = game_economy_claims::pickups(&plan);
+            let old_events: Vec<_> = std::mem::take(&mut claims.events)
+                .into_par_iter()
+                .filter(|event| event.tick == tick)
+                .collect();
+            let events = game_lot_runtime::Events {
+                tick,
+                physical_actions: draft.transactions().par_iter().cloned().collect(),
+                started: vec![],
+                start_denied: vec![],
+                abandoned: vec![],
+                suspended: vec![],
+                adopted: vec![],
+                finished: vec![],
+                delivered: vec![],
+                output_lost: vec![],
+                interrupted: vec![],
+                returned: vec![],
+                empty_returns: vec![],
+                spoiled: vec![],
+                physical_movements: Default::default(),
+            };
+            game_economy_claims::publish(
+                claims,
+                &uses,
+                &events,
+                &self.core.people,
+                staged_opinions.as_mut().expect("claims stage opinions"),
+                None,
+            );
+            claims.events.par_extend(old_events);
+            claims
+                .events
+                .par_sort_unstable_by_key(|e| (e.tick, e.claimant, e.person, e.region, e.good));
+        }
         let outcomes = self.core.physical.commit_interval_consumption(draft)?;
+        if let Some(owner) = &mut self.food_search {
+            owner.claims = staged_claims;
+        }
+        if let Some(opinions) = staged_opinions {
+            self.opinions = opinions;
+        }
         Ok(CoreFoodProvision {
             actors: plan.actors,
             outcomes: outcomes.transactions,
@@ -136,7 +192,12 @@ impl CoreHost {
         let mut next_owner = CoreFoodSearch {
             search: owner.search.clone(),
             knowledge,
+            claims: owner.claims.clone(),
         };
+        let claims = next_owner
+            .claims
+            .as_ref()
+            .map(game_economy_claims::Claims::index);
         let mut plan = crate::food_search::Context {
             owner: &next_owner.search,
             knowledge: &next_owner.knowledge,
@@ -144,7 +205,7 @@ impl CoreHost {
             people: &self.core.people,
             goods: self.core.physical.goods(),
             view: &view,
-            claims: None,
+            claims: claims.as_ref(),
             busy: &busy,
             now: tick,
         }

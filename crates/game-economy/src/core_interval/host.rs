@@ -276,6 +276,9 @@ impl CoreHost {
             owner
                 .search
                 .validate(&people, Some(&owner.knowledge), core.travel.as_ref())?;
+            if let Some(claims) = &owner.claims {
+                claims.validate(&people, &view, core.physical.tick())?;
+            }
         }
         if let Some(owner) = &goals {
             let people: HashSet<_> = core.people.par_iter().map(|person| person.id).collect();
