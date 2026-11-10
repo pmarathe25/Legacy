@@ -1,4 +1,4 @@
-use game_economy::core_interval::{CoreInterval, CoreSnapshot};
+use game_economy::core_interval::{CoreHost, CoreHostSnapshot, CoreInterval, CoreSnapshot};
 use game_economy_person::{
     Person, Rules,
     travel::{Journey, Route, Travel},
@@ -426,6 +426,102 @@ fn interval_identified_meals_benchmark() {
             samples.sort_by(f64::total_cmp);
             println!(
                 "workers={workers} identified_meals={count} elapsed={:.6}",
+                samples[1]
+            );
+        });
+}
+
+#[test]
+#[ignore = "manual saved core host work scaling benchmark"]
+fn core_host_autonomous_work_benchmark() {
+    use std::hash::{Hash, Hasher};
+    let count = std::env::var("LEGACY_PEOPLE")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(50_000);
+    let workers = std::env::var("LEGACY_WORKERS")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(1);
+    assert!(count > 1);
+    let mut initial = fixture();
+    let person = initial.people[0].clone();
+    initial.people = (1..=count)
+        .map(|id| {
+            let mut row = person.clone();
+            row.id = id;
+            row.willing_to_work = true;
+            row
+        })
+        .collect();
+    initial.travel = None;
+    initial.nutrition = None;
+    initial.pending_food.clear();
+    let stock = initial
+        .physical
+        .custody
+        .containers
+        .iter_mut()
+        .find(|row| row.place == Place::Stock { region: 1, good: 1 })
+        .unwrap();
+    *stock = Container::new(
+        stock.place,
+        count * 2,
+        vec![Lot {
+            item: None,
+            good: 1,
+            quantity: (count - 1) * 2,
+            expires_at: None,
+        }],
+    )
+    .unwrap();
+    let snapshot = CoreHostSnapshot {
+        core: initial,
+        tool_wear: None,
+        autowork: Some(game_autowork::Autowork {
+            next_id: 2,
+            policies: (2..=count)
+                .map(|person| game_autowork::Policy {
+                    person,
+                    recipe: 1,
+                    enabled: true,
+                    disregard_claims: false,
+                })
+                .collect(),
+            requests: None,
+        }),
+    };
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(workers)
+        .build()
+        .unwrap()
+        .install(|| {
+            let mut samples = Vec::new();
+            for round in 0..4 {
+                let mut host = CoreHost::begin(snapshot.clone(), &[(1, 1)]).unwrap();
+                host.progress(400).unwrap();
+                let start = std::time::Instant::now();
+                let outcomes = host.start_autonomous_work(&[], 1).unwrap();
+                let elapsed = start.elapsed().as_secs_f64();
+                assert_eq!(
+                    outcomes.iter().filter(|row| row.1).count(),
+                    (count - 1) as usize
+                );
+                if round == 3 {
+                    let mut hash = std::collections::hash_map::DefaultHasher::new();
+                    serde_json::to_vec(&host.snapshot())
+                        .unwrap()
+                        .hash(&mut hash);
+                    println!("fingerprint={:016x}", hash.finish());
+                }
+                if round > 0 {
+                    samples.push(elapsed);
+                }
+            }
+            samples.sort_by(f64::total_cmp);
+            println!(
+                "workers={workers} host_autonomous_starts={} elapsed={:.6}",
+                count - 1,
                 samples[1]
             );
         });
@@ -1084,6 +1180,194 @@ fn autonomous_interval_work_respects_personal_choices_and_real_stock() {
             })
     };
     assert_eq!(run(1), run(6));
+}
+
+#[test]
+fn saved_core_host_coordinates_personal_work_meals_and_tool_ownership() {
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut initial = fixture();
+                initial.people[0].willing_to_work = true;
+                initial.people[0].seek_meals = true;
+                initial.people[1].region = Some(1);
+                initial.people[1].willing_to_work = true;
+                initial.people[1].seek_meals = true;
+                initial.travel = None;
+                initial.nutrition = None;
+                initial.pending_food.clear();
+                initial.rules.meal_threshold = 2;
+                initial.physical.goods[0].food = Some(game_production_model::FoodProfile {
+                    portion: 1,
+                    hunger_relief: 1,
+                    nutrients: Default::default(),
+                    health_effect: 0,
+                    shelf_days: None,
+                });
+                let stock = initial
+                    .physical
+                    .custody
+                    .containers
+                    .iter_mut()
+                    .find(|row| row.place == Place::Stock { region: 1, good: 1 })
+                    .unwrap();
+                *stock = Container::new(
+                    stock.place,
+                    10,
+                    vec![Lot {
+                        item: None,
+                        good: 1,
+                        quantity: 2,
+                        expires_at: None,
+                    }],
+                )
+                .unwrap();
+                initial
+                    .physical
+                    .custody
+                    .containers
+                    .extend((1..=2).map(|id| {
+                        Container::new(
+                            Place::Person(id),
+                            2,
+                            vec![Lot {
+                                item: None,
+                                good: 1,
+                                quantity: 1,
+                                expires_at: None,
+                            }],
+                        )
+                        .unwrap()
+                    }));
+                initial
+                    .physical
+                    .custody
+                    .containers
+                    .sort_by_key(|row| row.place);
+                let snapshot = CoreHostSnapshot {
+                    core: initial,
+                    autowork: Some(game_autowork::Autowork {
+                        next_id: 2,
+                        policies: vec![game_autowork::Policy {
+                            person: 2,
+                            recipe: 1,
+                            enabled: true,
+                            disregard_claims: false,
+                        }],
+                        requests: None,
+                    }),
+                    tool_wear: Some(game_economy_work::tool_wear::ToolWear {
+                        next_item: 10,
+                        rules: vec![game_economy_work::tool_wear::Rule {
+                            good: 2,
+                            durability: 10,
+                            wear: 1,
+                            repair_good: 1,
+                            repair_quantity: 1,
+                        }],
+                        conditions: vec![],
+                        repairs: vec![],
+                        events: vec![],
+                    }),
+                };
+                let mut host = CoreHost::begin(snapshot, &[(1, 1)]).unwrap();
+                host.progress(300).unwrap();
+                assert_eq!(
+                    host.eat_autonomously(&[])
+                        .unwrap()
+                        .iter()
+                        .map(|meal| meal.person)
+                        .collect::<Vec<_>>(),
+                    vec![2]
+                );
+                assert!(host.start_autonomous_work(&[2], 2).unwrap().is_empty());
+                let saved = serde_json::to_string(&host.snapshot()).unwrap();
+                let mut host = CoreHost::resume(serde_json::from_str(&saved).unwrap()).unwrap();
+                host.progress(1).unwrap();
+                assert_eq!(host.start_autonomous_work(&[], 2).unwrap(), vec![(2, true)]);
+                host.progress(500).unwrap();
+                assert_eq!(
+                    host.publish_early_work().unwrap().unwrap().finished,
+                    vec![2]
+                );
+                let saved = serde_json::to_string(&host.snapshot()).unwrap();
+                let mut host = CoreHost::resume(serde_json::from_str(&saved).unwrap()).unwrap();
+                assert_eq!(
+                    host.snapshot().tool_wear.as_ref().unwrap().conditions[0].item,
+                    10
+                );
+                host.progress(199).unwrap();
+                let events = host.settle().unwrap();
+                assert_eq!(events.finished, vec![1]);
+                assert_eq!(events.delivered, vec![2]);
+                let result = host.snapshot();
+                let physical = Runtime::compile(result.core.physical.clone()).unwrap();
+                assert_eq!(
+                    physical.item_place(10),
+                    Some(Place::Stock { region: 1, good: 2 })
+                );
+                assert_eq!(physical.item_place(11), Some(Place::JobOutput(1)));
+                let owner = result.tool_wear.as_ref().unwrap();
+                owner
+                    .validate(
+                        &physical,
+                        &[1, 2].into_iter().collect(),
+                        &[1, 2].into_iter().collect(),
+                        1,
+                    )
+                    .unwrap();
+                assert_eq!(result.autowork.as_ref().unwrap().next_id, 3);
+                result
+            })
+    };
+    assert_eq!(run(1), run(6));
+}
+
+#[test]
+fn core_host_rejects_unowned_identified_consumption_without_mutation() {
+    let mut initial = fixture();
+    let input = initial
+        .physical
+        .custody
+        .containers
+        .iter_mut()
+        .find(|row| row.place == Place::JobInput(1))
+        .unwrap();
+    *input = Container::new(
+        input.place,
+        2,
+        vec![
+            Lot {
+                item: Some(10),
+                good: 1,
+                quantity: 1,
+                expires_at: None,
+            },
+            Lot {
+                item: Some(11),
+                good: 1,
+                quantity: 1,
+                expires_at: None,
+            },
+        ],
+    )
+    .unwrap();
+    let mut host = CoreHost::begin(
+        CoreHostSnapshot {
+            core: initial,
+            autowork: None,
+            tool_wear: None,
+        },
+        &[(1, 2)],
+    )
+    .unwrap();
+    host.progress(500).unwrap();
+    let before = host.snapshot();
+    assert!(host.publish_early_work().is_err());
+    assert_eq!(host.snapshot(), before);
 }
 
 #[test]

@@ -14,6 +14,8 @@ use game_production_model::FoodEffect;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
+mod host;
+pub use host::{CoreHost, CoreHostSnapshot};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

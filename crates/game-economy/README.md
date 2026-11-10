@@ -26,6 +26,10 @@ For identified boundary output, `prepare_settlement` exposes staged physical ide
 
 The same host can use `prepare_early_work` to stage nonperishable identified output at a partial offset. It must stage and validate the item owner before committing the early draft; the convenience `publish_early_work` creates fungible output and is only appropriate when no separate item identity is required.
 
+`CoreHost` saves the limited core together with optional autonomous-work policies and tool conditions. It coordinates carried-food choices, work admission, early production, and boundary settlement with those owners; identified consumption with no matching tool owner is rejected. The enclosing host must still supply exclusions for other activities, sites, tools, and claims, and must handle other world owners. Use `resume` for an in-flight snapshot and `begin` with new work rates after a completed boundary.
+
+The ignored `core_host_autonomous_work_benchmark` measures policy selection and reservation through this saved host. One 49,999-start run took 61.7, 42.3, 29.1, and 27.3 ms at one, two, four, and six workers, with matching saved-state fingerprints. It does not measure the complete campaign.
+
 The ignored `composed_core_progress_benchmark` with `LEGACY_CORE_ARRIVALS=1` measures publication of 50,000 arrivals among 100,000 people. One run took 5.87, 2.86, 1.58, and 1.25 ms with one, two, four, and six workers, with matching fingerprints. This measures only arrival publication in the limited core.
 
 The ignored `interval_work_admission_benchmark` starts 49,999 jobs from one shared stock within a partial interval. A specialized physical path reduced one instrumented run from 111, 70, 52, and 46 ms to 73, 45, 35, and 31 ms with one, two, four, and six workers, with matching fingerprints. Set `LEGACY_ADMISSION_STOCK=25000` to admit only 25,000 jobs; one run took 83, 52, 37, and 34 ms with matching fingerprints across worker counts. These isolated admission workloads are sublinear and do not measure whole-economy time advancement.
