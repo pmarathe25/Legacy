@@ -1000,3 +1000,23 @@ fn authored_aspiration_resolves_named_recipe_and_forms_a_goal() {
             .any(|goal| goal.person == 1 && goal.recipe == recipe && goal.target == 2)
     );
 }
+
+#[test]
+fn authored_shared_work_resolves_recipe_and_produces_real_output() {
+    fn run(workers: usize) -> serde_json::Value {
+        rayon::ThreadPoolBuilder::new().num_threads(workers).build().unwrap().install(|| {
+            let root = root();
+            let mut host = game_economy_cli::core_scenario(&root.join("content/scenarios/economy-core-shared-work.toml"), &root.join("content")).unwrap();
+            let result = host.advance_continuous(1_800_000, &[]).unwrap();
+            assert_eq!(result.failure,None);
+            assert!(result.events.iter().any(|event| matches!(event, game_economy::core_interval::CoreRunEvent::Assists(people) if people == &[1])));
+            assert!(result.events.iter().any(|event| matches!(event, game_economy::core_interval::CoreRunEvent::Work(work) if work.finished == [1])));
+            assert_eq!(host.advance_continuous(1_800_000, &[]).unwrap().failure,None);
+            let state = host.snapshot();
+            let tool = state.core.physical.goods.iter().find(|good| good.name == "tool").unwrap().id;
+            assert_eq!(state.core.physical.custody.containers.iter().find(|row| row.place == (game_lots::Place::Stock {region:1,good:tool})).unwrap().used,1);
+            serde_json::to_value(state).unwrap()
+        })
+    }
+    assert_eq!(run(1), run(6));
+}

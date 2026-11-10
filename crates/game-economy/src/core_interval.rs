@@ -16,11 +16,11 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 mod host;
 pub use host::{
-    CoreDeliveryResults, CoreDynamicsResults, CoreFoodProvision, CoreFoodSearch, CoreHealth,
-    CoreHost, CoreHostSnapshot, CorePracticeWorkEvidence, CorePurpose, CoreRepairResults,
-    CoreRequestResults, CoreRun, CoreRunEvent, CoreSchedule, CoreSites, CoreSkillCredit,
-    CoreSkills, CoreSocial, CoreSocialResults, CoreToolRepairResults, CoreTreatmentResults,
-    DecisionPhase,
+    CoreAssistRecord, CoreAssistSession, CoreDeliveryResults, CoreDynamicsResults,
+    CoreFoodProvision, CoreFoodSearch, CoreHealth, CoreHost, CoreHostSnapshot,
+    CorePracticeWorkEvidence, CorePurpose, CoreRepairResults, CoreRequestResults, CoreRun,
+    CoreRunEvent, CoreSchedule, CoreSharedWork, CoreSites, CoreSkillCredit, CoreSkills, CoreSocial,
+    CoreSocialResults, CoreToolRepairResults, CoreTreatmentResults, DecisionPhase,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

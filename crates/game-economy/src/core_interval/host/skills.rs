@@ -110,7 +110,9 @@ impl CoreSkills {
         self.owner
             .validate(&people, &recipes, core.physical.tick())?;
         for rows in [&self.practiced, &self.completed] {
-            if rows.par_windows(2).any(|pair| pair[0].job >= pair[1].job)
+            if rows
+                .par_windows(2)
+                .any(|pair| (pair[0].job, pair[0].worker) >= (pair[1].job, pair[1].worker))
                 || rows.par_iter().any(|row| {
                     row.job == 0 || !people.contains(&row.worker) || !recipes.contains(&row.recipe)
                 })
@@ -156,7 +158,7 @@ impl CoreHost {
         let Some(interval) = self.core.physical.work_interval() else {
             return Vec::new();
         };
-        interval
+        let mut credits: Vec<_> = interval
             .rates
             .par_iter()
             .filter(|(_, rate)| *rate > 0)
@@ -176,7 +178,30 @@ impl CoreHost {
                     },
                 )
             })
-            .collect()
+            .collect();
+        if let Some(shared) = &self.shared_work {
+            credits.par_extend(
+                shared
+                    .sessions
+                    .par_iter()
+                    .filter(|session| {
+                        recipes.contains(&session.event.recipe)
+                            && self
+                                .core
+                                .physical
+                                .work()
+                                .binary_search_by_key(&session.event.job, |row| row.job.id)
+                                .ok()
+                                .is_some_and(|i| self.core.physical.work()[i].job.remaining > 0)
+                    })
+                    .map(|session| CoreSkillCredit {
+                        job: session.event.job,
+                        worker: session.event.person,
+                        recipe: session.event.recipe,
+                    }),
+            );
+        }
+        credits
     }
     pub(super) fn remember_skill_practice(&mut self, rows: Vec<CoreSkillCredit>) {
         if rows.is_empty() {
@@ -184,14 +209,16 @@ impl CoreHost {
         }
         let owner = self.skills.as_mut().expect("planned skill owner");
         owner.practiced.par_extend(rows);
-        owner.practiced.par_sort_unstable_by_key(|row| row.job);
-        owner.practiced.dedup_by_key(|row| row.job);
+        owner
+            .practiced
+            .par_sort_unstable_by_key(|row| (row.job, row.worker));
+        owner.practiced.dedup_by_key(|row| (row.job, row.worker));
     }
     pub(super) fn plan_skill_completions(&self, finished: &[u64]) -> Vec<CoreSkillCredit> {
         if self.skills.is_none() || finished.is_empty() {
             return Vec::new();
         }
-        finished
+        let mut credits: Vec<_> = finished
             .par_iter()
             .filter_map(|&job| {
                 let index = self
@@ -207,7 +234,24 @@ impl CoreHost {
                     recipe: work.job.recipe,
                 })
             })
-            .collect()
+            .collect();
+        if let Some(shared) = &self.shared_work {
+            let jobs: HashSet<_> = finished.par_iter().copied().collect();
+            credits.par_extend(
+                shared
+                    .sessions
+                    .par_iter()
+                    .filter(|session| {
+                        jobs.contains(&session.event.job) && session.elapsed_millis > 0
+                    })
+                    .map(|session| CoreSkillCredit {
+                        job: session.event.job,
+                        worker: session.event.person,
+                        recipe: session.event.recipe,
+                    }),
+            );
+        }
+        credits
     }
     pub(super) fn remember_skill_completions(&mut self, rows: Vec<CoreSkillCredit>) {
         if rows.is_empty() {
@@ -215,8 +259,10 @@ impl CoreHost {
         }
         let owner = self.skills.as_mut().expect("planned skill owner");
         owner.completed.par_extend(rows);
-        owner.completed.par_sort_unstable_by_key(|row| row.job);
-        owner.completed.dedup_by_key(|row| row.job);
+        owner
+            .completed
+            .par_sort_unstable_by_key(|row| (row.job, row.worker));
+        owner.completed.dedup_by_key(|row| (row.job, row.worker));
     }
     pub(super) fn stage_skills(&self, finished: &[u64], tick: u64) -> Option<CoreSkills> {
         let owner = self.skills.as_ref()?;

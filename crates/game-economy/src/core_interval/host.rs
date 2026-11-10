@@ -25,6 +25,7 @@ mod purpose;
 mod requests;
 mod scenario;
 mod scheduler;
+mod shared_work;
 mod sites;
 mod skills;
 mod social;
@@ -37,6 +38,7 @@ pub use offers::CoreSocialResults;
 pub use purpose::CorePurpose;
 pub use requests::{CoreDeliveryResults, CoreRequestResults};
 pub use scheduler::{CoreRun, CoreRunEvent, CoreSchedule, DecisionPhase};
+pub use shared_work::{CoreAssistRecord, CoreAssistSession, CoreSharedWork};
 pub use sites::{CoreRepairResults, CoreSites};
 pub use skills::{CoreSkillCredit, CoreSkills};
 pub use social::{CoreDynamicsResults, CoreHealth, CoreSocial};
@@ -120,6 +122,8 @@ pub struct CoreHostSnapshot {
     #[serde(default)]
     pub dreams: Option<game_economy_goals::Dreams>,
     #[serde(default)]
+    pub shared_work: Option<CoreSharedWork>,
+    #[serde(default)]
     pub goal_setbacks: Vec<(u64, u32)>,
     #[serde(default)]
     pub agreements: Option<game_agreements::Agreements>,
@@ -175,6 +179,7 @@ pub struct CoreHost {
     opinions: Option<game_opinions::Opinions>,
     goals: Option<game_goals::Goals>,
     dreams: Option<game_economy_goals::Dreams>,
+    shared_work: Option<CoreSharedWork>,
     agreements: Option<game_agreements::Agreements>,
     sites: Option<CoreSites>,
     schedule: Option<CoreSchedule>,
@@ -215,6 +220,7 @@ struct CoreRuntimeOptions {
     family: Option<game_economy_family::Families>,
     dependent_care: Option<crate::DependentCare>,
     dreams: Option<game_economy_goals::Dreams>,
+    shared_work: Option<CoreSharedWork>,
 }
 impl CoreHost {
     pub fn begin(snapshot: CoreHostSnapshot, rates: &[(u64, u64)]) -> Result<Self, String> {
@@ -257,6 +263,7 @@ impl CoreHost {
             opinions,
             goals,
             dreams,
+            shared_work,
             agreements,
             sites,
             schedule,
@@ -275,6 +282,7 @@ impl CoreHost {
             agreements,
             CoreRuntimeOptions {
                 dreams,
+                shared_work,
                 sites,
                 schedule,
                 tool_requirements,
@@ -352,6 +360,7 @@ impl CoreHost {
             opinions,
             goals,
             dreams,
+            shared_work,
             agreements,
             sites,
             schedule,
@@ -366,6 +375,7 @@ impl CoreHost {
             agreements,
             CoreRuntimeOptions {
                 dreams,
+                shared_work,
                 sites,
                 schedule,
                 tool_requirements,
@@ -414,6 +424,7 @@ impl CoreHost {
     ) -> Result<Self, String> {
         let CoreRuntimeOptions {
             dreams,
+            shared_work,
             mut sites,
             schedule,
             tool_requirements,
@@ -945,6 +956,9 @@ impl CoreHost {
                 .validate(&people, &recipes, core.physical.tick())
                 .map_err(str::to_owned)?;
         }
+        if let Some(owner) = &shared_work {
+            owner.validate(&core, sites.as_ref())?;
+        }
         if let Some(owner) = &dreams {
             if goals.is_none() {
                 return Err("aspirations require personal goals".into());
@@ -1053,6 +1067,7 @@ impl CoreHost {
             opinions,
             goals,
             dreams,
+            shared_work,
             agreements,
             sites,
             schedule,
@@ -1098,6 +1113,7 @@ impl CoreHost {
             opinions: self.opinions.clone(),
             goals: self.goals.clone(),
             dreams: self.dreams.clone(),
+            shared_work: self.shared_work.clone(),
             agreements: self.agreements.clone(),
             sites: self.sites.clone(),
             schedule: self.schedule.clone(),
@@ -1140,7 +1156,13 @@ impl CoreHost {
     ) -> Result<Vec<travel::DepartureOutcome>, String> {
         let tick = self.core.physical.tick();
         let offset = self.core.elapsed_millis().ok_or("no physical interval")?;
-        let outcomes = self.core.depart(tick, offset, requests, occupied)?;
+        let blocked = self.blocked_with_rest(occupied);
+        let outcomes = self.core.depart(
+            tick,
+            offset,
+            requests,
+            blocked.as_deref().unwrap_or(occupied),
+        )?;
         self.work_checked_revision = None;
         Ok(outcomes)
     }
@@ -1215,6 +1237,13 @@ impl CoreHost {
         &mut self,
         requests: &[(game_production_model::Start, u64)],
     ) -> Result<Vec<(u64, bool)>, String> {
+        let helpers = self.assisting_people();
+        if requests
+            .par_iter()
+            .any(|(start, _)| helpers.binary_search(&start.worker).is_ok())
+        {
+            return Err("an assisting person cannot start other work".into());
+        }
         self.start_with_sites(requests)
     }
     /// A worker may independently stop work; inputs return at the boundary.
@@ -1227,6 +1256,7 @@ impl CoreHost {
         ended.par_sort_unstable();
         let sites = self.stage_sites(&[], &ended, false);
         self.core.abandon_work(tick, offset, requests)?;
+        self.finished_shared_jobs(&ended, &[]);
         self.record_early_work_outcomes(&[], &ended);
         self.paused_work_rates
             .retain(|row| ended.binary_search(&row.0).is_err());
@@ -1316,7 +1346,8 @@ impl CoreHost {
         );
         let requests =
             self.stage_request_resolution(&outcomes, draft.events().tick, &self.core.people, false);
-        let ended: Vec<_> = outcomes.par_iter().map(|&(job, _)| job).collect();
+        let mut ended: Vec<_> = outcomes.par_iter().map(|&(job, _)| job).collect();
+        ended.par_sort_unstable();
         let sites = self.stage_sites(&draft.events().finished, &ended, false);
         let goals = self.stage_goals(
             &draft.events().finished,
@@ -1332,6 +1363,7 @@ impl CoreHost {
 
         self.core.validate_early_work(&draft)?;
         let events = self.core.commit_early_work(draft)?;
+        self.finished_shared_jobs(&ended, &events.finished);
         self.remember_skill_completions(skill_completions);
         self.record_early_work_outcomes(&events.finished, &events.interrupted);
         if let Some(progress) = purpose_progress {
@@ -1361,7 +1393,8 @@ impl CoreHost {
         if blocked.par_windows(2).any(|rows| rows[0] >= rows[1]) {
             return Err("invalid occupied people".into());
         }
-        let mut busy = blocked.to_vec();
+        let occupied = self.blocked_with_rest(blocked);
+        let mut busy = occupied.as_deref().unwrap_or(blocked).to_vec();
         busy.par_extend(
             self.core
                 .physical
@@ -1393,6 +1426,8 @@ impl CoreHost {
         if blocked.par_windows(2).any(|rows| rows[0] >= rows[1]) {
             return Err("invalid occupied people".into());
         }
+        let occupied = self.blocked_with_rest(blocked);
+        let blocked = occupied.as_deref().unwrap_or(blocked);
         self.refresh_personality_work_refusals();
         let reluctant = (!self.personality_refusals.is_empty()).then(|| {
             let mut rows = blocked.to_vec();
@@ -1991,6 +2026,15 @@ impl CoreHost {
             family.as_ref(),
             draft.events().tick,
         )?;
+        let mut interrupted: Vec<_> = draft
+            .events()
+            .interrupted
+            .par_iter()
+            .chain(draft.events().abandoned.par_iter())
+            .copied()
+            .collect();
+        interrupted.par_sort_unstable();
+        let shared_work = self.stage_shared_boundary(&draft.events().finished, &interrupted);
         let mut ended = draft.events().finished.clone();
         ended.par_extend(draft.events().interrupted.par_iter().copied());
         ended.par_extend(draft.events().abandoned.par_iter().copied());
@@ -2027,6 +2071,9 @@ impl CoreHost {
             self.tool_wear = Some(tools);
         }
         self.publish_request_resolution(requests);
+        if let Some(owner) = shared_work {
+            self.shared_work = Some(owner);
+        }
         if let Some(dreams) = dreams {
             self.dreams = Some(dreams);
         }

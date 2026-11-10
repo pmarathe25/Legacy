@@ -87,3 +87,5 @@ policies = [{ person = 2, blueprint = 1, target_sites = 1, willing = true }]
 `economy-core-personality.toml` adds authored dispositions to the interval-host birth scenario, including optional inheritance from the parents.
 
 `economy-core-aspirations.toml` adds a named personal aspiration and an inheritable inclination to learn from witnessed work.
+
+`economy-core-shared-work.toml` demonstrates individually chosen assistance on a job with physically reserved workshop capacity.

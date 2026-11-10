@@ -39,15 +39,18 @@ impl CoreHost {
         Ok(Some(draft.state))
     }
     pub(super) fn blocked_with_rest(&self, blocked: &[u64]) -> Option<Vec<u64>> {
-        let resting = self.fatigue.as_ref()?.fatigue.resting();
-        if resting
+        let mut occupied = self
+            .fatigue
+            .as_ref()
+            .map_or_else(Vec::new, |owner| owner.fatigue.resting());
+        occupied.par_extend(self.assisting_people());
+        if occupied
             .par_iter()
             .all(|id| blocked.binary_search(id).is_ok())
         {
             return None;
         }
-        let mut occupied = blocked.to_vec();
-        occupied.extend(resting);
+        occupied.par_extend(blocked.par_iter().copied());
         occupied.par_sort_unstable();
         occupied.dedup();
         Some(occupied)
@@ -86,10 +89,19 @@ impl CoreHost {
         requested: u64,
         externally_busy: &[u64],
     ) -> Result<u64, String> {
+        let elapsed = self.core.elapsed_millis().ok_or("no physical interval")?;
+        let quantum = self.core.physical.tick_millis();
+        let consumed = requested.min(
+            quantum
+                .checked_sub(elapsed)
+                .ok_or("invalid interval elapsed time")?,
+        );
+        let durations = self.assist_durations(consumed)?;
         let Some(owner) = &self.fatigue else {
             let credits = self.plan_skill_practice(requested);
             let advanced = self.core.progress(requested)?;
             if advanced > 0 {
+                self.record_assist_durations(&durations);
                 self.remember_skill_practice(credits);
             }
             return Ok(advanced);
@@ -128,6 +140,15 @@ impl CoreHost {
                 Ok((row.job.worker, duration))
             })
             .collect::<Result<Vec<_>, _>>()?;
+        if let Some(owner) = &self.shared_work {
+            work.par_extend(
+                owner
+                    .sessions
+                    .par_iter()
+                    .zip(durations.par_iter())
+                    .map(|(session, duration)| (session.event.person, *duration)),
+            );
+        }
         work.par_sort_unstable_by_key(|row| row.0);
         let mut travel: Vec<_> = self.core.travel.as_ref().map_or(Ok(Vec::new()), |travel| {
             travel
@@ -223,6 +244,7 @@ impl CoreHost {
         let next = chunks.into_par_iter().flatten().collect();
         let advanced = self.core.progress(consumed)?;
         self.activity = next;
+        self.record_assist_durations(&durations);
         self.remember_skill_practice(skill_practice);
         Ok(advanced)
     }

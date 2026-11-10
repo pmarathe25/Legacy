@@ -161,6 +161,13 @@ fn priority(seed: u64, tick: u64, job: u64, person: u64) -> u64 {
 
 impl Context<'_> {
     pub fn prepare(&self) -> Vec<Event> {
+        self.prepare_with(false)
+    }
+    /// Admit helper rates for a fractional interval; the physical runtime caps elapsed progress at completion.
+    pub fn prepare_interval(&self) -> Vec<Event> {
+        self.prepare_with(true)
+    }
+    fn prepare_with(&self, interval: bool) -> Vec<Event> {
         if (self.owner.preferences.is_empty() && self.manual.is_none()) || self.rates.is_empty() {
             return Vec::new();
         }
@@ -279,6 +286,14 @@ impl Context<'_> {
                     .binary_search_by_key(&preference.recipe, |r| r.recipe)
                     .ok()
                     .map(|i| rules[i].max_helpers)?;
+                let limit = if interval {
+                    limit.min(binding.slots.saturating_sub(1))
+                } else {
+                    limit
+                };
+                if limit == 0 {
+                    return None;
+                }
                 let mut offered = skills
                     .as_ref()
                     .map_or(1, |index| index.rate(person.id, preference.recipe));
@@ -351,9 +366,13 @@ impl Context<'_> {
                     job: candidate.job,
                     recipe: candidate.recipe,
                     offered: candidate.offered,
-                    progress: candidate
-                        .offered
-                        .min(candidate.remaining.saturating_sub(candidate.base)),
+                    progress: if interval {
+                        candidate.offered
+                    } else {
+                        candidate
+                            .offered
+                            .min(candidate.remaining.saturating_sub(candidate.base))
+                    },
                     finished: false,
                     interrupted: false,
                 })
@@ -365,7 +384,11 @@ impl Context<'_> {
                 let admitted = &group[..group
                     .len()
                     .min(usize::try_from(group[0].limit).unwrap_or(usize::MAX))];
-                let budget = u128::from(group[0].remaining.saturating_sub(group[0].base));
+                let budget = if interval {
+                    u128::MAX
+                } else {
+                    u128::from(group[0].remaining.saturating_sub(group[0].base))
+                };
                 let totals: Vec<u128> = admitted
                     .par_chunks(1024)
                     .map(|chunk| chunk.iter().map(|c| u128::from(c.offered)).sum())

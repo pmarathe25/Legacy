@@ -16,6 +16,7 @@ pub enum DecisionPhase {
     Asking { meal_people: Vec<u64> },
     Requests { meal_people: Vec<u64> },
     Work { meal_people: Vec<u64> },
+    Assisting { meal_people: Vec<u64> },
     FoodSearch { meal_people: Vec<u64> },
     Travel { meal_people: Vec<u64> },
 }
@@ -65,6 +66,7 @@ impl CoreSchedule {
         | DecisionPhase::Asking { meal_people }
         | DecisionPhase::Requests { meal_people }
         | DecisionPhase::Work { meal_people }
+        | DecisionPhase::Assisting { meal_people }
         | DecisionPhase::FoodSearch { meal_people }
         | DecisionPhase::Travel { meal_people } = &self.phase
             && (self.next_decision_millis != Some(u128::from(offset))
@@ -97,6 +99,7 @@ pub enum CoreRunEvent {
     Asks(Vec<u64>),
     Requests(Vec<game_autowork::requests::Event>),
     Starts(Vec<(u64, bool)>),
+    Assists(Vec<u64>),
     Departures(Vec<travel::DepartureOutcome>),
     FoodSearch(Vec<travel::DepartureOutcome>),
     Boundary(Box<Events>),
@@ -321,6 +324,7 @@ impl CoreHost {
             if schedule.next_decision_millis == Some(u128::from(offset)) {
                 match schedule.phase {
                     DecisionPhase::Meals => {
+                        attempt!('run, self.release_shared_helpers());
                         let meals = attempt!('run, self.eat_autonomously(external_blocked));
                         let people: Vec<_> = meals.iter().map(|meal| meal.person).collect();
                         if !meals.is_empty() {
@@ -544,6 +548,25 @@ impl CoreHost {
                             run.events.push(CoreRunEvent::Starts(starts));
                         }
                         self.schedule.as_mut().expect("active schedule").phase =
+                            if self.shared_work.is_some() {
+                                DecisionPhase::Assisting { meal_people }
+                            } else {
+                                DecisionPhase::FoodSearch { meal_people }
+                            };
+                    }
+                    DecisionPhase::Assisting { mut meal_people } => {
+                        let mut busy = blocked.to_vec();
+                        busy.extend(meal_people.iter().copied());
+                        busy.par_sort_unstable();
+                        busy.dedup();
+                        let helpers = attempt!('run, self.assist_work_autonomously(&busy));
+                        if !helpers.is_empty() {
+                            meal_people.extend(helpers.iter().copied());
+                            meal_people.par_sort_unstable();
+                            meal_people.dedup();
+                            run.events.push(CoreRunEvent::Assists(helpers));
+                        }
+                        self.schedule.as_mut().expect("active schedule").phase =
                             DecisionPhase::FoodSearch { meal_people };
                     }
                     DecisionPhase::FoodSearch { mut meal_people } => {
@@ -636,13 +659,14 @@ impl CoreHost {
             }
             let mut schedule = self.schedule.clone().expect("active schedule");
             let quantum = self.core.physical.tick_millis();
-            let current_rates = self
+            let mut current_rates = self
                 .core
                 .physical
                 .work_interval()
                 .expect("active interval")
                 .rates
                 .clone();
+            self.base_shared_rates(&mut current_rates);
             let events = match self.settle_with_occupied(blocked) {
                 Ok(events) => events,
                 Err(error) => {
