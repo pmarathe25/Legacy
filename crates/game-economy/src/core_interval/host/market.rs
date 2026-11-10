@@ -204,6 +204,7 @@ impl CoreHost {
         contacts.par_sort_unstable();
         let health = self.stage_contact_health(None, &contacts, tick)?;
         let tools = self.stage_tools(&[], None, physical.item_updates())?;
+        let writing = self.stage_written_page_removals(physical.item_updates());
         let mut opinions = self
             .opinions
             .as_ref()
@@ -229,6 +230,9 @@ impl CoreHost {
         }
         if let Some(owner) = tools {
             self.tool_wear = Some(owner);
+        }
+        if let Some(owner) = writing {
+            self.writing = Some(owner);
         }
         self.work_checked_revision = None;
         Ok(CoreMarketResults { actors, offers })

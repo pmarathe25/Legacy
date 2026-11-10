@@ -112,6 +112,7 @@ impl CoreHost {
             .prepare_interval_consumption(&plan.actions, self.core.seed)?;
         let events = plan.publish_outcomes(tick, physical.transactions());
         let tools = self.stage_tools(&[], None, physical.item_updates())?;
+        let writing = self.stage_written_page_removals(physical.item_updates());
         let mut next = owner.clone();
         next.maintenance
             .as_mut()
@@ -123,6 +124,9 @@ impl CoreHost {
         self.core.physical.commit_interval_consumption(physical)?;
         if let Some(tools) = tools {
             self.tool_wear = Some(tools);
+        }
+        if let Some(writing) = writing {
+            self.writing = Some(writing);
         }
         self.sites = Some(next);
         Ok(CoreRepairResults { actors, events })

@@ -14596,3 +14596,294 @@ fn written_claims_can_lie_and_readers_independently_accept_the_author() {
         assert_eq!(run(1, trust), run(6, trust));
     }
 }
+
+#[test]
+fn consumed_written_pages_are_retired_but_personal_memories_survive() {
+    fn run(workers: usize, early: bool) -> serde_json::Value {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut snapshot = text_writing_fixture(false);
+                snapshot.core.physical.recipes[0].inputs = vec![Amount {
+                    good: 5,
+                    quantity: 1,
+                }];
+                snapshot.core.physical.work[0].job.reserved = snapshot.core.physical.recipes[0]
+                    .inputs
+                    .iter()
+                    .cloned()
+                    .collect();
+                let input = snapshot
+                    .core
+                    .physical
+                    .custody
+                    .containers
+                    .iter_mut()
+                    .find(|row| row.place == Place::JobInput(1))
+                    .unwrap();
+                *input = Container::new(
+                    Place::JobInput(1),
+                    2,
+                    vec![Lot {
+                        item: Some(1),
+                        good: 5,
+                        quantity: 1,
+                        expires_at: None,
+                    }],
+                )
+                .unwrap();
+                let writing = snapshot.writing.as_mut().unwrap();
+                writing.next_item = 2;
+                writing.text_authors = Default::default();
+                writing.pages = std::sync::Arc::new(vec![game_economy::WrittenPage {
+                    item: 1,
+                    author: 2,
+                    script: 1,
+                    written_at: 0,
+                    claim: None,
+                    text: Some("remembered words".into()),
+                }]);
+                writing.text_memories = std::sync::Arc::new(vec![game_economy::TextMemory {
+                    person: 2,
+                    item: 1,
+                    text: "remembered words".into(),
+                    first_read_at: 0,
+                    read_at: 0,
+                }]);
+                let mut host =
+                    CoreHost::begin(snapshot, &[(1, if early { 2 } else { 1 })]).unwrap();
+                let opening = host.snapshot();
+                let mut restored = CoreHost::resume(
+                    serde_json::from_str(&serde_json::to_string(&opening).unwrap()).unwrap(),
+                )
+                .unwrap();
+                let elapsed = if early { 500 } else { 1000 };
+                assert_eq!(host.progress(elapsed).unwrap(), elapsed);
+                assert_eq!(restored.progress(elapsed).unwrap(), elapsed);
+                if early {
+                    assert_eq!(
+                        host.publish_early_work().unwrap().unwrap().finished,
+                        vec![1]
+                    );
+                    restored.publish_early_work().unwrap();
+                } else {
+                    host.settle().unwrap();
+                    restored.settle().unwrap();
+                }
+                let state = host.snapshot();
+                assert_eq!(state, restored.snapshot());
+                let writing = state.writing.as_ref().unwrap();
+                assert!(writing.pages.is_empty());
+                assert_eq!(&*writing.text_memories[0].text, "remembered words");
+                assert!(
+                    state
+                        .core
+                        .physical
+                        .custody
+                        .containers
+                        .iter()
+                        .all(|holder| holder.lots.iter().all(|lot| lot.item != Some(1)))
+                );
+                if early {
+                    CoreHost::resume(state.clone()).unwrap();
+                } else {
+                    CoreHost::begin(state.clone(), &[]).unwrap();
+                }
+                serde_json::to_value(state).unwrap()
+            })
+    }
+    for early in [true, false] {
+        assert_eq!(run(1, early), run(6, early));
+    }
+}
+
+#[test]
+#[ignore = "manual written page consumption scaling benchmark"]
+fn core_host_written_page_consumption_benchmark() {
+    use std::hash::{Hash, Hasher};
+    let count = std::env::var("LEGACY_PEOPLE")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(50_000);
+    let workers = std::env::var("LEGACY_WORKERS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(1);
+    assert!(count > 1);
+    let mut core = fixture();
+    let person = core.people[0].clone();
+    core.people = (1..=count)
+        .map(|id| {
+            let mut row = person.clone();
+            row.id = id;
+            row
+        })
+        .collect();
+    core.travel = None;
+    core.nutrition = None;
+    core.pending_food.clear();
+    for (id, name) in [(3, "paper"), (4, "ink"), (5, "page")] {
+        core.physical.goods.push(Good {
+            id,
+            name: name.into(),
+            food: None,
+        });
+    }
+    core.physical.recipes[0].inputs = vec![Amount {
+        good: 5,
+        quantity: 1,
+    }];
+    core.physical.work[0].job.reserved = core.physical.recipes[0].inputs.iter().cloned().collect();
+    let input = core
+        .physical
+        .custody
+        .containers
+        .iter_mut()
+        .find(|row| row.place == Place::JobInput(1))
+        .unwrap();
+    *input = Container::new(
+        Place::JobInput(1),
+        2,
+        vec![Lot {
+            item: Some(1),
+            good: 5,
+            quantity: 1,
+            expires_at: None,
+        }],
+    )
+    .unwrap();
+    let output = core
+        .physical
+        .custody
+        .containers
+        .iter_mut()
+        .find(|row| row.place == Place::Stock { region: 1, good: 2 })
+        .unwrap();
+    *output = Container::new(output.place, count + 10, vec![]).unwrap();
+    core.physical.custody.containers.push(
+        Container::new(
+            Place::Stock { region: 1, good: 5 },
+            count,
+            (2..=count)
+                .map(|item| Lot {
+                    item: Some(item),
+                    good: 5,
+                    quantity: 1,
+                    expires_at: None,
+                })
+                .collect(),
+        )
+        .unwrap(),
+    );
+    core.physical
+        .custody
+        .containers
+        .sort_by_key(|row| row.place);
+    let mut physical = Runtime::compile(core.physical).unwrap();
+    let starts: Vec<_> = (2..=count)
+        .map(|id| Start {
+            id,
+            worker: id,
+            region: 1,
+            recipe: 1,
+            units: 1,
+        })
+        .collect();
+    assert!(
+        physical
+            .start(&starts, core.seed)
+            .unwrap()
+            .iter()
+            .all(|row| row.1)
+    );
+    core.physical = physical.snapshot();
+    let pages:Vec<_>=(1..=count).map(|item|serde_json::json!({"item":item,"author":item,"script":1,"written_at":0,"text":"A page"})).collect();
+    let snapshot:CoreHostSnapshot=serde_json::from_value(serde_json::json!({"core":core,"writing":{"paper":3,"ink":4,"page":5,"paper_quantity":1,"ink_quantity":1,"next_item":count+1,"pages":pages}})).unwrap();
+    let rates: Vec<_> = (1..=count).map(|id| (id, 2)).collect();
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(workers)
+        .build()
+        .unwrap()
+        .install(|| {
+            let mut host = CoreHost::begin(snapshot, &rates).unwrap();
+            assert_eq!(host.progress(500).unwrap(), 500);
+            let start = std::time::Instant::now();
+            let finished = host.publish_early_work().unwrap().unwrap();
+            let elapsed = start.elapsed();
+            assert_eq!(finished.finished.len(), count as usize);
+            let state = host.snapshot();
+            assert!(state.writing.as_ref().unwrap().pages.is_empty());
+            let mut hash = std::collections::hash_map::DefaultHasher::new();
+            serde_json::to_vec(&state).unwrap().hash(&mut hash);
+            println!(
+                "workers={workers} pages={count} elapsed={:.6} fingerprint={:016x}",
+                elapsed.as_secs_f64(),
+                hash.finish()
+            );
+        });
+}
+
+#[test]
+fn written_page_retirement_rolls_back_when_another_item_has_no_owner() {
+    let mut snapshot = text_writing_fixture(false);
+    snapshot.core.physical.recipes[0].inputs = vec![
+        Amount {
+            good: 5,
+            quantity: 1,
+        },
+        Amount {
+            good: 1,
+            quantity: 1,
+        },
+    ];
+    snapshot.core.physical.work[0].job.reserved = snapshot.core.physical.recipes[0]
+        .inputs
+        .iter()
+        .cloned()
+        .collect();
+    let input = snapshot
+        .core
+        .physical
+        .custody
+        .containers
+        .iter_mut()
+        .find(|row| row.place == Place::JobInput(1))
+        .unwrap();
+    *input = Container::new(
+        Place::JobInput(1),
+        2,
+        vec![
+            Lot {
+                item: Some(1),
+                good: 5,
+                quantity: 1,
+                expires_at: None,
+            },
+            Lot {
+                item: Some(2),
+                good: 1,
+                quantity: 1,
+                expires_at: None,
+            },
+        ],
+    )
+    .unwrap();
+    let writing = snapshot.writing.as_mut().unwrap();
+    writing.next_item = 3;
+    writing.text_authors = Default::default();
+    writing.pages = std::sync::Arc::new(vec![game_economy::WrittenPage {
+        item: 1,
+        author: 2,
+        script: 1,
+        written_at: 0,
+        claim: None,
+        text: Some("A page".into()),
+    }]);
+    let mut host = CoreHost::begin(snapshot, &[(1, 2)]).unwrap();
+    assert_eq!(host.progress(500).unwrap(), 500);
+    let before = host.snapshot();
+    assert!(host.publish_early_work().is_err());
+    assert_eq!(host.snapshot(), before);
+}

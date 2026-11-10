@@ -211,6 +211,7 @@ impl CoreHost {
         let mut next = self
             .stage_tools(&[], None, physical.item_updates())?
             .unwrap_or_else(|| owner.clone());
+        let writing = self.stage_written_page_removals(physical.item_updates());
         next.advance(&[], &repairs, &outcomes, physical.item_updates(), tick);
         let events = next.events.clone();
         self.core
@@ -218,6 +219,9 @@ impl CoreHost {
             .validate_interval_consumption(&physical)?;
         self.core.physical.commit_interval_consumption(physical)?;
         self.tool_wear = Some(next);
+        if let Some(writing) = writing {
+            self.writing = Some(writing);
+        }
         Ok(CoreToolRepairResults { actors, events })
     }
 }

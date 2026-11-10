@@ -1340,17 +1340,6 @@ impl CoreHost {
         next: Option<u64>,
         updates: &[(u64, Option<game_lots::Place>)],
     ) -> Result<Option<ToolWear>, String> {
-        if self.writing.as_ref().is_some_and(|owner| {
-            updates.par_iter().any(|(id, place)| {
-                place.is_none()
-                    && owner
-                        .pages
-                        .binary_search_by_key(id, |page| page.item)
-                        .is_ok()
-            })
-        }) {
-            return Err("destruction of written pages is not yet supported".into());
-        }
         let page_updates = self
             .writing
             .as_ref()
@@ -1399,6 +1388,24 @@ impl CoreHost {
             updates,
         )?))
     }
+    fn stage_written_page_removals(
+        &self,
+        updates: &[(u64, Option<game_lots::Place>)],
+    ) -> Option<crate::Writing> {
+        let owner = self.writing.as_ref()?;
+        if !updates.par_iter().any(|(id, place)| {
+            place.is_none()
+                && owner
+                    .pages
+                    .binary_search_by_key(id, |page| page.item)
+                    .is_ok()
+        }) {
+            return None;
+        }
+        let mut next = owner.clone();
+        next.retire(updates);
+        Some(next)
+    }
     /// Publish completed nonperishable work and its staged tool conditions.
     pub fn publish_early_work(
         &mut self,
@@ -1423,6 +1430,7 @@ impl CoreHost {
             draft.next_produced_item(),
             draft.item_updates(),
         )?;
+        let writing = self.stage_written_page_removals(draft.item_updates());
         let mut outcomes: Vec<_> = draft
             .events()
             .finished
@@ -1465,6 +1473,9 @@ impl CoreHost {
         if let Some(tools) = tools {
             self.tool_wear = Some(tools);
         }
+        if let Some(writing) = writing {
+            self.writing = Some(writing);
+        }
         self.publish_request_resolution(requests);
         if let Some(dreams) = dreams {
             self.dreams = Some(dreams);
@@ -1502,10 +1513,14 @@ impl CoreHost {
             return Ok(Vec::new());
         };
         let tools = self.stage_tools(&[], None, draft.item_updates())?;
+        let writing = self.stage_written_page_removals(draft.item_updates());
         self.core.validate_meals(&draft)?;
         self.core.commit_meals(draft)?;
         if let Some(tools) = tools {
             self.tool_wear = Some(tools);
+        }
+        if let Some(writing) = writing {
+            self.writing = Some(writing);
         }
         Ok(meals)
     }
@@ -2110,6 +2125,7 @@ impl CoreHost {
             draft.next_produced_item(),
             draft.item_updates(),
         )?;
+        let writing = self.stage_written_page_removals(draft.item_updates());
         if tools.is_none() {
             tools = self
                 .tool_wear
@@ -2202,6 +2218,9 @@ impl CoreHost {
         }
         if let Some(tools) = tools {
             self.tool_wear = Some(tools);
+        }
+        if let Some(writing) = writing {
+            self.writing = Some(writing);
         }
         self.publish_request_resolution(requests);
         if let Some(owner) = shared_work {
