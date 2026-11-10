@@ -58,7 +58,55 @@ impl CoreHost {
         let mut next = owner.clone();
         next.record_reads(&reads);
         next.remember_text(&reads, tick);
+        let filter = self
+            .opinions
+            .as_ref()
+            .and_then(|opinions| opinions.report_filter());
+        let reports: Vec<_> = reads
+            .par_iter()
+            .filter_map(|&(person, item)| {
+                let page = owner.page(item)?;
+                if filter
+                    .as_ref()
+                    .is_some_and(|filter| !filter.accepts(person, page.author))
+                {
+                    return None;
+                }
+                let mut claim = page.claim.clone()?;
+                claim.learned_from = if page.author == person {
+                    claim.learned_from.filter(|&source| source != person)
+                } else {
+                    Some(page.author)
+                };
+                let region = self
+                    .core
+                    .people
+                    .binary_search_by_key(&person, |p| p.id)
+                    .ok()
+                    .and_then(|index| self.core.people[index].region);
+                Some((person, claim, region))
+            })
+            .collect();
+        let knowledge = if reports.is_empty() {
+            None
+        } else {
+            let owner = self
+                .knowledge
+                .as_ref()
+                .ok_or("written claims require personal knowledge")?;
+            let mut next = game_economy_knowledge::Knowledge {
+                max_records: owner.max_records,
+                minds: owner.minds.par_iter().cloned().collect(),
+                retention: owner.retention.par_iter().cloned().collect(),
+            };
+            next.receive_reports_at(&reports, tick)
+                .map_err(str::to_owned)?;
+            Some(next)
+        };
         self.writing = Some(next);
+        if let Some(knowledge) = knowledge {
+            self.knowledge = Some(knowledge);
+        }
         Ok(CoreWritingResults { actors, items })
     }
     /// Each author may consume their own paper and ink to create an identified page.
@@ -201,6 +249,185 @@ impl CoreHost {
             next.pages = Arc::new(pages);
         }
         next.remember_text(&experiences, tick);
+        let mut created: Vec<_> = items.par_iter().copied().collect();
+        created.par_sort_unstable();
+        let other_updates: Vec<_> = physical
+            .item_updates()
+            .par_iter()
+            .filter(|(id, _)| created.binary_search(id).is_err())
+            .copied()
+            .collect();
+        let tools = self.stage_tools(&[], None, &other_updates)?;
+        if !accepted.is_empty() {
+            self.core
+                .physical
+                .validate_interval_consumption(&physical)?;
+            self.core.physical.commit_interval_consumption(physical)?;
+        }
+        if let Some(tools) = tools {
+            self.tool_wear = Some(tools);
+        }
+        let actors = chosen.par_iter().map(|row| row.0).collect();
+        let items = accepted.par_iter().map(|page| page.item).collect();
+        self.writing = Some(next);
+        self.work_checked_revision = None;
+        Ok(CoreWritingResults { actors, items })
+    }
+    /// An author can write a remembered report, including their chosen misstatement.
+    pub fn write_claims_autonomously(
+        &mut self,
+        blocked: &[u64],
+    ) -> Result<CoreWritingResults, String> {
+        if blocked.par_windows(2).any(|pair| pair[0] >= pair[1]) {
+            return Err("invalid occupied people".into());
+        }
+        let Some(owner) = self.writing.as_ref() else {
+            return Ok(CoreWritingResults::default());
+        };
+        if owner.authors.is_empty() {
+            return Ok(CoreWritingResults::default());
+        }
+        let tick = self.writing_tick()?;
+        let busy = self.writing_busy(blocked);
+        let knowledge = self
+            .knowledge
+            .as_ref()
+            .ok_or("written claims require personal knowledge")?;
+        let recall = knowledge.recall_index();
+        let mut minds: Vec<_> = knowledge.minds.par_iter().collect();
+        if minds
+            .par_windows(2)
+            .any(|pair| pair[0].person > pair[1].person)
+        {
+            minds.par_sort_unstable_by_key(|mind| mind.person);
+        }
+        let chosen: Vec<_> = owner
+            .authors
+            .par_iter()
+            .filter_map(|author| {
+                let person = &self.core.people[self
+                    .core
+                    .people
+                    .binary_search_by_key(&author.person, |p| p.id)
+                    .ok()?];
+                let mind = minds[minds
+                    .binary_search_by_key(&author.person, |row| row.person)
+                    .ok()?];
+                if author.completed
+                    || author.retry_at > tick
+                    || person.controlled
+                    || person.health == 0
+                    || person.region.is_none()
+                    || busy.binary_search(&person.id).is_ok()
+                    || !owner.can_write(person.id, author.script)
+                {
+                    return None;
+                }
+                let mut claim = mind
+                    .records
+                    .iter()
+                    .find(|record| {
+                        record.region == author.region
+                            && recall.remembers(author.person, record, tick)
+                    })?
+                    .clone();
+                claim.food = (i128::from(claim.food) + i128::from(author.food_delta))
+                    .clamp(0, i128::from(u32::MAX)) as u32;
+                Some((person.id, author.script, claim))
+            })
+            .collect();
+        if chosen.is_empty() {
+            return Ok(CoreWritingResults::default());
+        }
+        u64::try_from(chosen.len())
+            .map_err(|_| "writing action overflow")?
+            .checked_add(1)
+            .ok_or("writing action overflow")?;
+        let start = owner
+            .next_item
+            .max(self.tool_wear.as_ref().map_or(1, |wear| wear.next_item));
+        let items = self
+            .core
+            .physical
+            .next_unused_items(start, chosen.len())
+            .ok_or("item identity overflow")?;
+        if items.last().is_some_and(|&id| id == u64::MAX) {
+            return Err("item identity overflow".into());
+        }
+        let pages: Vec<_> = chosen
+            .par_iter()
+            .zip(items.par_iter())
+            .enumerate()
+            .map(
+                |(index, ((person, _, _), &item))| game_lot_runtime::WritingPage {
+                    action: index as u64 + 1,
+                    writer: *person,
+                    paper: owner.paper,
+                    paper_quantity: owner.paper_quantity,
+                    ink: owner.ink,
+                    ink_quantity: owner.ink_quantity,
+                    page: owner.page,
+                    item,
+                },
+            )
+            .collect();
+        let physical = self
+            .core
+            .physical
+            .prepare_interval_writing(&pages, self.core.seed)?;
+        let mut outcomes: Vec<_> = physical.transactions().par_iter().copied().collect();
+        outcomes.par_sort_unstable_by_key(|row| row.id);
+        let accepted: Vec<_> = pages
+            .par_iter()
+            .zip(chosen.par_iter())
+            .filter_map(|(page, (person, script, text))| {
+                outcomes
+                    .binary_search_by_key(&page.action, |row| row.id)
+                    .ok()
+                    .filter(|&i| outcomes[i].accepted)
+                    .map(|_| crate::WrittenPage {
+                        item: page.item,
+                        author: *person,
+                        script: *script,
+                        written_at: tick,
+                        claim: Some(text.clone()),
+                        text: None,
+                    })
+            })
+            .collect();
+        let mut next = owner.clone();
+        let mut statuses: Vec<_> = pages
+            .par_iter()
+            .zip(chosen.par_iter())
+            .map(|(page, (person, _, _))| {
+                (
+                    *person,
+                    outcomes
+                        .binary_search_by_key(&page.action, |row| row.id)
+                        .ok()
+                        .is_some_and(|i| outcomes[i].accepted),
+                )
+            })
+            .collect();
+        statuses.par_sort_unstable_by_key(|row| row.0);
+        let mut authors: Vec<_> = owner.authors.par_iter().cloned().collect();
+        authors.par_iter_mut().for_each(|author| {
+            if let Ok(i) = statuses.binary_search_by_key(&author.person, |row| row.0) {
+                author.completed = statuses[i].1;
+                if !author.completed {
+                    author.retry_at = tick.saturating_add(8);
+                }
+            }
+        });
+        next.authors = Arc::new(authors);
+        if let Some(last) = accepted.last() {
+            next.next_item = next.next_item.max(last.item + 1);
+        }
+        if !accepted.is_empty() {
+            let mut pages: Vec<_> = owner.pages.par_iter().cloned().collect();
+            pages.par_extend(accepted.par_iter().cloned());
+            next.pages = Arc::new(pages);
+        }
         let mut created: Vec<_> = items.par_iter().copied().collect();
         created.par_sort_unstable();
         let other_updates: Vec<_> = physical

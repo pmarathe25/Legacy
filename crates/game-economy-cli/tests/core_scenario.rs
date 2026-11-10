@@ -1085,3 +1085,21 @@ fn authored_text_writing_consumes_supplies_and_creates_a_real_page() {
     }
     assert_eq!(run(1), run(6));
 }
+
+#[test]
+fn authored_written_claim_can_misstate_a_memory() {
+    fn run(workers: usize) -> serde_json::Value {
+        rayon::ThreadPoolBuilder::new().num_threads(workers).build().unwrap().install(|| {
+            let root = root();
+            let mut host = game_economy_cli::core_scenario(&root.join("content/scenarios/economy-core-written-claim.toml"), &root.join("content")).unwrap();
+            let result = host.advance_scheduled(0, &[]).unwrap();
+            assert_eq!(result.failure, None);
+            assert!(result.events.iter().any(|event| matches!(event, game_economy::core_interval::CoreRunEvent::WrittenPages(ids) if ids == &[1])));
+            let state = host.snapshot();
+            assert_eq!(state.writing.as_ref().unwrap().pages[0].claim.as_ref().unwrap().food, 13);
+            assert_eq!(state.knowledge.as_ref().unwrap().minds[0].records[0].food, 20);
+            serde_json::to_value(state).unwrap()
+        })
+    }
+    assert_eq!(run(1), run(6));
+}

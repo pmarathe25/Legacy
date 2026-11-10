@@ -21,6 +21,7 @@ pub enum DecisionPhase {
     ExchangeProposals { meal_people: Vec<u64> },
     ReadPages { meal_people: Vec<u64> },
     PracticeWriting { meal_people: Vec<u64> },
+    WriteClaims { meal_people: Vec<u64> },
     WritePages { meal_people: Vec<u64> },
     FoodSearch { meal_people: Vec<u64> },
     Travel { meal_people: Vec<u64> },
@@ -76,6 +77,7 @@ impl CoreSchedule {
         | DecisionPhase::ExchangeProposals { meal_people }
         | DecisionPhase::ReadPages { meal_people }
         | DecisionPhase::PracticeWriting { meal_people }
+        | DecisionPhase::WriteClaims { meal_people }
         | DecisionPhase::WritePages { meal_people }
         | DecisionPhase::FoodSearch { meal_people }
         | DecisionPhase::Travel { meal_people } = &self.phase
@@ -673,6 +675,21 @@ impl CoreHost {
                         if !result.practiced.is_empty() {
                             run.events
                                 .push(CoreRunEvent::PracticedWriting(result.practiced));
+                        }
+                        self.schedule.as_mut().expect("active schedule").phase =
+                            DecisionPhase::WriteClaims { meal_people };
+                    }
+                    DecisionPhase::WriteClaims { mut meal_people } => {
+                        let mut busy = blocked.to_vec();
+                        busy.extend(meal_people.iter().copied());
+                        busy.par_sort_unstable();
+                        busy.dedup();
+                        let result = attempt!('run,self.write_claims_autonomously(&busy));
+                        meal_people.par_extend(result.actors);
+                        meal_people.par_sort_unstable();
+                        meal_people.dedup();
+                        if !result.items.is_empty() {
+                            run.events.push(CoreRunEvent::WrittenPages(result.items));
                         }
                         self.schedule.as_mut().expect("active schedule").phase =
                             DecisionPhase::WritePages { meal_people };

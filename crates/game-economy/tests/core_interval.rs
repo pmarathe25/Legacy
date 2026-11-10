@@ -14225,6 +14225,7 @@ fn core_host_text_writing_benchmark() {
         .unwrap_or(1);
     let reading = std::env::var_os("LEGACY_TEXT_READING").is_some();
     let practicing = std::env::var_os("LEGACY_WRITING_PRACTICE").is_some();
+    let claims = std::env::var_os("LEGACY_WRITTEN_CLAIMS").is_some();
     assert!(count > 1);
     let mut core = fixture();
     let template = core.people[0].clone();
@@ -14279,12 +14280,14 @@ fn core_host_text_writing_benchmark() {
         .containers
         .sort_by_key(|row| row.place);
     let literacy:Vec<_>=(2..=count).map(|person|serde_json::json!({"person":person,"script":1,"read":true,"write":!practicing,"auto_read":reading})).collect();
-    let authors: Vec<_> = if reading || practicing {
+    let authors: Vec<_> = if reading || practicing || claims {
         vec![]
     } else {
         (2..=count).map(|person|serde_json::json!({"person":person,"script":1,"template":1,"enabled":true})).collect()
     };
-    let pages: Vec<_> = if reading {
+    let pages: Vec<_> = if reading && claims {
+        (2..=count).map(|person|serde_json::json!({"item":person-1,"author":person,"script":1,"written_at":0,"claim":{"region":2,"food":10,"observed_at":0,"witness":person}})).collect()
+    } else if reading {
         (2..=count).map(|person|serde_json::json!({"item":person-1,"author":person,"script":1,"written_at":0,"text":"A note."})).collect()
     } else {
         vec![]
@@ -14297,7 +14300,19 @@ fn core_host_text_writing_benchmark() {
     } else {
         vec![]
     };
-    let snapshot:CoreHostSnapshot=serde_json::from_value(serde_json::json!({"core":core,"writing":{"paper":3,"ink":4,"page":5,"paper_quantity":1,"ink_quantity":1,"next_item":if reading {count} else {1},"literacy":literacy,"pages":pages,"text_templates":[{"id":1,"text":"A note."}],"text_authors":authors,"text_retention":retention,"practice":practice}})).unwrap();
+    let claim_authors: Vec<_> = if claims && !reading {
+        (2..=count)
+            .map(|person| serde_json::json!({"person":person,"script":1,"region":2,"food_delta":1}))
+            .collect()
+    } else {
+        vec![]
+    };
+    let knowledge = if claims {
+        serde_json::json!({"max_records":2,"minds":(2..=count).map(|person| if reading { serde_json::json!({"person":person}) } else {serde_json::json!({"person":person,"records":[{"region":2,"food":10,"observed_at":0,"witness":person}]})}).collect::<Vec<_>>()})
+    } else {
+        serde_json::Value::Null
+    };
+    let snapshot:CoreHostSnapshot=serde_json::from_value(serde_json::json!({"core":core,"knowledge":knowledge,"writing":{"paper":3,"ink":4,"page":5,"paper_quantity":1,"ink_quantity":1,"next_item":if reading {count} else {1},"literacy":literacy,"pages":pages,"text_templates":[{"id":1,"text":"A note."}],"text_authors":authors,"authors":claim_authors,"text_retention":retention,"practice":practice}})).unwrap();
     rayon::ThreadPoolBuilder::new()
         .num_threads(workers)
         .build()
@@ -14312,6 +14327,8 @@ fn core_host_text_writing_benchmark() {
                     .len()
             } else if reading {
                 host.read_texts_autonomously(&[]).unwrap().items.len()
+            } else if claims {
+                host.write_claims_autonomously(&[]).unwrap().items.len()
             } else {
                 host.write_texts_autonomously(&[]).unwrap().items.len()
             };
@@ -14330,6 +14347,22 @@ fn core_host_text_writing_benchmark() {
                         .count(),
                     (count - 1) as usize
                 );
+            } else if claims {
+                assert_eq!(
+                    state.writing.as_ref().unwrap().pages.len(),
+                    (count - 1) as usize
+                );
+                if reading {
+                    assert!(
+                        state
+                            .knowledge
+                            .as_ref()
+                            .unwrap()
+                            .minds
+                            .iter()
+                            .all(|mind| mind.records.len() == 1)
+                    );
+                }
             } else {
                 assert_eq!(
                     state.writing.as_ref().unwrap().text_memories.len(),
@@ -14522,5 +14555,44 @@ fn writing_practice_consumes_supplies_only_when_personally_chosen() {
     }
     for (enabled, supplied) in [(true, true), (true, false), (false, true)] {
         assert_eq!(run(1, enabled, supplied), run(6, enabled, supplied));
+    }
+}
+
+#[test]
+fn written_claims_can_lie_and_readers_independently_accept_the_author() {
+    fn run(workers: usize, trust: bool) -> serde_json::Value {
+        rayon::ThreadPoolBuilder::new().num_threads(workers).build().unwrap().install(|| {
+            let mut value = serde_json::to_value(text_writing_fixture(true)).unwrap();
+            value["writing"]["text_authors"] = serde_json::json!([]);
+            value["writing"]["authors"] = serde_json::json!([{"person":2,"script":1,"region":2,"food_delta":-7}]);
+            value["knowledge"] = serde_json::json!({"max_records":4,"minds":[{"person":3},{"person":2,"records":[{"region":2,"food":20,"observed_at":0,"witness":2}]}]});
+            if !trust {
+                value["opinions"] = serde_json::json!({"rules":{"minimum":-10,"maximum":10,"initial":0,"fulfilled_gain":1,"default_loss":1,"minimum_report_trust":1},"records":[]});
+            }
+            let snapshot: CoreHostSnapshot = serde_json::from_value(value).unwrap();
+            let mut host = CoreHost::begin(snapshot, &[(1,1)]).unwrap();
+            let result = host.write_claims_autonomously(&[]).unwrap();
+            assert_eq!(result.items, vec![1]);
+            let written = host.snapshot();
+            assert_eq!(written.writing.as_ref().unwrap().pages[0].claim.as_ref().unwrap().food,13);
+            assert_eq!(written.knowledge.as_ref().unwrap().minds.iter().find(|mind|mind.person==2).unwrap().records[0].food,20);
+            let mut restored = CoreHost::resume(serde_json::from_str(&serde_json::to_string(&written).unwrap()).unwrap()).unwrap();
+            assert_eq!(host.progress(250).unwrap(),250);
+            assert_eq!(restored.progress(250).unwrap(),250);
+            let transfer = game_lots::Transaction { id:1, movements:vec![game_lots::Movement {id:1,from:Place::Person(2),to:Some(Place::Person(3)),good:5,quantity:1,item:Some(1)}],creations:vec![] };
+            assert_eq!(host.transfer_goods(std::slice::from_ref(&transfer)).unwrap().transactions, restored.transfer_goods(&[transfer]).unwrap().transactions);
+            assert_eq!(host.read_texts_autonomously(&[]).unwrap().items,vec![1]);
+            assert_eq!(restored.read_texts_autonomously(&[]).unwrap().items,vec![1]);
+            let state=host.snapshot();
+            assert_eq!(state,restored.snapshot());
+            let records=&state.knowledge.as_ref().unwrap().minds.iter().find(|mind|mind.person==3).unwrap().records;
+            if trust { assert_eq!(records.len(),1); assert_eq!(records[0].food,13); assert_eq!(records[0].learned_from,Some(2)); } else { assert!(records.is_empty()); }
+            assert!(state.writing.as_ref().unwrap().reads.contains(&(3,1)));
+            assert!(host.read_texts_autonomously(&[]).unwrap().items.is_empty());
+            serde_json::to_value(state).unwrap()
+        })
+    }
+    for trust in [true, false] {
+        assert_eq!(run(1, trust), run(6, trust));
     }
 }

@@ -95,3 +95,5 @@ policies = [{ person = 2, blueprint = 1, target_sites = 1, willing = true }]
 `economy-core-exchange.toml` describes personal exchange policies and offers using named goods. Each `[[market.policies]]` entry has a person, `enabled`, `propose`, and `request_help` choices, optional minimum gain and help value, a `values` table keyed by good name, and optional personal influences. `[[market.offers]]` entries name a proposer and recipient and use `give` and `receive` tables keyed by good name. Offers do not reserve the stated goods.
 
 `economy-core-writing.toml` demonstrates a personal text author, a reader, script knowledge, text retention preferences, and physical paper and ink. Writing creates an identified page in the author's custody; reading depends on a person's own script knowledge and possession. Another person independently practices the known script using their own supplies.
+
+`economy-core-written-claim.toml` demonstrates an author writing a deliberately altered food report while retaining the original personal memory.
