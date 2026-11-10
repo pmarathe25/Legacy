@@ -187,6 +187,7 @@ fn timed_fatigue_tracks_early_completion_across_save_and_workers() {
                     fatigue: Some(timed_fatigue()),
                     activity: vec![],
                     fauna: None,
+                    hunting: None,
                     gathering: None,
                     environment: None,
                     irrigation: None,
@@ -240,6 +241,7 @@ fn timed_fatigue_rest_pauses_and_resumes_unfinished_work() {
         fatigue: Some(timed_fatigue()),
         activity: vec![],
         fauna: None,
+        hunting: None,
         gathering: None,
         environment: None,
         irrigation: None,
@@ -307,6 +309,7 @@ fn external_occupation_does_not_count_as_rest() {
         fatigue: Some(timed_fatigue()),
         activity: vec![],
         fauna: None,
+        hunting: None,
         gathering: None,
         environment: None,
         irrigation: None,
@@ -369,6 +372,7 @@ fn chosen_departure_progresses_from_its_offset_and_survives_reload() {
                     fatigue: Some(timed_fatigue()),
                     activity: vec![],
                     fauna: None,
+                    hunting: None,
                     gathering: None,
                     environment: None,
                     irrigation: None,
@@ -574,6 +578,7 @@ fn core_host_departure_benchmark() {
         fatigue: Some(timed_fatigue()),
         activity: vec![],
         fauna: None,
+        hunting: None,
         gathering: None,
         environment: None,
         irrigation: None,
@@ -680,6 +685,7 @@ fn closed_route_is_observed_without_moving_or_consuming_time() {
         fatigue: None,
         activity: vec![],
         fauna: None,
+        hunting: None,
         gathering: None,
         environment: None,
         irrigation: None,
@@ -736,7 +742,7 @@ fn scheduled_personal_destinations_respect_work_rest_and_control() {
         fatigue.fatigue.people.push(game_economy_fatigue::FatiguePerson { id: 6, fatigue: 2, resting: true });
         let snapshot = CoreHostSnapshot {
             core: initial, autowork: None, tool_wear: None, tool_requirements: vec![],
-            paused_work_rates: vec![], fatigue: Some(fatigue), activity: vec![], fauna: None, gathering: None, environment: None, irrigation: None, agriculture: None, health: None, knowledge: None, social: None, claims: None, food_search: None,
+            paused_work_rates: vec![], fatigue: Some(fatigue), activity: vec![], fauna: None, hunting: None, gathering: None, environment: None, irrigation: None, agriculture: None, health: None, knowledge: None, social: None, claims: None, food_search: None,
             opinions: None, goals: None, agreements: None, sites: None, schedule: None,
         };
         let mut host = CoreHost::begin(snapshot, &[(1, 1)]).unwrap();
@@ -783,7 +789,7 @@ fn food_search_follows_personal_report_even_when_it_is_stale() {
         };
         let snapshot = CoreHostSnapshot {
             core: initial, autowork: None, tool_wear: None, tool_requirements: vec![], paused_work_rates: vec![],
-            fatigue: None, activity: vec![], fauna: None, gathering: None, environment: None, irrigation: None, agriculture: None, health: None, knowledge: None, social: None, claims: None, food_search: Some(game_economy::core_interval::CoreFoodSearch {search, knowledge: Some(knowledge), claims: None}),
+            fatigue: None, activity: vec![], fauna: None, hunting: None, gathering: None, environment: None, irrigation: None, agriculture: None, health: None, knowledge: None, social: None, claims: None, food_search: Some(game_economy::core_interval::CoreFoodSearch {search, knowledge: Some(knowledge), claims: None}),
             opinions: None, goals: None, agreements: None, sites: None, schedule: None,
         };
         let mut failing = snapshot.clone();
@@ -841,7 +847,7 @@ fn personal_food_acquisition_contends_for_real_stock_then_eats() {
         initial.physical.custody.containers.sort_by_key(|row| row.place);
         let snapshot = CoreHostSnapshot {
             core: initial, autowork: None, tool_wear: None, tool_requirements: vec![], paused_work_rates: vec![],
-            fatigue: None, activity: vec![], fauna: None, gathering: None, environment: None, irrigation: None, agriculture: None, health: None, knowledge: None, social: None, claims: None, food_search: Some(game_economy::core_interval::CoreFoodSearch {
+            fatigue: None, activity: vec![], fauna: None, hunting: None, gathering: None, environment: None, irrigation: None, agriculture: None, health: None, knowledge: None, social: None, claims: None, food_search: Some(game_economy::core_interval::CoreFoodSearch {
                 claims: None,
                 search: game_economy::FoodSearch {min_hunger: 5, min_report_food: 1, max_report_age: 10, retry_ticks: 1, inherit_births: false, people: vec![]},
                 knowledge: Some(game_economy_knowledge::Knowledge {max_records: 1, minds: vec![], retention: vec![]}),
@@ -969,6 +975,7 @@ fn autonomous_work_respects_individual_claim_choices_but_explicit_work_can_take_
                     fatigue: None,
                     activity: vec![],
                     fauna: None,
+                    hunting: None,
                     gathering: None,
                     environment: None,
                     irrigation: None,
@@ -1361,6 +1368,7 @@ fn core_host_autonomous_work_benchmark() {
         fatigue: None,
         activity: vec![],
         fauna: None,
+        hunting: None,
         gathering: None,
         environment: None,
         irrigation: None,
@@ -1594,6 +1602,7 @@ fn core_host_work_requests_benchmark() {
         fatigue: None,
         activity: vec![],
         fauna: None,
+        hunting: None,
         gathering: None,
         environment: None,
         irrigation: None,
@@ -2432,6 +2441,7 @@ fn saved_core_host_coordinates_personal_work_meals_and_tool_ownership() {
                     fatigue: None,
                     activity: vec![],
                     fauna: None,
+                    hunting: None,
                     gathering: None,
                     environment: None,
                     irrigation: None,
@@ -2569,6 +2579,7 @@ fn externally_chosen_work_does_not_require_willingness_and_can_be_abandoned() {
             fatigue: None,
             activity: vec![],
             fauna: None,
+            hunting: None,
             gathering: None,
             environment: None,
             irrigation: None,
@@ -2719,6 +2730,7 @@ fn scheduled_requests_use_directed_fear_and_obligation_without_binding_work() {
                     fatigue: None,
                     activity: vec![],
                     fauna: None,
+                    hunting: None,
                     gathering: None,
                     environment: None,
                     irrigation: None,
@@ -2861,6 +2873,7 @@ fn willing_request_response_with_missing_stock_remains_pending() {
             fatigue: None,
             activity: vec![],
             fauna: None,
+            hunting: None,
             gathering: None,
             environment: None,
             irrigation: None,
@@ -2973,6 +2986,7 @@ fn contested_request_reservations_do_not_turn_shortage_into_refusal() {
                         fatigue: None,
                         activity: vec![],
                         fauna: None,
+                        hunting: None,
                         gathering: None,
                         environment: None,
                         irrigation: None,
@@ -3076,6 +3090,7 @@ fn future_request_does_not_hide_an_existing_local_request() {
             fatigue: None,
             activity: vec![],
             fauna: None,
+            hunting: None,
             gathering: None,
             environment: None,
             irrigation: None,
@@ -3174,6 +3189,7 @@ fn requested_work_follows_the_workers_own_claim_preference() {
                     fatigue: None,
                     activity: vec![],
                     fauna: None,
+                    hunting: None,
                     gathering: None,
                     environment: None,
                     irrigation: None,
@@ -3276,7 +3292,7 @@ fn pressured_meeting_can_share_a_false_personal_report_once_per_tick() {
         };
         let snapshot = CoreHostSnapshot {
             core: initial, autowork: None, tool_wear: None, tool_requirements: vec![], paused_work_rates: vec![],
-            fatigue: None, activity: vec![], fauna: None, gathering: None, environment: None, irrigation: None, agriculture: None, health: None, claims: None, social: Some(social),
+            fatigue: None, activity: vec![], fauna: None, hunting: None, gathering: None, environment: None, irrigation: None, agriculture: None, health: None, claims: None, social: Some(social),
             food_search: None, knowledge: Some(game_economy_knowledge::Knowledge {max_records: 4, minds, retention: vec![]}),
             opinions: Some(opinions), goals: None, agreements: None, sites: None, schedule: None,
         };
@@ -3335,7 +3351,7 @@ fn disease_uses_actual_meetings_and_does_not_require_social_to_progress() {
         };
         let snapshot = CoreHostSnapshot {
             core: initial, autowork: None, tool_wear: None, tool_requirements: vec![], paused_work_rates: vec![],
-            fatigue: None, activity: vec![], fauna: None, gathering: None, environment: None, irrigation: None, agriculture: None, health: Some(game_economy::core_interval::CoreHealth {owner: disease, treatment: vec![], last_tick: None}),
+            fatigue: None, activity: vec![], fauna: None, hunting: None, gathering: None, environment: None, irrigation: None, agriculture: None, health: Some(game_economy::core_interval::CoreHealth {owner: disease, treatment: vec![], last_tick: None}),
             claims: None, social: Some(social), knowledge: None, food_search: None,
             opinions: None, goals: None, agreements: None, sites: None, schedule: None,
         };
@@ -3474,6 +3490,7 @@ fn personal_treatment_consumes_medicine_and_only_clears_matching_episodes() {
                     fatigue: None,
                     activity: vec![],
                     fauna: None,
+                    hunting: None,
                     gathering: None,
                     environment: None,
                     irrigation: None,
@@ -3662,6 +3679,7 @@ fn boundary_cultivation_uses_real_seeds_grows_and_harvests_after_reload() {
                     fatigue: None,
                     activity: vec![],
                     fauna: None,
+                    hunting: None,
                     gathering: None,
                     environment: None,
                     irrigation: None,
@@ -3904,7 +3922,7 @@ fn irrigation_consumes_contested_water_and_gates_next_growth() {
         let rules = serde_json::from_value(serde_json::json!({"minimum":-10,"maximum":10,"initial":0,"fulfilled_gain":1,"default_loss":1})).unwrap();
         let opinions = game_opinions::Opinions {rules, sensitivities: Default::default(), records: vec![game_opinions::Opinion {observer: 2, target: 1, trust: 0, fear: 2, obligation: 0, affinity: 0}], events: vec![]};
         let snapshot = CoreHostSnapshot {core: initial, autowork: None, tool_wear: None, tool_requirements: vec![], paused_work_rates: vec![],
-            fatigue: None, activity: vec![], fauna: None, gathering: None, environment: None, agriculture: Some(agriculture), irrigation: Some(irrigation), health: None, social: None, knowledge: None, claims: None, food_search: None,
+            fatigue: None, activity: vec![], fauna: None, hunting: None, gathering: None, environment: None, agriculture: Some(agriculture), irrigation: Some(irrigation), health: None, social: None, knowledge: None, claims: None, food_search: None,
             opinions: Some(opinions), goals: None, agreements: None, sites: None, schedule: None};
         let mut identified = snapshot.clone();
         let stock = identified.core.physical.custody.containers.iter_mut().find(|row| row.place == Place::Stock {region: 1, good: 3}).unwrap();
@@ -4026,6 +4044,7 @@ fn gathering_depletes_resources_into_real_personal_custody() {
                     fatigue: None,
                     activity: vec![],
                     fauna: None,
+                    hunting: None,
                     gathering: Some(gathering),
                     environment: None,
                     irrigation: None,
@@ -4118,6 +4137,82 @@ fn gathering_depletes_resources_into_real_personal_custody() {
                         .iter()
                         .all(|animal| animal.age == 2 && animal.hunger == 2)
                 );
+                let mut hunting = with_animals.clone();
+                hunting.gathering.as_mut().unwrap().policies.clear();
+                hunting.fauna.as_mut().unwrap().species[0].hunting = Some(game_fauna::HuntYield {
+                    good: 2,
+                    quantity: 1,
+                    success_per_thousand: 1000,
+                });
+                let policy = |person| game_economy::HuntingPolicy {
+                    person,
+                    animal: Some(1),
+                    willing: true,
+                    affinity_at_least: None,
+                    affinity_at_most: None,
+                    hunger_at_least: None,
+                    reserve_good: None,
+                    reserve_below: None,
+                    request_response: None,
+                    pressured_by: None,
+                    pressure_threshold: None,
+                };
+                hunting.hunting = Some(game_economy::Hunting {
+                    inherit_births: false,
+                    policies: vec![policy(2), policy(3)],
+                });
+                let mut contested = CoreHost::begin(hunting.clone(), &[(1, 1)]).unwrap();
+                contested.progress(1000).unwrap();
+                let events = contested.settle().unwrap();
+                assert_eq!(
+                    events
+                        .physical_actions
+                        .iter()
+                        .filter(|event| event.accepted)
+                        .count(),
+                    1
+                );
+                let state = contested.snapshot();
+                assert_eq!(state.fauna.as_ref().unwrap().animals[0].health, 0);
+                assert_eq!(
+                    state
+                        .core
+                        .physical
+                        .custody
+                        .containers
+                        .iter()
+                        .filter(|row| matches!(row.place, Place::Person(2 | 3)) && row.used == 1)
+                        .count(),
+                    1
+                );
+                let mut combined = hunting.clone();
+                combined.gathering.as_mut().unwrap().policies = vec![game_economy::GatherPolicy {
+                    person: 2,
+                    node: 1,
+                    willing: true,
+                    pressured_by: None,
+                    pressure_threshold: None,
+                }];
+                combined.hunting.as_mut().unwrap().policies = vec![policy(2), policy(3)];
+                let mut combined = CoreHost::begin(combined, &[(1, 1)]).unwrap();
+                combined.progress(1000).unwrap();
+                let events = combined.settle().unwrap();
+                assert_eq!(
+                    events
+                        .physical_actions
+                        .iter()
+                        .filter(|event| event.accepted)
+                        .count(),
+                    2
+                );
+                assert_eq!(combined.snapshot().fauna.unwrap().animals[0].health, 0);
+                hunting.hunting.as_mut().unwrap().policies = vec![policy(4)];
+                let mut full = CoreHost::begin(hunting, &[(1, 1)]).unwrap();
+                full.progress(1000).unwrap();
+                let events = full.settle().unwrap();
+                assert_eq!(events.physical_actions.len(), 1);
+                assert!(!events.physical_actions[0].accepted);
+                assert!(full.snapshot().fauna.unwrap().animals[0].health > 0);
                 with_animals.gathering.as_mut().unwrap().policies.clear();
                 let mut animals_only = CoreHost::begin(with_animals, &[(1, 1)]).unwrap();
                 animals_only.progress(1000).unwrap();
@@ -4219,7 +4314,8 @@ fn core_host_cultivation_benchmark() {
         .unwrap_or(1);
     assert!(count > 1);
     let watering = std::env::var_os("LEGACY_IRRIGATION").is_some();
-    let wildlife = std::env::var_os("LEGACY_FAUNA").is_some();
+    let hunting = std::env::var_os("LEGACY_HUNTING").is_some();
+    let wildlife = std::env::var_os("LEGACY_FAUNA").is_some() || hunting;
     let gathering = std::env::var_os("LEGACY_GATHERING").is_some() || wildlife;
     assert!(!(watering && gathering));
     let exposure = std::env::var_os("LEGACY_ENVIRONMENT").is_some();
@@ -4235,7 +4331,7 @@ fn core_host_cultivation_benchmark() {
     initial.travel = None;
     initial.nutrition = None;
     initial.pending_food.clear();
-    if gathering && !wildlife {
+    if gathering && (!wildlife || hunting) {
         initial.physical.custody.containers.extend(
             (2..=count).map(|person| Container::new(Place::Person(person), 1, vec![]).unwrap()),
         );
@@ -4331,6 +4427,24 @@ fn core_host_cultivation_benchmark() {
         paused_work_rates: vec![],
         fatigue: None,
         activity: vec![],
+        hunting: hunting.then(|| game_economy::Hunting {
+            inherit_births: false,
+            policies: (2..=count)
+                .map(|person| game_economy::HuntingPolicy {
+                    person,
+                    animal: Some(person),
+                    willing: true,
+                    affinity_at_least: None,
+                    affinity_at_most: None,
+                    hunger_at_least: None,
+                    reserve_good: None,
+                    reserve_below: None,
+                    request_response: None,
+                    pressured_by: None,
+                    pressure_threshold: None,
+                })
+                .collect(),
+        }),
         fauna: wildlife.then(|| {
             let species = game_fauna::Species {
                 id: 1,
@@ -4352,7 +4466,11 @@ fn core_host_cultivation_benchmark() {
                 mutation_per_million: 0,
                 mutation_step: 0,
                 climate: None,
-                hunting: None,
+                hunting: hunting.then_some(game_fauna::HuntYield {
+                    good: 2,
+                    quantity: 1,
+                    success_per_thousand: 1000,
+                }),
                 newborn_social_response: None,
                 newborn_handling_response: None,
                 newborn_restraint_response: None,
@@ -4473,7 +4591,9 @@ fn core_host_cultivation_benchmark() {
                     .iter()
                     .filter(|row| row.accepted)
                     .count(),
-                if wildlife {
+                if hunting {
+                    (count - 1) as usize
+                } else if wildlife {
                     0
                 } else if watering || gathering {
                     (count / 2) as usize
@@ -4491,8 +4611,34 @@ fn core_host_cultivation_benchmark() {
                 );
             }
             if gathering {
-                assert_eq!(state.gathering.as_ref().unwrap().nodes[0].available, 0);
-                if wildlife {
+                assert_eq!(
+                    state.gathering.as_ref().unwrap().nodes[0].available,
+                    if hunting { count / 2 - 1 } else { 0 }
+                );
+                if hunting {
+                    assert_eq!(
+                        state
+                            .fauna
+                            .as_ref()
+                            .unwrap()
+                            .animals
+                            .iter()
+                            .filter(|animal| animal.health == 0)
+                            .count(),
+                        (count - 1) as usize
+                    );
+                    assert_eq!(
+                        state
+                            .core
+                            .physical
+                            .custody
+                            .containers
+                            .iter()
+                            .filter(|row| matches!(row.place, Place::Person(_)) && row.used == 1)
+                            .count(),
+                        (count - 1) as usize
+                    );
+                } else if wildlife {
                     let animals = &state.fauna.as_ref().unwrap().animals;
                     assert_eq!(
                         animals.iter().filter(|animal| animal.hunger == 1).count(),
@@ -4648,6 +4794,7 @@ fn core_host_social_benchmark() {
         fatigue: None,
         activity: vec![],
         fauna: None,
+        hunting: None,
         gathering: None,
         environment: None,
         irrigation: None,
@@ -4812,6 +4959,7 @@ fn core_host_clears_old_request_events_at_the_boundary() {
             fatigue: None,
             activity: vec![],
             fauna: None,
+            hunting: None,
             gathering: None,
             environment: None,
             irrigation: None,
@@ -4871,7 +5019,7 @@ fn scheduled_personal_goals_create_requests_and_count_only_witnessed_help() {
                 pending: vec![], events: vec![],
             };
             let goals = game_goals::Goals { retry_interval: 3, plan_inputs: false, people: vec![game_goals::Goal { person: 2, recipe: 1, priority: 1, target: 1, progress: 0, next_review: 0, enabled: true, recognize_help: true }], events: vec![] };
-            let snapshot = CoreHostSnapshot { core: initial, autowork: Some(game_autowork::Autowork { next_id: 2, policies: vec![], requests: Some(requests) }), tool_wear: None, opinions: None, goals: Some(goals), agreements: None, sites: None, tool_requirements: vec![], paused_work_rates: vec![], fatigue: None, activity: vec![], fauna: None, gathering: None, environment: None, irrigation: None, agriculture: None, health: None, knowledge: None, social: None, claims: None, food_search: None, schedule: None };
+            let snapshot = CoreHostSnapshot { core: initial, autowork: Some(game_autowork::Autowork { next_id: 2, policies: vec![], requests: Some(requests) }), tool_wear: None, opinions: None, goals: Some(goals), agreements: None, sites: None, tool_requirements: vec![], paused_work_rates: vec![], fatigue: None, activity: vec![], fauna: None, hunting: None, gathering: None, environment: None, irrigation: None, agriculture: None, health: None, knowledge: None, social: None, claims: None, food_search: None, schedule: None };
             let mut host = CoreHost::begin(snapshot, &[(1, 1)]).unwrap();
             host.enable_schedule(1000, 1).unwrap();
             let run = host.advance_continuous(1000, &[]).unwrap();
@@ -4977,6 +5125,7 @@ fn core_host_goal_asking_benchmark() {
         fatigue: None,
         activity: vec![],
         fauna: None,
+        hunting: None,
         gathering: None,
         environment: None,
         irrigation: None,
@@ -5068,6 +5217,7 @@ fn personal_goal_selects_work_and_advances_only_after_completion() {
         fatigue: None,
         activity: vec![],
         fauna: None,
+        hunting: None,
         gathering: None,
         environment: None,
         irrigation: None,
@@ -5173,6 +5323,7 @@ fn an_unfunded_offer_can_motivate_work_without_forcing_delivery() {
         fatigue: None,
         activity: vec![],
         fauna: None,
+        hunting: None,
         gathering: None,
         environment: None,
         irrigation: None,
@@ -5285,6 +5436,7 @@ fn voluntary_deliveries_record_only_successful_physical_transfers() {
                         fatigue: None,
                         activity: vec![],
                         fauna: None,
+                        hunting: None,
                         gathering: None,
                         environment: None,
                         irrigation: None,
@@ -5409,7 +5561,7 @@ fn scheduled_delivery_is_a_personal_choice_that_fear_can_motivate() {
         let policy: game_agreements::Policy = serde_json::from_value(serde_json::json!({"person":2,"honor":false,"fear_honor_threshold":5})).unwrap();
         let agreements = game_agreements::Agreements { next_id: 2, policies: vec![policy], offering: vec![], work_offering: vec![], bulk_debtors: vec![], contracts: vec![game_agreements::Contract { id: 1, debtor: 2, creditor: 1, good: 1, quantity: 1, delivered: 0, due: 5, status: game_agreements::Status::Active }], events: vec![] };
         let opinions: game_opinions::Opinions = serde_json::from_value(serde_json::json!({"rules":{"minimum":-10,"maximum":10,"initial":0,"fulfilled_gain":1,"default_loss":1},"records":[{"observer":2,"target":1,"trust":0,"fear":fear}]})).unwrap();
-        let snapshot = CoreHostSnapshot { core: initial, autowork: None, tool_wear: None, opinions: Some(opinions), goals: None, agreements: Some(agreements), sites: None, tool_requirements: vec![], paused_work_rates: vec![], fatigue: None, activity: vec![], fauna: None, gathering: None, environment: None, irrigation: None, agriculture: None, health: None, knowledge: None, social: None, claims: None, food_search: None, schedule: None };
+        let snapshot = CoreHostSnapshot { core: initial, autowork: None, tool_wear: None, opinions: Some(opinions), goals: None, agreements: Some(agreements), sites: None, tool_requirements: vec![], paused_work_rates: vec![], fatigue: None, activity: vec![], fauna: None, hunting: None, gathering: None, environment: None, irrigation: None, agriculture: None, health: None, knowledge: None, social: None, claims: None, food_search: None, schedule: None };
         let mut host = CoreHost::begin(snapshot, &[(1, 1)]).unwrap();
         host.enable_schedule(1000, 1).unwrap();
         let saved = serde_json::to_string(&host.snapshot()).unwrap();
@@ -5444,7 +5596,7 @@ fn people_can_propose_and_accept_unfunded_promises_without_enforcement() {
         let accept: game_agreements::Policy = serde_json::from_value(serde_json::json!({"person":3,"accept":true})).unwrap();
         let agreements = game_agreements::Agreements { next_id: 1, policies: vec![accept], offering: vec![offer], work_offering: vec![], bulk_debtors: vec![], contracts: vec![], events: vec![] };
         let opinions: game_opinions::Opinions = serde_json::from_value(serde_json::json!({"rules":{"minimum":-10,"maximum":10,"initial":0,"fulfilled_gain":1,"default_loss":1},"records":[{"observer":2,"target":3,"trust":0,"obligation":0}]})).unwrap();
-        let snapshot = CoreHostSnapshot { core: initial, autowork: None, tool_wear: None, opinions: Some(opinions.clone()), goals: None, agreements: Some(agreements), sites: None, tool_requirements: vec![], paused_work_rates: vec![], fatigue: None, activity: vec![], fauna: None, gathering: None, environment: None, irrigation: None, agriculture: None, health: None, knowledge: None, social: None, claims: None, food_search: None, schedule: None };
+        let snapshot = CoreHostSnapshot { core: initial, autowork: None, tool_wear: None, opinions: Some(opinions.clone()), goals: None, agreements: Some(agreements), sites: None, tool_requirements: vec![], paused_work_rates: vec![], fatigue: None, activity: vec![], fauna: None, hunting: None, gathering: None, environment: None, irrigation: None, agriculture: None, health: None, knowledge: None, social: None, claims: None, food_search: None, schedule: None };
         let mut host = CoreHost::begin(snapshot, &[(1, 1)]).unwrap();
         host.enable_schedule(1000, 1).unwrap();
         let run = host.advance_scheduled(0, &[]).unwrap();
@@ -5501,6 +5653,7 @@ fn manually_making_a_promise_uses_the_makers_own_obligation_disposition() {
         fatigue: None,
         activity: vec![],
         fauna: None,
+        hunting: None,
         gathering: None,
         environment: None,
         irrigation: None,
@@ -5630,7 +5783,7 @@ fn completed_work_wears_a_site_and_real_repairs_reopen_it() {
                         facilities,
                         maintenance: Some(maintenance),
                     }),
-                    tool_requirements: vec![], paused_work_rates: vec![], fatigue: None, activity: vec![], fauna: None, gathering: None, environment: None, irrigation: None, agriculture: None, health: None, knowledge: None, social: None, claims: None, food_search: None, schedule: None,
+                    tool_requirements: vec![], paused_work_rates: vec![], fatigue: None, activity: vec![], fauna: None, hunting: None, gathering: None, environment: None, irrigation: None, agriculture: None, health: None, knowledge: None, social: None, claims: None, food_search: None, schedule: None,
                 };
                 let mut host = CoreHost::begin(snapshot, &[(1, 2)]).unwrap();
                 host.progress(500).unwrap();
@@ -5724,7 +5877,7 @@ fn scheduled_tool_repair_consumes_material_and_preserves_identity() {
         initial.physical.custody.containers.push(Container::new(Place::Person(2), 10, vec![Lot { item: Some(10), good: 1, quantity: 1, expires_at: None }, Lot { item: None, good: 2, quantity: 1, expires_at: None }]).unwrap());
         initial.physical.custody.containers.sort_by_key(|row| row.place);
         let tool_wear = game_economy_work::tool_wear::ToolWear { next_item: 11, rules: vec![game_economy_work::tool_wear::Rule { good: 1, durability: 10, wear: 1, repair_good: 2, repair_quantity: 1 }], conditions: vec![game_economy_work::tool_wear::Condition { item: 10, good: 1, damage: 4 }], repairs: vec![game_economy_work::tool_wear::RepairChoice { person: 2, item: 10, willing: true }], events: vec![] };
-        let snapshot = CoreHostSnapshot { core: initial, autowork: None, tool_wear: Some(tool_wear), opinions: None, goals: None, agreements: None, sites: None, tool_requirements: vec![], paused_work_rates: vec![], fatigue: None, activity: vec![], fauna: None, gathering: None, environment: None, irrigation: None, agriculture: None, health: None, knowledge: None, social: None, claims: None, food_search: None, schedule: None };
+        let snapshot = CoreHostSnapshot { core: initial, autowork: None, tool_wear: Some(tool_wear), opinions: None, goals: None, agreements: None, sites: None, tool_requirements: vec![], paused_work_rates: vec![], fatigue: None, activity: vec![], fauna: None, hunting: None, gathering: None, environment: None, irrigation: None, agriculture: None, health: None, knowledge: None, social: None, claims: None, food_search: None, schedule: None };
         let mut no_material = snapshot.clone();
         let bag = no_material.core.physical.custody.containers.iter_mut().find(|row| row.place == Place::Person(2)).unwrap();
         *bag = Container::new(bag.place, 10, vec![Lot { item: Some(10), good: 1, quantity: 1, expires_at: None }]).unwrap();
@@ -5830,6 +5983,7 @@ fn work_requires_carried_tools_and_wears_only_physically_started_jobs() {
                     fatigue: None,
                     activity: vec![],
                     fauna: None,
+                    hunting: None,
                     gathering: None,
                     environment: None,
                     irrigation: None,
@@ -6043,6 +6197,7 @@ fn work_pauses_when_a_required_tool_moves_and_resumes_after_its_return() {
                     fatigue: None,
                     activity: vec![],
                     fauna: None,
+                    hunting: None,
                     gathering: None,
                     environment: None,
                     irrigation: None,
@@ -6306,6 +6461,7 @@ fn core_host_tool_repair_benchmark() {
         fatigue: None,
         activity: vec![],
         fauna: None,
+        hunting: None,
         gathering: None,
         environment: None,
         irrigation: None,
@@ -6521,6 +6677,7 @@ fn core_host_site_admission_benchmark() {
         fatigue: fatigue.then(timed_fatigue),
         activity: vec![],
         fauna: None,
+        hunting: None,
         gathering: None,
         environment: None,
         irrigation: None,
@@ -6744,6 +6901,7 @@ fn core_host_site_repair_benchmark() {
         fatigue: None,
         activity: vec![],
         fauna: None,
+        hunting: None,
         gathering: None,
         environment: None,
         irrigation: None,
@@ -6857,6 +7015,7 @@ fn core_host_offer_choices_benchmark() {
         fatigue: None,
         activity: vec![],
         fauna: None,
+        hunting: None,
         gathering: None,
         environment: None,
         irrigation: None,
@@ -7000,6 +7159,7 @@ fn core_host_agreement_delivery_benchmark() {
         fatigue: None,
         activity: vec![],
         fauna: None,
+        hunting: None,
         gathering: None,
         environment: None,
         irrigation: None,
@@ -7098,6 +7258,7 @@ fn core_host_physical_taking_preserves_item_identity_without_implied_permission(
             fatigue: None,
             activity: vec![],
             fauna: None,
+            hunting: None,
             gathering: None,
             environment: None,
             irrigation: None,
@@ -7184,6 +7345,7 @@ fn core_host_rejects_unowned_identified_consumption_without_mutation() {
             fatigue: None,
             activity: vec![],
             fauna: None,
+            hunting: None,
             gathering: None,
             environment: None,
             irrigation: None,
@@ -7217,7 +7379,7 @@ fn scheduled_core_host_is_partition_independent_at_tied_deadlines() {
         let snapshot = CoreHostSnapshot {
             core: initial,
             autowork: Some(game_autowork::Autowork { next_id: 2, policies: vec![game_autowork::Policy { person: 2, recipe: 1, enabled: true, disregard_claims: false }], requests: None }),
-            tool_wear: None, opinions: None, goals: None, agreements: None, sites: None, tool_requirements: vec![], paused_work_rates: vec![], fatigue: None, activity: vec![], fauna: None, gathering: None, environment: None, irrigation: None, agriculture: None, health: None, knowledge: None, social: None, claims: None, food_search: None, schedule: None,
+            tool_wear: None, opinions: None, goals: None, agreements: None, sites: None, tool_requirements: vec![], paused_work_rates: vec![], fatigue: None, activity: vec![], fauna: None, hunting: None, gathering: None, environment: None, irrigation: None, agriculture: None, health: None, knowledge: None, social: None, claims: None, food_search: None, schedule: None,
         };
         let mut host = CoreHost::begin(snapshot, &[(1, 2)]).unwrap();
         host.progress(100).unwrap();
@@ -7318,6 +7480,7 @@ fn scheduled_decision_resumes_after_work_failure_without_repeating_meal() {
         fatigue: None,
         activity: vec![],
         fauna: None,
+        hunting: None,
         gathering: None,
         environment: None,
         irrigation: None,
@@ -7457,6 +7620,7 @@ fn scheduled_runner_defers_perishable_work_and_publishes_other_completion() {
             fatigue: None,
             activity: vec![],
             fauna: None,
+            hunting: None,
             gathering: None,
             environment: None,
             irrigation: None,
@@ -7501,7 +7665,7 @@ fn continuous_core_host_crosses_boundaries_without_partition_or_reload_drift() {
         let tool_wear = game_economy_work::tool_wear::ToolWear { next_item: 10,
             rules: vec![game_economy_work::tool_wear::Rule { good: 2, durability: 10, wear: 1, repair_good: 1, repair_quantity: 1 }],
             conditions: vec![], repairs: vec![], events: vec![] };
-        let snapshot = CoreHostSnapshot { core: initial, tool_wear: Some(tool_wear), opinions: None, goals: None, agreements: None, sites: None, tool_requirements: vec![], paused_work_rates: vec![], fatigue: None, activity: vec![], fauna: None, gathering: None, environment: None, irrigation: None, agriculture: None, health: None, knowledge: None, social: None, claims: None, food_search: None, schedule: None,
+        let snapshot = CoreHostSnapshot { core: initial, tool_wear: Some(tool_wear), opinions: None, goals: None, agreements: None, sites: None, tool_requirements: vec![], paused_work_rates: vec![], fatigue: None, activity: vec![], fauna: None, hunting: None, gathering: None, environment: None, irrigation: None, agriculture: None, health: None, knowledge: None, social: None, claims: None, food_search: None, schedule: None,
             autowork: Some(game_autowork::Autowork { next_id: 2, policies: vec![game_autowork::Policy { person: 2, recipe: 1, enabled: true, disregard_claims: false }], requests: None }) };
         let mut host = CoreHost::begin(snapshot, &[(1, 1)]).unwrap();
         host.enable_schedule(500, 1).unwrap();
@@ -7554,6 +7718,7 @@ fn long_decision_period_survives_save_and_crosses_a_boundary() {
         fatigue: None,
         activity: vec![],
         fauna: None,
+        hunting: None,
         gathering: None,
         environment: None,
         irrigation: None,
@@ -7608,6 +7773,7 @@ fn continuous_host_carries_long_work_rate_and_fractional_progress() {
                 fatigue: None,
                 activity: vec![],
                 fauna: None,
+                hunting: None,
                 gathering: None,
                 environment: None,
                 irrigation: None,
@@ -7670,6 +7836,7 @@ fn continuous_host_retains_rate_for_work_paused_at_a_boundary() {
             fatigue: None,
             activity: vec![],
             fauna: None,
+            hunting: None,
             gathering: None,
             environment: None,
             irrigation: None,
@@ -7735,6 +7902,7 @@ fn continuous_host_keeps_completed_interval_after_boundary_failure() {
             fatigue: None,
             activity: vec![],
             fauna: None,
+            hunting: None,
             gathering: None,
             environment: None,
             irrigation: None,

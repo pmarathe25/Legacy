@@ -8,6 +8,7 @@ mod fatigue;
 mod fauna;
 mod food_search;
 mod gathering;
+mod hunting;
 mod offers;
 mod requests;
 mod scheduler;
@@ -61,6 +62,8 @@ pub struct CoreHostSnapshot {
     #[serde(default)]
     pub fauna: Option<game_fauna::Fauna>,
     #[serde(default)]
+    pub hunting: Option<crate::Hunting>,
+    #[serde(default)]
     pub opinions: Option<game_opinions::Opinions>,
     #[serde(default)]
     pub goals: Option<game_goals::Goals>,
@@ -91,6 +94,7 @@ pub struct CoreHost {
     environment: Option<game_environment::Environment>,
     gathering: Option<crate::Gathering>,
     fauna: Option<game_fauna::Fauna>,
+    hunting: Option<crate::Hunting>,
     work_checked_revision: Option<u64>,
     work_checked_blocked: Vec<u64>,
     opinions: Option<game_opinions::Opinions>,
@@ -116,6 +120,7 @@ struct CoreRuntimeOptions {
     environment: Option<game_environment::Environment>,
     gathering: Option<crate::Gathering>,
     fauna: Option<game_fauna::Fauna>,
+    hunting: Option<crate::Hunting>,
 }
 impl CoreHost {
     pub fn begin(snapshot: CoreHostSnapshot, rates: &[(u64, u64)]) -> Result<Self, String> {
@@ -137,6 +142,7 @@ impl CoreHost {
             environment,
             gathering,
             fauna,
+            hunting,
             opinions,
             goals,
             agreements,
@@ -168,6 +174,7 @@ impl CoreHost {
                 environment,
                 gathering,
                 fauna,
+                hunting,
             },
         )
     }
@@ -190,6 +197,7 @@ impl CoreHost {
             environment,
             gathering,
             fauna,
+            hunting,
             opinions,
             goals,
             agreements,
@@ -221,6 +229,7 @@ impl CoreHost {
                 environment,
                 gathering,
                 fauna,
+                hunting,
             },
         )
     }
@@ -250,6 +259,7 @@ impl CoreHost {
             environment,
             gathering,
             fauna,
+            hunting,
         } = options;
         if let Some(legacy) = food_search.as_mut().and_then(|owner| owner.claims.take()) {
             if claims.is_some() {
@@ -490,6 +500,16 @@ impl CoreHost {
                 .validate(&regions, &goods, core.physical.tick())
                 .map_err(str::to_owned)?;
         }
+        if let Some(owner) = &hunting {
+            let people: HashSet<_> = core.people.par_iter().map(|person| person.id).collect();
+            let goods: HashSet<_> = core
+                .physical
+                .goods()
+                .par_iter()
+                .map(|good| good.id)
+                .collect();
+            owner.validate(&people, &goods, fauna.as_ref())?;
+        }
         if let Some(owner) = &goals {
             let people: HashSet<_> = core.people.par_iter().map(|person| person.id).collect();
             let recipes: HashSet<_> = core
@@ -541,6 +561,7 @@ impl CoreHost {
             environment,
             gathering,
             fauna,
+            hunting,
             work_checked_revision: None,
             work_checked_blocked: Vec::new(),
             opinions,
@@ -569,6 +590,7 @@ impl CoreHost {
             environment: self.environment.clone(),
             gathering: self.gathering.clone(),
             fauna: self.fauna.clone(),
+            hunting: self.hunting.clone(),
             opinions: self.opinions.clone(),
             goals: self.goals.clone(),
             agreements: self.agreements.clone(),
@@ -926,6 +948,27 @@ impl CoreHost {
         growth.gathered = gathering
             .as_ref()
             .map_or(&[], |(_, outputs)| outputs.as_slice());
+        let hunting = if self.hunting.is_some() {
+            let next_action = actions
+                .par_iter()
+                .map(|row| row.id)
+                .chain(growth.harvest.par_iter().map(|row| row.id))
+                .chain(growth.gathered.par_iter().map(|row| row.action))
+                .max()
+                .map_or(Ok(1), |id| {
+                    id.checked_add(1).ok_or("hunting action overflow")
+                })?;
+            self.plan_hunting(
+                occupied,
+                cultivation.as_ref(),
+                irrigation_plan.as_ref(),
+                gathering.as_ref().map(|(plan, _)| plan),
+                next_action,
+            )?
+        } else {
+            None
+        };
+        growth.animal_yield = hunting.as_ref().map_or(&[], |plan| plan.yields.as_slice());
         let mut draft = self
             .core
             .prepare_settlement_with_growth(&actions, growth, config)?;
@@ -962,7 +1005,10 @@ impl CoreHost {
                 )
             })
             .transpose()?;
-        let fauna = self.stage_fauna(&mut gathering, draft.events().tick)?;
+        let hunted = hunting
+            .as_ref()
+            .map_or_else(Vec::new, |plan| plan.accepted(draft.events()));
+        let fauna = self.stage_fauna(&mut gathering, &hunted, draft.events().tick)?;
         let mut tools = self.stage_tools(
             draft.produced_items(),
             draft.next_produced_item(),

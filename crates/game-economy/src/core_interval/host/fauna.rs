@@ -10,6 +10,7 @@ impl CoreHost {
     pub(super) fn stage_fauna(
         &self,
         gathering: &mut Option<crate::Gathering>,
+        hunted: &[u64],
         tick: u64,
     ) -> Result<Option<CoreFaunaDraft>, String> {
         let Some(owner) = &self.fauna else {
@@ -41,7 +42,7 @@ impl CoreHost {
             })
             .collect();
         let quiet = owner
-            .prepare_compact(&patches, &[], &exposure, &[], self.core.seed, tick)
+            .prepare_compact(&patches, &[], &exposure, hunted, self.core.seed, tick)
             .map_err(str::to_owned)?;
         let (draft, consumed) = if let Some(quiet) = quiet {
             owner.validate_quiet(&quiet).map_err(str::to_owned)?;
@@ -49,7 +50,7 @@ impl CoreHost {
             (CoreFaunaDraft::Quiet(quiet), consumed)
         } else {
             let complete = owner
-                .advance_with_hunts(&patches, &[], &exposure, &[], self.core.seed, tick)
+                .advance_with_hunts(&patches, &[], &exposure, hunted, self.core.seed, tick)
                 .map_err(str::to_owned)?;
             (CoreFaunaDraft::Complete(complete.fauna), complete.consumed)
         };
