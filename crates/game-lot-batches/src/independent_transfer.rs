@@ -110,6 +110,7 @@ pub fn prepare(
             (transaction.id, transaction.movements[0])
         },
         advance,
+        true,
     )
 }
 
@@ -119,6 +120,26 @@ pub fn prepare_flat(
     instance: u64,
     transfers: &[SimpleTransfer],
     advance: bool,
+) -> Result<Option<Draft>, String> {
+    prepare_flat_impl(state, instance, transfers, advance, true)
+}
+
+/// The general partition publishes all global expiry and spoilage.
+pub(crate) fn prepare_flat_endpoints(
+    state: &State,
+    instance: u64,
+    transfers: &[SimpleTransfer],
+    advance: bool,
+) -> Result<Option<Draft>, String> {
+    prepare_flat_impl(state, instance, transfers, advance, false)
+}
+
+fn prepare_flat_impl(
+    state: &State,
+    instance: u64,
+    transfers: &[SimpleTransfer],
+    advance: bool,
+    global_expiry: bool,
 ) -> Result<Option<Draft>, String> {
     let mut ids: Vec<_> = transfers.par_iter().map(|row| row.action).collect();
     if ids.par_windows(2).any(|pair| pair[0] > pair[1]) {
@@ -144,6 +165,7 @@ pub fn prepare_flat(
         transfers.len(),
         |index| (transfers[index].action, transfers[index].movement),
         advance,
+        global_expiry,
     )
 }
 
@@ -153,6 +175,7 @@ fn prepare_rows(
     length: usize,
     action: impl Fn(usize) -> (u64, Movement) + Sync,
     advance: bool,
+    global_expiry: bool,
 ) -> Result<Option<Draft>, String> {
     let next = if advance {
         state.tick.checked_add(1).ok_or("lot tick overflow")?
@@ -261,21 +284,25 @@ fn prepare_rows(
         drop(phase);
         phase = game_diagnostics::span("physical.independent.spoilage");
     }
-    let mut spoiled: Vec<_> = state
-        .containers
-        .par_iter()
-        .filter(|c| c.next_expiry.is_some_and(|at| at <= next))
-        .flat_map_iter(|c| {
-            c.lots.iter().filter_map(move |lot| {
-                lot.expires_at.filter(|&at| at <= next).map(|at| Spoilage {
-                    place: c.place,
-                    good: lot.good,
-                    quantity: lot.quantity,
-                    expires_at: at,
+    let mut spoiled: Vec<_> = if global_expiry {
+        state
+            .containers
+            .par_iter()
+            .filter(|c| c.next_expiry.is_some_and(|at| at <= next))
+            .flat_map_iter(|c| {
+                c.lots.iter().filter_map(move |lot| {
+                    lot.expires_at.filter(|&at| at <= next).map(|at| Spoilage {
+                        place: c.place,
+                        good: lot.good,
+                        quantity: lot.quantity,
+                        expires_at: at,
+                    })
                 })
             })
-        })
-        .collect();
+            .collect()
+    } else {
+        Vec::new()
+    };
     spoiled.par_sort_unstable_by_key(|row| (row.place, row.good, row.expires_at));
 
     #[cfg(feature = "profile")]

@@ -26,6 +26,8 @@ On the 10,000-person mixed campaign, replacing sorted contested-action IDs with 
 
 Set `LEGACY_IDLE_HOLDERS` on `mixed_atomic_action_benchmark` to add untouched custody. With 5,000 transfers and 500,000 idle holders, computing expiry-aware occupancy only for destinations reduced general preparation from about 13.1 to 11.5 ms on one worker and from 5.9–6.2 to 5.2–5.3 ms on six in repeated runs. Every run compares receipts with the unpartitioned arbiter; the mixed campaign's whole-run timings overlapped.
 
+Add `LEGACY_IDLE_EXPIRY=1` to make idle custody expire at the boundary. In a 5,000-transfer run with 100,000 expiring idle holders, assigning global expiry to the general partition reduced partitioned preparation from 65–69 to 42–45 ms on one worker and from 23–24 to about 20 ms on six in repeated comparisons. Receipts and spoilage matched the general arbiter, including with added custody. In one 24-boundary mixed campaign repeat, one, two, four and six workers took 622, 502, 424 and 434 ms respectively, with matching fingerprints; whole-world scaling remained sublinear.
+
 Independent transfers keep moved cohorts in immutable chunk-owned receipt arenas. Each outcome exposes only its own exact slice, and serialized outcomes retain their ordinary flat lot arrays. Copies of a receipt remain valid after the source draft is dropped.
 
 Independent transfers merge already ordered dated cohorts in linear time. Work is divided into fixed logical chunks that also expose parallelism in smaller, cohort-heavy batches. The ignored `many_cohort_transfer_benchmark` accepts `LEGACY_ATTEMPTS`, `LEGACY_COHORTS`, and `LEGACY_WORKERS` to measure this path.

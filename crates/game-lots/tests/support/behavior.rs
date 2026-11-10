@@ -1299,6 +1299,8 @@ fn mixed_atomic_actions_match_general_arbitration() {
         container(Place::Person(600), 10, vec![lot(1, 2, None)]),
         container(Place::Person(601), 10, vec![]),
         container(Place::Person(602), 10, vec![]),
+        // Expiry outside either partition must still be published exactly once.
+        container(Place::Person(603), 10, vec![lot(1, 2, Some(1))]),
     ]);
     let mut actions: Vec<_> = transfers
         .iter()
@@ -1470,6 +1472,7 @@ fn mixed_atomic_action_benchmark() {
         .ok()
         .and_then(|v| v.parse::<u64>().ok())
         .unwrap_or(0);
+    let idle_expiry = std::env::var_os("LEGACY_IDLE_EXPIRY").is_some();
     let additions = if with_additions {
         vec![container(Place::Inventory(1), 10, vec![])]
     } else {
@@ -1494,7 +1497,15 @@ fn mixed_atomic_action_benchmark() {
         });
     }
     for id in 1..=idle {
-        holders.push(container(Place::Person(count * 2 + id), 10, vec![]));
+        holders.push(container(
+            Place::Person(count * 2 + id),
+            10,
+            if idle_expiry {
+                vec![lot(1, 1, Some(1))]
+            } else {
+                vec![]
+            },
+        ));
     }
     actions.push(Transaction {
         id: count + 1,
@@ -1529,6 +1540,7 @@ fn mixed_atomic_action_benchmark() {
             assert_eq!(general.transactions(), partitioned.transactions());
             assert_eq!(general.outcomes(), partitioned.outcomes());
             assert_eq!(general.creations(), partitioned.creations());
+            assert_eq!(general.spoiled(), partitioned.spoiled());
             for mode in ["general", "partitioned"] {
                 let mut samples = Vec::new();
                 for round in 0..5 {
@@ -1548,7 +1560,7 @@ fn mixed_atomic_action_benchmark() {
                 }
                 samples.sort_by(f64::total_cmp);
                 println!(
-                    "workers={workers} transfers={count} idle_holders={idle} additions={with_additions} mode={mode} prepare={:.6}",
+                    "workers={workers} transfers={count} idle_holders={idle} idle_expiry={idle_expiry} additions={with_additions} mode={mode} prepare={:.6}",
                     samples[2]
                 );
             }

@@ -134,7 +134,11 @@ pub fn prepare_transactions(
         phase = game_diagnostics::span("physical.partitioned.resolve");
     }
     let (fast, general) = rayon::join(
-        || super::independent_transfer::prepare_flat(state, instance, &transfers, advance),
+        || {
+            super::independent_transfer::prepare_flat_endpoints(
+                state, instance, &transfers, advance,
+            )
+        },
         || {
             super::prepare_unpartitioned(
                 state,
@@ -174,7 +178,7 @@ fn merge(
             row.0 += additions.partition_point(|addition| addition.place < row.1.place);
         });
     }
-    let mut changes = if fast.spoiled.is_empty() {
+    let mut changes = if general.spoiled.is_empty() {
         // Without boundary-wide expiry, each planner changes only its own
         // exclusive endpoints, so no ownership filtering is necessary.
         let mut changes = fast_changes;
@@ -298,7 +302,14 @@ pub fn prepare(
         })
         .collect();
     let (fast, general) = rayon::join(
-        || super::independent_transfer::prepare_flat(state, instance, &independent, advance),
+        || {
+            super::independent_transfer::prepare_flat_endpoints(
+                state,
+                instance,
+                &independent,
+                advance,
+            )
+        },
         || super::prepare(state, instance, seed, &conflicted, advance, Vec::new(), &[]),
     );
     let Some(fast) = fast? else { return Ok(None) };
