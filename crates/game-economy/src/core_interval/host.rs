@@ -589,19 +589,8 @@ impl CoreHost {
             )?;
         }
         if let Some(owner) = &taking {
-            if owner.policies.par_iter().any(|policy| {
-                policy.escalate
-                    || policy.assessment_at_least.is_some()
-                    || policy.assessment_at_most.is_some()
-            }) || !owner.complaints.is_empty()
-                || !owner.complaint_preferences.is_empty()
-                || !owner.assessment_preferences.is_empty()
-                || !owner.inquiry_pursuit.is_empty()
-            {
-                return Err(
-                    "taking escalation and complaints are not yet supported by the interval host"
-                        .into(),
-                );
+            if owner.policies.par_iter().any(|policy| policy.escalate) {
+                return Err("taking escalation is not yet supported by the interval host".into());
             }
             let people: HashSet<_> = core.people.par_iter().map(|person| person.id).collect();
             let goods: HashSet<_> = core
@@ -1579,7 +1568,7 @@ impl CoreHost {
                     .map(|event| (event.actor, event.target)),
             );
             let mut changes = self.stage_taking_reactions(&mut frame.owner);
-            changes.par_extend(self.stage_taking_reports(
+            changes.par_extend(self.stage_taking_contacts(
                 &mut frame.owner,
                 &contacts,
                 draft.events().tick,

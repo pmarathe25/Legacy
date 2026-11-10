@@ -3837,6 +3837,229 @@ fn pressured_meeting_can_share_false_taking_testimony_once() {
 }
 
 #[test]
+fn personal_inquiry_requires_later_meetings_and_subjective_assessment() {
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new().num_threads(workers).build().unwrap().install(|| {
+        let mut initial = fixture();
+        initial.physical.custody.tick = 1;
+        initial.people[1].region = Some(1);
+        let mut third = initial.people[1].clone();
+        third.id = 3;
+        initial.people.push(third);
+        initial.travel.as_mut().unwrap().journeys.clear();
+        initial.nutrition = None;
+        initial.pending_food.clear();
+        let minds = vec![
+            game_economy_knowledge::Mind {
+                person: 2, remember_people: false, people_seen: vec![], people_reporting: None, people_reports: vec![],
+                reporting: Some(game_economy_knowledge::Reporting {willing: false, pressure_threshold: Some(1)}),
+                misreport: Some(game_economy_knowledge::Misreport {target: Some(3), food_delta: 5}),
+                records: vec![game_economy_knowledge::Record {region: 2, food: 10, observed_at: 0, witness: 2, learned_from: None}],
+            },
+            game_economy_knowledge::Mind {
+                person: 3, remember_people: false, people_seen: vec![], people_reporting: None, people_reports: vec![],
+                reporting: None, misreport: None, records: vec![],
+            },
+        ];
+        let rules = serde_json::from_value(serde_json::json!({"minimum":-10,"maximum":10,"initial":0,"fulfilled_gain":1,"default_loss":1,"affinity":{"limit":10}})).unwrap();
+        let opinions = game_opinions::Opinions {rules, sensitivities: Default::default(), records: vec![game_opinions::Opinion {
+            observer: 2, target: 3, trust: 0, fear: 2, obligation: 0, affinity: 0,
+        }], events: vec![]};
+        let social = game_economy::core_interval::CoreSocial {
+            owner: game_social::Social {
+                rules: game_social::Rules {interval: 1, min_health: 1, max_hunger: 10, familiarity_gain: 1, familiarity_max: 10, relationship_retention: None},
+                participants: vec![game_social::Participant {person: 2, willing: false}, game_social::Participant {person: 3, willing: true}],
+                pressures: vec![game_social::PressurePolicy {person: 2, fear_at_least: Some(1), obligation_at_least: None, enabled: true}],
+                relationships: vec![], events: vec![], needs: None,
+            }, last_tick: None,
+        };
+        let snapshot = CoreHostSnapshot {
+            core: initial, autowork: None, tool_wear: None, tool_requirements: vec![], paused_work_rates: vec![],
+            fatigue: None, activity: vec![], giving: None, taking: Some(serde_json::from_value(serde_json::json!({
+                "witnesses": [{"person":2,"actor":1,"notices":true,"last_seen":{"tick":0,"target":3,"good":1,"quantity":1,"outcome":"transferred"}}],
+                "report_policies": [{"person":2,"recipient":3,"actor":1,"willing":false,"pressure_threshold":1,"claimed_outcome":"resisted"}],
+                "receptions": [{"person":3,"stance":"believe"}],
+                "complaint_preferences": [{"person":3,"willing":true}],
+                "assessment_preferences": [{"person":3,"different_believed":4}],
+                "inquiry_pursuit": [2,3]
+            })).unwrap()), medical: None, goal_setbacks: vec![], purpose: None, animal_restraints: None, animal_products: None, recovery: None, fauna: None, hunting: None, animal_feelings: None, animal_care: None, animal_handling: None, family: None, dependent_care: None, gathering: None, environment: None, irrigation: None, agriculture: None, health: None, claims: None, social: Some(social),
+            food_search: None, knowledge: Some(game_economy_knowledge::Knowledge {max_records: 4, minds, retention: vec![]}),
+            opinions: Some(opinions), goals: None, agreements: None, sites: None, schedule: None,
+        };
+        let mut host = CoreHost::begin(snapshot, &[(1, 1)]).unwrap();
+        let before = host.snapshot();
+        assert!(host.request_taking_inquiry(3, 2, 3, 1, 5).is_err());
+        assert_eq!(host.snapshot(), before);
+        host.request_taking_inquiry(2, 3, 2, 1, 5).unwrap();
+        assert!(host.request_taking_inquiry(2, 3, 2, 1, 5).is_err());
+        host.enable_schedule(500, 1).unwrap();
+        assert_eq!(host.advance_scheduled(0, &[]).unwrap().failure, None);
+        assert_eq!(host.snapshot().taking.as_ref().unwrap().complaints[0].decision, game_economy_taking::ComplaintDecision::Pending);
+        let saved = serde_json::to_string(&host.snapshot()).unwrap();
+        let mut restored = CoreHost::resume(serde_json::from_str(&saved).unwrap()).unwrap();
+        assert_eq!(host.advance_continuous(1000, &[]).unwrap().failure, None);
+        assert_eq!(restored.advance_continuous(1000, &[]).unwrap().failure, None);
+        let accepted = host.snapshot();
+        assert_eq!(accepted, restored.snapshot());
+        assert_eq!(accepted.taking.as_ref().unwrap().complaints[0].decision, game_economy_taking::ComplaintDecision::Accepted);
+        assert!(accepted.taking.as_ref().unwrap().complaints[0].answer.is_none());
+        assert_eq!(host.advance_continuous(1000, &[]).unwrap().failure, None);
+        assert_eq!(restored.advance_continuous(1000, &[]).unwrap().failure, None);
+        let state = host.snapshot();
+        assert_eq!(state, restored.snapshot());
+        let inquiry = &state.taking.as_ref().unwrap().complaints[0];
+        let answer = inquiry.answer.as_ref().unwrap();
+        assert!(!answer.matches_account);
+        assert_eq!(answer.assessment, Some(4));
+        assert_eq!(inquiry.account.outcome, game_economy_taking::Outcome::Transferred);
+        assert_eq!(answer.report.claimed_outcome, game_economy_taking::Outcome::Resisted);
+        state
+    })
+    };
+    assert_eq!(run(1), run(6));
+}
+
+#[test]
+fn personal_inquiry_can_be_declined() {
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new().num_threads(workers).build().unwrap().install(|| {
+        let mut initial = fixture();
+        initial.physical.custody.tick = 1;
+        initial.people[1].region = Some(1);
+        let mut third = initial.people[1].clone();
+        third.id = 3;
+        initial.people.push(third);
+        initial.travel.as_mut().unwrap().journeys.clear();
+        initial.nutrition = None;
+        initial.pending_food.clear();
+        let minds = vec![
+            game_economy_knowledge::Mind {
+                person: 2, remember_people: false, people_seen: vec![], people_reporting: None, people_reports: vec![],
+                reporting: Some(game_economy_knowledge::Reporting {willing: false, pressure_threshold: Some(1)}),
+                misreport: Some(game_economy_knowledge::Misreport {target: Some(3), food_delta: 5}),
+                records: vec![game_economy_knowledge::Record {region: 2, food: 10, observed_at: 0, witness: 2, learned_from: None}],
+            },
+            game_economy_knowledge::Mind {
+                person: 3, remember_people: false, people_seen: vec![], people_reporting: None, people_reports: vec![],
+                reporting: None, misreport: None, records: vec![],
+            },
+        ];
+        let rules = serde_json::from_value(serde_json::json!({"minimum":-10,"maximum":10,"initial":0,"fulfilled_gain":1,"default_loss":1,"affinity":{"limit":10}})).unwrap();
+        let opinions = game_opinions::Opinions {rules, sensitivities: Default::default(), records: vec![game_opinions::Opinion {
+            observer: 2, target: 3, trust: 0, fear: 2, obligation: 0, affinity: 0,
+        }], events: vec![]};
+        let social = game_economy::core_interval::CoreSocial {
+            owner: game_social::Social {
+                rules: game_social::Rules {interval: 1, min_health: 1, max_hunger: 10, familiarity_gain: 1, familiarity_max: 10, relationship_retention: None},
+                participants: vec![game_social::Participant {person: 2, willing: false}, game_social::Participant {person: 3, willing: true}],
+                pressures: vec![game_social::PressurePolicy {person: 2, fear_at_least: Some(1), obligation_at_least: None, enabled: true}],
+                relationships: vec![], events: vec![], needs: None,
+            }, last_tick: None,
+        };
+        let snapshot = CoreHostSnapshot {
+            core: initial, autowork: None, tool_wear: None, tool_requirements: vec![], paused_work_rates: vec![],
+            fatigue: None, activity: vec![], giving: None, taking: Some(serde_json::from_value(serde_json::json!({
+                "witnesses": [{"person":2,"actor":1,"notices":true,"last_seen":{"tick":0,"target":3,"good":1,"quantity":1,"outcome":"transferred"}}],
+                "report_policies": [{"person":2,"recipient":3,"actor":1,"willing":false,"pressure_threshold":1,"claimed_outcome":"resisted"}],
+                "receptions": [{"person":3,"stance":"believe"}],
+                "complaint_preferences": [{"person":3,"willing":false}],
+                "assessment_preferences": [{"person":3,"different_believed":4}],
+                "inquiry_pursuit": [2,3]
+            })).unwrap()), medical: None, goal_setbacks: vec![], purpose: None, animal_restraints: None, animal_products: None, recovery: None, fauna: None, hunting: None, animal_feelings: None, animal_care: None, animal_handling: None, family: None, dependent_care: None, gathering: None, environment: None, irrigation: None, agriculture: None, health: None, claims: None, social: Some(social),
+            food_search: None, knowledge: Some(game_economy_knowledge::Knowledge {max_records: 4, minds, retention: vec![]}),
+            opinions: Some(opinions), goals: None, agreements: None, sites: None, schedule: None,
+        };
+        let mut host = CoreHost::begin(snapshot, &[(1, 1)]).unwrap();
+        host.request_taking_inquiry(2, 3, 2, 1, 5).unwrap();
+        assert!(host.request_taking_inquiry(2, 3, 2, 1, 5).is_err());
+        host.enable_schedule(500, 1).unwrap();
+        assert_eq!(host.advance_scheduled(0, &[]).unwrap().failure, None);
+        assert_eq!(host.snapshot().taking.as_ref().unwrap().complaints[0].decision, game_economy_taking::ComplaintDecision::Pending);
+        let saved = serde_json::to_string(&host.snapshot()).unwrap();
+        let mut restored = CoreHost::resume(serde_json::from_str(&saved).unwrap()).unwrap();
+        assert_eq!(host.advance_continuous(1000, &[]).unwrap().failure, None);
+        assert_eq!(restored.advance_continuous(1000, &[]).unwrap().failure, None);
+        let accepted = host.snapshot();
+        assert_eq!(accepted, restored.snapshot());
+        assert_eq!(accepted.taking.as_ref().unwrap().complaints[0].decision, game_economy_taking::ComplaintDecision::Declined);
+        assert!(accepted.taking.as_ref().unwrap().complaints[0].answer.is_none());
+        accepted
+    })
+    };
+    assert_eq!(run(1), run(6));
+}
+
+#[test]
+fn personal_inquiry_expires_without_a_later_decision() {
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new().num_threads(workers).build().unwrap().install(|| {
+        let mut initial = fixture();
+        initial.physical.custody.tick = 1;
+        initial.people[1].region = Some(1);
+        let mut third = initial.people[1].clone();
+        third.id = 3;
+        initial.people.push(third);
+        initial.travel.as_mut().unwrap().journeys.clear();
+        initial.nutrition = None;
+        initial.pending_food.clear();
+        let minds = vec![
+            game_economy_knowledge::Mind {
+                person: 2, remember_people: false, people_seen: vec![], people_reporting: None, people_reports: vec![],
+                reporting: Some(game_economy_knowledge::Reporting {willing: false, pressure_threshold: Some(1)}),
+                misreport: Some(game_economy_knowledge::Misreport {target: Some(3), food_delta: 5}),
+                records: vec![game_economy_knowledge::Record {region: 2, food: 10, observed_at: 0, witness: 2, learned_from: None}],
+            },
+            game_economy_knowledge::Mind {
+                person: 3, remember_people: false, people_seen: vec![], people_reporting: None, people_reports: vec![],
+                reporting: None, misreport: None, records: vec![],
+            },
+        ];
+        let rules = serde_json::from_value(serde_json::json!({"minimum":-10,"maximum":10,"initial":0,"fulfilled_gain":1,"default_loss":1,"affinity":{"limit":10}})).unwrap();
+        let opinions = game_opinions::Opinions {rules, sensitivities: Default::default(), records: vec![game_opinions::Opinion {
+            observer: 2, target: 3, trust: 0, fear: 2, obligation: 0, affinity: 0,
+        }], events: vec![]};
+        let social = game_economy::core_interval::CoreSocial {
+            owner: game_social::Social {
+                rules: game_social::Rules {interval: 1, min_health: 1, max_hunger: 10, familiarity_gain: 1, familiarity_max: 10, relationship_retention: None},
+                participants: vec![game_social::Participant {person: 2, willing: false}, game_social::Participant {person: 3, willing: true}],
+                pressures: vec![game_social::PressurePolicy {person: 2, fear_at_least: Some(1), obligation_at_least: None, enabled: true}],
+                relationships: vec![], events: vec![], needs: None,
+            }, last_tick: None,
+        };
+        let snapshot = CoreHostSnapshot {
+            core: initial, autowork: None, tool_wear: None, tool_requirements: vec![], paused_work_rates: vec![],
+            fatigue: None, activity: vec![], giving: None, taking: Some(serde_json::from_value(serde_json::json!({
+                "witnesses": [{"person":2,"actor":1,"notices":true,"last_seen":{"tick":0,"target":3,"good":1,"quantity":1,"outcome":"transferred"}}],
+                "report_policies": [{"person":2,"recipient":3,"actor":1,"willing":false,"pressure_threshold":1,"claimed_outcome":"resisted"}],
+                "receptions": [{"person":3,"stance":"believe"}],
+                "complaint_preferences": [{"person":3,"willing":false}],
+                "assessment_preferences": [{"person":3,"different_believed":4}],
+                "inquiry_pursuit": [2,3]
+            })).unwrap()), medical: None, goal_setbacks: vec![], purpose: None, animal_restraints: None, animal_products: None, recovery: None, fauna: None, hunting: None, animal_feelings: None, animal_care: None, animal_handling: None, family: None, dependent_care: None, gathering: None, environment: None, irrigation: None, agriculture: None, health: None, claims: None, social: Some(social),
+            food_search: None, knowledge: Some(game_economy_knowledge::Knowledge {max_records: 4, minds, retention: vec![]}),
+            opinions: Some(opinions), goals: None, agreements: None, sites: None, schedule: None,
+        };
+        let mut host = CoreHost::begin(snapshot, &[(1, 1)]).unwrap();
+        host.request_taking_inquiry(2, 3, 2, 1, 1).unwrap();
+        assert!(host.request_taking_inquiry(2, 3, 2, 1, 1).is_err());
+        host.enable_schedule(500, 1).unwrap();
+        assert_eq!(host.advance_scheduled(0, &[]).unwrap().failure, None);
+        assert_eq!(host.snapshot().taking.as_ref().unwrap().complaints[0].decision, game_economy_taking::ComplaintDecision::Pending);
+        let saved = serde_json::to_string(&host.snapshot()).unwrap();
+        let mut restored = CoreHost::resume(serde_json::from_str(&saved).unwrap()).unwrap();
+        assert_eq!(host.advance_continuous(1000, &[]).unwrap().failure, None);
+        assert_eq!(restored.advance_continuous(1000, &[]).unwrap().failure, None);
+        let accepted = host.snapshot();
+        assert_eq!(accepted, restored.snapshot());
+        assert_eq!(accepted.taking.as_ref().unwrap().complaints[0].decision, game_economy_taking::ComplaintDecision::Expired);
+        assert!(accepted.taking.as_ref().unwrap().complaints[0].answer.is_none());
+        accepted
+    })
+    };
+    assert_eq!(run(1), run(6));
+}
+
+#[test]
 fn disease_uses_actual_meetings_and_does_not_require_social_to_progress() {
     let run = |workers| {
         rayon::ThreadPoolBuilder::new().num_threads(workers).build().unwrap().install(|| {
@@ -6060,7 +6283,8 @@ fn core_host_social_benchmark() {
         .and_then(|value| value.parse().ok())
         .unwrap_or(1);
     assert!(count > 2);
-    let taking_reports = std::env::var_os("LEGACY_TAKING_REPORTS").is_some();
+    let taking_inquiries = std::env::var_os("LEGACY_TAKING_INQUIRIES").is_some();
+    let taking_reports = std::env::var_os("LEGACY_TAKING_REPORTS").is_some() || taking_inquiries;
     let treatment = std::env::var_os("LEGACY_TREATMENT").is_some();
     let disease = std::env::var_os("LEGACY_DISEASE").is_some() || treatment;
     let mut initial = fixture();
@@ -6272,7 +6496,54 @@ fn core_host_social_benchmark() {
                         details: None,
                     })
                     .collect::<Vec<_>>();
+                let complaints = if taking_inquiries {
+                    pairs
+                        .iter()
+                        .map(|event| game_economy_taking::Complaint {
+                            author: event.a,
+                            recipient: event.b,
+                            witness: event.a,
+                            account: game_economy_taking::ComplaintAccount {
+                                actor: 1,
+                                target: 2,
+                                good: 1,
+                                quantity: 1,
+                                observed_at: 0,
+                                outcome: game_economy_taking::Outcome::Transferred,
+                                source: None,
+                            },
+                            created_at: 0,
+                            expires_at: 5,
+                            decision: game_economy_taking::ComplaintDecision::Pending,
+                            decided_at: None,
+                            previous_case: None,
+                            answer: None,
+                        })
+                        .collect::<Vec<_>>()
+                } else {
+                    Vec::new()
+                };
+                let complaint_preferences = if taking_inquiries {
+                    pairs
+                        .iter()
+                        .map(|event| game_economy_taking::ComplaintPreference {
+                            person: event.b,
+                            willing: true,
+                            pressure_threshold: None,
+                        })
+                        .collect::<Vec<_>>()
+                } else {
+                    Vec::new()
+                };
+                let inquiry_pursuit = if taking_inquiries {
+                    pairs.iter().map(|event| event.a).collect::<Vec<_>>()
+                } else {
+                    Vec::new()
+                };
                 snapshot.taking = Some(game_economy_taking::Taking {
+                    complaints: complaints.into(),
+                    complaint_preferences: complaint_preferences.into(),
+                    inquiry_pursuit: inquiry_pursuit.into(),
                     witnesses: witnesses.into(),
                     report_policies: report_policies.into(),
                     ..Default::default()
@@ -6310,10 +6581,19 @@ fn core_host_social_benchmark() {
             let elapsed = start.elapsed();
             assert_eq!(meetings.len(), ((count - 1) / 2) as usize);
             if taking_reports {
-                assert_eq!(
-                    host.snapshot().taking.unwrap().reports.len(),
-                    meetings.len()
-                );
+                let taking = host.snapshot().taking.unwrap();
+                assert_eq!(taking.reports.len(), meetings.len());
+                if taking_inquiries {
+                    assert_eq!(
+                        taking
+                            .complaints
+                            .iter()
+                            .filter(|row| row.decision
+                                == game_economy_taking::ComplaintDecision::Accepted)
+                            .count(),
+                        meetings.len()
+                    );
+                }
             }
             let mut hash = std::collections::hash_map::DefaultHasher::new();
             serde_json::to_vec(&host.snapshot())

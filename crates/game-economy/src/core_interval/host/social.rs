@@ -93,6 +93,10 @@ impl CoreHost {
             claims: None,
         };
         let mut people: Vec<_> = self.core.people.par_iter().cloned().collect();
+        let inquiry_meetings = self
+            .taking
+            .as_ref()
+            .map_or_else(Vec::new, |owner| owner.inquiry_meetings(tick));
         let mut next = opening.prepare(
             &self.core.people,
             &mut people,
@@ -109,7 +113,7 @@ impl CoreHost {
                 speak: None,
                 opening: None,
                 missions: None,
-                inquiry_meetings: &[],
+                inquiry_meetings: &inquiry_meetings,
             },
         )?;
         if let (Some(previous), Some(disease)) = (health, &mut next.disease) {
@@ -168,14 +172,17 @@ impl CoreHost {
         let taking = self
             .taking
             .as_ref()
-            .filter(|owner| !owner.report_policies.is_empty() && !meetings.is_empty())
+            .filter(|owner| {
+                (!owner.report_policies.is_empty() && !meetings.is_empty())
+                    || !owner.complaints.is_empty()
+            })
             .map(|owner| {
                 let mut owner = owner.clone();
                 let contacts: Vec<_> = meetings
                     .par_iter()
                     .map(|event| (event.a, event.b))
                     .collect();
-                let changes = self.stage_taking_reports(&mut owner, &contacts, tick);
+                let changes = self.stage_taking_contacts(&mut owner, &contacts, tick);
                 if !changes.is_empty() {
                     let current = opinions.get_or_insert_with(|| self.opinions.clone());
                     if let Some(opinions) = current {
