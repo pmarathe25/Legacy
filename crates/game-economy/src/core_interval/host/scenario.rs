@@ -21,7 +21,6 @@ impl CoreHostSnapshot {
             ("skills", state.skills.is_some()),
             ("writing", state.writing.is_some()),
             ("combat", state.combat.is_some()),
-            ("purpose", state.purpose.is_some()),
             ("taking", state.taking.is_some()),
             ("giving", state.giving.is_some()),
             ("medical", state.medical.is_some()),
@@ -126,6 +125,10 @@ impl CoreHostSnapshot {
             irrigation: state.irrigation,
             environment: state.environment,
             recovery: state.recovery,
+            purpose: state.purpose.map(|owner| CorePurpose {
+                owner,
+                progress: vec![],
+            }),
             gathering: state.gathering,
             fauna: state.fauna,
             hunting: state.hunting,

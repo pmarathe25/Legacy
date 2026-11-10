@@ -16,6 +16,7 @@ mod food_search;
 mod gathering;
 mod hunting;
 mod offers;
+mod purpose;
 mod requests;
 mod scenario;
 mod scheduler;
@@ -25,6 +26,7 @@ mod tools;
 mod treatment;
 pub use food_search::{CoreFoodProvision, CoreFoodSearch};
 pub use offers::CoreSocialResults;
+pub use purpose::CorePurpose;
 pub use requests::{CoreDeliveryResults, CoreRequestResults};
 pub use scheduler::{CoreRun, CoreRunEvent, CoreSchedule, DecisionPhase};
 pub use sites::{CoreRepairResults, CoreSites};
@@ -66,6 +68,8 @@ pub struct CoreHostSnapshot {
     pub environment: Option<game_environment::Environment>,
     #[serde(default)]
     pub recovery: Option<crate::RecoveryRules>,
+    #[serde(default)]
+    pub purpose: Option<CorePurpose>,
     #[serde(default)]
     pub gathering: Option<crate::Gathering>,
     #[serde(default)]
@@ -116,6 +120,7 @@ pub struct CoreHost {
     irrigation: Option<game_economy_agriculture::irrigation::Irrigation>,
     environment: Option<game_environment::Environment>,
     recovery: Option<crate::RecoveryRules>,
+    purpose: Option<CorePurpose>,
     gathering: Option<crate::Gathering>,
     fauna: Option<game_fauna::Fauna>,
     hunting: Option<crate::Hunting>,
@@ -150,6 +155,7 @@ struct CoreRuntimeOptions {
     irrigation: Option<game_economy_agriculture::irrigation::Irrigation>,
     environment: Option<game_environment::Environment>,
     recovery: Option<crate::RecoveryRules>,
+    purpose: Option<CorePurpose>,
     gathering: Option<crate::Gathering>,
     fauna: Option<game_fauna::Fauna>,
     hunting: Option<crate::Hunting>,
@@ -180,6 +186,7 @@ impl CoreHost {
             irrigation,
             environment,
             recovery,
+            purpose,
             gathering,
             fauna,
             hunting,
@@ -220,6 +227,7 @@ impl CoreHost {
                 irrigation,
                 environment,
                 recovery,
+                purpose,
                 gathering,
                 fauna,
                 hunting,
@@ -251,6 +259,7 @@ impl CoreHost {
             irrigation,
             environment,
             recovery,
+            purpose,
             gathering,
             fauna,
             hunting,
@@ -291,6 +300,7 @@ impl CoreHost {
                 irrigation,
                 environment,
                 recovery,
+                purpose,
                 gathering,
                 fauna,
                 hunting,
@@ -329,6 +339,7 @@ impl CoreHost {
             irrigation,
             environment,
             recovery,
+            purpose,
             gathering,
             fauna,
             hunting,
@@ -665,6 +676,13 @@ impl CoreHost {
                 .validate(&people, &goods, core.physical.tick())
                 .map_err(str::to_owned)?;
         }
+        if let Some(owner) = &purpose {
+            let people: HashSet<_> = core.people.par_iter().map(|person| person.id).collect();
+            owner.validate(&people)?;
+            if goals.is_some() && owner.owner.rules.blocked_increase > 0 {
+                return Err("purpose with goal setbacks is not yet supported".into());
+            }
+        }
         if recovery.as_ref().is_some_and(|rules| rules.interval == 0) {
             return Err("invalid recovery rules".into());
         }
@@ -694,6 +712,7 @@ impl CoreHost {
             irrigation,
             environment,
             recovery,
+            purpose,
             gathering,
             fauna,
             hunting,
@@ -731,6 +750,7 @@ impl CoreHost {
             irrigation: self.irrigation.clone(),
             environment: self.environment.clone(),
             recovery: self.recovery.clone(),
+            purpose: self.purpose.clone(),
             gathering: self.gathering.clone(),
             fauna: self.fauna.clone(),
             hunting: self.hunting.clone(),
@@ -938,6 +958,7 @@ impl CoreHost {
         let Some(draft) = self.core.prepare_early_work(config)? else {
             return Ok(None);
         };
+        let purpose_progress = self.stage_purpose_progress(&draft.events().finished);
         let tools = self.stage_tools(
             draft.produced_items(),
             draft.next_produced_item(),
@@ -968,6 +989,9 @@ impl CoreHost {
         )?;
         self.core.validate_early_work(&draft)?;
         let events = self.core.commit_early_work(draft)?;
+        if let Some(progress) = purpose_progress {
+            self.purpose.as_mut().expect("purpose owner").progress = progress;
+        }
         if let Some(tools) = tools {
             self.tool_wear = Some(tools);
         }
@@ -1236,6 +1260,14 @@ impl CoreHost {
         let mut draft = self
             .core
             .prepare_settlement_with_growth(&actions, growth, config)?;
+        let tick = draft.events().tick;
+        let finished_for_purpose = self
+            .purpose
+            .as_ref()
+            .map(|_| draft.events().finished.clone());
+        let mut purpose = finished_for_purpose
+            .as_ref()
+            .and_then(|finished| self.stage_purpose(finished, &mut draft.people.people, tick));
         let fatigue = self.stage_fatigue(&mut draft.people.people)?;
         if self
             .environment
@@ -1286,6 +1318,11 @@ impl CoreHost {
             );
         }
         let family = self.stage_family(&mut draft)?;
+        crate::purpose::enroll(
+            purpose.as_mut().map(|owner| &mut owner.owner),
+            family.as_ref().map(|frame| &frame.owner),
+            draft.events().tick,
+        )?;
         let birth_health = self.stage_birth_health(family.as_ref(), draft.events().tick);
         let birth_health =
             self.stage_care_health(birth_health, dependent.as_ref(), draft.events().tick)?;
@@ -1409,6 +1446,9 @@ impl CoreHost {
         });
         self.core.validate_settlement(&draft)?;
         let events = self.core.commit_settlement(draft)?;
+        if let Some(owner) = purpose {
+            self.purpose = Some(owner);
+        }
         if let Some(tools) = tools {
             self.tool_wear = Some(tools);
         }

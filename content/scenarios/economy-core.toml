@@ -142,3 +142,18 @@ animal = 1
 willing = true
 
 [animal_restraints]
+
+[purpose]
+[purpose.rules]
+max = 100
+per_tick = 1
+blocked_increase = 1
+completion_relief = 4
+damage_threshold = 50
+damage = 1
+[[purpose.people]]
+person = 1
+deprivation = 0
+[[purpose.people]]
+person = 2
+deprivation = 0
