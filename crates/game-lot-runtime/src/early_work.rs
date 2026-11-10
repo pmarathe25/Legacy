@@ -5,6 +5,43 @@ use game_production_model::JobPhase;
 use game_production_model::Start;
 use rayon::prelude::*;
 
+fn renumber_operations(transactions: &mut [Transaction]) -> Result<(), String> {
+    let counts: Vec<u64> = transactions
+        .par_iter()
+        .map(|row| {
+            row.movements
+                .len()
+                .checked_add(row.creations.len())
+                .and_then(|count| u64::try_from(count).ok())
+                .ok_or("operation identity overflow".to_string())
+        })
+        .collect::<Result<_, _>>()?;
+    let offsets = game_lot_allocation::prefixes(&counts);
+    if offsets
+        .last()
+        .zip(counts.last())
+        .is_some_and(|(&offset, &count)| offset + u128::from(count) > u128::from(u64::MAX))
+    {
+        return Err("operation identity overflow".into());
+    }
+    transactions
+        .par_iter_mut()
+        .zip(offsets.par_iter())
+        .for_each(|(row, &offset)| {
+            let start = offset as u64;
+            let movements = row.movements.len() as u64;
+            row.movements
+                .iter_mut()
+                .enumerate()
+                .for_each(|(index, movement)| movement.id = start + index as u64 + 1);
+            row.creations
+                .par_iter_mut()
+                .enumerate()
+                .for_each(|(index, creation)| creation.id = start + movements + index as u64 + 1);
+        });
+    Ok(())
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct EarlyWorkEvents {
     pub tick: u64,
@@ -19,6 +56,8 @@ pub struct EarlyWorkDraft {
     work: Vec<Work>,
     interval: WorkInterval,
     events: EarlyWorkEvents,
+    produced_items: Vec<crate::ProducedItem>,
+    next_produced_item: Option<u64>,
 }
 /// Unpublished personal consumption; callers must validate their own effects
 /// before committing it at the same interval offset.
@@ -39,6 +78,15 @@ impl IntervalConsumptionDraft {
 impl EarlyWorkDraft {
     pub fn events(&self) -> &EarlyWorkEvents {
         &self.events
+    }
+    pub fn produced_items(&self) -> &[crate::ProducedItem] {
+        &self.produced_items
+    }
+    pub fn next_produced_item(&self) -> Option<u64> {
+        self.next_produced_item
+    }
+    pub fn item_updates(&self) -> &[(u64, Option<Place>)] {
+        self.custody.item_updates()
     }
 }
 impl Runtime {
@@ -408,6 +456,15 @@ impl Runtime {
     /// Callers must exclude jobs whose outputs require separately owned item
     /// identities: this physical-only operation creates fungible lots.
     pub fn prepare_early_work(&self, seed: u64) -> Result<Option<EarlyWorkDraft>, String> {
+        self.prepare_early_work_with_identified(seed, None)
+    }
+    /// Stage nonperishable early output, optionally allocating identified
+    /// goods for a separately staged item owner.
+    pub fn prepare_early_work_with_identified(
+        &self,
+        seed: u64,
+        identified: Option<crate::IdentifiedProduction<'_>>,
+    ) -> Result<Option<EarlyWorkDraft>, String> {
         #[cfg(feature = "profile")]
         let mut phase = game_diagnostics::span("physical.early.select");
         let interval = self
@@ -450,7 +507,7 @@ impl Runtime {
             drop(phase);
             phase = game_diagnostics::span("physical.early.plan");
         }
-        let finished = game_lot_work::finish(&rows, &self.catalog, self.tick())?;
+        let mut finished = game_lot_work::finish(&rows, &self.catalog, self.tick())?;
         if finished.transactions.par_iter().any(|transaction| {
             transaction
                 .creations
@@ -458,6 +515,22 @@ impl Runtime {
                 .any(|creation| creation.lot.expires_at.is_some())
         }) {
             return Err("early perishable production is unsupported".into());
+        }
+        let identified_plan = identified
+            .map(|config| {
+                crate::identified_output::prepare(
+                    &self.store,
+                    &mut finished.transactions,
+                    &[],
+                    config,
+                )
+            })
+            .transpose()?;
+        if identified_plan
+            .as_ref()
+            .is_some_and(|plan| !plan.items.is_empty())
+        {
+            renumber_operations(&mut finished.transactions)?;
         }
         #[cfg(feature = "profile")]
         {
@@ -467,6 +540,20 @@ impl Runtime {
         let mut custody = self
             .store
             .prepare_transactions_now(seed, &finished.transactions)?;
+        let produced_items = identified_plan.as_ref().map_or_else(Vec::new, |plan| {
+            plan.items
+                .par_iter()
+                .filter(|item| {
+                    custody
+                        .item_updates()
+                        .binary_search_by_key(&item.item, |row| row.0)
+                        .ok()
+                        .is_some_and(|index| custody.item_updates()[index].1.is_some())
+                })
+                .copied()
+                .collect()
+        });
+        let next_produced_item = identified_plan.map(|plan| plan.next_item);
         // Early work exposes acceptance, not cohort receipts, and must not
         // silently publish unrelated expiry before the scheduled boundary.
         let (_, spoiled) = custody.take_outcome_batch();
@@ -534,6 +621,8 @@ impl Runtime {
             custody,
             work,
             interval: next_interval,
+            produced_items,
+            next_produced_item,
             events: EarlyWorkEvents {
                 tick: self.tick(),
                 offset_millis: interval.elapsed_millis,

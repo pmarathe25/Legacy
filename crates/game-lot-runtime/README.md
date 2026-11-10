@@ -20,7 +20,7 @@ For a resumable physical-only interval, `begin_work_interval` freezes the rates 
 
 Within a partial interval, `prepare_early_work` stages completed admitted jobs using no-time custody transactions; `commit_early_work` publishes their outputs into job custody with the opening tick and elapsed offset. Successful and interrupted jobs leave the frozen rates. Capacity-rejected jobs also leave the rates and remain pending for the normal boundary, preventing repeated same-offset retries. Early perishable output is rejected until lot expiry supports finer timestamps. No other physical or economic boundary systems run during this operation.
 
-The caller must exclude jobs whose outputs need separately owned item identities. The early physical-only path creates fungible lots and does not allocate or update identified items.
+The ordinary early-work method creates fungible lots. Hosts with identified goods use `prepare_early_work_with_identified` and stage their item-owner metadata from the resulting draft before committing it.
 
 The host can defer completed jobs to boundary settlement without releasing their input custody or publishing their output. Deferred jobs leave the active rate set so other early events can proceed; the host must decide which completions need deferral.
 

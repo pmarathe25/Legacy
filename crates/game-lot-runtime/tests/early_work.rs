@@ -399,6 +399,77 @@ fn rejected_identified_output_does_not_create_item_metadata() {
 }
 
 #[test]
+fn rejected_identified_early_output_does_not_publish_item_metadata() {
+    let mut snapshot = fixture(false, 2).snapshot();
+    let output = snapshot
+        .custody
+        .containers
+        .iter_mut()
+        .find(|row| row.place == Place::JobOutput(1))
+        .unwrap();
+    *output = Container::new(output.place, 1, vec![]).unwrap();
+    let mut runtime = Runtime::compile(snapshot).unwrap();
+    runtime.begin_work_interval(&[(1, 2)]).unwrap();
+    runtime.progress_work_interval(500).unwrap();
+    let draft = runtime
+        .prepare_early_work_with_identified(
+            7,
+            Some(game_lot_runtime::IdentifiedProduction {
+                goods: &[2],
+                next_item: 10,
+            }),
+        )
+        .unwrap()
+        .unwrap();
+    assert!(draft.produced_items().is_empty());
+    assert!(draft.item_updates().is_empty());
+    assert_eq!(draft.next_produced_item(), Some(12));
+    assert_eq!(draft.events().rejected, vec![1]);
+    runtime.commit_early_work(draft).unwrap();
+    assert_eq!(runtime.item_place(10), None);
+    assert_eq!(runtime.item_place(11), None);
+}
+
+#[test]
+fn early_identified_multiunit_output_assigns_unique_operations_and_items() {
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut runtime = fixture(false, 2);
+                runtime.begin_work_interval(&[(1, 2)]).unwrap();
+                runtime.progress_work_interval(500).unwrap();
+                let draft = runtime
+                    .prepare_early_work_with_identified(
+                        7,
+                        Some(game_lot_runtime::IdentifiedProduction {
+                            goods: &[2],
+                            next_item: 10,
+                        }),
+                    )
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(
+                    draft
+                        .produced_items()
+                        .iter()
+                        .map(|item| item.item)
+                        .collect::<Vec<_>>(),
+                    vec![10, 11]
+                );
+                assert_eq!(draft.next_produced_item(), Some(12));
+                assert_eq!(runtime.commit_early_work(draft).unwrap().finished, vec![1]);
+                assert_eq!(runtime.item_place(10), Some(Place::JobOutput(1)));
+                assert_eq!(runtime.item_place(11), Some(Place::JobOutput(1)));
+                runtime.snapshot()
+            })
+    };
+    assert_eq!(run(1), run(6));
+}
+
+#[test]
 fn interval_transfer_invalidates_completion_drafts_and_keeps_work_live() {
     let mut snapshot = fixture(false, 1).snapshot();
     snapshot

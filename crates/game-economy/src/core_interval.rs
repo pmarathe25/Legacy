@@ -318,6 +318,27 @@ impl CoreInterval {
         };
         self.physical.commit_early_work(draft).map(Some)
     }
+    /// Stage early production so an item owner can prepare metadata before it
+    /// is published. Perishable output still waits for boundary settlement.
+    pub fn prepare_early_work(
+        &self,
+        identified: Option<game_lot_runtime::IdentifiedProduction<'_>>,
+    ) -> Result<Option<game_lot_runtime::EarlyWorkDraft>, String> {
+        self.physical
+            .prepare_early_work_with_identified(self.seed, identified)
+    }
+    pub fn validate_early_work(
+        &self,
+        draft: &game_lot_runtime::EarlyWorkDraft,
+    ) -> Result<(), String> {
+        self.physical.validate_early_work(draft)
+    }
+    pub fn commit_early_work(
+        &mut self,
+        draft: game_lot_runtime::EarlyWorkDraft,
+    ) -> Result<game_lot_runtime::EarlyWorkEvents, String> {
+        self.physical.commit_early_work(draft)
+    }
     /// Defer selected completed jobs to ordinary physical boundary settlement.
     /// Outputs requiring identified-item owners still need a broader host.
     pub fn defer_work(

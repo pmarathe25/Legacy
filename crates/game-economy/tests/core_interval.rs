@@ -893,6 +893,115 @@ fn identified_interval_settlement_stages_item_owner_and_person_effects_together(
 }
 
 #[test]
+fn identified_early_work_stages_tool_owner_and_survives_later_delivery() {
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut core = CoreInterval::begin(fixture(), &[(1, 2)]).unwrap();
+                core.progress(500).unwrap();
+                let owner = game_economy_work::tool_wear::ToolWear {
+                    next_item: 10,
+                    rules: vec![game_economy_work::tool_wear::Rule {
+                        good: 2,
+                        durability: 10,
+                        wear: 1,
+                        repair_good: 1,
+                        repair_quantity: 1,
+                    }],
+                    conditions: vec![],
+                    repairs: vec![],
+                    events: vec![],
+                };
+                let before = core.snapshot();
+                let draft = core
+                    .prepare_early_work(Some(game_lot_runtime::IdentifiedProduction {
+                        goods: &[2],
+                        next_item: owner.next_item,
+                    }))
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(
+                    draft.produced_items(),
+                    &[game_lot_runtime::ProducedItem {
+                        job: 1,
+                        item: 10,
+                        good: 2
+                    }]
+                );
+                assert!(
+                    owner
+                        .stage_identified_outputs(draft.produced_items(), 0, draft.item_updates())
+                        .is_err()
+                );
+                assert_eq!(core.snapshot(), before);
+                drop(draft);
+                let saved = serde_json::to_string(&(core.snapshot(), owner)).unwrap();
+                let (snapshot, owner): (CoreSnapshot, game_economy_work::tool_wear::ToolWear) =
+                    serde_json::from_str(&saved).unwrap();
+                let mut core = CoreInterval::resume(snapshot).unwrap();
+                let stale = core
+                    .prepare_early_work(Some(game_lot_runtime::IdentifiedProduction {
+                        goods: &[2],
+                        next_item: owner.next_item,
+                    }))
+                    .unwrap()
+                    .unwrap();
+                let draft = core
+                    .prepare_early_work(Some(game_lot_runtime::IdentifiedProduction {
+                        goods: &[2],
+                        next_item: owner.next_item,
+                    }))
+                    .unwrap()
+                    .unwrap();
+                let owner = owner
+                    .stage_identified_outputs(
+                        draft.produced_items(),
+                        draft.next_produced_item().unwrap(),
+                        draft.item_updates(),
+                    )
+                    .unwrap();
+                core.validate_early_work(&draft).unwrap();
+                assert_eq!(core.commit_early_work(draft).unwrap().finished, vec![1]);
+                assert!(core.commit_early_work(stale).is_err());
+                let early = core.snapshot();
+                assert_eq!(
+                    early
+                        .physical
+                        .custody
+                        .containers
+                        .iter()
+                        .find(|row| row.place == Place::JobOutput(1))
+                        .unwrap()
+                        .lots[0]
+                        .item,
+                    Some(10)
+                );
+                core.progress(500).unwrap();
+                assert_eq!(core.settle().unwrap().delivered, vec![1]);
+                let result = core.snapshot();
+                let physical = Runtime::compile(result.physical.clone()).unwrap();
+                assert_eq!(
+                    physical.item_place(10),
+                    Some(Place::Stock { region: 1, good: 2 })
+                );
+                owner
+                    .validate(
+                        &physical,
+                        &[1, 2].into_iter().collect(),
+                        &[1, 2].into_iter().collect(),
+                        1,
+                    )
+                    .unwrap();
+                (result, owner)
+            })
+    };
+    assert_eq!(run(1), run(6));
+}
+
+#[test]
 fn composed_core_interval_is_chunk_independent_and_resumable() {
     let initial = fixture();
     let run = |workers, chunks: &[u64], reload| {
@@ -1285,10 +1394,20 @@ fn interval_work_admission_benchmark() {
         .min(count - 1);
     let defer = std::env::var_os("LEGACY_DEFER").is_some();
     let identified = std::env::var_os("LEGACY_IDENTIFIED_SETTLE").is_some();
+    let identified_early = std::env::var_os("LEGACY_IDENTIFIED_EARLY").is_some();
     assert!(
-        !(defer && identified)
-            && (!(defer || identified) || std::env::var_os("LEGACY_ABANDON").is_none())
+        [
+            defer,
+            identified,
+            identified_early,
+            std::env::var_os("LEGACY_ABANDON").is_some()
+        ]
+        .iter()
+        .filter(|&&value| value)
+        .count()
+            <= 1
     );
+    assert!(!identified_early || stock_units > 0);
     let mut initial = fixture();
     let person = initial.people[0].clone();
     initial.people = (1..=count)
@@ -1333,7 +1452,11 @@ fn interval_work_admission_benchmark() {
                     recipe: 1,
                     units: 1,
                 },
-                if defer || identified { 2 } else { 1 },
+                if defer || identified || identified_early {
+                    2
+                } else {
+                    1
+                },
             )
         })
         .collect();
@@ -1346,6 +1469,7 @@ fn interval_work_admission_benchmark() {
             let mut abandonment_samples = Vec::new();
             let mut deferral_samples = Vec::new();
             let mut settlement_samples = Vec::new();
+            let mut early_samples = Vec::new();
             for round in 0..4 {
                 let mut settled_owner = None;
                 let mut core = CoreInterval::begin(initial.clone(), &[(1, 1)]).unwrap();
@@ -1415,6 +1539,43 @@ fn interval_work_admission_benchmark() {
                         settlement_samples.push(start.elapsed().as_secs_f64());
                     }
                 }
+                if identified_early {
+                    core.progress(500).unwrap();
+                    let owner = game_economy_work::tool_wear::ToolWear {
+                        next_item: 1_000_000,
+                        rules: vec![game_economy_work::tool_wear::Rule {
+                            good: 2,
+                            durability: 10,
+                            wear: 1,
+                            repair_good: 1,
+                            repair_quantity: 1,
+                        }],
+                        conditions: vec![],
+                        repairs: vec![],
+                        events: vec![],
+                    };
+                    let start = std::time::Instant::now();
+                    let draft = core
+                        .prepare_early_work(Some(game_lot_runtime::IdentifiedProduction {
+                            goods: &[2],
+                            next_item: 1_000_000,
+                        }))
+                        .unwrap()
+                        .unwrap();
+                    let next_owner = owner
+                        .stage_identified_outputs(
+                            draft.produced_items(),
+                            draft.next_produced_item().unwrap(),
+                            draft.item_updates(),
+                        )
+                        .unwrap();
+                    assert_eq!(next_owner.conditions.len(), stock_units as usize);
+                    core.commit_early_work(draft).unwrap();
+                    settled_owner = Some(next_owner);
+                    if round > 0 {
+                        early_samples.push(start.elapsed().as_secs_f64());
+                    }
+                }
                 if round == 3 {
                     let mut hash = std::collections::hash_map::DefaultHasher::new();
                     serde_json::to_vec(&core.snapshot())
@@ -1455,6 +1616,13 @@ fn interval_work_admission_benchmark() {
                     "workers={workers} identified={} elapsed={:.6}",
                     stock_units + 1,
                     settlement_samples[1]
+                );
+            }
+            if identified_early {
+                early_samples.sort_by(f64::total_cmp);
+                println!(
+                    "workers={workers} early_identified={stock_units} elapsed={:.6}",
+                    early_samples[1]
                 );
             }
             #[cfg(feature = "profile")]
