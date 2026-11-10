@@ -3,6 +3,7 @@ use super::*;
 use game_autowork::Autowork;
 use game_economy_work::tool_wear::ToolWear;
 mod agriculture;
+mod animal_care;
 mod claims;
 mod fatigue;
 mod fauna;
@@ -66,6 +67,8 @@ pub struct CoreHostSnapshot {
     #[serde(default)]
     pub animal_feelings: Option<crate::AnimalFeelings>,
     #[serde(default)]
+    pub animal_care: Option<crate::AnimalCare>,
+    #[serde(default)]
     pub opinions: Option<game_opinions::Opinions>,
     #[serde(default)]
     pub goals: Option<game_goals::Goals>,
@@ -98,6 +101,7 @@ pub struct CoreHost {
     fauna: Option<game_fauna::Fauna>,
     hunting: Option<crate::Hunting>,
     animal_feelings: Option<crate::AnimalFeelings>,
+    animal_care: Option<crate::AnimalCare>,
     work_checked_revision: Option<u64>,
     work_checked_blocked: Vec<u64>,
     opinions: Option<game_opinions::Opinions>,
@@ -125,6 +129,7 @@ struct CoreRuntimeOptions {
     fauna: Option<game_fauna::Fauna>,
     hunting: Option<crate::Hunting>,
     animal_feelings: Option<crate::AnimalFeelings>,
+    animal_care: Option<crate::AnimalCare>,
 }
 impl CoreHost {
     pub fn begin(snapshot: CoreHostSnapshot, rates: &[(u64, u64)]) -> Result<Self, String> {
@@ -148,6 +153,7 @@ impl CoreHost {
             fauna,
             hunting,
             animal_feelings,
+            animal_care,
             opinions,
             goals,
             agreements,
@@ -181,6 +187,7 @@ impl CoreHost {
                 fauna,
                 hunting,
                 animal_feelings,
+                animal_care,
             },
         )
     }
@@ -205,6 +212,7 @@ impl CoreHost {
             fauna,
             hunting,
             animal_feelings,
+            animal_care,
             opinions,
             goals,
             agreements,
@@ -238,6 +246,7 @@ impl CoreHost {
                 fauna,
                 hunting,
                 animal_feelings,
+                animal_care,
             },
         )
     }
@@ -269,6 +278,7 @@ impl CoreHost {
             fauna,
             hunting,
             mut animal_feelings,
+            animal_care,
         } = options;
         if let Some(legacy) = food_search.as_mut().and_then(|owner| owner.claims.take()) {
             if claims.is_some() {
@@ -513,6 +523,16 @@ impl CoreHost {
             let people: HashSet<_> = core.people.par_iter().map(|person| person.id).collect();
             owner.normalize_and_validate(&people, fauna.as_ref())?;
         }
+        if let Some(owner) = &animal_care {
+            let people: HashSet<_> = core.people.par_iter().map(|person| person.id).collect();
+            let goods: HashSet<_> = core
+                .physical
+                .goods()
+                .par_iter()
+                .map(|good| good.id)
+                .collect();
+            owner.validate(&people, &goods, fauna.as_ref())?;
+        }
         if let Some(owner) = &hunting {
             let people: HashSet<_> = core.people.par_iter().map(|person| person.id).collect();
             let goods: HashSet<_> = core
@@ -576,6 +596,7 @@ impl CoreHost {
             fauna,
             hunting,
             animal_feelings,
+            animal_care,
             work_checked_revision: None,
             work_checked_blocked: Vec::new(),
             opinions,
@@ -606,6 +627,7 @@ impl CoreHost {
             fauna: self.fauna.clone(),
             hunting: self.hunting.clone(),
             animal_feelings: self.animal_feelings.clone(),
+            animal_care: self.animal_care.clone(),
             opinions: self.opinions.clone(),
             goals: self.goals.clone(),
             agreements: self.agreements.clone(),
@@ -963,25 +985,40 @@ impl CoreHost {
         growth.gathered = gathering
             .as_ref()
             .map_or(&[], |(_, outputs)| outputs.as_slice());
-        let hunting = if self.hunting.is_some() {
-            let next_action = actions
+        let (care, hunting) = if self.hunting.is_some() || self.animal_care.is_some() {
+            let mut next_action = actions
                 .par_iter()
                 .map(|row| row.id)
                 .chain(growth.harvest.par_iter().map(|row| row.id))
                 .chain(growth.gathered.par_iter().map(|row| row.action))
                 .max()
                 .map_or(Ok(1), |id| {
-                    id.checked_add(1).ok_or("hunting action overflow")
+                    id.checked_add(1).ok_or("animal action overflow")
                 })?;
-            self.plan_hunting(
+            let care = self.plan_animal_care(
                 occupied,
                 cultivation.as_ref(),
                 irrigation_plan.as_ref(),
                 gathering.as_ref().map(|(plan, _)| plan),
                 next_action,
-            )?
+            )?;
+            if let Some(plan) = &care {
+                next_action = next_action
+                    .checked_add(plan.actions.len() as u64)
+                    .ok_or("animal action overflow")?;
+                actions.par_extend(plan.actions.par_iter().cloned());
+            }
+            let hunting = self.plan_hunting(
+                occupied,
+                cultivation.as_ref(),
+                irrigation_plan.as_ref(),
+                gathering.as_ref().map(|(plan, _)| plan),
+                care.as_ref(),
+                next_action,
+            )?;
+            (care, hunting)
         } else {
-            None
+            (None, None)
         };
         growth.animal_yield = hunting.as_ref().map_or(&[], |plan| plan.yields.as_slice());
         let mut draft = self
@@ -1023,8 +1060,11 @@ impl CoreHost {
         let hunted = hunting
             .as_ref()
             .map_or_else(Vec::new, |plan| plan.accepted(draft.events()));
-        let animal_feelings = self.stage_animal_feelings(hunting.as_ref(), &hunted);
-        let fauna = self.stage_fauna(&mut gathering, &hunted, draft.events().tick)?;
+        let feeding = care
+            .as_ref()
+            .map_or_else(Vec::new, |plan| plan.accepted(draft.events()));
+        let animal_feelings = self.stage_animal_feelings(hunting.as_ref(), &hunted, &feeding);
+        let fauna = self.stage_fauna(&mut gathering, &hunted, &feeding, draft.events().tick)?;
         let mut tools = self.stage_tools(
             draft.produced_items(),
             draft.next_produced_item(),

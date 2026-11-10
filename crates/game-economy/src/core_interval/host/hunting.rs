@@ -8,6 +8,7 @@ impl CoreHost {
         cultivation: Option<&game_economy_agriculture::Plan>,
         irrigation: Option<&game_economy_agriculture::irrigation::Plan>,
         gathering: Option<&crate::gathering::Plan>,
+        care: Option<&crate::animal_care::Plan>,
         base: u64,
     ) -> Result<Option<crate::hunting::Plan>, String> {
         let Some(owner) = &self.hunting else {
@@ -29,6 +30,10 @@ impl CoreHost {
         if let Some(plan) = gathering {
             busy.par_extend(plan.actors.par_iter().copied());
         }
+        if let Some(plan) = care {
+            busy.par_extend(plan.actors.par_iter().copied());
+        }
+        let feed_targets = care.map_or_else(Vec::new, |plan| plan.targets());
         busy.par_extend(
             self.core
                 .physical
@@ -55,7 +60,7 @@ impl CoreHost {
             view: &view,
             requests: &[],
             busy: &busy,
-            feed_targets: &[],
+            feed_targets: &feed_targets,
             max_hunger: self.core.rules.max_work_hunger,
             seed: self.core.seed,
             tick,
@@ -68,23 +73,31 @@ impl CoreHost {
         &self,
         plan: Option<&crate::hunting::Plan>,
         hunted: &[u64],
+        feeding: &[game_fauna::Feeding],
     ) -> Option<crate::AnimalFeelings> {
         let owner = self.animal_feelings.as_ref()?;
-        let plan = plan?;
-        let events = owner.relevant(
-            plan.yields
-                .par_iter()
-                .filter_map(|yield_| {
-                    hunted.binary_search(&yield_.animal).is_ok().then_some(
-                        crate::animal_feelings::Event {
-                            person: yield_.hunter,
-                            animal: yield_.animal,
-                            kind: crate::animal_feelings::Experience::Hunt,
-                        },
-                    )
+        let mut events: Vec<_> = feeding
+            .par_iter()
+            .filter_map(|food| {
+                food.person.map(|person| crate::animal_feelings::Event {
+                    person,
+                    animal: food.animal,
+                    kind: crate::animal_feelings::Experience::Feed,
                 })
-                .collect(),
-        );
+            })
+            .collect();
+        if let Some(plan) = plan {
+            events.par_extend(plan.yields.par_iter().filter_map(|yield_| {
+                hunted.binary_search(&yield_.animal).is_ok().then_some(
+                    crate::animal_feelings::Event {
+                        person: yield_.hunter,
+                        animal: yield_.animal,
+                        kind: crate::animal_feelings::Experience::Hunt,
+                    },
+                )
+            }));
+        }
+        let events = owner.relevant(events);
         (!events.is_empty()).then(|| owner.advance(&events))
     }
 }
