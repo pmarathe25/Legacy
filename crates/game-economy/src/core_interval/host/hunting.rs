@@ -8,7 +8,10 @@ impl CoreHost {
         cultivation: Option<&game_economy_agriculture::Plan>,
         irrigation: Option<&game_economy_agriculture::irrigation::Plan>,
         gathering: Option<&crate::gathering::Plan>,
-        care: Option<&crate::animal_care::Plan>,
+        (care, handling): (
+            Option<&crate::animal_care::Plan>,
+            Option<&crate::animal_handling::Plan>,
+        ),
         base: u64,
     ) -> Result<Option<crate::hunting::Plan>, String> {
         let Some(owner) = &self.hunting else {
@@ -33,7 +36,13 @@ impl CoreHost {
         if let Some(plan) = care {
             busy.par_extend(plan.actors.par_iter().copied());
         }
-        let feed_targets = care.map_or_else(Vec::new, |plan| plan.targets());
+        let mut feed_targets = care.map_or_else(Vec::new, |plan| plan.targets());
+        if let Some(plan) = handling {
+            busy.par_extend(plan.actors.par_iter().copied());
+            feed_targets.par_extend(plan.events.par_iter().map(|event| event.animal));
+            feed_targets.par_sort_unstable();
+            feed_targets.dedup();
+        }
         busy.par_extend(
             self.core
                 .physical
@@ -74,6 +83,7 @@ impl CoreHost {
         plan: Option<&crate::hunting::Plan>,
         hunted: &[u64],
         feeding: &[game_fauna::Feeding],
+        handling: Option<&crate::animal_handling::Plan>,
     ) -> Option<crate::AnimalFeelings> {
         let owner = self.animal_feelings.as_ref()?;
         let mut events: Vec<_> = feeding
@@ -95,6 +105,24 @@ impl CoreHost {
                         kind: crate::animal_feelings::Experience::Hunt,
                     },
                 )
+            }));
+        }
+        if let Some(plan) = handling {
+            events.par_extend(plan.events.par_iter().filter_map(|event| {
+                let kind = match event.outcome {
+                    crate::AnimalHandlingOutcome::Accepted => {
+                        crate::animal_feelings::Experience::HandleAccepted
+                    }
+                    crate::AnimalHandlingOutcome::Refused => {
+                        crate::animal_feelings::Experience::HandleRefused
+                    }
+                    crate::AnimalHandlingOutcome::Unavailable => return None,
+                };
+                Some(crate::animal_feelings::Event {
+                    person: event.person,
+                    animal: event.animal,
+                    kind,
+                })
             }));
         }
         let events = owner.relevant(events);
