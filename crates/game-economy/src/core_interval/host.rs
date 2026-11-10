@@ -6,10 +6,12 @@ mod offers;
 mod requests;
 mod scheduler;
 mod sites;
+mod tools;
 pub use offers::CoreSocialResults;
 pub use requests::{CoreDeliveryResults, CoreRequestResults};
 pub use scheduler::{CoreRun, CoreRunEvent, CoreSchedule, DecisionPhase};
 pub use sites::{CoreRepairResults, CoreSites};
+pub use tools::CoreToolRepairResults;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -417,11 +419,21 @@ impl CoreHost {
                 next_item: owner.next_item,
             });
         let draft = self.core.prepare_settlement(config)?;
-        let tools = self.stage_tools(
+        let mut tools = self.stage_tools(
             draft.produced_items(),
             draft.next_produced_item(),
             draft.item_updates(),
         )?;
+        if tools.is_none() {
+            tools = self
+                .tool_wear
+                .as_ref()
+                .filter(|owner| !owner.events.is_empty())
+                .cloned();
+        }
+        if let Some(tools) = &mut tools {
+            tools.events.clear();
+        }
         let mut outcomes: Vec<_> = draft
             .events()
             .finished

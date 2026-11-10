@@ -34,6 +34,8 @@ The host also accepts work chosen by an enclosing social owner without requiring
 
 Optional `CoreSites` adds site capacity and maintenance to the limited host. Site slots are provisional until physical inputs are reserved; completed bound jobs wear their sites, broken sites cannot admit new jobs, and personal repair choices consume carried material. Occupied sites cannot be repaired. Slot bindings and wear survive reload, and repair events clear at the boundary. The host still relies on its caller for claim restrictions and does not run site construction or destruction.
 
+People can also choose to repair damaged identified tools. Repair material is consumed from personal custody, and accepted repairs reset the same item's damage; failed attempts leave its condition unchanged. The core host does not yet apply tool requirements or work-driven tool wear.
+
 A host can enable a periodic decision schedule and call `advance_scheduled`. The runner publishes tied arrivals and nonperishable work, defers perishable completions to the boundary, and then stages carried meals, requests and responses, and autonomous work. Decision phase and timing survive save/load. `advance_scheduled` stops at the boundary for an explicit `settle`; `advance_continuous` settles and opens subsequent intervals, preserving decision timing and retained work rates. At a boundary, externally blocked or unable workers pause; their retained rate can resume at a later boundary. If an action fails, the result reports the failure and earlier events remain committed. The host supplies consistent external activity exclusions across split advances. Hunger decisions are periodic, not a complete world action scheduler.
 
 The ignored `core_host_autonomous_work_benchmark` measures policy selection and reservation through this saved host. One 49,999-start run took 61.7, 42.3, 29.1, and 27.3 ms at one, two, four, and six workers, with matching saved-state fingerprints. It does not measure the complete campaign.
@@ -59,6 +61,8 @@ The ignored `core_host_offer_choices_benchmark` measures 24,999 personal proposa
 The ignored `core_host_site_admission_benchmark` includes personal work selection, site-slot arbitration, and physical reservation. For 49,999 starts across 50,000 sites, one run took 90.9, 54.5, 38.3, and 34.3 ms at one, two, four, and six workers. With `LEGACY_SITE_SCARCE=1`, one shared site had room for 24,999 of those contenders; a run took 65.4, 33.6, 23.6, and 21.2 ms. With `LEGACY_SITE_SETTLE=1`, the timed section instead completed 50,000 jobs, settled the boundary, and applied site wear; a run took 132.9, 84.0, 59.4, and 57.8 ms. Each workload produced matching fingerprints across worker counts; setup is excluded.
 
 The ignored `core_host_site_repair_benchmark` measures 49,999 people repairing separate sites using carried materials. One run took 47.3, 31.2, 24.5, and 26.2 ms at the same worker counts, with matching fingerprints and setup excluded.
+
+The ignored `core_host_tool_repair_benchmark` measures 49,999 identified-tool repairs with carried materials. One run took 81.3, 49.4, 39.1, and 34.5 ms at one, two, four, and six workers, with matching fingerprints and setup excluded.
 
 The ignored `core_host_goal_asking_benchmark`, with `LEGACY_PEOPLE=200000`, creates 99,999 requests at one endpoint. One run took 45.7, 30.8, 21.3, and 21.4 ms at one, two, four, and six workers, with matching fingerprints. Setup and responses are excluded; this workload levels off around four workers on the measured machine.
 

@@ -2989,6 +2989,160 @@ fn completed_work_wears_a_site_and_real_repairs_reopen_it() {
 }
 
 #[test]
+fn scheduled_tool_repair_consumes_material_and_preserves_identity() {
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new().num_threads(workers).build().unwrap().install(|| {
+        let mut initial = fixture();
+        initial.people[1].region = Some(1);
+        initial.travel = None;
+        initial.nutrition = None;
+        initial.pending_food.clear();
+        initial.physical.custody.containers.push(Container::new(Place::Person(2), 10, vec![Lot { item: Some(10), good: 1, quantity: 1, expires_at: None }, Lot { item: None, good: 2, quantity: 1, expires_at: None }]).unwrap());
+        initial.physical.custody.containers.sort_by_key(|row| row.place);
+        let tool_wear = game_economy_work::tool_wear::ToolWear { next_item: 11, rules: vec![game_economy_work::tool_wear::Rule { good: 1, durability: 10, wear: 1, repair_good: 2, repair_quantity: 1 }], conditions: vec![game_economy_work::tool_wear::Condition { item: 10, good: 1, damage: 4 }], repairs: vec![game_economy_work::tool_wear::RepairChoice { person: 2, item: 10, willing: true }], events: vec![] };
+        let snapshot = CoreHostSnapshot { core: initial, autowork: None, tool_wear: Some(tool_wear), opinions: None, goals: None, agreements: None, sites: None, schedule: None };
+        let mut no_material = snapshot.clone();
+        let bag = no_material.core.physical.custody.containers.iter_mut().find(|row| row.place == Place::Person(2)).unwrap();
+        *bag = Container::new(bag.place, 10, vec![Lot { item: Some(10), good: 1, quantity: 1, expires_at: None }]).unwrap();
+        let mut no_material = CoreHost::begin(no_material, &[(1, 1)]).unwrap();
+        assert!(!no_material.repair_tools_autonomously(&[]).unwrap().events[0].accepted);
+        assert_eq!(no_material.snapshot().tool_wear.unwrap().conditions[0].damage, 4);
+        let mut host = CoreHost::begin(snapshot, &[(1, 1)]).unwrap();
+        host.enable_schedule(1000, 1).unwrap();
+        let run = host.advance_scheduled(0, &[]).unwrap();
+        assert_eq!(run.failure, None);
+        assert!(run.events.iter().any(|event| matches!(event, game_economy::core_interval::CoreRunEvent::ToolRepairs(events) if events.iter().any(|event| event.item == 10 && event.accepted))));
+        let repaired = host.snapshot();
+        assert_eq!(repaired.tool_wear.as_ref().unwrap().conditions[0].damage, 0);
+        let bag = repaired.core.physical.custody.containers.iter().find(|row| row.place == Place::Person(2)).unwrap();
+        assert_eq!(bag.used, 1);
+        assert_eq!(bag.lots[0].item, Some(10));
+        let saved = serde_json::to_string(&repaired).unwrap();
+        let mut host = CoreHost::resume(serde_json::from_str(&saved).unwrap()).unwrap();
+        assert_eq!(host.advance_continuous(1000, &[]).unwrap().failure, None);
+        let state = host.snapshot();
+        assert!(state.tool_wear.as_ref().unwrap().events.is_empty());
+        state
+    })
+    };
+    assert_eq!(run(1), run(6));
+}
+
+#[test]
+#[ignore = "manual identified tool repair scaling benchmark"]
+fn core_host_tool_repair_benchmark() {
+    use std::hash::{Hash, Hasher};
+    let count = std::env::var("LEGACY_PEOPLE")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(50_000);
+    let workers = std::env::var("LEGACY_WORKERS")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(1);
+    assert!(count > 1);
+    let mut initial = fixture();
+    let template = initial.people[0].clone();
+    initial.people = (1..=count)
+        .map(|id| {
+            let mut person = template.clone();
+            person.id = id;
+            person
+        })
+        .collect();
+    initial.travel = None;
+    initial.nutrition = None;
+    initial.pending_food.clear();
+    initial
+        .physical
+        .custody
+        .containers
+        .extend((2..=count).map(|person| {
+            Container::new(
+                Place::Person(person),
+                10,
+                vec![
+                    Lot {
+                        item: Some(person),
+                        good: 1,
+                        quantity: 1,
+                        expires_at: None,
+                    },
+                    Lot {
+                        item: None,
+                        good: 2,
+                        quantity: 1,
+                        expires_at: None,
+                    },
+                ],
+            )
+            .unwrap()
+        }));
+    initial
+        .physical
+        .custody
+        .containers
+        .sort_by_key(|row| row.place);
+    let tool_wear = game_economy_work::tool_wear::ToolWear {
+        next_item: count + 1,
+        rules: vec![game_economy_work::tool_wear::Rule {
+            good: 1,
+            durability: 10,
+            wear: 1,
+            repair_good: 2,
+            repair_quantity: 1,
+        }],
+        conditions: (2..=count)
+            .map(|item| game_economy_work::tool_wear::Condition {
+                item,
+                good: 1,
+                damage: 4,
+            })
+            .collect(),
+        repairs: (2..=count)
+            .map(|person| game_economy_work::tool_wear::RepairChoice {
+                person,
+                item: person,
+                willing: true,
+            })
+            .collect(),
+        events: vec![],
+    };
+    let snapshot = CoreHostSnapshot {
+        core: initial,
+        autowork: None,
+        tool_wear: Some(tool_wear),
+        opinions: None,
+        goals: None,
+        agreements: None,
+        sites: None,
+        schedule: None,
+    };
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(workers)
+        .build()
+        .unwrap()
+        .install(|| {
+            let mut host = CoreHost::begin(snapshot, &[(1, 1)]).unwrap();
+            let start = std::time::Instant::now();
+            let repairs = host.repair_tools_autonomously(&[]).unwrap();
+            let elapsed = start.elapsed();
+            assert_eq!(repairs.events.len(), (count - 1) as usize);
+            assert!(repairs.events.iter().all(|event| event.accepted));
+            let mut hash = std::collections::hash_map::DefaultHasher::new();
+            serde_json::to_vec(&host.snapshot())
+                .unwrap()
+                .hash(&mut hash);
+            println!("fingerprint={:016x}", hash.finish());
+            println!(
+                "workers={workers} tool_repairs={} elapsed={:.6}",
+                repairs.events.len(),
+                elapsed.as_secs_f64()
+            );
+        });
+}
+
+#[test]
 #[ignore = "manual site admission scaling benchmark"]
 fn core_host_site_admission_benchmark() {
     use std::hash::{Hash, Hasher};

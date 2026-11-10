@@ -6,6 +6,7 @@ use super::*;
 pub enum DecisionPhase {
     Meals,
     Maintenance { meal_people: Vec<u64> },
+    ToolMaintenance { meal_people: Vec<u64> },
     Delivery { meal_people: Vec<u64> },
     Offers { meal_people: Vec<u64> },
     Acceptance { meal_people: Vec<u64> },
@@ -49,6 +50,7 @@ impl CoreSchedule {
             return Err("invalid core decision schedule".into());
         }
         if let DecisionPhase::Maintenance { meal_people }
+        | DecisionPhase::ToolMaintenance { meal_people }
         | DecisionPhase::Delivery { meal_people }
         | DecisionPhase::Offers { meal_people }
         | DecisionPhase::Acceptance { meal_people }
@@ -74,6 +76,7 @@ pub enum CoreRunEvent {
     Work(game_lot_runtime::EarlyWorkEvents),
     Meals(Vec<(u64, u32)>),
     Repairs(Vec<game_economy_building::maintenance::Event>),
+    ToolRepairs(Vec<game_economy_work::tool_wear::RepairEvent>),
     Deliveries(Vec<game_lots::TransactionOutcome>),
     Offers(Vec<u64>),
     Acceptances(Vec<u64>),
@@ -239,6 +242,14 @@ impl CoreHost {
                                 DecisionPhase::Maintenance {
                                     meal_people: people,
                                 }
+                            } else if self
+                                .tool_wear
+                                .as_ref()
+                                .is_some_and(|owner| !owner.repairs.is_empty())
+                            {
+                                DecisionPhase::ToolMaintenance {
+                                    meal_people: people,
+                                }
                             } else if self.agreements.is_some() {
                                 DecisionPhase::Delivery {
                                     meal_people: people,
@@ -268,6 +279,36 @@ impl CoreHost {
                         meal_people.dedup();
                         if !result.events.is_empty() {
                             run.events.push(CoreRunEvent::Repairs(result.events));
+                        }
+                        self.schedule.as_mut().expect("active schedule").phase = if self
+                            .tool_wear
+                            .as_ref()
+                            .is_some_and(|owner| !owner.repairs.is_empty())
+                        {
+                            DecisionPhase::ToolMaintenance { meal_people }
+                        } else if self.agreements.is_some() {
+                            DecisionPhase::Delivery { meal_people }
+                        } else if self
+                            .autowork
+                            .as_ref()
+                            .is_some_and(|owner| owner.requests.is_some())
+                        {
+                            DecisionPhase::Asking { meal_people }
+                        } else {
+                            DecisionPhase::Work { meal_people }
+                        };
+                    }
+                    DecisionPhase::ToolMaintenance { mut meal_people } => {
+                        let mut busy = blocked.to_vec();
+                        busy.extend(meal_people.iter().copied());
+                        busy.par_sort_unstable();
+                        busy.dedup();
+                        let result = attempt!('run, self.repair_tools_autonomously(&busy));
+                        meal_people.extend(result.actors);
+                        meal_people.par_sort_unstable();
+                        meal_people.dedup();
+                        if !result.events.is_empty() {
+                            run.events.push(CoreRunEvent::ToolRepairs(result.events));
                         }
                         self.schedule.as_mut().expect("active schedule").phase =
                             if self.agreements.is_some() {
