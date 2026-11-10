@@ -19,6 +19,8 @@ pub enum DecisionPhase {
     Assisting { meal_people: Vec<u64> },
     Exchange { meal_people: Vec<u64> },
     ExchangeProposals { meal_people: Vec<u64> },
+    ReadPages { meal_people: Vec<u64> },
+    WritePages { meal_people: Vec<u64> },
     FoodSearch { meal_people: Vec<u64> },
     Travel { meal_people: Vec<u64> },
 }
@@ -71,6 +73,8 @@ impl CoreSchedule {
         | DecisionPhase::Assisting { meal_people }
         | DecisionPhase::Exchange { meal_people }
         | DecisionPhase::ExchangeProposals { meal_people }
+        | DecisionPhase::ReadPages { meal_people }
+        | DecisionPhase::WritePages { meal_people }
         | DecisionPhase::FoodSearch { meal_people }
         | DecisionPhase::Travel { meal_people } = &self.phase
             && (self.next_decision_millis != Some(u128::from(offset))
@@ -107,6 +111,8 @@ pub enum CoreRunEvent {
     Adoptions(Vec<game_lot_runtime::Adoption>),
     Exchanges(Vec<u64>),
     ExchangeOffers(Vec<u64>),
+    ReadPages(Vec<u64>),
+    WrittenPages(Vec<u64>),
     Departures(Vec<travel::DepartureOutcome>),
     FoodSearch(Vec<travel::DepartureOutcome>),
     Boundary(Box<Events>),
@@ -155,6 +161,15 @@ impl CoreHost {
             DecisionPhase::Asking { meal_people }
         } else {
             DecisionPhase::Work { meal_people }
+        }
+    }
+    fn after_exchange(&self, meal_people: Vec<u64>) -> DecisionPhase {
+        if self.writing.is_some() {
+            DecisionPhase::ReadPages { meal_people }
+        } else if self.shared_work.is_some() {
+            DecisionPhase::Assisting { meal_people }
+        } else {
+            DecisionPhase::FoodSearch { meal_people }
         }
     }
     /// Begin periodic personal decisions at the current partial offset.
@@ -593,10 +608,8 @@ impl CoreHost {
                         self.schedule.as_mut().expect("active schedule").phase =
                             if self.market.is_some() {
                                 DecisionPhase::Exchange { meal_people }
-                            } else if self.shared_work.is_some() {
-                                DecisionPhase::Assisting { meal_people }
                             } else {
-                                DecisionPhase::FoodSearch { meal_people }
+                                self.after_exchange(meal_people)
                             };
                     }
                     DecisionPhase::Exchange { mut meal_people } => {
@@ -626,6 +639,36 @@ impl CoreHost {
                         meal_people.dedup();
                         if !result.offers.is_empty() {
                             run.events.push(CoreRunEvent::ExchangeOffers(result.offers));
+                        }
+                        let next = self.after_exchange(meal_people);
+                        self.schedule.as_mut().expect("active schedule").phase = next;
+                    }
+                    DecisionPhase::ReadPages { mut meal_people } => {
+                        let mut busy = blocked.to_vec();
+                        busy.extend(meal_people.iter().copied());
+                        busy.par_sort_unstable();
+                        busy.dedup();
+                        let result = attempt!('run,self.read_texts_autonomously(&busy));
+                        meal_people.par_extend(result.actors);
+                        meal_people.par_sort_unstable();
+                        meal_people.dedup();
+                        if !result.items.is_empty() {
+                            run.events.push(CoreRunEvent::ReadPages(result.items));
+                        }
+                        self.schedule.as_mut().expect("active schedule").phase =
+                            DecisionPhase::WritePages { meal_people };
+                    }
+                    DecisionPhase::WritePages { mut meal_people } => {
+                        let mut busy = blocked.to_vec();
+                        busy.extend(meal_people.iter().copied());
+                        busy.par_sort_unstable();
+                        busy.dedup();
+                        let result = attempt!('run,self.write_texts_autonomously(&busy));
+                        meal_people.par_extend(result.actors);
+                        meal_people.par_sort_unstable();
+                        meal_people.dedup();
+                        if !result.items.is_empty() {
+                            run.events.push(CoreRunEvent::WrittenPages(result.items));
                         }
                         self.schedule.as_mut().expect("active schedule").phase =
                             if self.shared_work.is_some() {

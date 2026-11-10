@@ -307,6 +307,39 @@ impl Runtime {
             custody,
         })
     }
+    /// Stage identified pages and consume the writer's actual paper and ink atomically.
+    pub fn prepare_interval_writing(
+        &self,
+        pages: &[crate::WritingPage],
+        seed: u64,
+    ) -> Result<IntervalConsumptionDraft, String> {
+        let interval = self
+            .work_interval
+            .as_ref()
+            .ok_or("no physical work interval")?;
+        if interval.tick != self.tick()
+            || interval.custody_revision != self.store.revision()
+            || interval.elapsed_millis >= self.tick_millis
+        {
+            return Err("invalid interval for writing".into());
+        }
+        self.epoch
+            .checked_add(1)
+            .ok_or("physical work revision overflow")?;
+        let mut actions = game_lot_content::prepare_writing(&self.catalog, pages, interval.tick)?;
+        renumber_operations(&mut actions)?;
+        let custody = self.store.prepare_transactions_now(seed, &actions)?;
+        if !custody.spoiled().is_empty() {
+            return Err("interval writing cannot publish pending spoilage".into());
+        }
+        Ok(IntervalConsumptionDraft {
+            epoch: self.epoch,
+            tick: interval.tick,
+            offset_millis: interval.elapsed_millis,
+            custody,
+        })
+    }
+
     /// Stop chosen jobs at this offset. Their surviving inputs remain in job
     /// custody until the normal boundary return, even if that return is blocked.
     pub fn abandon_interval_work(&mut self, requests: &[(u64, u64)]) -> Result<(), String> {

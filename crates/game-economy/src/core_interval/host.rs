@@ -33,6 +33,7 @@ mod social;
 mod taking;
 mod tools;
 mod treatment;
+mod writing;
 pub use food_search::{CoreFoodProvision, CoreFoodSearch};
 pub use giving::CorePracticeWorkEvidence;
 pub use market::CoreMarketResults;
@@ -46,6 +47,7 @@ pub use skills::{CoreSkillCredit, CoreSkills};
 pub use social::{CoreDynamicsResults, CoreHealth, CoreSocial};
 pub use tools::CoreToolRepairResults;
 pub use treatment::CoreTreatmentResults;
+pub use writing::CoreWritingResults;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -128,6 +130,8 @@ pub struct CoreHostSnapshot {
     #[serde(default)]
     pub market: Option<game_market::Market>,
     #[serde(default)]
+    pub writing: Option<crate::Writing>,
+    #[serde(default)]
     pub goal_setbacks: Vec<(u64, u32)>,
     #[serde(default)]
     pub agreements: Option<game_agreements::Agreements>,
@@ -185,6 +189,7 @@ pub struct CoreHost {
     dreams: Option<game_economy_goals::Dreams>,
     shared_work: Option<CoreSharedWork>,
     market: Option<game_market::Market>,
+    writing: Option<crate::Writing>,
     agreements: Option<game_agreements::Agreements>,
     sites: Option<CoreSites>,
     schedule: Option<CoreSchedule>,
@@ -227,6 +232,7 @@ struct CoreRuntimeOptions {
     dreams: Option<game_economy_goals::Dreams>,
     shared_work: Option<CoreSharedWork>,
     market: Option<game_market::Market>,
+    writing: Option<crate::Writing>,
 }
 impl CoreHost {
     pub fn begin(snapshot: CoreHostSnapshot, rates: &[(u64, u64)]) -> Result<Self, String> {
@@ -271,6 +277,7 @@ impl CoreHost {
             dreams,
             shared_work,
             market,
+            writing,
             agreements,
             sites,
             schedule,
@@ -291,6 +298,7 @@ impl CoreHost {
                 dreams,
                 shared_work,
                 market,
+                writing,
                 sites,
                 schedule,
                 tool_requirements,
@@ -370,6 +378,7 @@ impl CoreHost {
             dreams,
             shared_work,
             market,
+            writing,
             agreements,
             sites,
             schedule,
@@ -386,6 +395,7 @@ impl CoreHost {
                 dreams,
                 shared_work,
                 market,
+                writing,
                 sites,
                 schedule,
                 tool_requirements,
@@ -436,6 +446,7 @@ impl CoreHost {
             dreams,
             shared_work,
             market,
+            mut writing,
             mut sites,
             schedule,
             tool_requirements,
@@ -967,6 +978,27 @@ impl CoreHost {
                 .validate(&people, &recipes, core.physical.tick())
                 .map_err(str::to_owned)?;
         }
+        if let Some(owner) = &mut writing {
+            if !owner.authors.is_empty()
+                || !owner.study.is_empty()
+                || !owner.practice.is_empty()
+                || owner.pages.par_iter().any(|page| page.claim.is_some())
+            {
+                return Err("written claims and literacy training are not yet supported".into());
+            }
+            let people: HashSet<_> = core.people.par_iter().map(|p| p.id).collect();
+            let goods: HashSet<_> = core.physical.goods().par_iter().map(|g| g.id).collect();
+            let view = core.physical.view(core.physical.tick())?;
+            let regions: HashSet<_> = view
+                .containers
+                .par_iter()
+                .filter_map(|row| match row.place {
+                    game_lots::Place::Stock { region, .. } => Some(region),
+                    _ => None,
+                })
+                .collect();
+            owner.normalize_and_validate(&people, &goods, &regions, &core.physical.snapshot())?;
+        }
         if let Some(owner) = &market {
             let people: HashSet<_> = core.people.par_iter().map(|person| person.id).collect();
             let goods: HashSet<_> = core
@@ -1090,6 +1122,7 @@ impl CoreHost {
             dreams,
             shared_work,
             market,
+            writing,
             agreements,
             sites,
             schedule,
@@ -1137,6 +1170,7 @@ impl CoreHost {
             dreams: self.dreams.clone(),
             shared_work: self.shared_work.clone(),
             market: self.market.clone(),
+            writing: self.writing.clone(),
             agreements: self.agreements.clone(),
             sites: self.sites.clone(),
             schedule: self.schedule.clone(),
@@ -1307,6 +1341,41 @@ impl CoreHost {
         next: Option<u64>,
         updates: &[(u64, Option<game_lots::Place>)],
     ) -> Result<Option<ToolWear>, String> {
+        if self.writing.as_ref().is_some_and(|owner| {
+            updates.par_iter().any(|(id, place)| {
+                place.is_none()
+                    && owner
+                        .pages
+                        .binary_search_by_key(id, |page| page.item)
+                        .is_ok()
+            })
+        }) {
+            return Err("destruction of written pages is not yet supported".into());
+        }
+        let page_updates = self
+            .writing
+            .as_ref()
+            .filter(|owner| {
+                updates.par_iter().any(|(id, _)| {
+                    owner
+                        .pages
+                        .binary_search_by_key(id, |page| page.item)
+                        .is_ok()
+                })
+            })
+            .map(|owner| {
+                updates
+                    .par_iter()
+                    .filter(|(id, _)| {
+                        owner
+                            .pages
+                            .binary_search_by_key(id, |page| page.item)
+                            .is_err()
+                    })
+                    .copied()
+                    .collect::<Vec<_>>()
+            });
+        let updates = page_updates.as_deref().unwrap_or(updates);
         let Some(owner) = &self.tool_wear else {
             if !updates.is_empty() || !items.is_empty() {
                 return Err("identified changes require an item owner".into());

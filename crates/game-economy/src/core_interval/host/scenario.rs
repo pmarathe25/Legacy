@@ -15,7 +15,6 @@ impl CoreHostSnapshot {
             ("confinement", state.confinement.is_some()),
             ("missions", state.missions.is_some()),
             ("campaign", state.campaign.is_some()),
-            ("writing", state.writing.is_some()),
             ("combat", state.combat.is_some()),
             ("hauling", state.hauling.is_some()),
             ("local_transport", state.local_transport.is_some()),
@@ -140,6 +139,7 @@ impl CoreHostSnapshot {
             goals: state.goals,
             dreams: state.dreams,
             market: state.market,
+            writing: state.writing,
             shared_work: state.shared_work.map(|owner| CoreSharedWork {
                 owner,
                 sessions: vec![],

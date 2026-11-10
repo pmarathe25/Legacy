@@ -20,7 +20,8 @@ pub use host::{
     CoreFoodProvision, CoreFoodSearch, CoreHealth, CoreHost, CoreHostSnapshot, CoreMarketResults,
     CorePracticeWorkEvidence, CorePurpose, CoreRepairResults, CoreRequestResults, CoreRun,
     CoreRunEvent, CoreSchedule, CoreSharedWork, CoreSites, CoreSkillCredit, CoreSkills, CoreSocial,
-    CoreSocialResults, CoreToolRepairResults, CoreTreatmentResults, DecisionPhase,
+    CoreSocialResults, CoreToolRepairResults, CoreTreatmentResults, CoreWritingResults,
+    DecisionPhase,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

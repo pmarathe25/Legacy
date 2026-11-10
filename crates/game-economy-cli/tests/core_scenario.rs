@@ -1065,3 +1065,22 @@ fn authored_personal_exchange_resolves_named_goods_and_real_custody() {
     }
     assert_eq!(run(1), run(6));
 }
+
+#[test]
+fn authored_text_writing_consumes_supplies_and_creates_a_real_page() {
+    fn run(workers: usize) -> serde_json::Value {
+        rayon::ThreadPoolBuilder::new().num_threads(workers).build().unwrap().install(|| {
+            let root=root(); let mut host=game_economy_cli::core_scenario(&root.join("content/scenarios/economy-core-writing.toml"),&root.join("content")).unwrap();
+            let result=host.advance_scheduled(0,&[]).unwrap(); assert_eq!(result.failure,None);
+            assert!(result.events.iter().any(|event|matches!(event,game_economy::core_interval::CoreRunEvent::WrittenPages(ids) if ids == &[1])));
+            let state=host.snapshot(); let writing=state.writing.as_ref().unwrap();
+            assert_eq!(writing.pages[0].text.as_deref(),Some("The river is cold."));
+            assert!(writing.text_memories.iter().any(|memory| memory.person==2 && &*memory.text=="The river is cold."));
+            let page=writing.page; let physical=state.core.physical.custody.containers.iter().find(|row|row.place==game_lots::Place::Person(2)).unwrap();
+            assert!(physical.lots.iter().any(|lot|lot.good==page && lot.item==Some(1)));
+            let saved=serde_json::to_string(&state).unwrap(); assert_eq!(game_economy::core_interval::CoreHost::resume(serde_json::from_str(&saved).unwrap()).unwrap().snapshot(),state);
+            serde_json::to_value(state).unwrap()
+        })
+    }
+    assert_eq!(run(1), run(6));
+}
