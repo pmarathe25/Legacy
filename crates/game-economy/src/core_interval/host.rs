@@ -9,6 +9,7 @@ mod animal_products;
 mod animal_restraints;
 mod claims;
 mod dependent_care;
+mod dreams;
 mod family;
 mod fatigue;
 mod fauna;
@@ -117,6 +118,8 @@ pub struct CoreHostSnapshot {
     #[serde(default)]
     pub goals: Option<game_goals::Goals>,
     #[serde(default)]
+    pub dreams: Option<game_economy_goals::Dreams>,
+    #[serde(default)]
     pub goal_setbacks: Vec<(u64, u32)>,
     #[serde(default)]
     pub agreements: Option<game_agreements::Agreements>,
@@ -171,6 +174,7 @@ pub struct CoreHost {
     work_checked_blocked: Vec<u64>,
     opinions: Option<game_opinions::Opinions>,
     goals: Option<game_goals::Goals>,
+    dreams: Option<game_economy_goals::Dreams>,
     agreements: Option<game_agreements::Agreements>,
     sites: Option<CoreSites>,
     schedule: Option<CoreSchedule>,
@@ -210,6 +214,7 @@ struct CoreRuntimeOptions {
     animal_handling: Option<crate::AnimalHandling>,
     family: Option<game_economy_family::Families>,
     dependent_care: Option<crate::DependentCare>,
+    dreams: Option<game_economy_goals::Dreams>,
 }
 impl CoreHost {
     pub fn begin(snapshot: CoreHostSnapshot, rates: &[(u64, u64)]) -> Result<Self, String> {
@@ -251,6 +256,7 @@ impl CoreHost {
             dependent_care,
             opinions,
             goals,
+            dreams,
             agreements,
             sites,
             schedule,
@@ -268,6 +274,7 @@ impl CoreHost {
             goals,
             agreements,
             CoreRuntimeOptions {
+                dreams,
                 sites,
                 schedule,
                 tool_requirements,
@@ -344,6 +351,7 @@ impl CoreHost {
             dependent_care,
             opinions,
             goals,
+            dreams,
             agreements,
             sites,
             schedule,
@@ -357,6 +365,7 @@ impl CoreHost {
             goals,
             agreements,
             CoreRuntimeOptions {
+                dreams,
                 sites,
                 schedule,
                 tool_requirements,
@@ -404,6 +413,7 @@ impl CoreHost {
         options: CoreRuntimeOptions,
     ) -> Result<Self, String> {
         let CoreRuntimeOptions {
+            dreams,
             mut sites,
             schedule,
             tool_requirements,
@@ -935,6 +945,21 @@ impl CoreHost {
                 .validate(&people, &recipes, core.physical.tick())
                 .map_err(str::to_owned)?;
         }
+        if let Some(owner) = &dreams {
+            if goals.is_none() {
+                return Err("aspirations require personal goals".into());
+            }
+            let people: HashSet<_> = core.people.par_iter().map(|person| person.id).collect();
+            let recipes: HashSet<_> = core
+                .physical
+                .recipes()
+                .par_iter()
+                .map(|recipe| recipe.id)
+                .collect();
+            owner
+                .validate(&people, &recipes, core.physical.tick())
+                .map_err(str::to_owned)?;
+        }
         if let Some(owner) = &agreements {
             let people: HashSet<_> = core.people.par_iter().map(|person| person.id).collect();
             let goods: HashSet<_> = core
@@ -1027,6 +1052,7 @@ impl CoreHost {
             work_checked_blocked: Vec::new(),
             opinions,
             goals,
+            dreams,
             agreements,
             sites,
             schedule,
@@ -1071,6 +1097,7 @@ impl CoreHost {
             dependent_care: self.dependent_care.clone(),
             opinions: self.opinions.clone(),
             goals: self.goals.clone(),
+            dreams: self.dreams.clone(),
             agreements: self.agreements.clone(),
             sites: self.sites.clone(),
             schedule: self.schedule.clone(),
@@ -1297,6 +1324,12 @@ impl CoreHost {
             &self.core.people,
             false,
         )?;
+        let dreams = self.stage_aspiration_observations(
+            requests.as_ref(),
+            &self.core.people,
+            draft.events().tick,
+        );
+
         self.core.validate_early_work(&draft)?;
         let events = self.core.commit_early_work(draft)?;
         self.remember_skill_completions(skill_completions);
@@ -1308,6 +1341,9 @@ impl CoreHost {
             self.tool_wear = Some(tools);
         }
         self.publish_request_resolution(requests);
+        if let Some(dreams) = dreams {
+            self.dreams = Some(dreams);
+        }
         if let Some(sites) = sites {
             self.sites = Some(sites);
         }
@@ -1942,11 +1978,18 @@ impl CoreHost {
             &draft.people.people,
             true,
         );
-        let goals = self.stage_goals(
+        let mut goals = self.stage_goals(
             &draft.events().finished,
             draft.events().tick,
             &draft.people.people,
             true,
+        )?;
+        let dreams = self.stage_aspirations(
+            &mut goals,
+            requests.as_ref(),
+            &draft.people.people,
+            family.as_ref(),
+            draft.events().tick,
         )?;
         let mut ended = draft.events().finished.clone();
         ended.par_extend(draft.events().interrupted.par_iter().copied());
@@ -1984,6 +2027,9 @@ impl CoreHost {
             self.tool_wear = Some(tools);
         }
         self.publish_request_resolution(requests);
+        if let Some(dreams) = dreams {
+            self.dreams = Some(dreams);
+        }
         if let Some(sites) = sites {
             self.sites = Some(sites);
         }

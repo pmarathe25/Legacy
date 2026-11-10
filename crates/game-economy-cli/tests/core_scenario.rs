@@ -945,3 +945,58 @@ fn authored_personality_is_inherited_only_at_real_births() {
     }
     assert_eq!(run(1), run(6));
 }
+
+#[test]
+fn authored_aspiration_resolves_named_recipe_and_forms_a_goal() {
+    let root = root();
+    let mut host = game_economy_cli::core_scenario(
+        &root.join("content/scenarios/economy-core-aspirations.toml"),
+        &root.join("content"),
+    )
+    .unwrap();
+    let recipe = host
+        .snapshot()
+        .core
+        .physical
+        .recipes
+        .iter()
+        .find(|r| r.name == "fixture-tool")
+        .unwrap()
+        .id;
+    assert_eq!(
+        host.snapshot().dreams.as_ref().unwrap().people[0].recipe,
+        recipe
+    );
+    assert_eq!(
+        host.advance_continuous(3_600_000, &[]).unwrap().failure,
+        None
+    );
+    let state = host.snapshot();
+    assert!(
+        state
+            .dreams
+            .as_ref()
+            .unwrap()
+            .learning
+            .iter()
+            .any(|rule| rule.person == 3)
+    );
+    assert!(
+        !state
+            .dreams
+            .as_ref()
+            .unwrap()
+            .people
+            .iter()
+            .any(|dream| dream.person == 3)
+    );
+    assert!(
+        host.snapshot()
+            .goals
+            .as_ref()
+            .unwrap()
+            .people
+            .iter()
+            .any(|goal| goal.person == 1 && goal.recipe == recipe && goal.target == 2)
+    );
+}

@@ -85,3 +85,5 @@ policies = [{ person = 2, blueprint = 1, target_sites = 1, willing = true }]
 `economy-core.toml` is a small authored interval-host scenario loaded through `game_economy_cli::core_scenario`. It combines an imminent birth, dependent care, gathering, and a wild grazer. The interval host currently rejects scenarios containing unsupported owners rather than ignoring them.
 
 `economy-core-personality.toml` adds authored dispositions to the interval-host birth scenario, including optional inheritance from the parents.
+
+`economy-core-aspirations.toml` adds a named personal aspiration and an inheritable inclination to learn from witnessed work.

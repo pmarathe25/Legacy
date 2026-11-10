@@ -1,0 +1,233 @@
+# A compact authored scenario for the interval host. Goods and recipes are loaded from content.
+inherit_aspiration_learning = true
+seed = 7
+tick_millis = 3600000
+stock_capacity = 1000
+food_relief_divisor = 20
+
+[rules]
+hunger_per_tick = 1
+meal_threshold = 1
+starvation_threshold = 50
+starvation_damage = 1
+max_health = 100
+carrying_capacity = 100
+max_work_hunger = 20
+
+[[regions]]
+id = 1
+stock = { grain = 100, bread = 20 }
+
+[[people]]
+id = 1
+region = 1
+health = 90
+hunger = 0
+willing_to_work = false
+seek_meals = false
+
+[[people]]
+id = 2
+region = 1
+health = 100
+hunger = 0
+willing_to_work = false
+seek_meals = false
+
+[family]
+next_id = 3
+last_tick = 0
+
+[family.rules]
+adult_age = 12
+min_work_age = 12
+fertile_until = 40
+gestation = 3
+birth_spacing = 8
+lifespan_min = 50
+lifespan_max = 70
+conception_one_in = 1
+minimum_health = 50
+maximum_hunger = 15
+newborn_health = 100
+mutation_per_million = 0
+mutation_step = 0
+enroll_births = true
+
+[[family.members]]
+id = 1
+age = 18
+genome = { sex = "Male", alleles = [[100,100], [100,100], [100,100], [100,100]] }
+
+[[family.members]]
+id = 2
+age = 18
+genome = { sex = "Female", alleles = [[200,200], [200,200], [200,200], [200,200]] }
+pregnancy = { father = 1, due = 1 }
+
+[care]
+inherit_births = true
+policies = [{ person = 2, willing = true }]
+
+[care.rules]
+dependent_until = 6
+max_caregiver_hunger = 20
+neglect_damage = 1
+fetch_local_food = true
+
+[gathering]
+inherit_births = true
+max_hunger = 20
+policies = [{ person = 1, node = 1, willing = true }]
+
+[[gathering.nodes]]
+id = 1
+region = 1
+good = "grain"
+available = 20
+capacity = 40
+regrowth = 1
+yield_per_action = 10
+
+[fauna]
+next_id = 2
+last_tick = 0
+
+[[fauna.species]]
+id = 1
+name = "grazer"
+food_good = "grain"
+intake = 2
+hunger_per_tick = 1
+relief_per_unit = 1
+starvation_threshold = 8
+starvation_damage = 1
+max_health = 10
+adult_age = 2
+fertile_until = 30
+lifespan = 60
+gestation = 3
+conception_one_in = 4
+breeding_max_hunger = 4
+newborn_health = 10
+
+[[fauna.animals]]
+id = 1
+species = 1
+region = 1
+age = 2
+health = 10
+hunger = 1
+genome = { sex = "Male", alleles = [[300,300], [300,300], [300,300], [300,300]] }
+handling_response = { willing = true, on_accept = 0, on_refuse = 0 }
+
+[recovery]
+interval = 1
+health_per_interval = 2
+rest_bonus = 4
+max_hunger = 20
+
+[animal_products]
+[[animal_products.rules]]
+species = 1
+good = "raw-wool"
+quantity = 1
+grow_ticks = 1
+min_age = 1
+min_health = 1
+max_hunger = 10
+
+[[animal_products.policies]]
+person = 2
+animal = 1
+willing = true
+
+[animal_restraints]
+
+[purpose]
+[purpose.rules]
+max = 100
+per_tick = 1
+blocked_increase = 1
+completion_relief = 4
+damage_threshold = 50
+damage = 1
+[[purpose.people]]
+person = 1
+deprivation = 0
+[[purpose.people]]
+person = 2
+deprivation = 0
+
+[goals]
+retry_interval = 3
+plan_inputs = true
+[[goals.people]]
+person = 2
+recipe = "fixture-tool"
+priority = 1
+target = 1
+
+[[dynamics.disease.strains]]
+id = 1
+name = "fever"
+incubation = 0
+infectious_ticks = 5
+immunity_ticks = 0
+damage_per_tick = 0
+transmission_per_million = 1000000
+
+[[remedies]]
+strain = 1
+medicine = "grain"
+quantity = 1
+people = []
+
+[medical]
+[[medical.policies]]
+person = 2
+patient = 1
+medicine = "grain"
+quantity = 1
+willing = false
+
+[giving]
+[[giving.policies]]
+person = 2
+recipient = 1
+good = "bread"
+quantity = 2
+recipient_hunger_at_least = 5
+willing = false
+requires_request = true
+
+[[giving.asking]]
+person = 1
+target = 2
+min_hunger = 5
+enabled = true
+retry_ticks = 2
+request_lifetime = 3
+
+[skills]
+rules = []
+
+[skills.catalog_training]
+completions_per_level = 1
+max_level = 5
+work_per_level = 1
+practice_each_tick = true
+
+[[aspirations]]
+person = 1
+recipe = "fixture-tool"
+priority = 2
+batch = 2
+review_interval = 1
+
+[[aspiration_learning]]
+person = 2
+max_aspirations = 3
+priority = 1
+batch = 1
+review_interval = 2

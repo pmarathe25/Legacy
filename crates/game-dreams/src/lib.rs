@@ -302,7 +302,7 @@ impl Dreams {
                         *goal = patches[i].1.clone();
                     }
                 });
-            updated.people.extend(appended);
+            updated.people.par_extend(appended);
             Some(updated)
         };
         Ok(Some(Draft {

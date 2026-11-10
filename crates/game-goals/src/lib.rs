@@ -4,7 +4,7 @@ use game_autowork::{Autowork, Policy};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Goals {
     #[serde(default = "retry_interval")]
@@ -15,6 +15,16 @@ pub struct Goals {
     pub people: Vec<Goal>,
     #[serde(default)]
     pub events: Vec<Event>,
+}
+impl Clone for Goals {
+    fn clone(&self) -> Self {
+        Self {
+            retry_interval: self.retry_interval,
+            plan_inputs: self.plan_inputs,
+            people: self.people.par_iter().cloned().collect(),
+            events: self.events.par_iter().cloned().collect(),
+        }
+    }
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
