@@ -114,6 +114,7 @@ impl CoreHost {
                 opening: None,
                 missions: None,
                 inquiry_meetings: &inquiry_meetings,
+                personality_override: self.personality.as_ref(),
             },
         )?;
         if let (Some(previous), Some(disease)) = (health, &mut next.disease) {

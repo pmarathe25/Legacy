@@ -218,6 +218,7 @@ macro_rules! prepare_dynamics {
                         opening: $opening,
                         missions: $world.missions.as_ref(),
                         inquiry_meetings: &inquiry_meetings,
+                        personality_override: None,
                     },
                 )
             })
@@ -258,6 +259,8 @@ pub struct Clock<'a> {
     pub opening: Option<&'a OpeningLocator<'a>>,
     pub missions: Option<&'a game_missions::Missions>,
     pub inquiry_meetings: &'a [(u64, u64)],
+    /// Borrow a host-owned personality generation without cloning it.
+    pub personality_override: Option<&'a personality::Personality>,
 }
 impl Dynamics {
     pub fn validate(
@@ -316,6 +319,7 @@ impl Dynamics {
             opening,
             missions,
             inquiry_meetings,
+            personality_override,
         } = clock;
         let (exposure, requested, combat) = encounters;
         let mut occupied: Vec<_> = exposure.par_iter().flat_map_iter(|e| [e.a, e.b]).collect();
@@ -377,7 +381,7 @@ impl Dynamics {
                     social,
                     &contacts,
                     opinions,
-                    self.personality.as_ref(),
+                    personality_override.or(self.personality.as_ref()),
                     (seed, tick),
                     requested.as_ref(),
                     pressure::Access {
@@ -592,6 +596,7 @@ mod tests {
                         opening: None,
                         missions: None,
                         inquiry_meetings: &[],
+                        personality_override: None,
                     },
                 )
                 .unwrap();

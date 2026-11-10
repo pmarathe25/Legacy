@@ -86,7 +86,7 @@ impl Personality {
                 })
             })
             .collect();
-        self.people.extend(rows);
+        self.people.par_extend(rows);
     }
     pub fn work_refusals(&self, seed: u64, tick: u64) -> Vec<u64> {
         self.people

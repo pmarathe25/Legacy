@@ -19,6 +19,7 @@ mod goals;
 mod hunting;
 mod medical;
 mod offers;
+mod personality;
 mod purpose;
 mod requests;
 mod scenario;
@@ -63,6 +64,8 @@ pub struct CoreHostSnapshot {
     pub claims: Option<game_economy_claims::Claims>,
     #[serde(default)]
     pub social: Option<CoreSocial>,
+    #[serde(default)]
+    pub personality: Option<game_economy_dynamics::personality::Personality>,
     #[serde(default)]
     pub knowledge: Option<game_economy_knowledge::Knowledge>,
     #[serde(default)]
@@ -136,6 +139,7 @@ pub struct CoreHost {
     food_search: Option<CoreFoodSearch>,
     claims: Option<game_economy_claims::Claims>,
     social: Option<CoreSocial>,
+    personality: Option<game_economy_dynamics::personality::Personality>,
     knowledge: Option<game_economy_knowledge::Knowledge>,
     health: Option<CoreHealth>,
     medical: Option<crate::Medical>,
@@ -161,6 +165,8 @@ pub struct CoreHost {
     dependent_care: Option<crate::DependentCare>,
     skill_rates: Option<game_economy_skills::Index>,
     skill_practice_recipes: HashSet<u32>,
+    personality_refusal_tick: Option<u64>,
+    personality_refusals: Vec<u64>,
     work_checked_revision: Option<u64>,
     work_checked_blocked: Vec<u64>,
     opinions: Option<game_opinions::Opinions>,
@@ -180,6 +186,7 @@ struct CoreRuntimeOptions {
     food_search: Option<CoreFoodSearch>,
     claims: Option<game_economy_claims::Claims>,
     social: Option<CoreSocial>,
+    personality: Option<game_economy_dynamics::personality::Personality>,
     knowledge: Option<game_economy_knowledge::Knowledge>,
     health: Option<CoreHealth>,
     medical: Option<crate::Medical>,
@@ -218,6 +225,7 @@ impl CoreHost {
             food_search,
             claims,
             social,
+            personality,
             knowledge,
             health,
             medical,
@@ -270,6 +278,7 @@ impl CoreHost {
                 food_search,
                 claims,
                 social,
+                personality,
                 knowledge,
                 health,
                 medical,
@@ -309,6 +318,7 @@ impl CoreHost {
             food_search,
             claims,
             social,
+            personality,
             knowledge,
             health,
             medical,
@@ -357,6 +367,7 @@ impl CoreHost {
                 food_search,
                 claims,
                 social,
+                personality,
                 knowledge,
                 health,
                 medical,
@@ -403,6 +414,7 @@ impl CoreHost {
             mut food_search,
             mut claims,
             social,
+            personality,
             mut knowledge,
             health,
             medical,
@@ -562,6 +574,10 @@ impl CoreHost {
             let people: HashSet<_> = core.people.par_iter().map(|person| person.id).collect();
             let view = core.physical.view(core.physical.tick())?;
             claims.validate(&people, &view, core.physical.tick())?;
+        }
+        if let Some(owner) = &personality {
+            let people: HashSet<_> = core.people.par_iter().map(|person| person.id).collect();
+            owner.validate(&people).map_err(str::to_owned)?;
         }
         if let Some(social) = &social {
             let people: HashSet<_> = core.people.par_iter().map(|person| person.id).collect();
@@ -979,6 +995,7 @@ impl CoreHost {
             food_search,
             claims,
             social,
+            personality,
             knowledge,
             health,
             medical,
@@ -1004,6 +1021,8 @@ impl CoreHost {
             dependent_care,
             skill_rates,
             skill_practice_recipes,
+            personality_refusal_tick: None,
+            personality_refusals: Vec::new(),
             work_checked_revision: None,
             work_checked_blocked: Vec::new(),
             opinions,
@@ -1026,6 +1045,7 @@ impl CoreHost {
             food_search: self.food_search.clone(),
             claims: self.claims.clone(),
             social: self.social.clone(),
+            personality: self.personality.clone(),
             knowledge: self.knowledge.clone(),
             health: self.health.clone(),
             medical: self.medical.clone(),
@@ -1337,6 +1357,15 @@ impl CoreHost {
         if blocked.par_windows(2).any(|rows| rows[0] >= rows[1]) {
             return Err("invalid occupied people".into());
         }
+        self.refresh_personality_work_refusals();
+        let reluctant = (!self.personality_refusals.is_empty()).then(|| {
+            let mut rows = blocked.to_vec();
+            rows.par_extend(self.personality_refusals.par_iter().copied());
+            rows.par_sort_unstable();
+            rows.dedup();
+            rows
+        });
+        let blocked = reluctant.as_deref().unwrap_or(blocked);
         let mut effective = self
             .goals
             .as_ref()
@@ -1725,6 +1754,7 @@ impl CoreHost {
         }
         let skills = self.stage_skills(&draft.events().finished, draft.events().tick);
         let family = self.stage_family(&mut draft)?;
+        let personality = self.stage_personality_births(family.as_ref());
         let skills = self.stage_skill_births(skills, family.as_ref(), draft.events().tick)?;
         crate::purpose::enroll(
             purpose.as_mut().map(|owner| &mut owner.owner),
@@ -1938,6 +1968,9 @@ impl CoreHost {
         self.goal_setbacks.clear();
         self.practice_work_asks.clear();
         self.practice_work_evidence = CorePracticeWorkEvidence::default();
+        if let Some(owner) = personality {
+            self.personality = Some(owner);
+        }
         if let Some(owner) = skills {
             if !owner.owner.events.is_empty() {
                 self.skill_rates = Some(owner.owner.index());

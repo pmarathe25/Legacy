@@ -898,3 +898,50 @@ fn newborn_inherits_teaching_inclination_without_skill() {
     }
     assert_eq!(run(1), run(6));
 }
+
+#[test]
+fn authored_personality_is_inherited_only_at_real_births() {
+    fn run(workers: usize) -> serde_json::Value {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let root = root();
+                let mut host = game_economy_cli::core_scenario(
+                    &root.join("content/scenarios/economy-core-personality.toml"),
+                    &root.join("content"),
+                )
+                .unwrap();
+                assert_eq!(
+                    host.snapshot().personality.as_ref().unwrap().people.len(),
+                    2
+                );
+                assert_eq!(
+                    host.advance_continuous(3_600_000, &[]).unwrap().failure,
+                    None
+                );
+                let state = host.snapshot();
+                let child = state
+                    .personality
+                    .as_ref()
+                    .unwrap()
+                    .people
+                    .iter()
+                    .find(|row| row.person == 3)
+                    .unwrap();
+                assert_eq!((child.sociability, child.diligence), (500, 500));
+                let saved = serde_json::to_string(&state).unwrap();
+                assert_eq!(
+                    game_economy::core_interval::CoreHost::resume(
+                        serde_json::from_str(&saved).unwrap()
+                    )
+                    .unwrap()
+                    .snapshot(),
+                    state
+                );
+                serde_json::to_value(state).unwrap()
+            })
+    }
+    assert_eq!(run(1), run(6));
+}

@@ -27,13 +27,6 @@ impl CoreHostSnapshot {
                 unsupported.push(name);
             }
         }
-        if state
-            .dynamics
-            .as_ref()
-            .is_some_and(|owner| owner.personality.is_some())
-        {
-            unsupported.push("personality");
-        }
         if state.construction.as_ref().is_some_and(|owner| {
             !owner.blueprints.is_empty()
                 || !owner.policies.is_empty()
@@ -72,7 +65,7 @@ impl CoreHostSnapshot {
             (None, Some(_)) => return Err("site maintenance requires facilities".into()),
             (None, None) => None,
         };
-        let (social, health, claims) = if let Some(dynamics) = state.dynamics.take() {
+        let (social, health, claims, personality) = if let Some(dynamics) = state.dynamics.take() {
             let social = dynamics.social.map(|owner| CoreSocial {
                 owner,
                 last_tick: None,
@@ -82,9 +75,9 @@ impl CoreHostSnapshot {
                 treatment: dynamics.treatment,
                 last_tick: None,
             });
-            (social, health, dynamics.claims)
+            (social, health, dynamics.claims, dynamics.personality)
         } else {
-            (None, None, None)
+            (None, None, None, None)
         };
         let food_search = state.food_search.take().map(|search| CoreFoodSearch {
             search,
@@ -115,6 +108,7 @@ impl CoreHostSnapshot {
             food_search,
             claims,
             social,
+            personality,
             knowledge: state.knowledge,
             health,
             medical: state.medical,
