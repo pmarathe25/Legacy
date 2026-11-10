@@ -53,6 +53,8 @@ pub struct CoreHostSnapshot {
     #[serde(default)]
     pub irrigation: Option<game_economy_agriculture::irrigation::Irrigation>,
     #[serde(default)]
+    pub environment: Option<game_environment::Environment>,
+    #[serde(default)]
     pub opinions: Option<game_opinions::Opinions>,
     #[serde(default)]
     pub goals: Option<game_goals::Goals>,
@@ -80,6 +82,7 @@ pub struct CoreHost {
     health: Option<CoreHealth>,
     agriculture: Option<game_economy_agriculture::Agriculture>,
     irrigation: Option<game_economy_agriculture::irrigation::Irrigation>,
+    environment: Option<game_environment::Environment>,
     work_checked_revision: Option<u64>,
     work_checked_blocked: Vec<u64>,
     opinions: Option<game_opinions::Opinions>,
@@ -102,6 +105,7 @@ struct CoreRuntimeOptions {
     health: Option<CoreHealth>,
     agriculture: Option<game_economy_agriculture::Agriculture>,
     irrigation: Option<game_economy_agriculture::irrigation::Irrigation>,
+    environment: Option<game_environment::Environment>,
 }
 impl CoreHost {
     pub fn begin(snapshot: CoreHostSnapshot, rates: &[(u64, u64)]) -> Result<Self, String> {
@@ -120,6 +124,7 @@ impl CoreHost {
             health,
             agriculture,
             irrigation,
+            environment,
             opinions,
             goals,
             agreements,
@@ -148,6 +153,7 @@ impl CoreHost {
                 health,
                 agriculture,
                 irrigation,
+                environment,
             },
         )
     }
@@ -167,6 +173,7 @@ impl CoreHost {
             health,
             agriculture,
             irrigation,
+            environment,
             opinions,
             goals,
             agreements,
@@ -195,6 +202,7 @@ impl CoreHost {
                 health,
                 agriculture,
                 irrigation,
+                environment,
             },
         )
     }
@@ -221,6 +229,7 @@ impl CoreHost {
             health,
             agriculture,
             irrigation,
+            environment,
         } = options;
         if let Some(legacy) = food_search.as_mut().and_then(|owner| owner.claims.take()) {
             if claims.is_some() {
@@ -420,6 +429,16 @@ impl CoreHost {
                 .collect();
             owner.validate(agriculture, &people, &goods, core.physical.tick())?;
         }
+        if environment.is_some() {
+            let goods: HashSet<_> = core
+                .physical
+                .goods()
+                .par_iter()
+                .map(|good| good.id)
+                .collect();
+            let view = core.physical.view(core.physical.tick())?;
+            crate::environment::validate(environment.as_ref(), &view, &goods)?;
+        }
         if let Some(owner) = &goals {
             let people: HashSet<_> = core.people.par_iter().map(|person| person.id).collect();
             let recipes: HashSet<_> = core
@@ -468,6 +487,7 @@ impl CoreHost {
             health,
             agriculture,
             irrigation,
+            environment,
             work_checked_revision: None,
             work_checked_blocked: Vec::new(),
             opinions,
@@ -493,6 +513,7 @@ impl CoreHost {
             health: self.health.clone(),
             agriculture: self.agriculture.clone(),
             irrigation: self.irrigation.clone(),
+            environment: self.environment.clone(),
             opinions: self.opinions.clone(),
             goals: self.goals.clone(),
             agreements: self.agreements.clone(),
@@ -849,6 +870,21 @@ impl CoreHost {
             .core
             .prepare_settlement_with_growth(&actions, growth, config)?;
         let fatigue = self.stage_fatigue(&mut draft.people.people)?;
+        if self
+            .environment
+            .as_ref()
+            .is_some_and(|owner| !owner.regions.is_empty())
+        {
+            let tick = draft.events().tick;
+            let view = self.core.physical.view(tick)?;
+            crate::environment::apply(
+                self.environment.as_ref(),
+                &view,
+                self.core.travel.as_ref(),
+                &mut draft.people.people,
+                tick,
+            );
+        }
         let irrigation = self
             .irrigation
             .as_ref()

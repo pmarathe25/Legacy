@@ -193,7 +193,10 @@ impl CoreHost {
             manual_response: None,
             manual_withdrawal: None,
             reserved_field: None,
-            season: None,
+            season: self
+                .environment
+                .as_ref()
+                .and_then(|environment| environment.season(tick)),
         };
         Ok(Some(context.prepare(1)?))
     }
