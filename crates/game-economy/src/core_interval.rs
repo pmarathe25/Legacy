@@ -15,7 +15,10 @@ use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 mod host;
-pub use host::{CoreHost, CoreHostSnapshot, CoreRun, CoreRunEvent, CoreSchedule, DecisionPhase};
+pub use host::{
+    CoreHost, CoreHostSnapshot, CoreRequestResults, CoreRun, CoreRunEvent, CoreSchedule,
+    DecisionPhase,
+};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

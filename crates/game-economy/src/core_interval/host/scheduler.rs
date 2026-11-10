@@ -5,6 +5,7 @@ use super::*;
 #[serde(tag = "phase", rename_all = "snake_case")]
 pub enum DecisionPhase {
     Meals,
+    Requests { meal_people: Vec<u64> },
     Work { meal_people: Vec<u64> },
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -42,7 +43,8 @@ impl CoreSchedule {
         {
             return Err("invalid core decision schedule".into());
         }
-        if let DecisionPhase::Work { meal_people } = &self.phase
+        if let DecisionPhase::Requests { meal_people } | DecisionPhase::Work { meal_people } =
+            &self.phase
             && (self.next_decision_millis != Some(u128::from(offset))
                 || offset == quantum
                 || meal_people.par_windows(2).any(|rows| rows[0] >= rows[1])
@@ -61,6 +63,7 @@ pub enum CoreRunEvent {
     Deferred(Vec<u64>),
     Work(game_lot_runtime::EarlyWorkEvents),
     Meals(Vec<(u64, u32)>),
+    Requests(Vec<game_autowork::requests::Event>),
     Starts(Vec<(u64, bool)>),
     Boundary(Box<Events>),
 }
@@ -217,9 +220,24 @@ impl CoreHost {
                             ));
                         }
                         self.schedule.as_mut().expect("active schedule").phase =
-                            DecisionPhase::Work {
+                            DecisionPhase::Requests {
                                 meal_people: people,
                             };
+                    }
+                    DecisionPhase::Requests { mut meal_people } => {
+                        let mut busy = blocked.to_vec();
+                        busy.extend(meal_people.iter().copied());
+                        busy.par_sort_unstable();
+                        busy.dedup();
+                        let result = attempt!('run, self.respond_to_work_requests(&busy, schedule.work_rate));
+                        meal_people.extend(result.actors);
+                        meal_people.par_sort_unstable();
+                        meal_people.dedup();
+                        if !result.events.is_empty() {
+                            run.events.push(CoreRunEvent::Requests(result.events));
+                        }
+                        self.schedule.as_mut().expect("active schedule").phase =
+                            DecisionPhase::Work { meal_people };
                     }
                     DecisionPhase::Work { meal_people } => {
                         let mut busy = blocked.to_vec();

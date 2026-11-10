@@ -482,6 +482,22 @@ impl Requests {
         offers: Option<&OfferIndex>,
         tick: u64,
     ) -> Draft {
+        self.prepare_filtered(people, opinions, busy, offers, tick, |_| true)
+    }
+    /// Apply host-owned contact constraints before selecting a person's first
+    /// eligible request. Expiration remains independent of contact.
+    pub fn prepare_filtered<F>(
+        &self,
+        people: &[PersonSnapshot],
+        opinions: Option<&Opinions>,
+        busy: &[u64],
+        offers: Option<&OfferIndex>,
+        tick: u64,
+        eligible_contact: F,
+    ) -> Draft
+    where
+        F: Fn(&Request) -> bool + Sync,
+    {
         if self.pending.is_empty() {
             return Draft {
                 decisions: Vec::new(),
@@ -526,6 +542,7 @@ impl Requests {
             .par_iter()
             .filter(|row| {
                 row.expires >= tick
+                    && eligible_contact(row)
                     && busy.binary_search(&row.worker).is_err()
                     && person_index(people, row.worker)
                         .is_some_and(|i| people[i].1 == Some(row.region) && people[i].2 > 0)

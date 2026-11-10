@@ -2,7 +2,9 @@
 use super::*;
 use game_autowork::Autowork;
 use game_economy_work::tool_wear::ToolWear;
+mod requests;
 mod scheduler;
+pub use requests::CoreRequestResults;
 pub use scheduler::{CoreRun, CoreRunEvent, CoreSchedule, DecisionPhase};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -14,6 +16,8 @@ pub struct CoreHostSnapshot {
     #[serde(default)]
     pub tool_wear: Option<ToolWear>,
     #[serde(default)]
+    pub opinions: Option<game_opinions::Opinions>,
+    #[serde(default)]
     pub schedule: Option<CoreSchedule>,
 }
 
@@ -22,6 +26,7 @@ pub struct CoreHost {
     core: CoreInterval,
     autowork: Option<Autowork>,
     tool_wear: Option<ToolWear>,
+    opinions: Option<game_opinions::Opinions>,
     schedule: Option<CoreSchedule>,
 }
 impl CoreHost {
@@ -30,25 +35,28 @@ impl CoreHost {
             core,
             autowork,
             tool_wear,
+            opinions,
             schedule,
         } = snapshot;
         let core = CoreInterval::begin(core, rates)?;
-        Self::compile(core, autowork, tool_wear, schedule)
+        Self::compile(core, autowork, tool_wear, opinions, schedule)
     }
     pub fn resume(snapshot: CoreHostSnapshot) -> Result<Self, String> {
         let CoreHostSnapshot {
             core,
             autowork,
             tool_wear,
+            opinions,
             schedule,
         } = snapshot;
         let core = CoreInterval::resume(core)?;
-        Self::compile(core, autowork, tool_wear, schedule)
+        Self::compile(core, autowork, tool_wear, opinions, schedule)
     }
     fn compile(
         core: CoreInterval,
         autowork: Option<Autowork>,
         tool_wear: Option<ToolWear>,
+        opinions: Option<game_opinions::Opinions>,
         schedule: Option<CoreSchedule>,
     ) -> Result<Self, String> {
         if let Some(owner) = &autowork {
@@ -75,6 +83,12 @@ impl CoreHost {
             let people: HashSet<_> = core.people.par_iter().map(|person| person.id).collect();
             owner.validate(&core.physical, &goods, &people, core.physical.tick())?;
         }
+        if let Some(owner) = &opinions {
+            let people: HashSet<_> = core.people.par_iter().map(|person| person.id).collect();
+            owner
+                .validate(&people, core.physical.tick())
+                .map_err(str::to_owned)?;
+        }
         if let Some(schedule) = &schedule {
             schedule.validate(&core)?;
         }
@@ -82,6 +96,7 @@ impl CoreHost {
             core,
             autowork,
             tool_wear,
+            opinions,
             schedule,
         })
     }
@@ -90,6 +105,7 @@ impl CoreHost {
             core: self.core.snapshot(),
             autowork: self.autowork.clone(),
             tool_wear: self.tool_wear.clone(),
+            opinions: self.opinions.clone(),
             schedule: self.schedule.clone(),
         }
     }
@@ -125,7 +141,11 @@ impl CoreHost {
     pub fn abandon_work(&mut self, requests: &[(u64, u64)]) -> Result<(), String> {
         let tick = self.core.physical.tick();
         let offset = self.core.elapsed_millis().ok_or("no physical interval")?;
-        self.core.abandon_work(tick, offset, requests)
+        let stopped: Vec<_> = requests.par_iter().map(|&(job, _)| (job, false)).collect();
+        let next = self.stage_request_resolution(&stopped, tick, &self.core.people, false);
+        self.core.abandon_work(tick, offset, requests)?;
+        self.publish_request_resolution(next);
+        Ok(())
     }
     /// Physical transfers do not imply any social consent or ownership rule.
     pub fn transfer_goods(
@@ -189,11 +209,27 @@ impl CoreHost {
             draft.next_produced_item(),
             draft.item_updates(),
         )?;
+        let mut outcomes: Vec<_> = draft
+            .events()
+            .finished
+            .par_iter()
+            .map(|&job| (job, true))
+            .collect();
+        outcomes.par_extend(
+            draft
+                .events()
+                .interrupted
+                .par_iter()
+                .map(|&job| (job, false)),
+        );
+        let requests =
+            self.stage_request_resolution(&outcomes, draft.events().tick, &self.core.people, false);
         self.core.validate_early_work(&draft)?;
         let events = self.core.commit_early_work(draft)?;
         if let Some(tools) = tools {
             self.tool_wear = Some(tools);
         }
+        self.publish_request_resolution(requests);
         Ok(Some(events))
     }
     /// Stage and commit carried meals selected by individuals. Active workers
@@ -260,11 +296,35 @@ impl CoreHost {
             draft.next_produced_item(),
             draft.item_updates(),
         )?;
+        let mut outcomes: Vec<_> = draft
+            .events()
+            .finished
+            .par_iter()
+            .map(|&job| (job, true))
+            .collect();
+        outcomes.par_extend(
+            draft
+                .events()
+                .interrupted
+                .par_iter()
+                .chain(draft.events().abandoned.par_iter())
+                .chain(draft.events().suspended.par_iter())
+                .map(|&job| (job, false)),
+        );
+        outcomes.par_sort_unstable_by_key(|&(job, success)| (job, !success));
+        outcomes.dedup_by_key(|row| row.0);
+        let requests = self.stage_request_resolution(
+            &outcomes,
+            draft.events().tick,
+            &draft.people.people,
+            true,
+        );
         self.core.validate_settlement(&draft)?;
         let events = self.core.commit_settlement(draft)?;
         if let Some(tools) = tools {
             self.tool_wear = Some(tools);
         }
+        self.publish_request_resolution(requests);
         self.schedule = None;
         Ok(events)
     }

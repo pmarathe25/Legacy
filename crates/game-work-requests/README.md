@@ -2,6 +2,8 @@
 
 Individuals can address requests for physical work to others. Recipients decide independently using their own preferences and relationships; sending a request does not bind anyone. Starting a job uses the production owner's ordinary material and worker reservations. Batches are validated atomically and use bounded recipient inboxes.
 
+Hosts may filter requests by actual contact before a worker selects among them. Expiration is still processed independently of contact, so an unreachable earlier request does not suppress a reachable later one.
+
 Each person's optional signed `affinity_weight` controls how their own affinity toward a requester affects their decision to start requested work. The composed economy also reevaluates it when deciding whether to continue. Positive, negative, and zero weights are valid; fear, felt obligation, personal helping value, and effort remain separate parts of the person's evaluation.
 
 An independent signed `trust_weight` lets a person consider their own trust in the requester, including trust gained or lost through experienced promises. It also affects whether they continue work. Zero leaves trust irrelevant; no trust value or promise itself compels cooperation.
