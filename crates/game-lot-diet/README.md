@@ -3,3 +3,5 @@
 Plans person-chosen consumption as physical lot actions and derives hunger relief and delayed nutritional effects only from accepted receipts. Callers stage these effects alongside the same generation; the fused campaign host does not yet use this adapter.
 
 Pending effects are validated directly in parallel against the known people and current tick, without cloning the input batch. Validation retains the same rules as the production model.
+
+For partial intervals, `Plan::interval_effects` validates staged physical decisions and exact consumed lots before the host commits custody and applies hunger relief. The host chooses the boundary for delayed health and nutrition effects.

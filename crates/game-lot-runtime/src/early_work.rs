@@ -20,12 +20,103 @@ pub struct EarlyWorkDraft {
     interval: WorkInterval,
     events: EarlyWorkEvents,
 }
+/// Unpublished personal consumption; callers must validate their own effects
+/// before committing it at the same interval offset.
+pub struct IntervalConsumptionDraft {
+    epoch: u64,
+    tick: u64,
+    offset_millis: u64,
+    custody: game_lots::Draft,
+}
+impl IntervalConsumptionDraft {
+    pub fn transactions(&self) -> &[game_lots::TransactionOutcome] {
+        self.custody.transactions()
+    }
+    pub fn movements(&self) -> Vec<game_lots::Outcome> {
+        self.custody.outcomes()
+    }
+}
 impl EarlyWorkDraft {
     pub fn events(&self) -> &EarlyWorkEvents {
         &self.events
     }
 }
 impl Runtime {
+    /// Stage personal consumption without committing custody or physiology.
+    pub fn prepare_interval_consumption(
+        &self,
+        actions: &[Transaction],
+        seed: u64,
+    ) -> Result<IntervalConsumptionDraft, String> {
+        let interval = self
+            .work_interval
+            .as_ref()
+            .ok_or("no physical work interval")?;
+        if interval.tick != self.tick()
+            || interval.custody_revision != self.store.revision()
+            || interval.elapsed_millis == 0
+            || interval.elapsed_millis >= self.tick_millis
+        {
+            return Err("consumption requires a valid partial interval".into());
+        }
+        game_lot_work::validate_actions(&self.catalog, actions)?;
+        if actions.par_iter().any(|action| {
+            action
+                .movements
+                .iter()
+                .any(|movement| !matches!(movement.from, Place::Person(_)) || movement.to.is_some())
+        }) {
+            return Err("interval consumption requires personal custody".into());
+        }
+        self.epoch
+            .checked_add(1)
+            .ok_or("physical work revision overflow")?;
+        let custody = self.store.prepare_transactions_now(seed, actions)?;
+        if !custody.spoiled().is_empty() {
+            return Err("interval consumption cannot publish pending spoilage".into());
+        }
+        Ok(IntervalConsumptionDraft {
+            epoch: self.epoch,
+            tick: interval.tick,
+            offset_millis: interval.elapsed_millis,
+            custody,
+        })
+    }
+
+    /// Commit only if neither the physical generation nor its time has changed.
+    pub fn commit_interval_consumption(
+        &mut self,
+        draft: IntervalConsumptionDraft,
+    ) -> Result<PhysicalOutcomes, String> {
+        let interval = self
+            .work_interval
+            .as_ref()
+            .ok_or("no physical work interval")?;
+        if draft.epoch != self.epoch
+            || interval.tick != draft.tick
+            || interval.elapsed_millis != draft.offset_millis
+            || interval.custody_revision != self.store.revision()
+        {
+            return Err("stale interval consumption draft".into());
+        }
+        let epoch = self
+            .epoch
+            .checked_add(1)
+            .ok_or("physical work revision overflow")?;
+        self.store.validate_commit(&draft.custody)?;
+        let transactions = draft.custody.transactions().to_vec();
+        let (movements, spoiled) = self.store.commit(draft.custody)?;
+        self.work_interval
+            .as_mut()
+            .expect("checked interval")
+            .custody_revision = self.store.revision();
+        self.epoch = epoch;
+        Ok(PhysicalOutcomes {
+            transactions,
+            movements,
+            spoiled,
+        })
+    }
     /// Commit physical transfers at an interval offset after the host has
     /// checked actors and locations. Job custody remains with the work owner.
     pub fn transfer_interval(

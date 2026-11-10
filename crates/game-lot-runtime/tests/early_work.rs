@@ -225,6 +225,46 @@ fn interval_transfer_invalidates_completion_drafts_and_keeps_work_live() {
 }
 
 #[test]
+fn interval_consumption_draft_expires_when_time_moves_without_work_rates() {
+    let mut snapshot = fixture(false, 1).snapshot();
+    snapshot.custody.containers.push(
+        Container::new(
+            Place::Person(2),
+            2,
+            vec![Lot {
+                item: None,
+                good: 1,
+                quantity: 1,
+                expires_at: None,
+            }],
+        )
+        .unwrap(),
+    );
+    snapshot.custody.containers.sort_by_key(|row| row.place);
+    let mut runtime = Runtime::compile(snapshot).unwrap();
+    runtime.begin_work_interval(&[]).unwrap();
+    runtime.progress_work_interval(200).unwrap();
+    let action = game_lots::Transaction {
+        id: 1,
+        movements: vec![game_lots::Movement {
+            id: 1,
+            from: Place::Person(2),
+            to: None,
+            good: 1,
+            quantity: 1,
+            item: None,
+        }],
+        creations: vec![],
+    };
+    let draft = runtime.prepare_interval_consumption(&[action], 7).unwrap();
+    runtime.progress_work_interval(1).unwrap();
+    let before = runtime.snapshot();
+    assert!(runtime.commit_interval_consumption(draft).is_err());
+    assert_eq!(runtime.snapshot(), before);
+    assert_eq!(runtime.custody(Place::Person(2)).unwrap().used, 1);
+}
+
+#[test]
 fn rejected_interval_starts_retire_both_new_holders() {
     let mut runtime = fixture(false, 1);
     runtime.begin_work_interval(&[(1, 1)]).unwrap();

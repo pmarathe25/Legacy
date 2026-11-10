@@ -10,6 +10,8 @@ Callers can also stop a batch of active workers at a partial offset. Their work 
 
 The core can also commit transfers between people in the same region, or between a person and that region's stock, at a partial offset. The caller owns the actors' choices and other social consequences. These transfers do not consume goods or touch work custody, and do not run meals, meetings, or other world decisions.
 
+Chosen living people can eat food they actually carry at a partial offset. Only accepted consumption reduces hunger immediately; health and nutrition effects are retained for the next boundary. Failed consumption and invalid batches do not grant effects, and a resumed interval preserves both the custody and pending effects.
+
 `CoreInterval::next_deadline` observes the earliest work completion, traveler arrival, optional hunger threshold, or quantum boundary, including ties. `progress_to_deadline` stops at that time. The core can publish nonperishable work and arrivals at the offset; other early deadlines remain pending until settlement.
 
 The ignored `composed_core_progress_benchmark` with `LEGACY_CORE_ARRIVALS=1` measures publication of 50,000 arrivals among 100,000 people. One run took 5.87, 2.86, 1.58, and 1.25 ms with one, two, four, and six workers, with matching fingerprints. This measures only arrival publication in the limited core.
@@ -25,6 +27,10 @@ Building the packed holders and transfers in chunks reduced a subsequent instrum
 Set `LEGACY_ABANDON=1` on the admission benchmark to stop every accepted worker at the same offset. Stopping 49,999 workers took 6.25, 2.98, 1.59, and 1.23 ms at one, two, four, and six workers in one run, with matching fingerprints. The timing excludes admission and later physical returns.
 
 The ignored `interval_shared_transfer_benchmark` measures transfers from one stock into existing personal custody. A 50,000-transfer run took 27.4, 16.3, 10.6, and 10.4 ms at one, two, four, and six workers, with matching fingerprints. It excludes social choices and is not a campaign measurement.
+
+Set `LEGACY_MEALS=1` to time the same people consuming their received food after the transfer. One 50,000-meal run took 63.8, 39.9, 31.2, and 28.4 ms at one, two, four, and six workers, with matching fingerprints. This excludes the earlier transfer and remains sublinear.
+
+At 200,000 meals, a separate run took 283, 176, 139, and 151 ms at those worker counts, with matching fingerprints; six workers were slower than four on that run.
 
 An incapacitated traveler does not move during the core interval, even if an immortal recovers at its closing boundary. The existing coarse economy path can move such a traveler after recovery in the same boundary, so this case is not equivalent between the two paths.
 

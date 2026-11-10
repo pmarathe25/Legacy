@@ -78,6 +78,44 @@ fn only_actual_unexpired_meals_produce_nutrition_and_health_effects() {
         assert_eq!(runtime.custody(Place::Person(1)).unwrap().used, 0);
     }
 }
+
+#[test]
+fn interval_meal_effects_require_matching_staged_consumption() {
+    let mut runtime = runtime(3);
+    runtime.begin_work_interval(&[]).unwrap();
+    runtime.progress_work_interval(1).unwrap();
+    let meal = plan(
+        &[Meal {
+            action: 1,
+            person: 1,
+            good: 1,
+        }],
+        &[food()],
+    )
+    .unwrap();
+    let draft = runtime
+        .prepare_interval_consumption(meal.actions(), 1)
+        .unwrap();
+    let effects = meal
+        .interval_effects(draft.transactions(), &draft.movements(), 1)
+        .unwrap();
+    assert_eq!(effects.hunger_relief, vec![(1, 5)]);
+    assert_eq!(
+        (
+            effects.pending[0].at,
+            effects.pending[0].health,
+            effects.pending[0].nutrients[0]
+        ),
+        (1, -1, 7)
+    );
+    let mut receipts = draft.movements();
+    receipts[0].lots = Default::default();
+    assert!(
+        meal.interval_effects(draft.transactions(), &receipts, 1)
+            .is_err()
+    );
+    assert_eq!(runtime.custody(Place::Person(1)).unwrap().used, 2);
+}
 #[test]
 fn duplicate_meals_and_effect_tick_overflow_are_rejected() {
     let meal = Meal {

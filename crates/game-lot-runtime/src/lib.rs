@@ -4,7 +4,7 @@ mod early_work;
 mod identified_output;
 mod receipts;
 pub use advance::{Adoption, AdvanceDraft, Events, Suspension, WorkTransitions};
-pub use early_work::{EarlyWorkDraft, EarlyWorkEvents};
+pub use early_work::{EarlyWorkDraft, EarlyWorkEvents, IntervalConsumptionDraft};
 use game_lot_content::Catalog;
 pub use game_lot_content::{Growth, WritingPage};
 pub use game_lot_work::{Phase, Snapshot, Work, WorkInterval};

@@ -407,6 +407,66 @@ impl CoreInterval {
         }
         self.physical.transfer_interval(actions, self.seed)
     }
+    /// Let chosen living people consume food they physically hold. Hunger
+    /// relief applies now; nutrition and health effects settle at the boundary.
+    pub fn eat(
+        &mut self,
+        tick: u64,
+        offset_millis: u64,
+        meals: &[game_lot_diet::Meal],
+    ) -> Result<game_lot_runtime::PhysicalOutcomes, String> {
+        if self.physical.tick() != tick
+            || self.elapsed_millis() != Some(offset_millis)
+            || offset_millis == 0
+            || offset_millis >= self.physical.tick_millis()
+        {
+            return Err("meal has a stale or invalid interval time".into());
+        }
+        if self.next_deadline(None)?.after_millis == 0 {
+            return Err("publish pending interval events before eating".into());
+        }
+        if meals.is_empty() {
+            return Ok(game_lot_runtime::PhysicalOutcomes {
+                transactions: vec![],
+                movements: vec![],
+                spoiled: vec![],
+            });
+        }
+        if meals.par_iter().any(|meal| {
+            self.people
+                .binary_search_by_key(&meal.person, |p| p.id)
+                .ok()
+                .is_none_or(|index| self.people[index].health == 0)
+        }) {
+            return Err("meal requires a living person".into());
+        }
+        let effect_tick = tick.checked_add(1).ok_or("food effect tick overflow")?;
+        let plan = game_lot_diet::plan(meals, self.physical.goods())?;
+        let draft = self
+            .physical
+            .prepare_interval_consumption(plan.actions(), self.seed)?;
+        let effects =
+            plan.interval_effects(draft.transactions(), &draft.movements(), effect_tick)?;
+        let mut people: Vec<_> = self.people.par_iter().cloned().collect();
+        people.par_iter_mut().for_each(|person| {
+            if let Ok(index) = effects
+                .hunger_relief
+                .binary_search_by_key(&person.id, |row| row.0)
+            {
+                let relief = effects.hunger_relief[index].1;
+                if relief > person.hunger {
+                    person.hunger_remainder = 0;
+                }
+                person.hunger = person.hunger.saturating_sub(relief);
+            }
+        });
+        let mut pending_food = self.pending_food.clone();
+        pending_food.extend(effects.pending);
+        let result = self.physical.commit_interval_consumption(draft)?;
+        self.people = people;
+        self.pending_food = pending_food;
+        Ok(result)
+    }
     /// Progress without repeating decisions, publishing arrivals, or completing work.
     /// Failed validation leaves all owners unchanged.
     pub fn progress(&mut self, requested_millis: u64) -> Result<u64, String> {

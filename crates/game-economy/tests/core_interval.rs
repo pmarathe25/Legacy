@@ -163,6 +163,16 @@ fn interval_shared_transfer_benchmark() {
         .unwrap_or(1);
     assert!(count > 0);
     let mut initial = fixture();
+    let eat = std::env::var_os("LEGACY_MEALS").is_some();
+    if eat {
+        initial.physical.goods[0].food = Some(game_production_model::FoodProfile {
+            portion: 1,
+            hunger_relief: 1,
+            nutrients: Default::default(),
+            health_effect: 0,
+            shelf_days: None,
+        });
+    }
     let person = initial.people[0].clone();
     initial.people = (1..=count)
         .map(|id| {
@@ -216,12 +226,20 @@ fn interval_shared_transfer_benchmark() {
             creations: vec![],
         })
         .collect();
+    let meals: Vec<_> = (1..=count)
+        .map(|id| game_lot_diet::Meal {
+            action: id,
+            person: id,
+            good: 1,
+        })
+        .collect();
     rayon::ThreadPoolBuilder::new()
         .num_threads(workers)
         .build()
         .unwrap()
         .install(|| {
             let mut samples = Vec::new();
+            let mut meal_samples = Vec::new();
             for round in 0..4 {
                 let mut core = CoreInterval::begin(initial.clone(), &[(1, 1)]).unwrap();
                 core.progress(300).unwrap();
@@ -236,6 +254,22 @@ fn interval_shared_transfer_benchmark() {
                         .count(),
                     count as usize
                 );
+                if eat {
+                    let start = std::time::Instant::now();
+                    let outcomes = core.eat(0, 300, &meals).unwrap();
+                    let elapsed = start.elapsed().as_secs_f64();
+                    assert_eq!(
+                        outcomes
+                            .transactions
+                            .iter()
+                            .filter(|row| row.accepted)
+                            .count(),
+                        count as usize
+                    );
+                    if round > 0 {
+                        meal_samples.push(elapsed);
+                    }
+                }
                 if round == 3 {
                     let mut hash = std::collections::hash_map::DefaultHasher::new();
                     serde_json::to_vec(&core.snapshot())
@@ -252,6 +286,13 @@ fn interval_shared_transfer_benchmark() {
                 "workers={workers} transfers={count} elapsed={:.6}",
                 samples[1]
             );
+            if eat {
+                meal_samples.sort_by(f64::total_cmp);
+                println!(
+                    "workers={workers} meals={count} elapsed={:.6}",
+                    meal_samples[1]
+                );
+            }
         });
 }
 
@@ -474,6 +515,110 @@ fn local_interval_transfer_moves_real_custody_and_preserves_inflight_work() {
                 let events = core.settle().unwrap();
                 assert_eq!(events.finished, vec![1]);
                 (core.snapshot(), events)
+            })
+    };
+    assert_eq!(run(1), run(6));
+}
+
+#[test]
+fn interval_meals_consume_real_food_and_apply_effects_at_the_right_time() {
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut initial = fixture();
+                initial.physical.goods[1].food = Some(game_production_model::FoodProfile {
+                    portion: 1,
+                    hunger_relief: 1,
+                    nutrients: Default::default(),
+                    health_effect: -3,
+                    shelf_days: None,
+                });
+                initial.physical.custody.containers.extend([
+                    Container::new(
+                        Place::Person(1),
+                        2,
+                        vec![Lot {
+                            item: None,
+                            good: 2,
+                            quantity: 1,
+                            expires_at: None,
+                        }],
+                    )
+                    .unwrap(),
+                    Container::new(Place::Person(2), 2, vec![]).unwrap(),
+                ]);
+                initial
+                    .physical
+                    .custody
+                    .containers
+                    .sort_by_key(|row| row.place);
+                initial.nutrition = None;
+                initial.pending_food.clear();
+                let mut core = CoreInterval::begin(initial, &[(1, 1)]).unwrap();
+                core.progress(500).unwrap();
+                let meals = [
+                    game_lot_diet::Meal {
+                        action: 1,
+                        person: 1,
+                        good: 2,
+                    },
+                    game_lot_diet::Meal {
+                        action: 2,
+                        person: 2,
+                        good: 2,
+                    },
+                ];
+                let before = core.snapshot();
+                assert!(core.eat(0, 499, &meals).is_err());
+                assert!(
+                    core.eat(
+                        0,
+                        500,
+                        &[game_lot_diet::Meal {
+                            action: 3,
+                            person: 1,
+                            good: 1
+                        }]
+                    )
+                    .is_err()
+                );
+                assert_eq!(core.snapshot(), before);
+                let outcomes = core.eat(0, 500, &meals).unwrap();
+                assert!(outcomes.transactions[0].accepted);
+                assert!(!outcomes.transactions[1].accepted);
+                let saved = core.snapshot();
+                assert_eq!(
+                    (saved.people[0].hunger, saved.people[0].hunger_remainder),
+                    (1, 500)
+                );
+                assert_eq!(saved.people[0].health, 100);
+                assert_eq!(saved.pending_food.len(), 1);
+                assert_eq!(saved.pending_food[0].at, 1);
+                assert_eq!(
+                    saved
+                        .physical
+                        .custody
+                        .containers
+                        .iter()
+                        .find(|row| row.place == Place::Person(1))
+                        .unwrap()
+                        .used,
+                    0
+                );
+                let mut core = CoreInterval::resume(
+                    serde_json::from_str(&serde_json::to_string(&saved).unwrap()).unwrap(),
+                )
+                .unwrap();
+                core.progress(500).unwrap();
+                core.settle().unwrap();
+                let result = core.snapshot();
+                assert_eq!(result.people[0].hunger, 2);
+                assert_eq!(result.people[0].health, 97);
+                assert!(result.pending_food.is_empty());
+                result
             })
     };
     assert_eq!(run(1), run(6));

@@ -47,6 +47,86 @@ impl Plan {
     pub fn actions(&self) -> &[Transaction] {
         &self.actions
     }
+    /// Derive partial-interval effects from staged consumption, before custody
+    /// commits. The caller supplies the boundary for delayed effects.
+    pub fn interval_effects(
+        &self,
+        decisions: &[game_lots::TransactionOutcome],
+        receipts: &[game_lots::Outcome],
+        effect_tick: u64,
+    ) -> Result<Effects, String> {
+        let mut decisions: Vec<_> = decisions.iter().collect();
+        let mut receipts: Vec<_> = receipts.iter().collect();
+        decisions.par_sort_unstable_by_key(|row| row.id);
+        receipts.par_sort_unstable_by_key(|row| row.id);
+        if decisions
+            .par_windows(2)
+            .any(|rows| rows[0].id == rows[1].id)
+            || receipts.par_windows(2).any(|rows| rows[0].id == rows[1].id)
+            || decisions.len() != self.records.len()
+            || receipts.len() != self.records.len()
+        {
+            return Err("invalid interval meal receipts".into());
+        }
+        let rows: Vec<_> = self
+            .records
+            .par_iter()
+            .map(|record| {
+                let id = record.meal.action;
+                let decision = decisions
+                    .binary_search_by_key(&id, |row| row.id)
+                    .ok()
+                    .map(|index| decisions[index])
+                    .ok_or("missing meal decision")?;
+                let receipt = receipts
+                    .binary_search_by_key(&id, |row| row.id)
+                    .ok()
+                    .map(|index| receipts[index])
+                    .ok_or("missing meal receipt")?;
+                if decision.accepted != receipt.accepted {
+                    return Err("inconsistent meal receipt".to_string());
+                }
+                if !decision.accepted {
+                    if !receipt.lots.is_empty() {
+                        return Err("rejected meal has physical goods".into());
+                    }
+                    return Ok(None);
+                }
+                if receipt.lots.iter().any(|lot| lot.good != record.meal.good)
+                    || receipt
+                        .lots
+                        .iter()
+                        .map(|lot| u128::from(lot.quantity))
+                        .sum::<u128>()
+                        != u128::from(record.portion)
+                {
+                    return Err("invalid consumed food receipt".into());
+                }
+                let pending =
+                    (record.health != 0 || record.nutrients != [0; 6]).then_some(FoodEffect {
+                        person: record.meal.person,
+                        at: effect_tick,
+                        health: record.health,
+                        nutrients: record.nutrients,
+                    });
+                Ok(Some(((record.meal.person, record.relief), pending)))
+            })
+            .collect::<Result<_, String>>()?;
+        let mut hunger_relief: Vec<_> = rows
+            .par_iter()
+            .filter_map(|row| row.as_ref().map(|row| row.0))
+            .collect();
+        hunger_relief.par_sort_unstable_by_key(|row| row.0);
+        let mut pending: Vec<_> = rows
+            .into_par_iter()
+            .filter_map(|row| row.and_then(|row| row.1))
+            .collect();
+        pending.par_sort_unstable_by_key(|row| row.person);
+        Ok(Effects {
+            hunger_relief,
+            pending,
+        })
+    }
     /// Derive effects only from exact accepted physical receipts, before commit.
     pub fn effects(&self, events: &Events) -> Result<Effects, String> {
         let mut decisions: Vec<_> = events.physical_actions.par_iter().collect();
