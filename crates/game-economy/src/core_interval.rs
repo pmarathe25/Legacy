@@ -406,6 +406,51 @@ impl CoreInterval {
             people,
         }))
     }
+    /// Start personally chosen journeys at the current offset. Work and other
+    /// caller-supplied occupations exclude departure; closures resolve per route.
+    pub fn depart(
+        &mut self,
+        tick: u64,
+        offset_millis: u64,
+        requests: &[travel::Departure],
+        occupied: &[u64],
+    ) -> Result<Vec<travel::DepartureOutcome>, String> {
+        if self.physical.tick() != tick
+            || self.elapsed_millis() != Some(offset_millis)
+            || offset_millis >= self.physical.tick_millis()
+        {
+            return Err("departure has a stale or invalid interval time".into());
+        }
+        if occupied.par_windows(2).any(|rows| rows[0] >= rows[1]) {
+            return Err("invalid occupied people".into());
+        }
+        if self.next_deadline(None)?.after_millis == 0 {
+            return Err("publish pending interval events before departure".into());
+        }
+        if requests.is_empty() {
+            return Ok(Vec::new());
+        }
+        let generation = self
+            .generation
+            .checked_add(1)
+            .ok_or("core revision overflow")?;
+        let mut busy = occupied.to_vec();
+        busy.par_extend(
+            self.physical
+                .work()
+                .par_iter()
+                .filter(|row| row.phase == game_lot_runtime::Phase::Working)
+                .map(|row| row.job.worker),
+        );
+        busy.par_sort_unstable();
+        busy.dedup();
+        let travel = self.travel.as_ref().ok_or("travel is disabled")?;
+        let (travel, people, outcomes) = travel.attempt(&self.people, requests, &busy, tick)?;
+        self.travel = Some(travel);
+        self.people = people;
+        self.generation = generation;
+        Ok(outcomes)
+    }
     /// Start explicitly chosen work at the current partial-interval offset.
     /// Due arrivals and work completions must be published first.
     pub fn start_work(

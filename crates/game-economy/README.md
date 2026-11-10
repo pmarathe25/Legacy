@@ -10,6 +10,8 @@ Callers can also stop a batch of active workers at a partial offset. Their work 
 
 The core can also commit transfers between people in the same region, or between a person and that region's stock, at a partial offset. The caller owns the actors' choices and other social consequences. These transfers do not consume goods or touch work custody, and do not run meals, meetings, or other world decisions.
 
+Chosen people can start a journey at a partial offset. Existing work and caller-supplied occupations prevent departure, and a closed route produces the traveler's own observation without moving them. A journey begins accumulating travel time only after departure, carries the person's actual possessions, and can cross a boundary or a save before arrival. The caller still chooses destinations and supplies occupations belonging to other owners.
+
 Chosen living people can eat food they actually carry at a partial offset. Only accepted consumption reduces hunger immediately; health and nutrition effects are retained for the next boundary. Failed consumption and invalid batches do not grant effects, and a resumed interval preserves both the custody and pending effects.
 
 The host can also stage autonomous meal choices at an offset: hungry people with `seek_meals` select an unexpired portion from their own custody. Controlled people are excluded, and the host supplies people occupied by other activities. This does not yet schedule the rest of their decisions or food acquisition.
@@ -67,6 +69,8 @@ Adding `LEGACY_TOOLS=1` checks and wears an identified tool for each accepted st
 Adding `LEGACY_TOOL_PAUSE=1` with `LEGACY_TOOLS=1` instead times transferring 49,999 tools to one person and pausing the affected jobs. One run took 112.9, 72.3, 51.7, and 44.6 ms at the same worker counts, with matching fingerprints. Setup and the original work starts are excluded.
 
 With `LEGACY_FATIGUE=1`, the site benchmark times progress, completion, site wear, and duration-weighted fatigue for 50,000 workers. One run took 169.8, 93.3, 66.2, and 62.6 ms at one, two, four, and six workers. Splitting progress into 20 steps with `LEGACY_FATIGUE_STEPS=20` took 263.2, 161.1, 115.1, and 100.9 ms. All runs produced the same fingerprint. These isolated timings are sublinear and exclude admission and setup.
+
+The ignored `core_host_departure_benchmark` times 49,999 chosen departures, their travel, fatigue, and boundary settlement. One run took 19.3, 12.6, 9.1, and 8.0 ms at one, two, four, and six workers, with matching saved-state fingerprints. Setup is excluded, and the timings are sublinear.
 
 The ignored `core_host_site_repair_benchmark` measures 49,999 people repairing separate sites using carried materials. One run took 47.3, 31.2, 24.5, and 26.2 ms at the same worker counts, with matching fingerprints and setup excluded.
 

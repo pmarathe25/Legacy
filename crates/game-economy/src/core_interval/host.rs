@@ -348,6 +348,18 @@ impl CoreHost {
     pub fn publish_arrivals(&mut self) -> Result<Option<CoreArrivals>, String> {
         self.core.publish_arrivals()
     }
+    /// Start journeys selected by the enclosing decision owner.
+    pub fn depart(
+        &mut self,
+        requests: &[travel::Departure],
+        occupied: &[u64],
+    ) -> Result<Vec<travel::DepartureOutcome>, String> {
+        let tick = self.core.physical.tick();
+        let offset = self.core.elapsed_millis().ok_or("no physical interval")?;
+        let outcomes = self.core.depart(tick, offset, requests, occupied)?;
+        self.work_checked_revision = None;
+        Ok(outcomes)
+    }
     pub fn defer_work(&mut self, tick: u64, offset: u64, jobs: &[u64]) -> Result<(), String> {
         self.core.defer_work(tick, offset, jobs)
     }

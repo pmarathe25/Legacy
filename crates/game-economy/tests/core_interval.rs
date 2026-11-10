@@ -302,6 +302,212 @@ fn external_occupation_does_not_count_as_rest() {
 }
 
 #[test]
+fn chosen_departure_progresses_from_its_offset_and_survives_reload() {
+    let run = |workers, reload| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut initial = fixture();
+                initial.people[1].region = Some(1);
+                initial.travel.as_mut().unwrap().journeys.clear();
+                initial.physical.custody.containers.push(
+                    Container::new(
+                        Place::Person(2),
+                        10,
+                        vec![Lot {
+                            item: None,
+                            good: 2,
+                            quantity: 1,
+                            expires_at: None,
+                        }],
+                    )
+                    .unwrap(),
+                );
+                initial
+                    .physical
+                    .custody
+                    .containers
+                    .sort_by_key(|row| row.place);
+                let snapshot = CoreHostSnapshot {
+                    core: initial,
+                    autowork: None,
+                    tool_wear: None,
+                    tool_requirements: vec![],
+                    paused_work_rates: vec![],
+                    fatigue: Some(timed_fatigue()),
+                    activity: vec![],
+                    opinions: None,
+                    goals: None,
+                    agreements: None,
+                    sites: None,
+                    schedule: None,
+                };
+                let mut host = CoreHost::begin(snapshot, &[(1, 1)]).unwrap();
+                host.enable_schedule(1000, 1).unwrap();
+                assert_eq!(host.advance_continuous(250, &[]).unwrap().failure, None);
+                let before = host.snapshot();
+                let choice = game_economy_person::travel::Departure {
+                    person: 2,
+                    destination: 2,
+                };
+                assert!(host.depart(&[choice], &[2]).is_err());
+                assert_eq!(host.snapshot(), before);
+                assert!(host.depart(&[choice], &[]).unwrap()[0].departed);
+                assert_eq!(host.advance_continuous(750, &[]).unwrap().failure, None);
+                let at_boundary = host.snapshot();
+                assert_eq!(
+                    at_boundary.core.travel.as_ref().unwrap().journeys[0].progress_millis,
+                    750
+                );
+                assert_eq!(
+                    at_boundary.fatigue.as_ref().unwrap().remainders,
+                    vec![(2, 500)]
+                );
+                if reload {
+                    let saved = serde_json::to_string(&at_boundary).unwrap();
+                    host = CoreHost::resume(serde_json::from_str(&saved).unwrap()).unwrap();
+                }
+                assert_eq!(host.advance_continuous(250, &[]).unwrap().failure, None);
+                let result = host.snapshot();
+                assert_eq!(result.core.people[1].region, Some(2));
+                assert!(
+                    result
+                        .core
+                        .physical
+                        .custody
+                        .containers
+                        .iter()
+                        .any(|c| c.place == Place::Person(2) && !c.lots.is_empty())
+                );
+                result
+            })
+    };
+    assert_eq!(run(1, false), run(6, true));
+}
+
+#[test]
+#[ignore = "manual concurrent fractional departures benchmark"]
+fn core_host_departure_benchmark() {
+    use std::hash::{Hash, Hasher};
+    let count = std::env::var("LEGACY_PEOPLE")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(50_000);
+    let workers = std::env::var("LEGACY_WORKERS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(1);
+    assert!(count > 1);
+    let mut initial = fixture();
+    let template = initial.people[0].clone();
+    initial.people = (1..=count)
+        .map(|id| {
+            let mut p = template.clone();
+            p.id = id;
+            p
+        })
+        .collect();
+    initial.travel.as_mut().unwrap().journeys.clear();
+    initial.nutrition = None;
+    initial.pending_food.clear();
+    let snapshot = CoreHostSnapshot {
+        core: initial,
+        autowork: None,
+        tool_wear: None,
+        tool_requirements: vec![],
+        paused_work_rates: vec![],
+        fatigue: Some(timed_fatigue()),
+        activity: vec![],
+        opinions: None,
+        goals: None,
+        agreements: None,
+        sites: None,
+        schedule: None,
+    };
+    let choices: Vec<_> = (2..=count)
+        .map(|person| game_economy_person::travel::Departure {
+            person,
+            destination: 2,
+        })
+        .collect();
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(workers)
+        .build()
+        .unwrap()
+        .install(|| {
+            let mut host = CoreHost::begin(snapshot, &[(1, 1)]).unwrap();
+            let start = std::time::Instant::now();
+            let outcomes = host.depart(&choices, &[]).unwrap();
+            host.progress(1000).unwrap();
+            host.settle().unwrap();
+            let elapsed = start.elapsed();
+            assert_eq!(outcomes.len(), (count - 1) as usize);
+            assert!(outcomes.iter().all(|row| row.departed));
+            let result = host.snapshot();
+            assert!(result.core.people[1..].iter().all(|p| p.region == Some(2)));
+            let mut hash = std::collections::hash_map::DefaultHasher::new();
+            serde_json::to_vec(&result).unwrap().hash(&mut hash);
+            println!(
+                "workers={workers} departures={} elapsed={:.6} fingerprint={:016x}",
+                count - 1,
+                elapsed.as_secs_f64(),
+                hash.finish()
+            );
+        });
+}
+
+#[test]
+fn closed_route_is_observed_without_moving_or_consuming_time() {
+    let mut initial = fixture();
+    initial.people[1].region = Some(1);
+    let travel = initial.travel.as_mut().unwrap();
+    travel.journeys.clear();
+    travel.closures.push(game_economy_person::travel::Closure {
+        source: 1,
+        destination: 2,
+        start: 0,
+        end: 1,
+    });
+    let snapshot = CoreHostSnapshot {
+        core: initial,
+        autowork: None,
+        tool_wear: None,
+        tool_requirements: vec![],
+        paused_work_rates: vec![],
+        fatigue: None,
+        activity: vec![],
+        opinions: None,
+        goals: None,
+        agreements: None,
+        sites: None,
+        schedule: None,
+    };
+    let mut host = CoreHost::begin(snapshot, &[(1, 1)]).unwrap();
+    let outcome = host
+        .depart(
+            &[game_economy_person::travel::Departure {
+                person: 2,
+                destination: 2,
+            }],
+            &[],
+        )
+        .unwrap();
+    assert!(!outcome[0].departed);
+    let result = host.snapshot();
+    assert_eq!(result.core.people[1].region, Some(1));
+    let travel = result.core.travel.unwrap();
+    assert!(travel.journeys.is_empty());
+    assert_eq!(travel.observations.len(), 1);
+    assert!(!travel.observations[0].open);
+    assert_eq!(
+        result.core.physical.work_interval.unwrap().elapsed_millis,
+        0
+    );
+}
+
+#[test]
 #[ignore = "manual partial-interval transfer scaling benchmark"]
 fn interval_shared_transfer_benchmark() {
     use std::hash::{Hash, Hasher};
