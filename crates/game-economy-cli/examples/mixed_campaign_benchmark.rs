@@ -34,6 +34,7 @@ fn main() {
     let market_workload = std::env::var_os("LEGACY_MARKET").is_some();
     let work_requests = std::env::var_os("LEGACY_WORK_REQUESTS").is_some();
     let player_view = std::env::var_os("LEGACY_PLAYER_VIEW").is_some();
+    let player_command = std::env::var_os("LEGACY_PLAYER_COMMAND").is_some();
     let inquiry_pursuit =
         taking_inquiries && std::env::var_os("LEGACY_DISABLE_INQUIRY_PURSUIT").is_none();
     assert!(people > 4 && ticks > 0 && sample_count > 0 && reproduction <= 100);
@@ -238,6 +239,7 @@ fn main() {
         }
         let mut samples = Vec::new();
         let mut view_samples = Vec::new();
+        let mut command_samples = Vec::new();
         let mut expected_view = None;
         let mut visible_people = 0;
         let mut expected = None;
@@ -289,6 +291,12 @@ fn main() {
                 if round > 0 { view_samples.push(view_elapsed); }
             }
             let state = world.snapshot();
+            if player_command {
+                let started = std::time::Instant::now();
+                game_economy_player::Player::new(&mut world).set_remember_people(false).unwrap();
+                let elapsed = started.elapsed().as_secs_f64();
+                if round > 0 { command_samples.push(elapsed); }
+            }
             final_population = state.people.len();
             living_people = state.people.iter().filter(|person| person.health > 0).count();
             social_relationships = state.dynamics.as_ref().and_then(|d| d.social.as_ref()).map_or(0, |s| s.relationships.len());
@@ -335,6 +343,12 @@ fn main() {
             let middle = view_samples.len() / 2;
             let median = if view_samples.len() % 2 == 0 { (view_samples[middle - 1] + view_samples[middle]) / 2.0 } else { view_samples[middle] };
             println!("player_view_visible_people={visible_people} elapsed_median={median:.6} view_fingerprint={:016x}", expected_view.unwrap());
+        }
+        if player_command {
+            command_samples.sort_by(f64::total_cmp);
+            let middle = command_samples.len() / 2;
+            let median = if command_samples.len() % 2 == 0 { (command_samples[middle - 1] + command_samples[middle]) / 2.0 } else { command_samples[middle] };
+            println!("player_command=set_remember_people elapsed_median={median:.6}");
         }
         #[cfg(feature = "profile")]
         if std::env::var_os("LEGACY_PROFILE").is_some() {

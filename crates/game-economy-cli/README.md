@@ -88,6 +88,8 @@ The `mixed_campaign_benchmark` example runs the playable campaign with the autho
 
 `LEGACY_PLAYER_VIEW=1` also times a player view separately and fingerprints its visible people, bodies and work sites. In one 10,000-person mixed run with local visits, market and work requests, the view took 0.409 ms with one worker and 0.244 ms with six; both exposed 3,450 nearby people and produced the same view fingerprint.
 
+`LEGACY_PLAYER_COMMAND=1` separately times the controlled person's `set_remember_people(false)` command after the state snapshot. With encounter reports enabled, a single instrumented sample in the 24-boundary workload took about 0.001 ms at both one and six workers; this is one inexpensive preference command, not a bound for all commands.
+
 For example, run `LEGACY_PEOPLE=10000 LEGACY_WORKERS=4 LEGACY_REPRODUCTION=0 cargo run -p game-economy-cli --profile simulation --example mixed_campaign_benchmark`. With `--features profile` and `LEGACY_PROFILE=1`, it also prints wall-clock spans; spans can be nested and should not be summed as exclusive CPU time. The example avoids rebuilding the full CLI test harness for benchmark changes.
 
 Set `LEGACY_MARKET=1` to seed personal goods and gift-request preferences into the same campaign. The output counts generated and still-pending offers, and the run requires actual completed exchanges. With `LEGACY_LOCAL_VISITS=1`, both requesters and holders visit stores; 10,000 initial people over 12 ticks produced 12,994 offers, 1,824 pending, and identical state fingerprints at one and six workers. Median times were 379 ms and 278 ms on the measured machine. This is a short mixed workload with sublinear scaling, not a general performance guarantee.
@@ -95,6 +97,12 @@ Set `LEGACY_MARKET=1` to seed personal goods and gift-request preferences into t
 Set `LEGACY_WORK_REQUESTS=1` for a denser set of individual work goals and askers; the output counts requests created. With local visits, 10,000 initial people over 12 ticks created 35,310 requests and produced matching fingerprints at one and six workers. Median times were 367 ms and 261 ms on the measured machine.
 
 Set `LEGACY_ENCOUNTER_REPORTS=1` to give every initial person a knowledge mind that remembers encounters and willingly shares them. The benchmark prints the resulting numbers of memories and statements, which verifies that the communication path was active. This alters the initial scenario and therefore has a different state fingerprint from the default workload.
+
+With local visits, market, work requests and encounter reports enabled, a 24-boundary run with 10,000 initial people and reproduction set to zero produced 3,885 delivered jobs, 20,622 offers, 4,691 relationships, 2,213 remembered encounters and 1,562 statements. Median advance times were 636, 513, 446 and 462 ms with one, two, four and six workers, with matching world fingerprints. The separately measured player view took 0.292, 0.249, 0.192 and 0.192 ms. This workload is sublinear and includes one existing pregnancy despite disabling generated reproduction.
+
+On the same machine, a separately sampled one-worker process reached about 118 MB working set across setup, warm-up and one timed advance; this is a process-level measurement rather than live world-state size.
+
+With generated reproduction restored to 80 percent and the same 24-boundary mixed workload, the population grew from 10,000 to 19,401, with 3,791 deliveries and 14,298 relationships. An instrumented run measured medians of 1,006, 759, 644 and 618 ms at one, two, four and six workers, with matching fingerprints. Instrumentation adds overhead, so these timings should be compared with other instrumented runs.
 
 Set `LEGACY_TAKING_INQUIRIES=1` to stage a boundary of real takings, create personal requests only from noticed accounts, and let the selected individuals choose to seek relevant contacts during subsequent mixed campaign boundaries. The output distinguishes accepted, declined, and expired requests as well as witness answers. A pending request count alone does not measure active decision or testimony throughput. This option changes the initial state and fingerprint.
 
