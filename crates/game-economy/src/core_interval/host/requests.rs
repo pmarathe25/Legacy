@@ -462,11 +462,38 @@ impl CoreHost {
             .par_iter()
             .map(|decision| decision.worker)
             .collect();
-        let helping: Vec<_> = draft
-            .decisions
-            .par_iter()
-            .filter(|decision| decision.help)
-            .collect();
+        let helping: Vec<_> = if let Some(owner) = self
+            .claims
+            .as_ref()
+            .filter(|owner| !owner.claims.is_empty())
+        {
+            let claims = owner.index();
+            let recipes: std::collections::HashMap<_, _> = self
+                .core
+                .physical
+                .recipes()
+                .par_iter()
+                .map(|recipe| (recipe.id, recipe))
+                .collect();
+            draft
+                .decisions
+                .par_iter()
+                .filter(|decision| {
+                    decision.help
+                        && (decision.disregard_claims || {
+                            recipes.get(&decision.recipe).is_some_and(|recipe| {
+                                claims.allows_inputs(decision.worker, decision.region, recipe)
+                            })
+                        })
+                })
+                .collect()
+        } else {
+            draft
+                .decisions
+                .par_iter()
+                .filter(|decision| decision.help)
+                .collect()
+        };
         let (first, next) = if helping.is_empty() {
             (0, auto.next_id)
         } else {
@@ -496,6 +523,16 @@ impl CoreHost {
                 )
             })
             .collect();
+        let uses = if self
+            .claims
+            .as_ref()
+            .is_some_and(|owner| !owner.claims.is_empty())
+        {
+            let work: Vec<_> = starts.par_iter().map(|row| row.0).collect();
+            game_economy_claims::work(&work, self.core.physical.recipes())?
+        } else {
+            Vec::new()
+        };
         let mut visible: Vec<_> = requests
             .pending
             .par_iter()
@@ -515,6 +552,9 @@ impl CoreHost {
         } else {
             self.start_with_sites(&starts)?
         };
+        if !uses.is_empty() {
+            self.publish_claim_work(&uses, &outcomes, tick);
+        }
         let mut events: Vec<_> = draft
             .decisions
             .par_iter()

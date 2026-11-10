@@ -1410,6 +1410,7 @@ fn core_host_work_requests_benchmark() {
         .and_then(|value| value.parse().ok())
         .unwrap_or(1);
     let use_offers = std::env::var_os("LEGACY_OFFERS").is_some();
+    let request_claims = std::env::var_os("LEGACY_REQUEST_CLAIMS").is_some();
     assert!(count > 1);
     let mut initial = fixture();
     let person = initial.people[0].clone();
@@ -1460,7 +1461,7 @@ fn core_host_work_requests_benchmark() {
                     value_per_unit: 1,
                     max_quantity: 1,
                 }),
-                disregard_claims: false,
+                disregard_claims: request_claims,
             })
             .collect(),
         askers: vec![],
@@ -1528,7 +1529,14 @@ fn core_host_work_requests_benchmark() {
         paused_work_rates: vec![],
         fatigue: None,
         activity: vec![],
-        claims: None,
+        claims: request_claims.then(|| game_economy_claims::Claims {
+            claims: vec![game_economy_claims::Claim {
+                person: 1,
+                region: 1,
+                good: 1,
+            }],
+            ..Default::default()
+        }),
         food_search: None,
         schedule: None,
     };
@@ -2972,6 +2980,133 @@ fn future_request_does_not_hide_an_existing_local_request() {
         host.snapshot().autowork.unwrap().requests.unwrap().pending[0].id,
         1
     );
+}
+
+#[test]
+fn requested_work_follows_the_workers_own_claim_preference() {
+    use game_autowork::requests::{Outcome, Preference, Request, Requests};
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut initial = fixture();
+                initial.people[1].region = Some(1);
+                initial.travel = None;
+                initial.nutrition = None;
+                initial.pending_food.clear();
+                let stock = initial
+                    .physical
+                    .custody
+                    .containers
+                    .iter_mut()
+                    .find(|row| row.place == Place::Stock { region: 1, good: 1 })
+                    .unwrap();
+                *stock = Container::new(
+                    stock.place,
+                    10,
+                    vec![Lot {
+                        item: None,
+                        good: 1,
+                        quantity: 2,
+                        expires_at: None,
+                    }],
+                )
+                .unwrap();
+                let requests = Requests {
+                    next_id: 2,
+                    inherit_births: false,
+                    memory_limit: 4,
+                    work_links: vec![],
+                    memories: vec![],
+                    preferences: vec![Preference {
+                        person: 2,
+                        effort: 0,
+                        help_value: 1,
+                        affinity_weight: 0,
+                        trust_weight: 0,
+                        offer_value: None,
+                        disregard_claims: false,
+                    }],
+                    askers: vec![],
+                    pending: vec![Request {
+                        id: 1,
+                        requester: 1,
+                        worker: 2,
+                        region: 1,
+                        recipe: 1,
+                        created_at: 0,
+                        expires: 5,
+                    }],
+                    events: vec![],
+                };
+                let snapshot = CoreHostSnapshot {
+                    core: initial,
+                    autowork: Some(game_autowork::Autowork {
+                        next_id: 2,
+                        policies: vec![],
+                        requests: Some(requests),
+                    }),
+                    tool_wear: None,
+                    tool_requirements: vec![],
+                    paused_work_rates: vec![],
+                    fatigue: None,
+                    activity: vec![],
+                    food_search: None,
+                    claims: Some(game_economy_claims::Claims {
+                        claims: vec![game_economy_claims::Claim {
+                            person: 1,
+                            region: 1,
+                            good: 1,
+                        }],
+                        ..Default::default()
+                    }),
+                    opinions: None,
+                    goals: None,
+                    agreements: None,
+                    sites: None,
+                    schedule: None,
+                };
+                let mut respectful = CoreHost::begin(snapshot.clone(), &[(1, 1)]).unwrap();
+                let response = respectful.respond_to_work_requests(&[], 1).unwrap();
+                assert_eq!(response.actors, vec![2]);
+                assert!(response.events.is_empty());
+                assert_eq!(
+                    respectful
+                        .snapshot()
+                        .autowork
+                        .unwrap()
+                        .requests
+                        .unwrap()
+                        .pending
+                        .len(),
+                    1
+                );
+                let saved = serde_json::to_string(&respectful.snapshot()).unwrap();
+                let mut disregard: CoreHostSnapshot = serde_json::from_str(&saved).unwrap();
+                disregard
+                    .autowork
+                    .as_mut()
+                    .unwrap()
+                    .requests
+                    .as_mut()
+                    .unwrap()
+                    .preferences[0]
+                    .disregard_claims = true;
+                let mut host = CoreHost::resume(disregard).unwrap();
+                let response = host.respond_to_work_requests(&[], 1).unwrap();
+                assert!(matches!(
+                    response.events[0].outcome,
+                    Outcome::Started { job: 2 }
+                ));
+                let state = host.snapshot();
+                assert_eq!(state.claims.as_ref().unwrap().events.len(), 1);
+                assert_eq!(state.claims.as_ref().unwrap().events[0].person, 2);
+                state
+            })
+    };
+    assert_eq!(run(1), run(6));
 }
 
 #[test]

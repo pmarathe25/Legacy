@@ -66,10 +66,23 @@ impl CoreHost {
             .par_iter()
             .map(|start| (*start, rate))
             .collect();
-        let mut next_claims = claims.clone();
-        let mut opinions = self.opinions.clone();
         let outcomes = self.start_with_sites(&requests)?;
         self.autowork.as_mut().expect("checked work owner").next_id = plan.next_id;
+        self.publish_claim_work(&uses, &outcomes, tick);
+        Ok(Some(outcomes))
+    }
+
+    pub(super) fn publish_claim_work(
+        &mut self,
+        uses: &[game_economy_claims::Use],
+        outcomes: &[(u64, bool)],
+        tick: u64,
+    ) {
+        let Some(mut next_claims) = self.claims.clone().filter(|owner| !owner.claims.is_empty())
+        else {
+            return;
+        };
+        let mut opinions = self.opinions.clone();
         let old: Vec<_> = std::mem::take(&mut next_claims.events)
             .into_par_iter()
             .filter(|event| event.tick == tick)
@@ -99,7 +112,7 @@ impl CoreHost {
         };
         game_economy_claims::publish(
             &mut next_claims,
-            &uses,
+            uses,
             &events,
             &self.core.people,
             &mut opinions,
@@ -111,6 +124,5 @@ impl CoreHost {
             .par_sort_unstable_by_key(|e| (e.tick, e.claimant, e.person, e.region, e.good));
         self.claims = Some(next_claims);
         self.opinions = opinions;
-        Ok(Some(outcomes))
     }
 }
