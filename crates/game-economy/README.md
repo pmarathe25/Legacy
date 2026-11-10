@@ -8,6 +8,8 @@ The separate `core_interval` API composes already-admitted physical work, travel
 
 Callers can also stop a batch of active workers at a partial offset. Their work stops immediately; reserved inputs remain in job custody until their physical return at the boundary, which can be blocked. Stale or invalid batches change nothing, and saved intervals preserve the stopped state.
 
+The core can also commit transfers between people in the same region, or between a person and that region's stock, at a partial offset. The caller owns the actors' choices and other social consequences. These transfers do not consume goods or touch work custody, and do not run meals, meetings, or other world decisions.
+
 `CoreInterval::next_deadline` observes the earliest work completion, traveler arrival, optional hunger threshold, or quantum boundary, including ties. `progress_to_deadline` stops at that time. The core can publish nonperishable work and arrivals at the offset; other early deadlines remain pending until settlement.
 
 The ignored `composed_core_progress_benchmark` with `LEGACY_CORE_ARRIVALS=1` measures publication of 50,000 arrivals among 100,000 people. One run took 5.87, 2.86, 1.58, and 1.25 ms with one, two, four, and six workers, with matching fingerprints. This measures only arrival publication in the limited core.
@@ -21,6 +23,8 @@ At 199,999 packed starts, one run took 260, 163, 123, and 107 ms at one, two, fo
 Building the packed holders and transfers in chunks reduced a subsequent instrumented comparison at that size from 263, 162, 116, and 114 ms to 250, 148, 108, and 96 ms at the same worker counts, with matching fingerprints. These timings remain sublinear and measure only partial-core work admission.
 
 Set `LEGACY_ABANDON=1` on the admission benchmark to stop every accepted worker at the same offset. Stopping 49,999 workers took 6.25, 2.98, 1.59, and 1.23 ms at one, two, four, and six workers in one run, with matching fingerprints. The timing excludes admission and later physical returns.
+
+The ignored `interval_shared_transfer_benchmark` measures transfers from one stock into existing personal custody. A 50,000-transfer run took 27.4, 16.3, 10.6, and 10.4 ms at one, two, four, and six workers, with matching fingerprints. It excludes social choices and is not a campaign measurement.
 
 An incapacitated traveler does not move during the core interval, even if an immortal recovers at its closing boundary. The existing coarse economy path can move such a traveler after recovery in the same boundary, so this case is not equivalent between the two paths.
 

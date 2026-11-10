@@ -181,6 +181,50 @@ fn abandoning_another_job_invalidates_a_completion_draft() {
 }
 
 #[test]
+fn interval_transfer_invalidates_completion_drafts_and_keeps_work_live() {
+    let mut snapshot = fixture(false, 1).snapshot();
+    snapshot
+        .custody
+        .containers
+        .push(Container::new(Place::Person(2), 2, vec![]).unwrap());
+    snapshot.custody.containers.sort_by_key(|row| row.place);
+    let mut runtime = Runtime::compile(snapshot).unwrap();
+    runtime.begin_work_interval(&[(1, 2)]).unwrap();
+    runtime.progress_work_interval(500).unwrap();
+    let stale = runtime.prepare_early_work(7).unwrap().unwrap();
+    let action = game_lots::Transaction {
+        id: 1,
+        movements: vec![game_lots::Movement {
+            id: 1,
+            from: Place::Stock { region: 1, good: 1 },
+            to: Some(Place::Person(2)),
+            good: 1,
+            quantity: 1,
+            item: None,
+        }],
+        creations: vec![],
+    };
+    let mut invalid = action.clone();
+    invalid.movements[0].from = Place::JobInput(1);
+    let before = runtime.snapshot();
+    assert!(runtime.transfer_interval(&[invalid], 7).is_err());
+    assert_eq!(runtime.snapshot(), before);
+    assert!(
+        runtime
+            .transfer_interval(&[action], 7)
+            .unwrap()
+            .transactions[0]
+            .accepted
+    );
+    let before = runtime.snapshot();
+    assert!(runtime.commit_early_work(stale).is_err());
+    assert_eq!(runtime.snapshot(), before);
+    let draft = runtime.prepare_early_work(7).unwrap().unwrap();
+    assert_eq!(runtime.commit_early_work(draft).unwrap().finished, vec![1]);
+    assert_eq!(runtime.custody(Place::Person(2)).unwrap().used, 1);
+}
+
+#[test]
 fn rejected_interval_starts_retire_both_new_holders() {
     let mut runtime = fixture(false, 1);
     runtime.begin_work_interval(&[(1, 1)]).unwrap();

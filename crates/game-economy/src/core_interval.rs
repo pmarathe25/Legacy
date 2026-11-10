@@ -366,6 +366,47 @@ impl CoreInterval {
         }
         self.physical.abandon_interval_work(requests)
     }
+    /// Transfer goods between local people or between a person and local stock.
+    /// The host decides who acts and whether their social choices permit it.
+    pub fn transfer_goods(
+        &mut self,
+        tick: u64,
+        offset_millis: u64,
+        actions: &[game_lots::Transaction],
+    ) -> Result<game_lot_runtime::PhysicalOutcomes, String> {
+        if self.physical.tick() != tick
+            || self.elapsed_millis() != Some(offset_millis)
+            || offset_millis == 0
+            || offset_millis >= self.physical.tick_millis()
+        {
+            return Err("transfer has a stale or invalid interval time".into());
+        }
+        if self.next_deadline(None)?.after_millis == 0 {
+            return Err("publish pending interval events before transferring goods".into());
+        }
+        let region = |place| match place {
+            game_lots::Place::Person(id) => self
+                .people
+                .binary_search_by_key(&id, |p| p.id)
+                .ok()
+                .and_then(|index| self.people[index].region),
+            game_lots::Place::Stock { region, .. } => Some(region),
+            _ => None,
+        };
+        if actions.par_iter().any(|action| {
+            action.movements.iter().any(|movement| {
+                let Some(to) = movement.to else {
+                    return true;
+                };
+                !(matches!(movement.from, game_lots::Place::Person(_))
+                    || matches!(to, game_lots::Place::Person(_)))
+                    || region(movement.from).is_none_or(|source| region(to) != Some(source))
+            })
+        }) {
+            return Err("interval transfer requires local personal custody".into());
+        }
+        self.physical.transfer_interval(actions, self.seed)
+    }
     /// Progress without repeating decisions, publishing arrivals, or completing work.
     /// Failed validation leaves all owners unchanged.
     pub fn progress(&mut self, requested_millis: u64) -> Result<u64, String> {

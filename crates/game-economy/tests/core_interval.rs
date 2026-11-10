@@ -150,6 +150,112 @@ fn fixture() -> CoreSnapshot {
 }
 
 #[test]
+#[ignore = "manual partial-interval transfer scaling benchmark"]
+fn interval_shared_transfer_benchmark() {
+    use std::hash::{Hash, Hasher};
+    let count = std::env::var("LEGACY_PEOPLE")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(50_000);
+    let workers = std::env::var("LEGACY_WORKERS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(1);
+    assert!(count > 0);
+    let mut initial = fixture();
+    let person = initial.people[0].clone();
+    initial.people = (1..=count)
+        .map(|id| {
+            let mut p = person.clone();
+            p.id = id;
+            p
+        })
+        .collect();
+    initial.travel = None;
+    initial.nutrition = None;
+    initial.pending_food.clear();
+    let stock = initial
+        .physical
+        .custody
+        .containers
+        .iter_mut()
+        .find(|row| row.place == Place::Stock { region: 1, good: 1 })
+        .unwrap();
+    *stock = Container::new(
+        stock.place,
+        count,
+        vec![Lot {
+            item: None,
+            good: 1,
+            quantity: count,
+            expires_at: None,
+        }],
+    )
+    .unwrap();
+    initial
+        .physical
+        .custody
+        .containers
+        .extend((1..=count).map(|id| Container::new(Place::Person(id), 1, vec![]).unwrap()));
+    initial
+        .physical
+        .custody
+        .containers
+        .sort_by_key(|row| row.place);
+    let actions: Vec<_> = (1..=count)
+        .map(|id| game_lots::Transaction {
+            id,
+            movements: vec![game_lots::Movement {
+                id,
+                from: Place::Stock { region: 1, good: 1 },
+                to: Some(Place::Person(id)),
+                good: 1,
+                quantity: 1,
+                item: None,
+            }],
+            creations: vec![],
+        })
+        .collect();
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(workers)
+        .build()
+        .unwrap()
+        .install(|| {
+            let mut samples = Vec::new();
+            for round in 0..4 {
+                let mut core = CoreInterval::begin(initial.clone(), &[(1, 1)]).unwrap();
+                core.progress(300).unwrap();
+                let start = std::time::Instant::now();
+                let outcomes = core.transfer_goods(0, 300, &actions).unwrap();
+                let elapsed = start.elapsed().as_secs_f64();
+                assert_eq!(
+                    outcomes
+                        .transactions
+                        .iter()
+                        .filter(|row| row.accepted)
+                        .count(),
+                    count as usize
+                );
+                if round == 3 {
+                    let mut hash = std::collections::hash_map::DefaultHasher::new();
+                    serde_json::to_vec(&core.snapshot())
+                        .unwrap()
+                        .hash(&mut hash);
+                    println!("fingerprint={:016x}", hash.finish());
+                }
+                if round > 0 {
+                    samples.push(elapsed);
+                }
+            }
+            samples.sort_by(f64::total_cmp);
+            println!(
+                "workers={workers} transfers={count} elapsed={:.6}",
+                samples[1]
+            );
+        });
+}
+
+#[test]
 fn interval_abandonment_stops_progress_and_returns_real_inputs_at_boundary() {
     let run = |workers| {
         rayon::ThreadPoolBuilder::new()
@@ -279,6 +385,98 @@ fn abandoning_interval_work_frees_the_worker_without_freeing_reserved_goods() {
             .used,
         2
     );
+}
+
+#[test]
+fn local_interval_transfer_moves_real_custody_and_preserves_inflight_work() {
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut initial = fixture();
+                initial.people[1].region = Some(1);
+                initial.travel = None;
+                initial.physical.custody.containers.extend([
+                    Container::new(
+                        Place::Person(1),
+                        5,
+                        vec![Lot {
+                            item: None,
+                            good: 1,
+                            quantity: 1,
+                            expires_at: None,
+                        }],
+                    )
+                    .unwrap(),
+                    Container::new(Place::Person(2), 5, vec![]).unwrap(),
+                ]);
+                initial
+                    .physical
+                    .custody
+                    .containers
+                    .sort_by_key(|row| row.place);
+                let mut core = CoreInterval::begin(initial, &[(1, 1)]).unwrap();
+                core.progress(300).unwrap();
+                let action = game_lots::Transaction {
+                    id: 1,
+                    movements: vec![game_lots::Movement {
+                        id: 1,
+                        from: Place::Person(1),
+                        to: Some(Place::Person(2)),
+                        good: 1,
+                        quantity: 1,
+                        item: None,
+                    }],
+                    creations: vec![],
+                };
+                let before = core.snapshot();
+                assert!(
+                    core.transfer_goods(0, 299, std::slice::from_ref(&action))
+                        .is_err()
+                );
+                let mut invalid = action.clone();
+                invalid.movements[0].to = Some(Place::Stock { region: 2, good: 1 });
+                assert!(core.transfer_goods(0, 300, &[invalid]).is_err());
+                let mut invalid = action.clone();
+                invalid.movements[0].to = None;
+                assert!(core.transfer_goods(0, 300, &[invalid]).is_err());
+                assert_eq!(core.snapshot(), before);
+                assert!(
+                    core.transfer_goods(0, 300, std::slice::from_ref(&action))
+                        .unwrap()
+                        .transactions[0]
+                        .accepted
+                );
+                assert!(!core.transfer_goods(0, 300, &[action]).unwrap().transactions[0].accepted);
+                let saved = core.snapshot();
+                assert_eq!(
+                    saved.physical.work_interval.as_ref().unwrap().rates,
+                    vec![(1, 1)]
+                );
+                assert_eq!(
+                    saved
+                        .physical
+                        .custody
+                        .containers
+                        .iter()
+                        .find(|row| row.place == Place::Person(2))
+                        .unwrap()
+                        .used,
+                    1
+                );
+                let mut core = CoreInterval::resume(
+                    serde_json::from_str(&serde_json::to_string(&saved).unwrap()).unwrap(),
+                )
+                .unwrap();
+                core.progress(700).unwrap();
+                let events = core.settle().unwrap();
+                assert_eq!(events.finished, vec![1]);
+                (core.snapshot(), events)
+            })
+    };
+    assert_eq!(run(1), run(6));
 }
 
 #[test]

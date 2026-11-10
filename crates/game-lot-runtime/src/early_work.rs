@@ -1,6 +1,6 @@
 //! Transactional publication of already completed work within an open quantum.
-use crate::{Phase, Runtime, Work, WorkInterval};
-use game_lots::Place;
+use crate::{Phase, PhysicalOutcomes, Runtime, Work, WorkInterval};
+use game_lots::{Place, Transaction};
 use game_production_model::JobPhase;
 use game_production_model::Start;
 use rayon::prelude::*;
@@ -26,6 +26,62 @@ impl EarlyWorkDraft {
     }
 }
 impl Runtime {
+    /// Commit physical transfers at an interval offset after the host has
+    /// checked actors and locations. Job custody remains with the work owner.
+    pub fn transfer_interval(
+        &mut self,
+        actions: &[Transaction],
+        seed: u64,
+    ) -> Result<PhysicalOutcomes, String> {
+        let interval = self
+            .work_interval
+            .as_ref()
+            .ok_or("no physical work interval")?;
+        if interval.tick != self.tick()
+            || interval.custody_revision != self.store.revision()
+            || interval.elapsed_millis == 0
+            || interval.elapsed_millis >= self.tick_millis
+        {
+            return Err("transfer requires a valid partial interval".into());
+        }
+        game_lot_work::validate_actions(&self.catalog, actions)?;
+        if actions.par_iter().any(|action| {
+            action.movements.iter().any(|movement| {
+                matches!(movement.from, Place::JobInput(_) | Place::JobOutput(_))
+                    || movement.to.is_none()
+            })
+        }) {
+            return Err("interval transfers cannot consume goods or move job custody".into());
+        }
+        if actions.is_empty() {
+            return Ok(PhysicalOutcomes {
+                transactions: vec![],
+                movements: vec![],
+                spoiled: vec![],
+            });
+        }
+        let epoch = self
+            .epoch
+            .checked_add(1)
+            .ok_or("physical work revision overflow")?;
+        let draft = self.store.prepare_transactions_now(seed, actions)?;
+        if !draft.spoiled().is_empty() {
+            return Err("interval transfers cannot publish pending spoilage".into());
+        }
+        let transactions = draft.transactions().to_vec();
+        self.store.validate_commit(&draft)?;
+        let (movements, spoiled) = self.store.commit(draft)?;
+        self.work_interval
+            .as_mut()
+            .expect("checked interval")
+            .custody_revision = self.store.revision();
+        self.epoch = epoch;
+        Ok(PhysicalOutcomes {
+            transactions,
+            movements,
+            spoiled,
+        })
+    }
     /// Stop chosen jobs at this offset. Their surviving inputs remain in job
     /// custody until the normal boundary return, even if that return is blocked.
     pub fn abandon_interval_work(&mut self, requests: &[(u64, u64)]) -> Result<(), String> {
