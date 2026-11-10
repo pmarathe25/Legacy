@@ -42,6 +42,33 @@ fn fixture() -> (State, Vec<Transaction>) {
 }
 
 #[test]
+fn merged_custody_remains_ordered_across_parallel_chunks() {
+    let base: Vec<_> = (0..5000)
+        .map(|id| Container::new(Place::Person(id * 2 + 1), 1, vec![]).unwrap())
+        .collect();
+    let additions: Vec<_> = (0..5000)
+        .map(|id| Container::new(Place::Person(id * 2 + 2), 1, vec![]).unwrap())
+        .collect();
+    for workers in [1, 2, 4, 6] {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let view = Containers::new(&base, &additions);
+                assert_eq!(view.len(), 10_000);
+                for id in 1..=10_000 {
+                    assert_eq!(
+                        view.get((id - 1) as usize).unwrap().place,
+                        Place::Person(id)
+                    );
+                    assert_eq!(view.find(Place::Person(id)), Some((id - 1) as usize));
+                }
+            });
+    }
+}
+
+#[test]
 fn shared_source_path_resolves_shortage_and_declines_other_topologies() {
     let (state, actions) = fixture();
     let draft = prepare(&state, 1, 17, &actions, true).unwrap().unwrap();

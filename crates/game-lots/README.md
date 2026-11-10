@@ -36,6 +36,8 @@ Set `LEGACY_REVERSE_TRANSFERS=1` to exercise nonordered endpoints in the mixed a
 
 The shared-source path also accepts validated empty new destinations, including unused added holders. It preserves the general arbiter's source-grant order even when a destination lacks capacity, and maps changes into the merged custody order. Unsupported shapes fall back to general arbitration.
 
+For the 49,999-job admission workload, merging already sorted custody runs instead of sorting their concatenation reduced the instrumented one-worker location phase from about 8.7 to 5.9 ms in one repeat. Six-worker total timings overlapped, and fingerprints matched.
+
 Independent transfers keep moved cohorts in immutable chunk-owned receipt arenas. Each outcome exposes only its own exact slice, and serialized outcomes retain their ordinary flat lot arrays. Copies of a receipt remain valid after the source draft is dropped.
 
 Independent transfers merge already ordered dated cohorts in linear time. Work is divided into fixed logical chunks that also expose parallelism in smaller, cohort-heavy batches. The ignored `many_cohort_transfer_benchmark` accepts `LEGACY_ATTEMPTS`, `LEGACY_COHORTS`, and `LEGACY_WORKERS` to measure this path.

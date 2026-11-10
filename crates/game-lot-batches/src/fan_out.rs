@@ -25,14 +25,39 @@ struct Containers<'a> {
 impl<'a> Containers<'a> {
     fn new(base: &'a [Container], additions: &'a [Container]) -> Self {
         let merged = (!additions.is_empty()).then(|| {
-            let mut rows: Vec<_> = base.par_iter().chain(additions.par_iter()).collect();
-            if rows
-                .par_windows(2)
-                .any(|pair| pair[0].place > pair[1].place)
-            {
-                rows.par_sort_unstable_by_key(|row| row.place);
-            }
-            rows
+            const CHUNK: usize = 2048;
+            // Each addition chunk owns the base rows before the next chunk's
+            // first place, so independently merged runs are already ordered.
+            additions
+                .par_chunks(CHUNK)
+                .enumerate()
+                .flat_map_iter(|(index, chunk)| {
+                    let begin = if index == 0 {
+                        0
+                    } else {
+                        base.partition_point(|row| row.place < chunk[0].place)
+                    };
+                    let next = (index + 1) * CHUNK;
+                    let end = if next >= additions.len() {
+                        base.len()
+                    } else {
+                        base.partition_point(|row| row.place < additions[next].place)
+                    };
+                    let mut rows = Vec::with_capacity(end - begin + chunk.len());
+                    let mut old = base[begin..end].iter().peekable();
+                    let mut added = chunk.iter().peekable();
+                    while let (Some(left), Some(right)) = (old.peek(), added.peek()) {
+                        if left.place < right.place {
+                            rows.push(old.next().expect("peeked base row"));
+                        } else {
+                            rows.push(added.next().expect("peeked addition"));
+                        }
+                    }
+                    rows.extend(old);
+                    rows.extend(added);
+                    rows
+                })
+                .collect()
         });
         Self { base, merged }
     }
