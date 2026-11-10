@@ -822,3 +822,27 @@ fn work_terms_emerge_from_personal_experience_and_can_be_adopted_under_pressure(
     }
     assert_eq!(run(1), run(6));
 }
+
+#[test]
+fn authored_skill_catalog_loads_into_the_interval_host() {
+    let root = root();
+    let host = game_economy_cli::core_scenario(
+        &root.join("content/scenarios/economy-core-skills.toml"),
+        &root.join("content"),
+    )
+    .unwrap();
+    let snapshot = host.snapshot();
+    let recipe = snapshot
+        .core
+        .physical
+        .recipes
+        .iter()
+        .find(|recipe| recipe.name == "fixture-tool")
+        .unwrap()
+        .id;
+    let skills = &snapshot.skills.unwrap().owner;
+    assert!(
+        skills.rules.iter().any(|rule| rule.recipe == recipe)
+            || skills.aliases.iter().any(|alias| alias.recipe == recipe)
+    );
+}

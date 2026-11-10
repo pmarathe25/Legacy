@@ -132,6 +132,8 @@ impl CoreHost {
         &mut self,
         starts: &[(game_production_model::Start, u64)],
     ) -> Result<Vec<(u64, bool)>, String> {
+        let skill_rates = self.skill_start_rates(starts)?;
+        let starts = skill_rates.as_deref().unwrap_or(starts);
         if let Some(family) = &self.family {
             let underage = game_economy_work::underage(family);
             if starts

@@ -24,6 +24,7 @@ mod requests;
 mod scenario;
 mod scheduler;
 mod sites;
+mod skills;
 mod social;
 mod taking;
 mod tools;
@@ -35,6 +36,7 @@ pub use purpose::CorePurpose;
 pub use requests::{CoreDeliveryResults, CoreRequestResults};
 pub use scheduler::{CoreRun, CoreRunEvent, CoreSchedule, DecisionPhase};
 pub use sites::{CoreRepairResults, CoreSites};
+pub use skills::{CoreSkillCredit, CoreSkills};
 pub use social::{CoreDynamicsResults, CoreHealth, CoreSocial};
 pub use tools::CoreToolRepairResults;
 pub use treatment::CoreTreatmentResults;
@@ -73,6 +75,8 @@ pub struct CoreHostSnapshot {
     pub practice_work_asks: Vec<game_autowork::requests::Request>,
     #[serde(default)]
     pub practice_work_evidence: CorePracticeWorkEvidence,
+    #[serde(default)]
+    pub skills: Option<CoreSkills>,
     #[serde(default)]
     pub taking: Option<game_economy_taking::Taking>,
     #[serde(default)]
@@ -138,6 +142,7 @@ pub struct CoreHost {
     giving: Option<crate::Giving>,
     practice_work_asks: Vec<game_autowork::requests::Request>,
     practice_work_evidence: CorePracticeWorkEvidence,
+    skills: Option<CoreSkills>,
     taking: Option<game_economy_taking::Taking>,
     agriculture: Option<game_economy_agriculture::Agriculture>,
     irrigation: Option<game_economy_agriculture::irrigation::Irrigation>,
@@ -154,6 +159,8 @@ pub struct CoreHost {
     animal_handling: Option<crate::AnimalHandling>,
     family: Option<game_economy_family::Families>,
     dependent_care: Option<crate::DependentCare>,
+    skill_rates: Option<game_economy_skills::Index>,
+    skill_practice_recipes: HashSet<u32>,
     work_checked_revision: Option<u64>,
     work_checked_blocked: Vec<u64>,
     opinions: Option<game_opinions::Opinions>,
@@ -179,6 +186,7 @@ struct CoreRuntimeOptions {
     giving: Option<crate::Giving>,
     practice_work_asks: Vec<game_autowork::requests::Request>,
     practice_work_evidence: CorePracticeWorkEvidence,
+    skills: Option<CoreSkills>,
     taking: Option<game_economy_taking::Taking>,
     agriculture: Option<game_economy_agriculture::Agriculture>,
     irrigation: Option<game_economy_agriculture::irrigation::Irrigation>,
@@ -216,6 +224,7 @@ impl CoreHost {
             giving,
             practice_work_asks,
             practice_work_evidence,
+            skills,
             taking,
             agriculture,
             irrigation,
@@ -238,7 +247,11 @@ impl CoreHost {
             sites,
             schedule,
         } = snapshot;
-        let core = CoreInterval::begin(core, rates)?;
+        let skill_rates = skills
+            .as_ref()
+            .map(|owner| owner.initial_rates(&core, rates))
+            .transpose()?;
+        let core = CoreInterval::begin(core, skill_rates.as_deref().unwrap_or(rates))?;
         Self::compile(
             core,
             autowork,
@@ -263,6 +276,7 @@ impl CoreHost {
                 giving,
                 practice_work_asks,
                 practice_work_evidence,
+                skills,
                 taking,
                 agriculture,
                 irrigation,
@@ -301,6 +315,7 @@ impl CoreHost {
             giving,
             practice_work_asks,
             practice_work_evidence,
+            skills,
             taking,
             agriculture,
             irrigation,
@@ -348,6 +363,7 @@ impl CoreHost {
                 giving,
                 practice_work_asks,
                 practice_work_evidence,
+                skills,
                 taking,
                 agriculture,
                 irrigation,
@@ -393,6 +409,7 @@ impl CoreHost {
             giving,
             practice_work_asks,
             practice_work_evidence,
+            skills,
             taking,
             agriculture,
             irrigation,
@@ -590,6 +607,9 @@ impl CoreHost {
                 &people,
                 &goods,
             )?;
+        }
+        if let Some(owner) = &skills {
+            owner.validate(&core)?;
         }
         if let Some(owner) = &giving {
             let people: HashSet<_> = core.people.par_iter().map(|person| person.id).collect();
@@ -943,6 +963,10 @@ impl CoreHost {
         if let Some(schedule) = &schedule {
             schedule.validate(&core)?;
         }
+        let skill_rates = skills.as_ref().map(|owner| owner.owner.index());
+        let skill_practice_recipes = skills
+            .as_ref()
+            .map_or_else(HashSet::new, CoreSkills::practice_recipes);
         Ok(Self {
             core,
             autowork,
@@ -961,6 +985,7 @@ impl CoreHost {
             giving,
             practice_work_asks,
             practice_work_evidence,
+            skills,
             taking,
             agriculture,
             irrigation,
@@ -977,6 +1002,8 @@ impl CoreHost {
             animal_handling,
             family,
             dependent_care,
+            skill_rates,
+            skill_practice_recipes,
             work_checked_revision: None,
             work_checked_blocked: Vec::new(),
             opinions,
@@ -1005,6 +1032,7 @@ impl CoreHost {
             giving: self.giving.clone(),
             practice_work_asks: self.practice_work_asks.clone(),
             practice_work_evidence: self.practice_work_evidence.clone(),
+            skills: self.skills.clone(),
             taking: self.taking.clone(),
             agriculture: self.agriculture.clone(),
             irrigation: self.irrigation.clone(),
@@ -1220,6 +1248,7 @@ impl CoreHost {
             return Ok(None);
         };
         let purpose_progress = self.stage_purpose_progress(&draft.events().finished);
+        let skill_completions = self.plan_skill_completions(&draft.events().finished);
         let tools = self.stage_tools(
             draft.produced_items(),
             draft.next_produced_item(),
@@ -1250,6 +1279,7 @@ impl CoreHost {
         )?;
         self.core.validate_early_work(&draft)?;
         let events = self.core.commit_early_work(draft)?;
+        self.remember_skill_completions(skill_completions);
         self.record_early_work_outcomes(&events.finished, &events.interrupted);
         if let Some(progress) = purpose_progress {
             self.purpose.as_mut().expect("purpose owner").progress = progress;
@@ -1693,6 +1723,7 @@ impl CoreHost {
                 &mut draft.people.people,
             );
         }
+        let skills = self.stage_skills(&draft.events().finished, draft.events().tick);
         let family = self.stage_family(&mut draft)?;
         crate::purpose::enroll(
             purpose.as_mut().map(|owner| &mut owner.owner),
@@ -1906,6 +1937,12 @@ impl CoreHost {
         self.goal_setbacks.clear();
         self.practice_work_asks.clear();
         self.practice_work_evidence = CorePracticeWorkEvidence::default();
+        if let Some(owner) = skills {
+            if !owner.owner.events.is_empty() {
+                self.skill_rates = Some(owner.owner.index());
+            }
+            self.skills = Some(owner);
+        }
         if let Some(owner) = purpose {
             self.purpose = Some(owner);
         }

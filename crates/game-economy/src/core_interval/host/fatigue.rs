@@ -87,7 +87,12 @@ impl CoreHost {
         externally_busy: &[u64],
     ) -> Result<u64, String> {
         let Some(owner) = &self.fatigue else {
-            return self.core.progress(requested);
+            let credits = self.plan_skill_practice(requested);
+            let advanced = self.core.progress(requested)?;
+            if advanced > 0 {
+                self.remember_skill_practice(credits);
+            }
+            return Ok(advanced);
         };
         let elapsed = self.core.elapsed_millis().ok_or("no physical interval")?;
         let quantum = self.core.physical.tick_millis();
@@ -99,6 +104,7 @@ impl CoreHost {
         if consumed == 0 {
             return Ok(0);
         }
+        let skill_practice = self.plan_skill_practice(consumed);
         let rates = &self
             .core
             .physical
@@ -217,6 +223,7 @@ impl CoreHost {
         let next = chunks.into_par_iter().flatten().collect();
         let advanced = self.core.progress(consumed)?;
         self.activity = next;
+        self.remember_skill_practice(skill_practice);
         Ok(advanced)
     }
 }
