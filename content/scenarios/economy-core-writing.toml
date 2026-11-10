@@ -24,6 +24,7 @@ health = 90
 hunger = 0
 willing_to_work = false
 seek_meals = false
+goods = { paper = 1, ink = 1 }
 
 [[people]]
 id = 2
@@ -78,7 +79,7 @@ fetch_local_food = true
 [gathering]
 inherit_births = true
 max_hunger = 20
-policies = [{ person = 1, node = 1, willing = true }]
+policies = [{ person = 1, node = 1, willing = false }]
 
 [[gathering.nodes]]
 id = 1
@@ -217,6 +218,11 @@ paper_quantity = 1
 ink_quantity = 1
 next_item = 1
 literacy = [{person=1,script=1,read=true,auto_read=true},{person=2,script=1,read=true,write=true}]
+[[writing.practice]]
+person = 1
+script = 1
+required = 1
+enabled = true
 [[writing.text_templates]]
 id = 1
 text = "The river is cold."

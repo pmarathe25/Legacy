@@ -1073,6 +1073,7 @@ fn authored_text_writing_consumes_supplies_and_creates_a_real_page() {
             let root=root(); let mut host=game_economy_cli::core_scenario(&root.join("content/scenarios/economy-core-writing.toml"),&root.join("content")).unwrap();
             let result=host.advance_scheduled(0,&[]).unwrap(); assert_eq!(result.failure,None);
             assert!(result.events.iter().any(|event|matches!(event,game_economy::core_interval::CoreRunEvent::WrittenPages(ids) if ids == &[1])));
+            assert!(result.events.iter().any(|event|matches!(event,game_economy::core_interval::CoreRunEvent::PracticedWriting(ids) if ids == &[1])));
             let state=host.snapshot(); let writing=state.writing.as_ref().unwrap();
             assert_eq!(writing.pages[0].text.as_deref(),Some("The river is cold."));
             assert!(writing.text_memories.iter().any(|memory| memory.person==2 && &*memory.text=="The river is cold."));

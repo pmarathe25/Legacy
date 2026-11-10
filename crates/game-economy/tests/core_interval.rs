@@ -14224,6 +14224,7 @@ fn core_host_text_writing_benchmark() {
         .and_then(|v| v.parse().ok())
         .unwrap_or(1);
     let reading = std::env::var_os("LEGACY_TEXT_READING").is_some();
+    let practicing = std::env::var_os("LEGACY_WRITING_PRACTICE").is_some();
     assert!(count > 1);
     let mut core = fixture();
     let template = core.people[0].clone();
@@ -14277,8 +14278,8 @@ fn core_host_text_writing_benchmark() {
         .custody
         .containers
         .sort_by_key(|row| row.place);
-    let literacy:Vec<_>=(2..=count).map(|person|serde_json::json!({"person":person,"script":1,"read":true,"write":true,"auto_read":reading})).collect();
-    let authors: Vec<_> = if reading {
+    let literacy:Vec<_>=(2..=count).map(|person|serde_json::json!({"person":person,"script":1,"read":true,"write":!practicing,"auto_read":reading})).collect();
+    let authors: Vec<_> = if reading || practicing {
         vec![]
     } else {
         (2..=count).map(|person|serde_json::json!({"person":person,"script":1,"template":1,"enabled":true})).collect()
@@ -14291,7 +14292,12 @@ fn core_host_text_writing_benchmark() {
     let retention: Vec<_> = (2..=count)
         .map(|person| serde_json::json!({"person":person,"capacity":1,"enabled":true}))
         .collect();
-    let snapshot:CoreHostSnapshot=serde_json::from_value(serde_json::json!({"core":core,"writing":{"paper":3,"ink":4,"page":5,"paper_quantity":1,"ink_quantity":1,"next_item":if reading {count} else {1},"literacy":literacy,"pages":pages,"text_templates":[{"id":1,"text":"A note."}],"text_authors":authors,"text_retention":retention}})).unwrap();
+    let practice: Vec<_> = if practicing {
+        (2..=count).map(|person| serde_json::json!({"person":person,"script":1,"required":1,"enabled":true})).collect()
+    } else {
+        vec![]
+    };
+    let snapshot:CoreHostSnapshot=serde_json::from_value(serde_json::json!({"core":core,"writing":{"paper":3,"ink":4,"page":5,"paper_quantity":1,"ink_quantity":1,"next_item":if reading {count} else {1},"literacy":literacy,"pages":pages,"text_templates":[{"id":1,"text":"A note."}],"text_authors":authors,"text_retention":retention,"practice":practice}})).unwrap();
     rayon::ThreadPoolBuilder::new()
         .num_threads(workers)
         .build()
@@ -14299,19 +14305,37 @@ fn core_host_text_writing_benchmark() {
         .install(|| {
             let mut host = CoreHost::begin(snapshot, &[(1, 1)]).unwrap();
             let start = std::time::Instant::now();
-            let result = if reading {
-                host.read_texts_autonomously(&[])
+            let completed = if practicing {
+                host.practice_writing_autonomously(&[])
+                    .unwrap()
+                    .practiced
+                    .len()
+            } else if reading {
+                host.read_texts_autonomously(&[]).unwrap().items.len()
             } else {
-                host.write_texts_autonomously(&[])
-            }
-            .unwrap();
+                host.write_texts_autonomously(&[]).unwrap().items.len()
+            };
             let elapsed = start.elapsed();
-            assert_eq!(result.items.len(), (count - 1) as usize);
+            assert_eq!(completed, (count - 1) as usize);
             let state = host.snapshot();
-            assert_eq!(
-                state.writing.as_ref().unwrap().text_memories.len(),
-                (count - 1) as usize
-            );
+            if practicing {
+                assert_eq!(
+                    state
+                        .writing
+                        .as_ref()
+                        .unwrap()
+                        .practice
+                        .iter()
+                        .filter(|row| row.progress == 1)
+                        .count(),
+                    (count - 1) as usize
+                );
+            } else {
+                assert_eq!(
+                    state.writing.as_ref().unwrap().text_memories.len(),
+                    (count - 1) as usize
+                );
+            }
             let mut hash = std::collections::hash_map::DefaultHasher::new();
             serde_json::to_vec(&state).unwrap().hash(&mut hash);
             println!(
@@ -14435,5 +14459,68 @@ fn literacy_study_depends_on_personal_choice_encounter_and_a_physical_page() {
             run(1, enabled, page, literate),
             run(6, enabled, page, literate)
         );
+    }
+}
+
+#[test]
+fn writing_practice_consumes_supplies_only_when_personally_chosen() {
+    fn run(workers: usize, enabled: bool, supplied: bool) -> serde_json::Value {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut snapshot = text_writing_fixture(supplied);
+                let writing = snapshot.writing.as_mut().unwrap();
+                writing.text_authors = Default::default();
+                writing.literacy = std::sync::Arc::new(vec![game_economy::Literacy {
+                    person: 2,
+                    script: 1,
+                    read: true,
+                    write: false,
+                    auto_read: false,
+                }]);
+                writing.practice = std::sync::Arc::new(vec![game_economy::WritingPractice {
+                    person: 2,
+                    script: 1,
+                    required: 1,
+                    progress: 0,
+                    enabled,
+                    retry_at: 0,
+                }]);
+                let mut host = CoreHost::begin(snapshot, &[(1, 1)]).unwrap();
+                let before = host.snapshot();
+                let result = host.practice_writing_autonomously(&[]).unwrap();
+                let success = enabled && supplied;
+                assert_eq!(result.actors, if enabled { vec![2] } else { vec![] });
+                assert_eq!(result.practiced, if success { vec![2] } else { vec![] });
+                let state = host.snapshot();
+                let writing = state.writing.as_ref().unwrap();
+                assert_eq!(writing.can_write(2, 1), success);
+                assert_eq!(writing.practice[0].progress, u32::from(success));
+                assert_eq!(
+                    writing.practice[0].retry_at,
+                    if enabled && !supplied { 8 } else { 0 }
+                );
+                if !success {
+                    assert_eq!(state.core.physical.custody, before.core.physical.custody);
+                }
+                let mut restored = CoreHost::resume(
+                    serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap(),
+                )
+                .unwrap();
+                assert!(
+                    restored
+                        .practice_writing_autonomously(&[])
+                        .unwrap()
+                        .actors
+                        .is_empty()
+                );
+                assert_eq!(restored.snapshot(), state);
+                serde_json::to_value(state).unwrap()
+            })
+    }
+    for (enabled, supplied) in [(true, true), (true, false), (false, true)] {
+        assert_eq!(run(1, enabled, supplied), run(6, enabled, supplied));
     }
 }

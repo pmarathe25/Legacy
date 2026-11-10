@@ -226,3 +226,152 @@ impl CoreHost {
         Ok(CoreWritingResults { actors, items })
     }
 }
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct CoreWritingPracticeResults {
+    pub actors: Vec<u64>,
+    pub practiced: Vec<u64>,
+}
+impl CoreHost {
+    /// Each learner independently consumes paper and ink to practice a known script.
+    pub fn practice_writing_autonomously(
+        &mut self,
+        blocked: &[u64],
+    ) -> Result<CoreWritingPracticeResults, String> {
+        if blocked.par_windows(2).any(|pair| pair[0] >= pair[1]) {
+            return Err("invalid occupied people".into());
+        }
+        let Some(owner) = self.writing.as_ref() else {
+            return Ok(CoreWritingPracticeResults::default());
+        };
+        if owner.practice.is_empty() {
+            return Ok(CoreWritingPracticeResults::default());
+        }
+        let tick = self.writing_tick()?;
+        let busy = self.writing_busy(blocked);
+        let chosen: Vec<_> = owner
+            .practice
+            .par_iter()
+            .filter(|policy| {
+                let Ok(index) = self
+                    .core
+                    .people
+                    .binary_search_by_key(&policy.person, |p| p.id)
+                else {
+                    return false;
+                };
+                let person = &self.core.people[index];
+                policy.enabled
+                    && policy.progress < policy.required
+                    && policy.retry_at <= tick
+                    && !person.controlled
+                    && person.health > 0
+                    && person.region.is_some()
+                    && busy.binary_search(&person.id).is_err()
+                    && owner.can_read(person.id, policy.script)
+                    && !owner.can_write(person.id, policy.script)
+            })
+            .map(|policy| (policy.person, policy.script))
+            .collect();
+        if chosen.is_empty() {
+            return Ok(CoreWritingPracticeResults::default());
+        }
+        u64::try_from(chosen.len())
+            .map_err(|_| "practice action overflow")?
+            .checked_mul(2)
+            .ok_or("practice action overflow")?;
+        let actions: Vec<_> = chosen
+            .par_iter()
+            .enumerate()
+            .map(|(index, &(person, _))| {
+                let movement = index as u64 * 2 + 1;
+                game_lots::Transaction {
+                    id: index as u64 + 1,
+                    movements: vec![
+                        game_lots::Movement {
+                            id: movement,
+                            from: game_lots::Place::Person(person),
+                            to: None,
+                            good: owner.paper,
+                            quantity: owner.paper_quantity,
+                            item: None,
+                        },
+                        game_lots::Movement {
+                            id: movement + 1,
+                            from: game_lots::Place::Person(person),
+                            to: None,
+                            good: owner.ink,
+                            quantity: owner.ink_quantity,
+                            item: None,
+                        },
+                    ],
+                    creations: vec![],
+                }
+            })
+            .collect();
+        let physical = self
+            .core
+            .physical
+            .prepare_interval_consumption(&actions, self.core.seed)?;
+        let mut outcomes: Vec<_> = physical.transactions().par_iter().copied().collect();
+        outcomes.par_sort_unstable_by_key(|row| row.id);
+        let mut statuses: Vec<_> = chosen
+            .par_iter()
+            .enumerate()
+            .map(|(index, &(person, script))| {
+                let accepted = outcomes
+                    .binary_search_by_key(&(index as u64 + 1), |row| row.id)
+                    .ok()
+                    .is_some_and(|i| outcomes[i].accepted);
+                (person, script, accepted)
+            })
+            .collect();
+        statuses.par_sort_unstable_by_key(|row| row.0);
+        let mut practice: Vec<_> = owner.practice.par_iter().cloned().collect();
+        practice.par_iter_mut().for_each(|policy| {
+            if let Ok(index) = statuses.binary_search_by_key(&policy.person, |row| row.0) {
+                if statuses[index].2 {
+                    policy.progress += 1;
+                } else {
+                    policy.retry_at = tick.saturating_add(8);
+                }
+            }
+        });
+        let learned: Vec<_> = practice
+            .par_iter()
+            .filter(|policy| policy.progress == policy.required)
+            .map(|policy| (policy.person, policy.script))
+            .collect();
+        let mut next = owner.clone();
+        next.practice = Arc::new(practice);
+        if !learned.is_empty() {
+            let mut literacy: Vec<_> = owner.literacy.par_iter().cloned().collect();
+            literacy.par_iter_mut().for_each(|row| {
+                if learned.binary_search(&(row.person, row.script)).is_ok() {
+                    row.write = true;
+                }
+            });
+            next.literacy = Arc::new(literacy);
+        }
+        let tools = self.stage_tools(&[], None, physical.item_updates())?;
+        let succeeded: Vec<_> = statuses
+            .par_iter()
+            .filter(|row| row.2)
+            .map(|row| row.0)
+            .collect();
+        if !succeeded.is_empty() {
+            self.core
+                .physical
+                .validate_interval_consumption(&physical)?;
+            self.core.physical.commit_interval_consumption(physical)?;
+        }
+        if let Some(tools) = tools {
+            self.tool_wear = Some(tools);
+        }
+        self.writing = Some(next);
+        self.work_checked_revision = None;
+        Ok(CoreWritingPracticeResults {
+            actors: chosen.par_iter().map(|row| row.0).collect(),
+            practiced: succeeded,
+        })
+    }
+}

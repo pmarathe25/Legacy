@@ -20,6 +20,7 @@ pub enum DecisionPhase {
     Exchange { meal_people: Vec<u64> },
     ExchangeProposals { meal_people: Vec<u64> },
     ReadPages { meal_people: Vec<u64> },
+    PracticeWriting { meal_people: Vec<u64> },
     WritePages { meal_people: Vec<u64> },
     FoodSearch { meal_people: Vec<u64> },
     Travel { meal_people: Vec<u64> },
@@ -74,6 +75,7 @@ impl CoreSchedule {
         | DecisionPhase::Exchange { meal_people }
         | DecisionPhase::ExchangeProposals { meal_people }
         | DecisionPhase::ReadPages { meal_people }
+        | DecisionPhase::PracticeWriting { meal_people }
         | DecisionPhase::WritePages { meal_people }
         | DecisionPhase::FoodSearch { meal_people }
         | DecisionPhase::Travel { meal_people } = &self.phase
@@ -112,6 +114,7 @@ pub enum CoreRunEvent {
     Exchanges(Vec<u64>),
     ExchangeOffers(Vec<u64>),
     ReadPages(Vec<u64>),
+    PracticedWriting(Vec<u64>),
     WrittenPages(Vec<u64>),
     Departures(Vec<travel::DepartureOutcome>),
     FoodSearch(Vec<travel::DepartureOutcome>),
@@ -654,6 +657,22 @@ impl CoreHost {
                         meal_people.dedup();
                         if !result.items.is_empty() {
                             run.events.push(CoreRunEvent::ReadPages(result.items));
+                        }
+                        self.schedule.as_mut().expect("active schedule").phase =
+                            DecisionPhase::PracticeWriting { meal_people };
+                    }
+                    DecisionPhase::PracticeWriting { mut meal_people } => {
+                        let mut busy = blocked.to_vec();
+                        busy.extend(meal_people.iter().copied());
+                        busy.par_sort_unstable();
+                        busy.dedup();
+                        let result = attempt!('run,self.practice_writing_autonomously(&busy));
+                        meal_people.par_extend(result.actors);
+                        meal_people.par_sort_unstable();
+                        meal_people.dedup();
+                        if !result.practiced.is_empty() {
+                            run.events
+                                .push(CoreRunEvent::PracticedWriting(result.practiced));
                         }
                         self.schedule.as_mut().expect("active schedule").phase =
                             DecisionPhase::WritePages { meal_people };
