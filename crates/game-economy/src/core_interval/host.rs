@@ -2,6 +2,7 @@
 use super::*;
 use game_autowork::Autowork;
 use game_economy_work::tool_wear::ToolWear;
+mod fatigue;
 mod offers;
 mod requests;
 mod scheduler;
@@ -23,8 +24,12 @@ pub struct CoreHostSnapshot {
     pub tool_wear: Option<ToolWear>,
     #[serde(default)]
     pub tool_requirements: Vec<game_economy_work::tools::Requirement>,
+    #[serde(default, alias = "tool_paused_rates")]
+    pub paused_work_rates: Vec<(u64, u64)>,
     #[serde(default)]
-    pub tool_paused_rates: Vec<(u64, u64)>,
+    pub fatigue: Option<game_economy_fatigue::TimedFatigue>,
+    #[serde(default)]
+    pub activity: Vec<game_economy_fatigue::TimedActivity>,
     #[serde(default)]
     pub opinions: Option<game_opinions::Opinions>,
     #[serde(default)]
@@ -43,9 +48,11 @@ pub struct CoreHost {
     autowork: Option<Autowork>,
     tool_wear: Option<ToolWear>,
     tool_requirements: Vec<game_economy_work::tools::Requirement>,
-    tool_paused_rates: Vec<(u64, u64)>,
-    tool_checked_revision: Option<u64>,
-    tool_checked_blocked: Vec<u64>,
+    paused_work_rates: Vec<(u64, u64)>,
+    fatigue: Option<game_economy_fatigue::TimedFatigue>,
+    activity: Vec<game_economy_fatigue::TimedActivity>,
+    work_checked_revision: Option<u64>,
+    work_checked_blocked: Vec<u64>,
     opinions: Option<game_opinions::Opinions>,
     goals: Option<game_goals::Goals>,
     agreements: Option<game_agreements::Agreements>,
@@ -56,7 +63,9 @@ struct CoreRuntimeOptions {
     sites: Option<CoreSites>,
     schedule: Option<CoreSchedule>,
     tool_requirements: Vec<game_economy_work::tools::Requirement>,
-    tool_paused_rates: Vec<(u64, u64)>,
+    paused_work_rates: Vec<(u64, u64)>,
+    fatigue: Option<game_economy_fatigue::TimedFatigue>,
+    activity: Vec<game_economy_fatigue::TimedActivity>,
 }
 impl CoreHost {
     pub fn begin(snapshot: CoreHostSnapshot, rates: &[(u64, u64)]) -> Result<Self, String> {
@@ -65,7 +74,9 @@ impl CoreHost {
             autowork,
             tool_wear,
             tool_requirements,
-            tool_paused_rates,
+            paused_work_rates,
+            fatigue,
+            activity,
             opinions,
             goals,
             agreements,
@@ -84,7 +95,9 @@ impl CoreHost {
                 sites,
                 schedule,
                 tool_requirements,
-                tool_paused_rates,
+                paused_work_rates,
+                fatigue,
+                activity,
             },
         )
     }
@@ -94,7 +107,9 @@ impl CoreHost {
             autowork,
             tool_wear,
             tool_requirements,
-            tool_paused_rates,
+            paused_work_rates,
+            fatigue,
+            activity,
             opinions,
             goals,
             agreements,
@@ -113,7 +128,9 @@ impl CoreHost {
                 sites,
                 schedule,
                 tool_requirements,
-                tool_paused_rates,
+                paused_work_rates,
+                fatigue,
+                activity,
             },
         )
     }
@@ -130,7 +147,9 @@ impl CoreHost {
             mut sites,
             schedule,
             tool_requirements,
-            tool_paused_rates,
+            paused_work_rates,
+            fatigue,
+            mut activity,
         } = options;
         if let Some(owner) = &autowork {
             let people: Vec<_> = core
@@ -176,11 +195,11 @@ impl CoreHost {
             .work_interval()
             .ok_or("no physical interval")?
             .rates;
-        if (tool_requirements.is_empty() && !tool_paused_rates.is_empty())
-            || tool_paused_rates
+        if (tool_requirements.is_empty() && fatigue.is_none() && !paused_work_rates.is_empty())
+            || paused_work_rates
                 .par_windows(2)
                 .any(|rows| rows[0].0 >= rows[1].0)
-            || tool_paused_rates.par_iter().any(|&(job, rate)| {
+            || paused_work_rates.par_iter().any(|&(job, rate)| {
                 rate == 0
                     || rates.binary_search_by_key(&job, |row| row.0).is_ok()
                     || core
@@ -193,7 +212,40 @@ impl CoreHost {
                         })
             })
         {
-            return Err("invalid tool-paused work".into());
+            return Err("invalid paused work".into());
+        }
+        if let Some(owner) = &fatigue {
+            let people: HashSet<_> = core.people.par_iter().map(|person| person.id).collect();
+            owner.validate(&people, core.physical.tick_millis())?;
+            let elapsed = core.elapsed_millis().ok_or("no physical interval")?;
+            if activity.is_empty() && elapsed == 0 {
+                activity = core
+                    .people
+                    .par_iter()
+                    .map(|person| game_economy_fatigue::TimedActivity {
+                        id: person.id,
+                        ..Default::default()
+                    })
+                    .collect();
+            }
+            if activity.len() != core.people.len()
+                || activity
+                    .par_iter()
+                    .zip(core.people.par_iter())
+                    .any(|(row, person)| {
+                        row.id != person.id
+                            || row.alive_millis > elapsed
+                            || u128::from(row.work_millis)
+                                + u128::from(row.travel_millis)
+                                + u128::from(row.rest_millis)
+                                + u128::from(row.idle_millis)
+                                > u128::from(row.alive_millis)
+                    })
+            {
+                return Err("invalid saved fatigue activity".into());
+            }
+        } else if !activity.is_empty() {
+            return Err("fatigue activity has no owner".into());
         }
         if let Some(owner) = &opinions {
             let people: HashSet<_> = core.people.par_iter().map(|person| person.id).collect();
@@ -239,9 +291,11 @@ impl CoreHost {
             autowork,
             tool_wear,
             tool_requirements,
-            tool_paused_rates,
-            tool_checked_revision: None,
-            tool_checked_blocked: Vec::new(),
+            paused_work_rates,
+            fatigue,
+            activity,
+            work_checked_revision: None,
+            work_checked_blocked: Vec::new(),
             opinions,
             goals,
             agreements,
@@ -255,7 +309,9 @@ impl CoreHost {
             autowork: self.autowork.clone(),
             tool_wear: self.tool_wear.clone(),
             tool_requirements: self.tool_requirements.clone(),
-            tool_paused_rates: self.tool_paused_rates.clone(),
+            paused_work_rates: self.paused_work_rates.clone(),
+            fatigue: self.fatigue.clone(),
+            activity: self.activity.clone(),
             opinions: self.opinions.clone(),
             goals: self.goals.clone(),
             agreements: self.agreements.clone(),
@@ -275,9 +331,9 @@ impl CoreHost {
             .elapsed_millis()
             .is_some_and(|offset| offset < self.core.physical.tick_millis())
         {
-            self.sync_tool_work(&[])?;
+            self.sync_work_rates(&[])?;
         }
-        self.core.progress(millis)
+        self.progress_with_activity(millis, &[])
     }
     pub fn next_deadline(&mut self, hunger: Option<u32>) -> Result<CoreDeadline, String> {
         if self
@@ -285,7 +341,7 @@ impl CoreHost {
             .elapsed_millis()
             .is_some_and(|offset| offset < self.core.physical.tick_millis())
         {
-            self.sync_tool_work(&[])?;
+            self.sync_work_rates(&[])?;
         }
         self.core.next_deadline(hunger)
     }
@@ -313,9 +369,9 @@ impl CoreHost {
         ended.par_sort_unstable();
         let sites = self.stage_sites(&[], &ended, false);
         self.core.abandon_work(tick, offset, requests)?;
-        self.tool_paused_rates
+        self.paused_work_rates
             .retain(|row| ended.binary_search(&row.0).is_err());
-        self.tool_checked_revision = None;
+        self.work_checked_revision = None;
         self.publish_request_resolution(next);
         if let Some(sites) = sites {
             self.sites = Some(sites);
@@ -459,6 +515,11 @@ impl CoreHost {
         blocked: &[u64],
         rate: u64,
     ) -> Result<Vec<(u64, bool)>, String> {
+        if blocked.par_windows(2).any(|rows| rows[0] >= rows[1]) {
+            return Err("invalid occupied people".into());
+        }
+        let occupied = self.blocked_with_rest(blocked);
+        let blocked = occupied.as_deref().unwrap_or(blocked);
         if self.sites.is_some() || !self.tool_requirements.is_empty() {
             let Some(owner) = &self.autowork else {
                 return Ok(Vec::new());
@@ -514,7 +575,8 @@ impl CoreHost {
                 goods: &goods,
                 next_item: owner.next_item,
             });
-        let draft = self.core.prepare_settlement(config)?;
+        let mut draft = self.core.prepare_settlement(config)?;
+        let fatigue = self.stage_fatigue(&mut draft.people.people)?;
         let mut tools = self.stage_tools(
             draft.produced_items(),
             draft.next_produced_item(),
@@ -589,7 +651,19 @@ impl CoreHost {
         if let Some(agreements) = agreements {
             self.agreements = Some(agreements);
         }
-        self.tool_paused_rates.retain(|(job, _)| {
+        if let Some(fatigue) = fatigue {
+            self.fatigue = Some(fatigue);
+            self.activity = self
+                .core
+                .people
+                .par_iter()
+                .map(|person| game_economy_fatigue::TimedActivity {
+                    id: person.id,
+                    ..Default::default()
+                })
+                .collect();
+        }
+        self.paused_work_rates.retain(|(job, _)| {
             self.core
                 .physical
                 .work()
@@ -599,7 +673,7 @@ impl CoreHost {
                     self.core.physical.work()[index].phase == game_lot_runtime::Phase::Working
                 })
         });
-        self.tool_checked_revision = None;
+        self.work_checked_revision = None;
         self.schedule = None;
         Ok(events)
     }

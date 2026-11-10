@@ -37,6 +37,8 @@ impl CoreHost {
         if blocked.par_windows(2).any(|rows| rows[0] >= rows[1]) {
             return Err("invalid occupied people".into());
         }
+        let occupied = self.blocked_with_rest(blocked);
+        let blocked = occupied.as_deref().unwrap_or(blocked);
         let Some(owner) = self.agreements.as_ref().filter(|owner| {
             !owner.contracts.is_empty()
                 && owner.policies.par_iter().any(|policy| {
@@ -250,6 +252,8 @@ impl CoreHost {
         if blocked.par_windows(2).any(|rows| rows[0] >= rows[1]) {
             return Err("invalid occupied people".into());
         }
+        let occupied = self.blocked_with_rest(blocked);
+        let blocked = occupied.as_deref().unwrap_or(blocked);
         let tick = self.core.physical.tick();
         let offset = self.core.elapsed_millis().ok_or("no physical interval")?;
         if offset >= self.core.physical.tick_millis()
@@ -393,6 +397,8 @@ impl CoreHost {
         if rate == 0 || blocked.par_windows(2).any(|rows| rows[0] >= rows[1]) {
             return Err("invalid request response batch".into());
         }
+        let occupied = self.blocked_with_rest(blocked);
+        let blocked = occupied.as_deref().unwrap_or(blocked);
         let tick = self.core.physical.tick();
         let offset = self.core.elapsed_millis().ok_or("no physical interval")?;
         if offset >= self.core.physical.tick_millis()

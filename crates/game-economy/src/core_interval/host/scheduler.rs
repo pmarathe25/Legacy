@@ -109,7 +109,7 @@ impl CoreHost {
             .expect("active interval")
             .rates
             .clone();
-        carried_rates.extend(self.tool_paused_rates.iter().copied());
+        carried_rates.extend(self.paused_work_rates.iter().copied());
         carried_rates.par_sort_unstable_by_key(|row| row.0);
         let schedule = CoreSchedule {
             period_millis,
@@ -143,6 +143,15 @@ impl CoreHost {
         if blocked.par_windows(2).any(|rows| rows[0] >= rows[1]) {
             return Err("invalid occupied people".into());
         }
+        let external_blocked = blocked;
+        let occupied = self.fatigue.as_ref().map(|owner| {
+            let mut people = blocked.to_vec();
+            people.extend(owner.fatigue.resting());
+            people.par_sort_unstable();
+            people.dedup();
+            people
+        });
+        let blocked = occupied.as_deref().unwrap_or(blocked);
         self.schedule
             .as_ref()
             .ok_or("no core schedule")?
@@ -167,7 +176,7 @@ impl CoreHost {
                 run.boundary = true;
                 break;
             }
-            attempt!('run, self.sync_tool_work(blocked));
+            attempt!('run, self.sync_work_rates(blocked));
             let deadline = attempt!('run, self.core.next_deadline(None));
             if deadline.after_millis == 0 {
                 let mut handled = false;
@@ -234,7 +243,7 @@ impl CoreHost {
             if schedule.next_decision_millis == Some(u128::from(offset)) {
                 match schedule.phase {
                     DecisionPhase::Meals => {
-                        let meals = attempt!('run, self.eat_autonomously(blocked));
+                        let meals = attempt!('run, self.eat_autonomously(external_blocked));
                         let people: Vec<_> = meals.iter().map(|meal| meal.person).collect();
                         if !meals.is_empty() {
                             run.events.push(CoreRunEvent::Meals(
@@ -443,7 +452,7 @@ impl CoreHost {
                 run.failure = Some("core schedule made no progress".into());
                 break;
             }
-            attempt!('run, self.core.progress(step));
+            attempt!('run, self.progress_with_activity(step, external_blocked));
         }
         run.elapsed_millis = self.core.elapsed_millis().expect("active interval") - start;
         Ok(run)
@@ -520,7 +529,7 @@ impl CoreHost {
                 .collect();
             candidates.par_extend(current_rates.par_iter().map(|&(id, rate)| (id, 1u8, rate)));
             candidates.par_extend(
-                self.tool_paused_rates
+                self.paused_work_rates
                     .par_iter()
                     .map(|&(id, rate)| (id, 2u8, rate)),
             );
@@ -547,7 +556,7 @@ impl CoreHost {
                 .copied()
                 .filter(|(id, _)| {
                     if self
-                        .tool_paused_rates
+                        .paused_work_rates
                         .binary_search_by_key(id, |row| row.0)
                         .is_ok()
                     {
@@ -581,7 +590,7 @@ impl CoreHost {
                 Ok(core) => {
                     self.core = core;
                     self.schedule = Some(schedule);
-                    self.tool_checked_revision = None;
+                    self.work_checked_revision = None;
                 }
                 Err(error) => {
                     combined.failure = Some(error);

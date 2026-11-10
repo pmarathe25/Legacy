@@ -2,7 +2,8 @@
 use game_economy_person::Person;
 use game_fatigue::Activity;
 pub use game_fatigue::Draft;
-pub use game_fatigue::{Fatigue, Rules};
+pub use game_fatigue::Person as FatiguePerson;
+pub use game_fatigue::{Fatigue, Rules, TimedActivity, TimedFatigue};
 use game_lot_runtime::{Events, Work};
 use game_production_model::Start;
 use rayon::prelude::*;

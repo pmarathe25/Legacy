@@ -8,10 +8,9 @@ pub struct CoreToolRepairResults {
 }
 
 impl CoreHost {
-    /// Pause work while its required goods are absent and restore the saved
-    /// rate when they return. Only new custody revisions need a rescan.
-    pub(super) fn sync_tool_work(&mut self, blocked: &[u64]) -> Result<(), String> {
-        if self.tool_requirements.is_empty() {
+    /// Combine rest and tool blockers while retaining one desired work rate.
+    pub(super) fn sync_work_rates(&mut self, blocked: &[u64]) -> Result<(), String> {
+        if self.tool_requirements.is_empty() && self.fatigue.is_none() {
             return Ok(());
         }
         let interval = self
@@ -20,7 +19,7 @@ impl CoreHost {
             .work_interval()
             .ok_or("no physical interval")?;
         let revision = interval.custody_revision;
-        if self.tool_checked_revision == Some(revision) && self.tool_checked_blocked == blocked {
+        if self.work_checked_revision == Some(revision) && self.work_checked_blocked == blocked {
             return Ok(());
         }
         let mut rates: Vec<_> = interval
@@ -29,12 +28,20 @@ impl CoreHost {
             .map(|&(job, rate)| (job, rate, false))
             .collect();
         rates.par_extend(
-            self.tool_paused_rates
+            self.paused_work_rates
                 .par_iter()
                 .map(|&(job, rate)| (job, rate, true)),
         );
         rates.par_sort_unstable_by_key(|row| row.0);
-        let view = self.core.physical.view(self.core.physical.tick())?;
+        let view = if self.tool_requirements.is_empty() {
+            None
+        } else {
+            Some(self.core.physical.view(self.core.physical.tick())?)
+        };
+        let resting = self
+            .fatigue
+            .as_ref()
+            .map_or_else(Vec::new, |owner| owner.fatigue.resting());
         let choices: Vec<_> = rates
             .par_iter()
             .filter_map(|&(id, rate, was_paused)| {
@@ -51,12 +58,15 @@ impl CoreHost {
                 if work.job.remaining == 0 {
                     return Some((id, rate, false));
                 }
-                let present = game_economy_work::tools::available(
-                    &self.tool_requirements,
-                    &view,
-                    work.job.worker,
-                    work.job.recipe,
-                );
+                let present = view.as_ref().is_none_or(|view| {
+                    game_economy_work::tools::available(
+                        &self.tool_requirements,
+                        view,
+                        work.job.worker,
+                        work.job.recipe,
+                    )
+                });
+                let rests = resting.binary_search(&work.job.worker).is_ok();
                 let able = self
                     .core
                     .people
@@ -69,7 +79,7 @@ impl CoreHost {
                             && person.region == Some(work.job.region)
                             && blocked.binary_search(&person.id).is_err()
                     });
-                Some((id, rate, !present || (was_paused && !able)))
+                Some((id, rate, !present || rests || (was_paused && !able)))
             })
             .collect();
         let enabled: Vec<_> = choices
@@ -83,9 +93,9 @@ impl CoreHost {
             .map(|row| (row.0, row.1))
             .collect();
         self.core.physical.replace_interval_rates(&enabled)?;
-        self.tool_paused_rates = paused;
-        self.tool_checked_revision = Some(revision);
-        self.tool_checked_blocked = blocked.to_vec();
+        self.paused_work_rates = paused;
+        self.work_checked_revision = Some(revision);
+        self.work_checked_blocked = blocked.to_vec();
         Ok(())
     }
     /// Stage each person's repair and its actual consumed material together.
@@ -96,6 +106,8 @@ impl CoreHost {
         if blocked.par_windows(2).any(|rows| rows[0] >= rows[1]) {
             return Err("invalid occupied people".into());
         }
+        let occupied = self.blocked_with_rest(blocked);
+        let blocked = occupied.as_deref().unwrap_or(blocked);
         let Some(owner) = self
             .tool_wear
             .as_ref()

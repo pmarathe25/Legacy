@@ -58,6 +58,8 @@ impl CoreHost {
         if blocked.par_windows(2).any(|rows| rows[0] >= rows[1]) {
             return Err("invalid occupied people".into());
         }
+        let occupied = self.blocked_with_rest(blocked);
+        let blocked = occupied.as_deref().unwrap_or(blocked);
         let Some(owner) = self.sites.as_ref() else {
             return Ok(CoreRepairResults::default());
         };
