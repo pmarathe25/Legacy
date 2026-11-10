@@ -5,7 +5,7 @@ use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
 use std::collections::HashSet;
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Market {
     pub next_id: u64,
@@ -15,6 +15,16 @@ pub struct Market {
     pub offers: Vec<Offer>,
     #[serde(default)]
     pub events: Vec<Event>,
+}
+impl Clone for Market {
+    fn clone(&self) -> Self {
+        Self {
+            next_id: self.next_id,
+            policies: self.policies.par_iter().cloned().collect(),
+            offers: self.offers.par_iter().cloned().collect(),
+            events: self.events.par_iter().cloned().collect(),
+        }
+    }
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -192,7 +202,7 @@ impl Market {
     ) -> Result<(Self, Vec<u64>), String> {
         let count = u64::try_from(proposals.len()).map_err(|_| "offer count overflow")?;
         let next_id = self.next_id.checked_add(count).ok_or("offer id overflow")?;
-        let ids: Vec<_> = (self.next_id..next_id).collect();
+        let ids: Vec<_> = (self.next_id..next_id).into_par_iter().collect();
         let new: Vec<_> = proposals
             .par_iter()
             .zip(ids.par_iter())
@@ -206,7 +216,7 @@ impl Market {
             })
             .collect();
         let mut offers: Vec<_> = self.offers.par_iter().cloned().collect();
-        offers.extend(new);
+        offers.par_extend(new);
         Ok((
             Self {
                 next_id,
@@ -320,7 +330,7 @@ impl DecisionDraft {
             .into_par_iter()
             .filter(|offer| self.ids.binary_search(&offer.id).is_err())
             .collect();
-        market.events.extend(self.events);
+        market.events.par_extend(self.events);
     }
 }
 impl Market {

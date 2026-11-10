@@ -46,6 +46,8 @@ struct Scenario {
     #[serde(default)]
     agreements: Option<Agreements>,
     #[serde(default)]
+    market: Option<AuthoredMarket>,
+    #[serde(default)]
     promise_offering: Vec<PromiseOfferConfig>,
     #[serde(default)]
     work_promise_offering: Vec<WorkPromiseOfferConfig>,
@@ -169,6 +171,44 @@ struct AuthoredGoal {
     enabled: bool,
     #[serde(default)]
     recognize_help: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AuthoredMarket {
+    #[serde(default)]
+    policies: Vec<AuthoredMarketPolicy>,
+    #[serde(default)]
+    offers: Vec<AuthoredMarketOffer>,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AuthoredMarketPolicy {
+    person: u64,
+    #[serde(default = "goal_enabled")]
+    enabled: bool,
+    #[serde(default)]
+    propose: bool,
+    #[serde(default)]
+    request_help: bool,
+    #[serde(default)]
+    min_gain: u64,
+    #[serde(default)]
+    help_value: u64,
+    #[serde(default)]
+    values: BTreeMap<String, u64>,
+    #[serde(default)]
+    influences: Vec<game_market::Influence>,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AuthoredMarketOffer {
+    proposer: u64,
+    recipient: u64,
+    #[serde(default)]
+    give: BTreeMap<String, u64>,
+    #[serde(default)]
+    receive: BTreeMap<String, u64>,
 }
 
 #[derive(Deserialize)]
@@ -1790,6 +1830,74 @@ pub fn scenario_with_options(
             })
         })
         .transpose()?;
+    let market = scenario
+        .market
+        .take()
+        .map(|authored| -> Result<game_market::Market, String> {
+            let resolve = |name: &str| {
+                goods
+                    .get(name)
+                    .copied()
+                    .ok_or_else(|| format!("unknown good {name}"))
+            };
+            let policies = authored
+                .policies
+                .into_iter()
+                .map(|policy| -> Result<_, String> {
+                    let values = policy
+                        .values
+                        .into_iter()
+                        .map(|(name, value)| {
+                            Ok(game_market::Value {
+                                good: resolve(&name)?,
+                                value,
+                            })
+                        })
+                        .collect::<Result<_, String>>()?;
+                    Ok(game_market::Policy {
+                        person: policy.person,
+                        enabled: policy.enabled,
+                        propose: policy.propose,
+                        request_help: policy.request_help,
+                        min_gain: policy.min_gain,
+                        help_value: policy.help_value,
+                        values,
+                        influences: policy.influences,
+                    })
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            let proposals = authored
+                .offers
+                .into_iter()
+                .map(|offer| -> Result<_, String> {
+                    let amounts = |items: BTreeMap<String, u64>| {
+                        items
+                            .into_iter()
+                            .map(|(name, quantity)| {
+                                Ok(game_production::Amount {
+                                    good: resolve(&name)?,
+                                    quantity,
+                                })
+                            })
+                            .collect::<Result<Vec<_>, String>>()
+                    };
+                    Ok(game_market::Proposal {
+                        proposer: offer.proposer,
+                        recipient: offer.recipient,
+                        give: amounts(offer.give)?,
+                        receive: amounts(offer.receive)?,
+                    })
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            let owner = game_market::Market {
+                next_id: 1,
+                policies,
+                offers: vec![],
+                events: vec![],
+            };
+            owner.propose_batch(&proposals, 0).map(|(owner, _)| owner)
+        })
+        .transpose()?;
     for resident in scenario.people {
         let mut lots = Vec::new();
         for (name, quantity) in resident.goods {
@@ -1855,7 +1963,7 @@ pub fn scenario_with_options(
         },
         people,
         rules: scenario.rules,
-        market: None,
+        market,
         agreements,
         opinions: scenario.opinions,
         autowork: Some(Autowork {

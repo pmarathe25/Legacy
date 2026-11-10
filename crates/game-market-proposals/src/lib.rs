@@ -12,7 +12,7 @@ pub struct Draft {
 }
 impl Draft {
     pub fn commit(self, market: &mut Market) {
-        market.offers.extend(self.offers);
+        market.offers.par_extend(self.offers);
         market.next_id = self.next_id;
     }
 }

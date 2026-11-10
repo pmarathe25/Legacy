@@ -873,6 +873,7 @@ dependencies = [
  "game-autowork",
  "game-economy-person",
  "game-goods-cargo",
+ "game-lot-allocation",
  "game-lot-runtime",
  "game-lots",
  "game-market",

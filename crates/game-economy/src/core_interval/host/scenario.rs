@@ -12,7 +12,6 @@ impl CoreHostSnapshot {
         }
         let mut unsupported = Vec::new();
         for (name, present) in [
-            ("market", state.market.is_some()),
             ("confinement", state.confinement.is_some()),
             ("missions", state.missions.is_some()),
             ("campaign", state.campaign.is_some()),
@@ -140,6 +139,7 @@ impl CoreHostSnapshot {
             opinions: state.opinions,
             goals: state.goals,
             dreams: state.dreams,
+            market: state.market,
             shared_work: state.shared_work.map(|owner| CoreSharedWork {
                 owner,
                 sessions: vec![],

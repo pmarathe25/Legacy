@@ -11,6 +11,7 @@ profile = ["game-market-auto/profile"]
 game-economy-person = { path = "../game-economy-person" }
 game-production = { path = "../game-production" }
 game-lots = { path = "../game-lots" }
+game-lot-allocation = { path = "../game-lot-allocation" }
 game-agreements = { path = "../game-agreements" }
 game-market = { path = "../game-market" }
 game-market-auto = { path = "../game-market-auto" }

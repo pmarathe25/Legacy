@@ -18,6 +18,7 @@ mod gathering;
 mod giving;
 mod goals;
 mod hunting;
+mod market;
 mod medical;
 mod offers;
 mod personality;
@@ -34,6 +35,7 @@ mod tools;
 mod treatment;
 pub use food_search::{CoreFoodProvision, CoreFoodSearch};
 pub use giving::CorePracticeWorkEvidence;
+pub use market::CoreMarketResults;
 pub use offers::CoreSocialResults;
 pub use purpose::CorePurpose;
 pub use requests::{CoreDeliveryResults, CoreRequestResults};
@@ -124,6 +126,8 @@ pub struct CoreHostSnapshot {
     #[serde(default)]
     pub shared_work: Option<CoreSharedWork>,
     #[serde(default)]
+    pub market: Option<game_market::Market>,
+    #[serde(default)]
     pub goal_setbacks: Vec<(u64, u32)>,
     #[serde(default)]
     pub agreements: Option<game_agreements::Agreements>,
@@ -180,6 +184,7 @@ pub struct CoreHost {
     goals: Option<game_goals::Goals>,
     dreams: Option<game_economy_goals::Dreams>,
     shared_work: Option<CoreSharedWork>,
+    market: Option<game_market::Market>,
     agreements: Option<game_agreements::Agreements>,
     sites: Option<CoreSites>,
     schedule: Option<CoreSchedule>,
@@ -221,6 +226,7 @@ struct CoreRuntimeOptions {
     dependent_care: Option<crate::DependentCare>,
     dreams: Option<game_economy_goals::Dreams>,
     shared_work: Option<CoreSharedWork>,
+    market: Option<game_market::Market>,
 }
 impl CoreHost {
     pub fn begin(snapshot: CoreHostSnapshot, rates: &[(u64, u64)]) -> Result<Self, String> {
@@ -264,6 +270,7 @@ impl CoreHost {
             goals,
             dreams,
             shared_work,
+            market,
             agreements,
             sites,
             schedule,
@@ -283,6 +290,7 @@ impl CoreHost {
             CoreRuntimeOptions {
                 dreams,
                 shared_work,
+                market,
                 sites,
                 schedule,
                 tool_requirements,
@@ -361,6 +369,7 @@ impl CoreHost {
             goals,
             dreams,
             shared_work,
+            market,
             agreements,
             sites,
             schedule,
@@ -376,6 +385,7 @@ impl CoreHost {
             CoreRuntimeOptions {
                 dreams,
                 shared_work,
+                market,
                 sites,
                 schedule,
                 tool_requirements,
@@ -425,6 +435,7 @@ impl CoreHost {
         let CoreRuntimeOptions {
             dreams,
             shared_work,
+            market,
             mut sites,
             schedule,
             tool_requirements,
@@ -956,6 +967,16 @@ impl CoreHost {
                 .validate(&people, &recipes, core.physical.tick())
                 .map_err(str::to_owned)?;
         }
+        if let Some(owner) = &market {
+            let people: HashSet<_> = core.people.par_iter().map(|person| person.id).collect();
+            let goods: HashSet<_> = core
+                .physical
+                .goods()
+                .par_iter()
+                .map(|good| good.id)
+                .collect();
+            owner.validate(&people, &goods, core.physical.tick())?;
+        }
         if let Some(owner) = &shared_work {
             owner.validate(&core, sites.as_ref())?;
         }
@@ -1068,6 +1089,7 @@ impl CoreHost {
             goals,
             dreams,
             shared_work,
+            market,
             agreements,
             sites,
             schedule,
@@ -1114,6 +1136,7 @@ impl CoreHost {
             goals: self.goals.clone(),
             dreams: self.dreams.clone(),
             shared_work: self.shared_work.clone(),
+            market: self.market.clone(),
             agreements: self.agreements.clone(),
             sites: self.sites.clone(),
             schedule: self.schedule.clone(),
@@ -2075,6 +2098,7 @@ impl CoreHost {
             .collect();
         interrupted.par_sort_unstable();
         let shared_work = self.stage_shared_boundary(&draft.events().finished, &interrupted);
+        let market = self.stage_market_boundary();
         let mut ended = draft.events().finished.clone();
         ended.par_extend(draft.events().interrupted.par_iter().copied());
         ended.par_extend(draft.events().abandoned.par_iter().copied());
@@ -2114,6 +2138,9 @@ impl CoreHost {
         self.publish_request_resolution(requests);
         if let Some(owner) = shared_work {
             self.shared_work = Some(owner);
+        }
+        if let Some(owner) = market {
+            self.market = Some(owner);
         }
         self.prune_successions();
         if let Some(dreams) = dreams {

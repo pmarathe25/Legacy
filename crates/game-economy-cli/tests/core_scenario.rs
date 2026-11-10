@@ -1044,3 +1044,24 @@ fn authored_succession_keeps_real_site_and_inputs_until_personal_takeover() {
     }
     assert_eq!(run(1), run(6));
 }
+
+#[test]
+fn authored_personal_exchange_resolves_named_goods_and_real_custody() {
+    fn run(workers: usize) -> serde_json::Value {
+        rayon::ThreadPoolBuilder::new().num_threads(workers).build().unwrap().install(|| {
+            let root=root(); let mut host=game_economy_cli::core_scenario(&root.join("content/scenarios/economy-core-exchange.toml"),&root.join("content")).unwrap();
+            let state=host.snapshot(); let grain=state.core.physical.goods.iter().find(|good|good.name=="grain").unwrap().id;
+            let bread=state.core.physical.goods.iter().find(|good|good.name=="bread").unwrap().id;
+            let offer=&state.market.as_ref().unwrap().offers[0]; assert_eq!((offer.give[0].good,offer.receive[0].good),(grain,bread));
+            let result=host.advance_scheduled(0,&[]).unwrap(); assert_eq!(result.failure,None);
+            assert!(result.events.iter().any(|event| matches!(event,game_economy::core_interval::CoreRunEvent::Exchanges(ids) if ids == &[1])));
+            let state=host.snapshot();
+            let a=state.core.physical.custody.containers.iter().find(|row|row.place==game_lots::Place::Person(1)).unwrap();
+            let b=state.core.physical.custody.containers.iter().find(|row|row.place==game_lots::Place::Person(2)).unwrap();
+            assert_eq!(a.lots.iter().filter(|lot|lot.good==bread).map(|lot|lot.quantity).sum::<u64>(),1);
+            assert_eq!(b.lots.iter().filter(|lot|lot.good==grain).map(|lot|lot.quantity).sum::<u64>(),1);
+            serde_json::to_value(state).unwrap()
+        })
+    }
+    assert_eq!(run(1), run(6));
+}

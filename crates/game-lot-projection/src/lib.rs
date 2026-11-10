@@ -77,6 +77,39 @@ pub fn cargo(view: &View, capacity: u64) -> Result<GoodsCargo, String> {
     Ok(GoodsCargo { capacity, holdings })
 }
 
+/// A permissive aggregate view for personal choices. Real per-person capacities
+/// are enforced by the physical transaction draft before any decision commits.
+pub fn cargo_for_choices(view: &View, fallback_capacity: u64) -> Result<GoodsCargo, String> {
+    let capacity = view
+        .containers
+        .par_iter()
+        .filter_map(|row| matches!(row.place, Place::Person(_)).then_some(row.capacity))
+        .max()
+        .unwrap_or(fallback_capacity);
+    if capacity == 0 {
+        return Err("personal carrying capacity must be positive".into());
+    }
+    let holdings = view
+        .containers
+        .par_iter()
+        .filter_map(|container| match container.place {
+            Place::Person(person) if !container.goods.is_empty() => Some(GoodsHolding {
+                person,
+                items: container
+                    .goods
+                    .iter()
+                    .map(|item| Amount {
+                        good: item.good,
+                        quantity: item.quantity,
+                    })
+                    .collect(),
+            }),
+            _ => None,
+        })
+        .collect();
+    Ok(GoodsCargo { capacity, holdings })
+}
+
 #[cfg(test)]
 #[path = "../tests/support/behavior.rs"]
 mod tests;

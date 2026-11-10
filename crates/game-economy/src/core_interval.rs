@@ -17,7 +17,7 @@ use std::collections::HashSet;
 mod host;
 pub use host::{
     CoreAssistRecord, CoreAssistSession, CoreDeliveryResults, CoreDynamicsResults,
-    CoreFoodProvision, CoreFoodSearch, CoreHealth, CoreHost, CoreHostSnapshot,
+    CoreFoodProvision, CoreFoodSearch, CoreHealth, CoreHost, CoreHostSnapshot, CoreMarketResults,
     CorePracticeWorkEvidence, CorePurpose, CoreRepairResults, CoreRequestResults, CoreRun,
     CoreRunEvent, CoreSchedule, CoreSharedWork, CoreSites, CoreSkillCredit, CoreSkills, CoreSocial,
     CoreSocialResults, CoreToolRepairResults, CoreTreatmentResults, DecisionPhase,

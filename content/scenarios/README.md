@@ -91,3 +91,5 @@ policies = [{ person = 2, blueprint = 1, target_sites = 1, willing = true }]
 `economy-core-shared-work.toml` demonstrates individually chosen assistance on a job with physically reserved workshop capacity.
 
 `economy-core-succession.toml` adds a personal takeover preference to the shared-work scenario.
+
+`economy-core-exchange.toml` describes personal exchange policies and offers using named goods. Each `[[market.policies]]` entry has a person, `enabled`, `propose`, and `request_help` choices, optional minimum gain and help value, a `values` table keyed by good name, and optional personal influences. `[[market.offers]]` entries name a proposer and recipient and use `give` and `receive` tables keyed by good name. Offers do not reserve the stated goods.
