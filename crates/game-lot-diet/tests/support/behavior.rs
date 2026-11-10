@@ -116,6 +116,54 @@ fn interval_meal_effects_require_matching_staged_consumption() {
     );
     assert_eq!(runtime.custody(Place::Person(1)).unwrap().used, 2);
 }
+
+#[test]
+fn interval_meal_receipts_match_when_orders_differ() {
+    let mut snapshot = runtime(3).snapshot();
+    snapshot.custody.containers.push(
+        Container::new(
+            Place::Person(2),
+            2,
+            vec![Lot {
+                item: None,
+                good: 1,
+                quantity: 2,
+                expires_at: None,
+            }],
+        )
+        .unwrap(),
+    );
+    let mut runtime = Runtime::compile(snapshot).unwrap();
+    runtime.begin_work_interval(&[]).unwrap();
+    runtime.progress_work_interval(1).unwrap();
+    let meals = [
+        Meal {
+            action: 1,
+            person: 1,
+            good: 1,
+        },
+        Meal {
+            action: 2,
+            person: 2,
+            good: 1,
+        },
+    ];
+    let ordered = plan(&meals, &[food()]).unwrap();
+    let reversed = plan(&[meals[1], meals[0]], &[food()]).unwrap();
+    let draft = runtime
+        .prepare_interval_consumption(ordered.actions(), 1)
+        .unwrap();
+    let decisions = draft.transactions();
+    let receipts = draft.movements();
+    let expected = ordered.interval_effects(decisions, &receipts, 1).unwrap();
+    assert_eq!(
+        expected,
+        reversed.interval_effects(decisions, &receipts, 1).unwrap()
+    );
+    let mut duplicate = receipts.clone();
+    duplicate[1].id = duplicate[0].id;
+    assert!(ordered.interval_effects(decisions, &duplicate, 1).is_err());
+}
 #[test]
 fn duplicate_meals_and_effect_tick_overflow_are_rejected() {
     let meal = Meal {

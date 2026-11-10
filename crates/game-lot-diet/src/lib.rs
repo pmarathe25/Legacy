@@ -55,63 +55,87 @@ impl Plan {
         receipts: &[game_lots::Outcome],
         effect_tick: u64,
     ) -> Result<Effects, String> {
-        let mut decisions: Vec<_> = decisions.iter().collect();
-        let mut receipts: Vec<_> = receipts.iter().collect();
-        decisions.par_sort_unstable_by_key(|row| row.id);
-        receipts.par_sort_unstable_by_key(|row| row.id);
-        if decisions
-            .par_windows(2)
-            .any(|rows| rows[0].id == rows[1].id)
-            || receipts.par_windows(2).any(|rows| rows[0].id == rows[1].id)
-            || decisions.len() != self.records.len()
-            || receipts.len() != self.records.len()
-        {
+        if decisions.len() != self.records.len() || receipts.len() != self.records.len() {
             return Err("invalid interval meal receipts".into());
         }
-        let rows: Vec<_> = self
+        let evaluate = |record: &Record,
+                        decision: &game_lots::TransactionOutcome,
+                        receipt: &game_lots::Outcome| {
+            if decision.accepted != receipt.accepted {
+                return Err("inconsistent meal receipt".to_string());
+            }
+            if !decision.accepted {
+                if !receipt.lots.is_empty() {
+                    return Err("rejected meal has physical goods".into());
+                }
+                return Ok(None);
+            }
+            if receipt.lots.iter().any(|lot| lot.good != record.meal.good)
+                || receipt
+                    .lots
+                    .iter()
+                    .map(|lot| u128::from(lot.quantity))
+                    .sum::<u128>()
+                    != u128::from(record.portion)
+            {
+                return Err("invalid consumed food receipt".into());
+            }
+            let pending =
+                (record.health != 0 || record.nutrients != [0; 6]).then_some(FoodEffect {
+                    person: record.meal.person,
+                    at: effect_tick,
+                    health: record.health,
+                    nutrients: record.nutrients,
+                });
+            Ok(Some(((record.meal.person, record.relief), pending)))
+        };
+        // Meal planning validates unique action IDs, so aligned receipts are
+        // also unique and need no separate sort or lookup.
+        let aligned = self
             .records
             .par_iter()
-            .map(|record| {
-                let id = record.meal.action;
-                let decision = decisions
-                    .binary_search_by_key(&id, |row| row.id)
-                    .ok()
-                    .map(|index| decisions[index])
-                    .ok_or("missing meal decision")?;
-                let receipt = receipts
-                    .binary_search_by_key(&id, |row| row.id)
-                    .ok()
-                    .map(|index| receipts[index])
-                    .ok_or("missing meal receipt")?;
-                if decision.accepted != receipt.accepted {
-                    return Err("inconsistent meal receipt".to_string());
-                }
-                if !decision.accepted {
-                    if !receipt.lots.is_empty() {
-                        return Err("rejected meal has physical goods".into());
-                    }
-                    return Ok(None);
-                }
-                if receipt.lots.iter().any(|lot| lot.good != record.meal.good)
-                    || receipt
-                        .lots
-                        .iter()
-                        .map(|lot| u128::from(lot.quantity))
-                        .sum::<u128>()
-                        != u128::from(record.portion)
-                {
-                    return Err("invalid consumed food receipt".into());
-                }
-                let pending =
-                    (record.health != 0 || record.nutrients != [0; 6]).then_some(FoodEffect {
-                        person: record.meal.person,
-                        at: effect_tick,
-                        health: record.health,
-                        nutrients: record.nutrients,
-                    });
-                Ok(Some(((record.meal.person, record.relief), pending)))
-            })
-            .collect::<Result<_, String>>()?;
+            .zip(decisions.par_iter())
+            .zip(receipts.par_iter())
+            .all(|((record, decision), receipt)| {
+                record.meal.action == decision.id && decision.id == receipt.id
+            });
+        let rows: Vec<_> = if aligned {
+            self.records
+                .par_iter()
+                .zip(decisions.par_iter())
+                .zip(receipts.par_iter())
+                .map(|((record, decision), receipt)| evaluate(record, decision, receipt))
+                .collect::<Result<_, String>>()?
+        } else {
+            let mut decisions: Vec<_> = decisions.iter().collect();
+            let mut receipts: Vec<_> = receipts.iter().collect();
+            decisions.par_sort_unstable_by_key(|row| row.id);
+            receipts.par_sort_unstable_by_key(|row| row.id);
+            if decisions
+                .par_windows(2)
+                .any(|rows| rows[0].id == rows[1].id)
+                || receipts.par_windows(2).any(|rows| rows[0].id == rows[1].id)
+            {
+                return Err("invalid interval meal receipts".into());
+            }
+            self.records
+                .par_iter()
+                .map(|record| {
+                    let id = record.meal.action;
+                    let decision = decisions
+                        .binary_search_by_key(&id, |row| row.id)
+                        .ok()
+                        .map(|index| decisions[index])
+                        .ok_or("missing meal decision")?;
+                    let receipt = receipts
+                        .binary_search_by_key(&id, |row| row.id)
+                        .ok()
+                        .map(|index| receipts[index])
+                        .ok_or("missing meal receipt")?;
+                    evaluate(record, decision, receipt)
+                })
+                .collect::<Result<_, String>>()?
+        };
         let mut hunger_relief: Vec<_> = rows
             .par_iter()
             .filter_map(|row| row.as_ref().map(|row| row.0))

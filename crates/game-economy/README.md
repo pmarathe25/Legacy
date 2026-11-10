@@ -38,6 +38,8 @@ At 200,000 meals, a separate run took 283, 176, 139, and 151 ms at those worker 
 
 An independent-source custody path improved a later instrumented 200,000-meal comparison from 262, 169, 126, and 113 ms to 253, 151, 111, and 95 ms at one, two, four, and six workers, with matching fingerprints. Build with `--features profile` and set `LEGACY_PROFILE=1` to print meal phase timings.
 
+Avoiding redundant receipt sorting and lookups when meal records already align reduced a later 200,000-meal comparison from 252 to 235 ms with one worker and from 99 to 97 ms with six, with matching fingerprints.
+
 An incapacitated traveler does not move during the core interval, even if an immortal recovers at its closing boundary. The existing coarse economy path can move such a traveler after recovery in the same boundary, so this case is not equivalent between the two paths.
 
 Work sites can optionally wear with completed production and require real repair materials before they admit more work. An individual may choose to repair an idle site, including under their own fear or felt obligation; competing activity and material consumption are resolved at the physical boundary.
