@@ -6,6 +6,7 @@ type PriorPlans<'a> = (
     Option<&'a game_economy_agriculture::irrigation::Plan>,
     Option<&'a crate::gathering::Plan>,
     Option<&'a crate::animal_care::Plan>,
+    Option<&'a game_animal_restraint::Plan>,
     Option<&'a crate::animal_handling::Plan>,
     Option<&'a crate::hunting::Plan>,
 );
@@ -14,7 +15,7 @@ impl CoreHost {
     pub(super) fn plan_animal_products(
         &self,
         occupied: &[u64],
-        (cultivation, irrigation, gathering, care, handling, hunting): PriorPlans<'_>,
+        (cultivation, irrigation, gathering, care, restraints, handling, hunting): PriorPlans<'_>,
         base: u64,
     ) -> Result<Option<crate::animal_products::Plan>, String> {
         let Some(owner) = &self.animal_products else {
@@ -40,6 +41,10 @@ impl CoreHost {
             busy.par_extend(plan.actors.par_iter().copied());
             plan.targets()
         });
+        if let Some(plan) = restraints {
+            busy.par_extend(plan.actors.par_iter().copied());
+            animals.par_extend(plan.reserved.par_iter().copied());
+        }
         if let Some(plan) = handling {
             busy.par_extend(plan.actors.par_iter().copied());
             animals.par_extend(plan.events.par_iter().map(|event| event.animal));
@@ -71,7 +76,7 @@ impl CoreHost {
             fauna: self.fauna.as_ref(),
             people: &self.core.people,
             opinions: self.opinions.as_ref(),
-            holds: None,
+            holds: self.animal_restraints.as_ref(),
             busy: &busy,
             blocked: &animals,
             max_hunger: self.core.rules.max_work_hunger,

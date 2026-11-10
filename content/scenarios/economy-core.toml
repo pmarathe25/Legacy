@@ -140,3 +140,5 @@ max_hunger = 10
 person = 2
 animal = 1
 willing = true
+
+[animal_restraints]

@@ -17,6 +17,11 @@ impl CoreHost {
         else {
             return;
         };
+        crate::animal_restraint_inheritance::enroll(
+            self.animal_restraints.as_mut(),
+            Some(family),
+            tick,
+        );
         let hunting = crate::hunting::enroll(self.hunting.as_ref(), Some(family), tick);
         let animal_care = crate::animal_care::enroll(self.animal_care.as_ref(), Some(family), tick);
         let handling =

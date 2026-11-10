@@ -8,8 +8,9 @@ impl CoreHost {
         cultivation: Option<&game_economy_agriculture::Plan>,
         irrigation: Option<&game_economy_agriculture::irrigation::Plan>,
         gathering: Option<&crate::gathering::Plan>,
-        (care, handling): (
+        (care, restraints, handling): (
             Option<&crate::animal_care::Plan>,
+            Option<&game_animal_restraint::Plan>,
             Option<&crate::animal_handling::Plan>,
         ),
         base: u64,
@@ -37,6 +38,12 @@ impl CoreHost {
             busy.par_extend(plan.actors.par_iter().copied());
         }
         let mut feed_targets = care.map_or_else(Vec::new, |plan| plan.targets());
+        if let Some(plan) = restraints {
+            busy.par_extend(plan.actors.par_iter().copied());
+            feed_targets.par_extend(plan.reserved.par_iter().copied());
+            feed_targets.par_sort_unstable();
+            feed_targets.dedup();
+        }
         if let Some(plan) = handling {
             busy.par_extend(plan.actors.par_iter().copied());
             feed_targets.par_extend(plan.events.par_iter().map(|event| event.animal));
@@ -85,6 +92,7 @@ impl CoreHost {
         feeding: &[game_fauna::Feeding],
         handling: Option<&crate::animal_handling::Plan>,
         product_handling: &[game_fauna::handling::Event],
+        restraints: Option<&game_animal_restraint::Plan>,
     ) -> Option<crate::AnimalFeelings> {
         let owner = self.animal_feelings.as_ref()?;
         let mut events: Vec<_> = feeding
@@ -142,6 +150,40 @@ impl CoreHost {
                 kind,
             })
         }));
+        if let Some(state) = restraints.and_then(|plan| plan.state.as_ref()) {
+            events.par_extend(state.events.par_iter().flat_map_iter(|event| {
+                use crate::animal_feelings::Experience;
+                use game_animal_restraint::EventKind;
+                let actor = event.actor.and_then(|person| {
+                    let kind = match event.kind {
+                        EventKind::Yielded => Experience::CaptureYielded,
+                        EventKind::Forced => Experience::CaptureForced,
+                        EventKind::Resisted => Experience::CaptureResisted,
+                        EventKind::Released => Experience::Released,
+                        EventKind::ReleaseBlocked => Experience::ReleaseBlocked,
+                        _ => return None,
+                    };
+                    Some(crate::animal_feelings::Event {
+                        person,
+                        animal: event.animal,
+                        kind,
+                    })
+                });
+                let defender = event.defender.and_then(|person| {
+                    let kind = match event.kind {
+                        EventKind::ReleaseBlocked => Experience::DefenseSucceeded,
+                        EventKind::Released => Experience::DefenseOvercome,
+                        _ => return None,
+                    };
+                    Some(crate::animal_feelings::Event {
+                        person,
+                        animal: event.animal,
+                        kind,
+                    })
+                });
+                [actor, defender].into_iter().flatten()
+            }));
+        }
         let events = owner.relevant(events);
         (!events.is_empty()).then(|| owner.advance(&events))
     }

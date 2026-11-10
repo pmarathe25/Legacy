@@ -6,6 +6,7 @@ mod agriculture;
 mod animal_care;
 mod animal_handling;
 mod animal_products;
+mod animal_restraints;
 mod claims;
 mod dependent_care;
 mod family;
@@ -78,6 +79,8 @@ pub struct CoreHostSnapshot {
     #[serde(default)]
     pub animal_products: Option<crate::AnimalProducts>,
     #[serde(default)]
+    pub animal_restraints: Option<crate::AnimalRestraints>,
+    #[serde(default)]
     pub animal_handling: Option<crate::AnimalHandling>,
     #[serde(default)]
     pub family: Option<game_economy_family::Families>,
@@ -119,6 +122,7 @@ pub struct CoreHost {
     animal_feelings: Option<crate::AnimalFeelings>,
     animal_care: Option<crate::AnimalCare>,
     animal_products: Option<crate::AnimalProducts>,
+    animal_restraints: Option<crate::AnimalRestraints>,
     animal_handling: Option<crate::AnimalHandling>,
     family: Option<game_economy_family::Families>,
     dependent_care: Option<crate::DependentCare>,
@@ -152,6 +156,7 @@ struct CoreRuntimeOptions {
     animal_feelings: Option<crate::AnimalFeelings>,
     animal_care: Option<crate::AnimalCare>,
     animal_products: Option<crate::AnimalProducts>,
+    animal_restraints: Option<crate::AnimalRestraints>,
     animal_handling: Option<crate::AnimalHandling>,
     family: Option<game_economy_family::Families>,
     dependent_care: Option<crate::DependentCare>,
@@ -181,6 +186,7 @@ impl CoreHost {
             animal_feelings,
             animal_care,
             animal_products,
+            animal_restraints,
             animal_handling,
             family,
             dependent_care,
@@ -220,6 +226,7 @@ impl CoreHost {
                 animal_feelings,
                 animal_care,
                 animal_products,
+                animal_restraints,
                 animal_handling,
                 family,
                 dependent_care,
@@ -250,6 +257,7 @@ impl CoreHost {
             animal_feelings,
             animal_care,
             animal_products,
+            animal_restraints,
             animal_handling,
             family,
             dependent_care,
@@ -289,6 +297,7 @@ impl CoreHost {
                 animal_feelings,
                 animal_care,
                 animal_products,
+                animal_restraints,
                 animal_handling,
                 family,
                 dependent_care,
@@ -326,6 +335,7 @@ impl CoreHost {
             mut animal_feelings,
             animal_care,
             mut animal_products,
+            mut animal_restraints,
             mut animal_handling,
             family,
             dependent_care,
@@ -598,6 +608,9 @@ impl CoreHost {
             let people: HashSet<_> = core.people.par_iter().map(|person| person.id).collect();
             owner.validate(&people, fauna.as_ref(), core.physical.tick())?;
         }
+        if let Some(owner) = &mut animal_restraints {
+            owner.normalize_and_validate(&core.people, fauna.as_ref(), core.physical.tick())?;
+        }
         if let Some(owner) = &mut animal_products {
             let people: HashSet<_> = core.people.par_iter().map(|person| person.id).collect();
             let goods: HashSet<_> = core
@@ -687,6 +700,7 @@ impl CoreHost {
             animal_feelings,
             animal_care,
             animal_products,
+            animal_restraints,
             animal_handling,
             family,
             dependent_care,
@@ -723,6 +737,7 @@ impl CoreHost {
             animal_feelings: self.animal_feelings.clone(),
             animal_care: self.animal_care.clone(),
             animal_products: self.animal_products.clone(),
+            animal_restraints: self.animal_restraints.clone(),
             animal_handling: self.animal_handling.clone(),
             family: self.family.clone(),
             dependent_care: self.dependent_care.clone(),
@@ -1129,9 +1144,10 @@ impl CoreHost {
         growth.gathered = gathering
             .as_ref()
             .map_or(&[], |(_, outputs)| outputs.as_slice());
-        let (care, handling, hunting) = if self.hunting.is_some()
+        let (care, restraints, handling, hunting) = if self.hunting.is_some()
             || self.animal_care.is_some()
             || self.animal_handling.is_some()
+            || self.animal_restraints.is_some()
         {
             let mut next_action = if self.hunting.is_some() || self.animal_care.is_some() {
                 actions
@@ -1159,24 +1175,34 @@ impl CoreHost {
                     .ok_or("animal action overflow")?;
                 actions.par_extend(std::mem::take(&mut plan.actions).into_par_iter());
             }
+            let restraints = self.plan_animal_restraints(
+                occupied,
+                (
+                    cultivation.as_ref(),
+                    irrigation_plan.as_ref(),
+                    gathering.as_ref().map(|(plan, _)| plan),
+                    care.as_ref(),
+                ),
+            )?;
             let handling = self.plan_animal_handling(
                 occupied,
                 cultivation.as_ref(),
                 irrigation_plan.as_ref(),
                 gathering.as_ref().map(|(plan, _)| plan),
                 care.as_ref(),
+                restraints.as_ref(),
             )?;
             let hunting = self.plan_hunting(
                 occupied,
                 cultivation.as_ref(),
                 irrigation_plan.as_ref(),
                 gathering.as_ref().map(|(plan, _)| plan),
-                (care.as_ref(), handling.as_ref()),
+                (care.as_ref(), restraints.as_ref(), handling.as_ref()),
                 next_action,
             )?;
-            (care, handling, hunting)
+            (care, restraints, handling, hunting)
         } else {
-            (None, None, None)
+            (None, None, None, None)
         };
         growth.animal_yield = hunting.as_ref().map_or(&[], |plan| plan.yields.as_slice());
         let products = if self.animal_products.is_some() {
@@ -1197,6 +1223,7 @@ impl CoreHost {
                     irrigation_plan.as_ref(),
                     gathering.as_ref().map(|(plan, _)| plan),
                     care.as_ref(),
+                    restraints.as_ref(),
                     handling.as_ref(),
                     hunting.as_ref(),
                 ),
@@ -1301,8 +1328,26 @@ impl CoreHost {
             &feeding,
             handling.as_ref(),
             &product_handling,
+            restraints.as_ref(),
         );
         let fauna = self.stage_fauna(&mut gathering, &hunted, &feeding, draft.events().tick)?;
+        let (mut next_restraints, restraint_reactions) =
+            restraints.map_or((None, Vec::new()), |plan| (plan.state, plan.reactions));
+        if let (Some(owner), Some(fauna)) = (&mut next_restraints, &fauna) {
+            let available = |_person| true;
+            match fauna {
+                fauna::CoreFaunaDraft::Quiet(lifecycle) => owner.reconcile_with_deaths(
+                    &draft.people.people,
+                    self.fauna.as_ref().expect("staged fauna"),
+                    &available,
+                    draft.events().tick,
+                    lifecycle.deaths(),
+                ),
+                fauna::CoreFaunaDraft::Complete(fauna) => {
+                    owner.reconcile(&draft.people.people, fauna, &available, draft.events().tick)
+                }
+            }
+        }
         let mut tools = self.stage_tools(
             draft.produced_items(),
             draft.next_produced_item(),
@@ -1402,6 +1447,15 @@ impl CoreHost {
             plan.publish(self.dependent_care.as_mut().expect("care owner"));
         }
         self.publish_fauna(fauna);
+        if !restraint_reactions.is_empty() {
+            game_fauna::restraint::apply_reactions(
+                self.fauna.as_mut().expect("restraint fauna"),
+                &restraint_reactions,
+            );
+        }
+        if let Some(owner) = next_restraints {
+            self.animal_restraints = Some(owner);
+        }
         if let Some(plan) = handling {
             game_fauna::handling::apply(self.fauna.as_mut().expect("handling fauna"), &plan.events);
             self.animal_handling

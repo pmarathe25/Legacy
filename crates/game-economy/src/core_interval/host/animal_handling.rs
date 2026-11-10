@@ -9,6 +9,7 @@ impl CoreHost {
         irrigation: Option<&game_economy_agriculture::irrigation::Plan>,
         gathering: Option<&crate::gathering::Plan>,
         care: Option<&crate::animal_care::Plan>,
+        restraints: Option<&game_animal_restraint::Plan>,
     ) -> Result<Option<crate::animal_handling::Plan>, String> {
         let Some(owner) = &self.animal_handling else {
             return Ok(None);
@@ -32,6 +33,9 @@ impl CoreHost {
         if let Some(plan) = care {
             busy.par_extend(plan.actors.par_iter().copied());
         }
+        if let Some(plan) = restraints {
+            busy.par_extend(plan.actors.par_iter().copied());
+        }
         busy.par_extend(
             self.core
                 .physical
@@ -42,7 +46,12 @@ impl CoreHost {
         );
         busy.par_sort_unstable();
         busy.dedup();
-        let blocked = care.map_or_else(Vec::new, |plan| plan.targets());
+        let mut blocked = care.map_or_else(Vec::new, |plan| plan.targets());
+        if let Some(plan) = restraints {
+            blocked.par_extend(plan.reserved.par_iter().copied());
+            blocked.par_sort_unstable();
+            blocked.dedup();
+        }
         let tick = self
             .core
             .physical
