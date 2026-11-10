@@ -210,6 +210,195 @@ fn deferring_one_completion_invalidates_old_drafts_and_keeps_its_materials() {
 }
 
 #[test]
+fn identified_boundary_settlement_stays_staged_until_owner_validation() {
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut runtime = fixture(false, 1);
+                runtime.begin_work_interval(&[(1, 1)]).unwrap();
+                runtime.progress_work_interval(1000).unwrap();
+                let before = runtime.snapshot();
+                let goods = [2];
+                assert!(
+                    runtime
+                        .prepare_interval_settlement(
+                            7,
+                            Some(game_lot_runtime::IdentifiedProduction {
+                                goods: &goods,
+                                next_item: 0
+                            })
+                        )
+                        .is_err()
+                );
+                assert!(
+                    runtime
+                        .prepare_interval_settlement(
+                            7,
+                            Some(game_lot_runtime::IdentifiedProduction {
+                                goods: &goods,
+                                next_item: u64::MAX
+                            })
+                        )
+                        .is_err()
+                );
+                assert_eq!(runtime.snapshot(), before);
+                let draft = runtime
+                    .prepare_interval_settlement(
+                        7,
+                        Some(game_lot_runtime::IdentifiedProduction {
+                            goods: &goods,
+                            next_item: 10,
+                        }),
+                    )
+                    .unwrap();
+                assert_eq!(draft.events().finished, vec![1]);
+                assert_eq!(
+                    draft.produced_items(),
+                    &[game_lot_runtime::ProducedItem {
+                        job: 1,
+                        item: 10,
+                        good: 2
+                    }]
+                );
+                assert_eq!(draft.next_produced_item(), Some(11));
+                assert_eq!(draft.item_updates(), &[(10, Some(Place::JobOutput(1)))]);
+                assert_eq!(runtime.snapshot(), before);
+                // A host that cannot prepare its metadata can drop the draft and retry.
+                drop(draft);
+                let saved = serde_json::to_string(&runtime.snapshot()).unwrap();
+                let mut runtime = Runtime::compile(serde_json::from_str(&saved).unwrap()).unwrap();
+                let stale = runtime
+                    .prepare_interval_settlement(
+                        7,
+                        Some(game_lot_runtime::IdentifiedProduction {
+                            goods: &goods,
+                            next_item: 10,
+                        }),
+                    )
+                    .unwrap();
+                let draft = runtime
+                    .prepare_interval_settlement(
+                        7,
+                        Some(game_lot_runtime::IdentifiedProduction {
+                            goods: &goods,
+                            next_item: 10,
+                        }),
+                    )
+                    .unwrap();
+                runtime.validate_interval_settlement(&draft).unwrap();
+                assert_eq!(
+                    runtime.commit_interval_settlement(draft).unwrap().finished,
+                    vec![1]
+                );
+                assert_eq!(runtime.item_place(10), Some(Place::JobOutput(1)));
+                let committed = runtime.snapshot();
+                assert!(runtime.commit_interval_settlement(stale).is_err());
+                assert_eq!(runtime.snapshot(), committed);
+                assert_eq!(
+                    Runtime::compile(committed.clone()).unwrap().item_place(10),
+                    Some(Place::JobOutput(1))
+                );
+                committed
+            })
+    };
+    assert_eq!(run(1), run(6));
+}
+
+#[test]
+fn invalid_identified_boundary_output_keeps_interval_resumable() {
+    let mut runtime = fixture(true, 1);
+    runtime.begin_work_interval(&[(1, 1)]).unwrap();
+    runtime.progress_work_interval(1000).unwrap();
+    let before = runtime.snapshot();
+    assert!(
+        runtime
+            .prepare_interval_settlement(
+                7,
+                Some(game_lot_runtime::IdentifiedProduction {
+                    goods: &[2],
+                    next_item: 10
+                })
+            )
+            .is_err()
+    );
+    assert_eq!(runtime.snapshot(), before);
+    let draft = runtime.prepare_interval_settlement(7, None).unwrap();
+    assert_eq!(
+        runtime.commit_interval_settlement(draft).unwrap().finished,
+        vec![1]
+    );
+}
+
+#[test]
+fn staged_boundary_allocation_skips_existing_item_identities() {
+    let mut snapshot = fixture(false, 1).snapshot();
+    snapshot.custody.containers.push(
+        Container::new(
+            Place::Person(9),
+            1,
+            vec![Lot {
+                item: Some(10),
+                good: 2,
+                quantity: 1,
+                expires_at: None,
+            }],
+        )
+        .unwrap(),
+    );
+    snapshot.custody.containers.sort_by_key(|row| row.place);
+    let mut runtime = Runtime::compile(snapshot).unwrap();
+    runtime.begin_work_interval(&[(1, 1)]).unwrap();
+    runtime.progress_work_interval(1000).unwrap();
+    let draft = runtime
+        .prepare_interval_settlement(
+            7,
+            Some(game_lot_runtime::IdentifiedProduction {
+                goods: &[2],
+                next_item: 10,
+            }),
+        )
+        .unwrap();
+    assert_eq!(draft.produced_items()[0].item, 11);
+    assert_eq!(draft.next_produced_item(), Some(12));
+    runtime.commit_interval_settlement(draft).unwrap();
+    assert_eq!(runtime.item_place(10), Some(Place::Person(9)));
+    assert_eq!(runtime.item_place(11), Some(Place::JobOutput(1)));
+}
+
+#[test]
+fn rejected_identified_output_does_not_create_item_metadata() {
+    let mut snapshot = fixture(false, 2).snapshot();
+    let output = snapshot
+        .custody
+        .containers
+        .iter_mut()
+        .find(|row| row.place == Place::JobOutput(1))
+        .unwrap();
+    *output = Container::new(output.place, 1, vec![]).unwrap();
+    let mut runtime = Runtime::compile(snapshot).unwrap();
+    runtime.begin_work_interval(&[(1, 1)]).unwrap();
+    runtime.progress_work_interval(1000).unwrap();
+    let draft = runtime
+        .prepare_interval_settlement(
+            7,
+            Some(game_lot_runtime::IdentifiedProduction {
+                goods: &[2],
+                next_item: 10,
+            }),
+        )
+        .unwrap();
+    assert!(draft.produced_items().is_empty());
+    assert!(draft.item_updates().is_empty());
+    assert_eq!(draft.next_produced_item(), Some(12));
+    runtime.commit_interval_settlement(draft).unwrap();
+    assert_eq!(runtime.item_place(10), None);
+    assert_eq!(runtime.item_place(11), None);
+}
+
+#[test]
 fn interval_transfer_invalidates_completion_drafts_and_keeps_work_live() {
     let mut snapshot = fixture(false, 1).snapshot();
     snapshot

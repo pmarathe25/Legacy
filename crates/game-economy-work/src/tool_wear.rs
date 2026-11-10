@@ -66,6 +66,87 @@ impl Clone for ToolWear {
     }
 }
 impl ToolWear {
+    /// Stage identity and condition changes from a physical generation. The
+    /// caller validates both drafts before committing either owner. Work wear
+    /// and repair decisions are handled separately by `advance`.
+    pub fn stage_identified_outputs(
+        &self,
+        items: &[game_lot_runtime::ProducedItem],
+        next_item: u64,
+        updates: &[(u64, Option<Place>)],
+    ) -> Result<Self, String> {
+        if next_item == 0
+            || next_item < self.next_item
+            || updates.first().is_some_and(|row| row.0 == 0)
+            || updates.par_windows(2).any(|rows| rows[0].0 >= rows[1].0)
+            || self
+                .conditions
+                .par_windows(2)
+                .any(|rows| rows[0].item >= rows[1].item)
+        {
+            return Err("invalid staged tool identities".into());
+        }
+        let mut ids: Vec<_> = items.par_iter().map(|item| item.item).collect();
+        ids.par_sort_unstable();
+        if ids.par_windows(2).any(|rows| rows[0] == rows[1])
+            || items.par_iter().any(|item| {
+                item.item == 0
+                    || item.job == 0
+                    || item.item >= next_item
+                    || self.rule(item.good).is_none()
+                    || self
+                        .conditions
+                        .binary_search_by_key(&item.item, |row| row.item)
+                        .is_ok()
+                    || updates
+                        .binary_search_by_key(&item.item, |row| row.0)
+                        .ok()
+                        .is_none_or(|index| updates[index].1.is_none())
+            })
+        {
+            return Err("invalid produced tool metadata".into());
+        }
+        let highest = updates
+            .par_iter()
+            .filter_map(|(id, place)| place.map(|_| *id))
+            .max();
+        let next_item = if let Some(highest) = highest {
+            next_item.max(highest.checked_add(1).ok_or("item identity overflow")?)
+        } else {
+            next_item
+        };
+        let mut next = self.clone();
+        next.next_item = next_item;
+        next.conditions = self
+            .conditions
+            .par_iter()
+            .filter(|condition| {
+                updates
+                    .binary_search_by_key(&condition.item, |row| row.0)
+                    .ok()
+                    .is_none_or(|index| updates[index].1.is_some())
+            })
+            .cloned()
+            .collect();
+        next.repairs = self
+            .repairs
+            .par_iter()
+            .filter(|choice| {
+                next.conditions
+                    .binary_search_by_key(&choice.item, |row| row.item)
+                    .is_ok()
+            })
+            .cloned()
+            .collect();
+        next.conditions
+            .par_extend(items.par_iter().map(|item| Condition {
+                item: item.item,
+                good: item.good,
+                damage: 0,
+            }));
+        next.conditions.par_sort_unstable_by_key(|row| row.item);
+        Ok(next)
+    }
     pub fn validate(
         &self,
         physical: &Runtime,
@@ -371,5 +452,74 @@ impl ToolWear {
                 .cloned()
                 .collect();
         }
+    }
+}
+
+#[cfg(test)]
+mod staged_production_tests {
+    use super::*;
+
+    #[test]
+    fn staged_conditions_follow_item_changes_and_reject_invalid_metadata() {
+        let owner = ToolWear {
+            next_item: 10,
+            rules: vec![Rule {
+                good: 2,
+                durability: 10,
+                wear: 1,
+                repair_good: 1,
+                repair_quantity: 1,
+            }],
+            conditions: vec![Condition {
+                item: 5,
+                good: 2,
+                damage: 3,
+            }],
+            repairs: vec![RepairChoice {
+                person: 1,
+                item: 5,
+                willing: true,
+            }],
+            events: vec![],
+        };
+        let item = game_lot_runtime::ProducedItem {
+            job: 1,
+            item: 10,
+            good: 2,
+        };
+        let updates = [
+            (5, None),
+            (10, Some(Place::JobOutput(1))),
+            (20, Some(Place::Person(1))),
+        ];
+        let next = owner
+            .stage_identified_outputs(&[item], 11, &updates)
+            .unwrap();
+        assert_eq!(next.next_item, 21);
+        assert_eq!(
+            next.conditions,
+            vec![Condition {
+                item: 10,
+                good: 2,
+                damage: 0
+            }]
+        );
+        assert!(next.repairs.is_empty());
+        assert_eq!(owner.conditions[0].item, 5);
+        assert!(
+            owner
+                .stage_identified_outputs(&[item, item], 11, &updates)
+                .is_err()
+        );
+        assert!(
+            owner
+                .stage_identified_outputs(&[item], 10, &updates)
+                .is_err()
+        );
+        assert!(
+            owner
+                .stage_identified_outputs(&[item], 11, &[(10, None)])
+                .is_err()
+        );
     }
 }

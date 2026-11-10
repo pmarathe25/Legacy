@@ -24,6 +24,8 @@ The caller must exclude jobs whose outputs need separately owned item identities
 
 The host can defer completed jobs to boundary settlement without releasing their input custody or publishing their output. Deferred jobs leave the active rate set so other early events can proceed; the host must decide which completions need deferral.
 
+`prepare_interval_settlement` stages a completed physical boundary, including optional identified production, without consuming the interval. Its item updates, produced identities, and next allocator value let an external owner prepare its metadata before validation and commit. A failed or discarded draft leaves the interval resumable.
+
 `start_interval_work` reserves inputs for a batch of host-admitted jobs without advancing the tick. Accepted jobs join the interval with positive frozen rates and zero prior progress; entirely rejected batches leave the state unchanged. The host checks actor availability and resolves other due events before calling this physical-only operation.
 
 The host can stop active work, move goods outside job custody, and stage personal consumption inside an interval. Consumption drafts expose exact staged receipts for other owners to validate before commit; a changed physical generation or elapsed time invalidates the draft. Actor choices, locations, and physiological effects remain the host's responsibility.

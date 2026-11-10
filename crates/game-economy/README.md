@@ -14,7 +14,9 @@ Chosen living people can eat food they actually carry at a partial offset. Only 
 
 `CoreInterval::next_deadline` observes the earliest work completion, traveler arrival, optional hunger threshold, or quantum boundary, including ties. `progress_to_deadline` stops at that time. The core can publish nonperishable work and arrivals at the offset; other early deadlines remain pending until settlement.
 
-The host can defer selected completed jobs, including perishable production, until the boundary. Deferred jobs keep their inputs and workers reserved, and no longer block other early completions. The host chooses which outputs require deferral. Separately identified outputs still require an item-owning coordinator that the limited core does not provide.
+The host can defer selected completed jobs, including perishable production, until the boundary. Deferred jobs keep their inputs and workers reserved, and no longer block other early completions. The host chooses which outputs require deferral.
+
+For identified boundary output, `prepare_settlement` exposes staged physical identities before any owner commits. A host can persist its tool owner alongside `CoreSnapshot`, stage tool conditions from the draft, validate, and then publish the core and prepared owner state. Plain `settle` does not know an external owner's rules; callers with identified goods must use the staged API. This slice does not run tool use, wear, or the rest of the economy during the interval.
 
 The ignored `composed_core_progress_benchmark` with `LEGACY_CORE_ARRIVALS=1` measures publication of 50,000 arrivals among 100,000 people. One run took 5.87, 2.86, 1.58, and 1.25 ms with one, two, four, and six workers, with matching fingerprints. This measures only arrival publication in the limited core.
 
@@ -29,6 +31,8 @@ Building the packed holders and transfers in chunks reduced a subsequent instrum
 Set `LEGACY_ABANDON=1` on the admission benchmark to stop every accepted worker at the same offset. Stopping 49,999 workers took 6.25, 2.98, 1.59, and 1.23 ms at one, two, four, and six workers in one run, with matching fingerprints. The timing excludes admission and later physical returns.
 
 Set `LEGACY_DEFER=1` instead to let the admitted jobs finish and defer their publication. Deferring 49,999 jobs took 3.67, 1.75, 0.89, and 0.73 ms at those worker counts in one run, with matching fingerprints. Admission, progress, and boundary production are outside that timing.
+
+Set `LEGACY_IDENTIFIED_SETTLE=1` to stage and commit identified output with tool conditions at the boundary. A 50,000-job run took 170, 99, 69, and 74 ms at one, two, four, and six workers, with matching physical and tool-owner fingerprints. It excludes earlier admission and does not run whole-economy decisions.
 
 The ignored `interval_shared_transfer_benchmark` measures transfers from one stock into existing personal custody. A 50,000-transfer run took 27.4, 16.3, 10.6, and 10.4 ms at one, two, four, and six workers, with matching fingerprints. It excludes social choices and is not a campaign measurement.
 

@@ -2,6 +2,7 @@
 mod advance;
 mod early_work;
 mod identified_output;
+mod interval_settlement;
 mod receipts;
 pub use advance::{Adoption, AdvanceDraft, Events, Suspension, WorkTransitions};
 pub use early_work::{EarlyWorkDraft, EarlyWorkEvents, IntervalConsumptionDraft};
@@ -11,6 +12,7 @@ pub use game_lot_work::{Phase, Snapshot, Work, WorkInterval};
 use game_lots::{Outcome, Place, Spoilage, Store, Transaction, TransactionOutcome};
 use game_production_model::{Good, JobPhase, Recipe, Start};
 pub use identified_output::{IdentifiedProduction, ProducedItem};
+pub use interval_settlement::IntervalSettlementDraft;
 use rayon::prelude::*;
 pub use receipts::{
     ExternalReceipt, ExternalReceiptBatch, ExternalReceiptHeader, ExternalReceiptRef,
