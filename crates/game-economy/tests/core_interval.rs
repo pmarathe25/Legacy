@@ -293,6 +293,17 @@ fn interval_shared_transfer_benchmark() {
                     meal_samples[1]
                 );
             }
+            #[cfg(feature = "profile")]
+            if std::env::var_os("LEGACY_PROFILE").is_some() {
+                for (name, sample) in game_diagnostics::snapshot() {
+                    if name.starts_with("core.meal.") || name.starts_with("physical.") {
+                        println!(
+                            "{name}: {:.3} ms/call",
+                            sample.nanoseconds as f64 / sample.calls as f64 / 1_000_000.0
+                        );
+                    }
+                }
+            }
         });
 }
 

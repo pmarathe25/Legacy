@@ -11,3 +11,5 @@ flat action batches, without constructing a full transaction for each participan
 Independent shared sources with distinct destinations resolve as bounded parallel groups.
 Overlapping endpoints, mixed goods within one source, and oversized groups use the
 general planner; expiry and accepted cohort receipts remain identical.
+Independent single-source consumptions also retain exact dated receipts in a
+parallel path; shared sources and identity-sensitive custody use the general owner.

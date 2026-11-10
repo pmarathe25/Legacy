@@ -1,4 +1,4 @@
-//! Fast path for receipt-only consumptions with one independent source each.
+//! Fast path for consumptions with one independent source each.
 use game_lot_model::{
     Container, Lot, Movement, Outcome, Spoilage, State, Transaction, TransactionOutcome,
 };
@@ -52,13 +52,14 @@ pub fn prepare(
     advance: bool,
 ) -> Result<Option<Draft>, String> {
     if transactions.len() < 128
-        || compact.len() != transactions.len()
+        || (!compact.is_empty() && compact.len() != transactions.len())
         || transactions.par_iter().any(|t| {
             t.movements.len() != 1
                 || !t.creations.is_empty()
                 || t.movements[0].to.is_some()
                 || t.movements[0].id == 0
                 || t.movements[0].quantity == 0
+                || t.movements[0].item.is_some()
                 || !t.movements[0].from.accepts(t.movements[0].good)
         })
     {
@@ -139,6 +140,29 @@ pub fn prepare(
                 .map(|lot| lot.quantity)
                 .sum();
             let accepted = row.movement.quantity <= available;
+            let lots = if accepted && compact.is_empty() {
+                let mut remaining = row.movement.quantity;
+                container
+                    .lots
+                    .iter()
+                    .filter_map(|lot| {
+                        if lot.good != row.movement.good
+                            || lot.expires_at.is_some_and(|at| at <= next)
+                        {
+                            return None;
+                        }
+                        let quantity = remaining.min(lot.quantity);
+                        remaining -= quantity;
+                        (quantity > 0).then(|| Lot {
+                            quantity,
+                            ..lot.clone()
+                        })
+                    })
+                    .collect::<Vec<_>>()
+                    .into()
+            } else {
+                Default::default()
+            };
             let changed = accepted || container.next_expiry.is_some_and(|at| at <= next);
             let change = changed.then(|| {
                 (
@@ -155,7 +179,7 @@ pub fn prepare(
                 Outcome {
                     id: row.movement.id,
                     accepted,
-                    lots: Default::default(),
+                    lots,
                 },
                 TransactionOutcome {
                     id: row.transaction,
@@ -205,4 +229,119 @@ pub fn prepare(
         creations: Vec::new(),
         transactions: transaction_outcomes,
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use game_lot_model::Place;
+
+    #[test]
+    fn full_independent_receipts_match_general_arbitration() {
+        let mut containers: Vec<_> = (1..=256)
+            .map(|id| {
+                Container::new(
+                    Place::Person(id),
+                    10,
+                    vec![
+                        Lot {
+                            item: None,
+                            good: 1,
+                            quantity: 1,
+                            expires_at: Some(1),
+                        },
+                        Lot {
+                            item: None,
+                            good: 1,
+                            quantity: 2,
+                            expires_at: Some(3),
+                        },
+                        Lot {
+                            item: None,
+                            good: 2,
+                            quantity: 1,
+                            expires_at: None,
+                        },
+                    ],
+                )
+                .unwrap()
+            })
+            .collect();
+        containers.push(
+            Container::new(
+                Place::Person(999),
+                2,
+                vec![Lot {
+                    item: None,
+                    good: 1,
+                    quantity: 1,
+                    expires_at: Some(1),
+                }],
+            )
+            .unwrap(),
+        );
+        let state = State {
+            tick: 0,
+            revision: 0,
+            containers,
+        };
+        let actions: Vec<_> = (1..=256)
+            .rev()
+            .map(|id| Transaction {
+                id,
+                movements: vec![Movement {
+                    id,
+                    from: Place::Person(id),
+                    to: None,
+                    good: 1,
+                    quantity: id % 4 + 1,
+                    item: None,
+                }],
+                creations: vec![],
+            })
+            .collect();
+        for workers in [1, 2, 4, 6] {
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(workers)
+                .build()
+                .unwrap()
+                .install(|| {
+                    for advance in [false, true] {
+                        let (fast, _) = crate::prepare_fungible_validated(
+                            &state,
+                            1,
+                            7,
+                            &actions,
+                            advance,
+                            vec![],
+                            &[],
+                        )
+                        .unwrap();
+                        let (general, _) = crate::prepare_unpartitioned_validated(
+                            &state,
+                            1,
+                            7,
+                            &actions,
+                            advance,
+                            vec![],
+                            &[],
+                        )
+                        .unwrap();
+                        assert_eq!(fast.transactions, general.transactions);
+                        assert_eq!(fast.spoiled, general.spoiled);
+                        assert_eq!(
+                            fast.outcomes.iter().collect::<Vec<_>>(),
+                            general.outcomes.iter().collect::<Vec<_>>()
+                        );
+                        assert_eq!(fast.changes.into_flat(), general.changes.into_flat());
+                    }
+                });
+        }
+        let mut shared = actions.clone();
+        shared[0].movements[0].from = shared[1].movements[0].from;
+        assert!(prepare(&state, 1, &shared, &[], false).unwrap().is_none());
+        let mut missing = actions.clone();
+        missing[0].movements[0].from = Place::Person(1000);
+        assert!(prepare(&state, 1, &missing, &[], false).unwrap().is_none());
+    }
 }

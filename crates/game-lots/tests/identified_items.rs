@@ -69,6 +69,41 @@ fn exact_selection_moves_the_requested_page_and_rejects_missing_items() {
 }
 
 #[test]
+fn independent_consumption_preserves_identified_item_tracking() {
+    let containers = (1..=256)
+        .map(|id| Container::new(Place::Person(id), 1, vec![item(id)]).unwrap())
+        .collect();
+    let mut owner = Store::compile(State {
+        tick: 0,
+        revision: 0,
+        containers,
+    })
+    .unwrap();
+    let actions: Vec<_> = (1..=256)
+        .map(|id| Transaction {
+            id,
+            movements: vec![Movement {
+                id,
+                from: Place::Person(id),
+                to: None,
+                good: 1,
+                quantity: 1,
+                item: None,
+            }],
+            creations: vec![],
+        })
+        .collect();
+    let draft = owner.prepare_transactions_now(7, &actions).unwrap();
+    assert!(draft.transactions().iter().all(|row| row.accepted));
+    assert_eq!(draft.item_updates().len(), 256);
+    owner.commit(draft).unwrap();
+    for id in 1..=256 {
+        assert_eq!(owner.item_place(id), None);
+    }
+    Store::compile(owner.export()).unwrap();
+}
+
+#[test]
 fn a_rejected_exact_reservation_does_not_change_a_later_generic_allocation() {
     let mut owner = Store::compile(State {
         tick: 0,

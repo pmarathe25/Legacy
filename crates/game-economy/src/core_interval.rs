@@ -415,6 +415,8 @@ impl CoreInterval {
         offset_millis: u64,
         meals: &[game_lot_diet::Meal],
     ) -> Result<game_lot_runtime::PhysicalOutcomes, String> {
+        #[cfg(feature = "profile")]
+        let mut phase = game_diagnostics::span("core.meal.validate");
         if self.physical.tick() != tick
             || self.elapsed_millis() != Some(offset_millis)
             || offset_millis == 0
@@ -441,12 +443,32 @@ impl CoreInterval {
             return Err("meal requires a living person".into());
         }
         let effect_tick = tick.checked_add(1).ok_or("food effect tick overflow")?;
+        #[cfg(feature = "profile")]
+        {
+            drop(phase);
+            phase = game_diagnostics::span("core.meal.plan");
+        }
         let plan = game_lot_diet::plan(meals, self.physical.goods())?;
+        #[cfg(feature = "profile")]
+        {
+            drop(phase);
+            phase = game_diagnostics::span("core.meal.custody");
+        }
         let draft = self
             .physical
             .prepare_interval_consumption(plan.actions(), self.seed)?;
+        #[cfg(feature = "profile")]
+        {
+            drop(phase);
+            phase = game_diagnostics::span("core.meal.effects");
+        }
         let effects =
             plan.interval_effects(draft.transactions(), &draft.movements(), effect_tick)?;
+        #[cfg(feature = "profile")]
+        {
+            drop(phase);
+            phase = game_diagnostics::span("core.meal.people");
+        }
         let mut people: Vec<_> = self.people.par_iter().cloned().collect();
         people.par_iter_mut().for_each(|person| {
             if let Ok(index) = effects
@@ -462,7 +484,14 @@ impl CoreInterval {
         });
         let mut pending_food = self.pending_food.clone();
         pending_food.extend(effects.pending);
+        #[cfg(feature = "profile")]
+        {
+            drop(phase);
+            phase = game_diagnostics::span("core.meal.commit");
+        }
         let result = self.physical.commit_interval_consumption(draft)?;
+        #[cfg(feature = "profile")]
+        drop(phase);
         self.people = people;
         self.pending_food = pending_food;
         Ok(result)
