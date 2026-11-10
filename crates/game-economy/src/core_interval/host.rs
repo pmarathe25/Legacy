@@ -1173,6 +1173,8 @@ impl CoreHost {
         }
         let family = self.stage_family(&mut draft)?;
         let birth_health = self.stage_birth_health(family.as_ref(), draft.events().tick);
+        let birth_health =
+            self.stage_care_health(birth_health, dependent.as_ref(), draft.events().tick)?;
         let irrigation = self
             .irrigation
             .as_ref()

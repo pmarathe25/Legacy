@@ -4649,7 +4649,8 @@ fn core_host_cultivation_benchmark() {
         .and_then(|v| v.parse().ok())
         .unwrap_or(1);
     assert!(count > 1);
-    let dependent = std::env::var_os("LEGACY_DEPENDENT_CARE").is_some();
+    let dependent_disease = std::env::var_os("LEGACY_DEPENDENT_DISEASE").is_some();
+    let dependent = std::env::var_os("LEGACY_DEPENDENT_CARE").is_some() || dependent_disease;
     assert!(!dependent || count.is_multiple_of(3));
     let inheritance = std::env::var_os("LEGACY_BIRTH_INHERITANCE").is_some();
     let birth_disease = std::env::var_os("LEGACY_BIRTH_DISEASE").is_some();
@@ -5028,15 +5029,17 @@ fn core_host_cultivation_benchmark() {
                 })
                 .collect(),
         }),
-        health: birth_disease.then(|| game_economy::core_interval::CoreHealth {
+        health: (birth_disease || dependent_disease).then(|| game_economy::core_interval::CoreHealth {
             owner: game_disease::Disease {
                 strains: vec![game_disease::Strain { id: 1, name: "fever".into(), incubation: 0,
                     infectious_ticks: 3, immunity_ticks: 0, damage_per_tick: 1,
-                    transmission_per_million: 0, combat_transmission_per_million: 0,
-                    birth_transmission_per_million: 1_000_000 }],
-                treatments: vec![], cases: (2..=count).step_by(2).map(|person| game_disease::Case {
-                    person, strain: 1, infected_at: 0, source: None,
-                }).collect(), events: vec![],
+                    transmission_per_million: if dependent_disease { 1_000_000 } else { 0 }, combat_transmission_per_million: 0,
+                    birth_transmission_per_million: if birth_disease { 1_000_000 } else { 0 } }],
+                treatments: vec![], cases: if dependent_disease {
+                    (1..=2 * count / 3).map(|person| game_disease::Case { person, strain: 1, infected_at: 0, source: None }).collect()
+                } else {
+                    (2..=count).step_by(2).map(|person| game_disease::Case { person, strain: 1, infected_at: 0, source: None }).collect()
+                }, events: vec![],
             }, treatment: vec![], last_tick: None,
         }),
         social: None,
@@ -5133,6 +5136,16 @@ fn core_host_cultivation_benchmark() {
                     } else {
                         0
                     }
+                );
+            }
+            if dependent_disease {
+                assert_eq!(
+                    state.health.as_ref().unwrap().owner.cases.len(),
+                    count as usize
+                );
+                assert_eq!(
+                    state.health.as_ref().unwrap().owner.events.len(),
+                    (count / 3) as usize
                 );
             }
             if dependent {
@@ -10175,7 +10188,7 @@ fn family_birth_custody_and_worker_death_commit_atomically() {
             let before = collision.snapshot();
             assert!(collision.settle().is_err());
             assert_eq!(collision.snapshot(), before);
-            let run_care = |willing, pressured| {
+            let run_care = |willing, pressured, infectious| {
                 let mut caring = snapshot.clone();
                 caring.family.as_mut().unwrap().members[0].age = 3;
                 caring.core.physical.recipes[0].ticks = 1;
@@ -10210,6 +10223,19 @@ fn family_birth_custody_and_worker_death_commit_atomically() {
                 let mut caring = CoreHost::begin(caring, &[(1, 1)]).unwrap();
                 caring.progress(1000).unwrap(); caring.settle().unwrap();
                 let mut after_birth = caring.snapshot();
+                if infectious {
+                    after_birth.health = Some(game_economy::core_interval::CoreHealth {
+                        owner: game_disease::Disease {
+                            strains: vec![game_disease::Strain { id: 1, name: "fever".into(),
+                                incubation: 0, infectious_ticks: 3, immunity_ticks: 0, damage_per_tick: 4,
+                                transmission_per_million: 1_000_000, combat_transmission_per_million: 0,
+                                birth_transmission_per_million: 0 }],
+                            treatments: vec![], cases: vec![game_disease::Case {
+                                person: 2, strain: 1, infected_at: 0, source: None,
+                            }], events: vec![],
+                        }, treatment: vec![], last_tick: None,
+                    });
+                }
                 if pressured {
                     after_birth.dependent_care.as_mut().unwrap().rules.pressure_threshold = Some(1);
                     after_birth.opinions = Some(serde_json::from_value(serde_json::json!({
@@ -10236,7 +10262,7 @@ fn family_birth_custody_and_worker_death_commit_atomically() {
                 assert_eq!(state, restored.snapshot());
                 state
             };
-            let cared = run_care(true, false);
+            let cared = run_care(true, false, false);
             assert_eq!(cared.dependent_care.as_ref().unwrap().events[0].caregiver, Some(2));
             assert_eq!(cared.agriculture.as_ref().unwrap().fields[0].phase, game_economy_agriculture::Phase::Growing);
             assert!(cared.claims.as_ref().unwrap().events.iter().any(|event| event.claimant == 1 && event.person == 2));
@@ -10245,10 +10271,18 @@ fn family_birth_custody_and_worker_death_commit_atomically() {
             let mut fed = CoreHost::begin(cared, &[]).unwrap();
             assert_eq!(fed.eat_autonomously(&[]).unwrap().len(), 1);
             assert_eq!(fed.snapshot().core.people.iter().find(|person| person.id == 3).unwrap().hunger, 0);
-            let pressured = run_care(false, true);
+            let pressured = run_care(false, true, false);
             assert_eq!(pressured.dependent_care.as_ref().unwrap().events[0].caregiver, Some(2));
             assert_eq!(pressured.core.physical.custody.containers.iter().find(|row| row.place == Place::Person(3)).unwrap().used, 1);
-            let neglected = run_care(false, false);
+            let exposed = run_care(true, false, true);
+            assert!(exposed.health.as_ref().unwrap().owner.cases.iter().any(|case| case.person == 3 && case.source == Some(2) && case.infected_at == 2));
+            let mut exposed = CoreHost::begin(exposed, &[]).unwrap();
+            let dynamics = exposed.advance_dynamics_autonomously(&[]).unwrap();
+            assert_eq!(dynamics.disease_events.iter().filter(|event| event.person == 3 && event.kind == game_disease::EventKind::Infected).count(), 1);
+            assert_eq!(exposed.snapshot().core.people.iter().find(|person| person.id == 3).unwrap().health, 50);
+            let unexposed = run_care(false, false, true);
+            assert!(!unexposed.health.unwrap().owner.cases.iter().any(|case| case.person == 3));
+            let neglected = run_care(false, false, false);
             assert_eq!(neglected.dependent_care.as_ref().unwrap().events[0].caregiver, None);
             assert_eq!(neglected.core.people.iter().find(|person| person.id == 3).unwrap().health, 45);
             let mut inherited = snapshot.clone();

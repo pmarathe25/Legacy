@@ -227,6 +227,79 @@ impl Disease {
             )
         });
     }
+    /// Stage infections from actual physical contacts without advancing disease
+    /// damage or allowing those new cases to transmit in this generation.
+    pub fn admit_contacts_validated(
+        &mut self,
+        previous: &Disease,
+        people: &[Person],
+        contacts: &[Encounter],
+        seed: u64,
+        now: u64,
+    ) -> Result<(), &'static str> {
+        if contacts.is_empty()
+            || previous.cases.is_empty()
+            || !previous
+                .strains
+                .iter()
+                .any(|strain| strain.transmission_per_million > 0)
+        {
+            return Ok(());
+        }
+        let tick = now.checked_add(1).ok_or("tick overflow")?;
+        let preview = previous.prepare_validated(people, contacts, seed, now)?;
+        let mut existing: Vec<_> = self
+            .cases
+            .par_iter()
+            .map(|case| ((case.person, case.strain), case.infected_at))
+            .collect();
+        existing.par_sort_unstable();
+        let cases: Vec<_> = preview
+            .state
+            .cases
+            .into_par_iter()
+            .filter(|case| {
+                case.infected_at == tick
+                    && existing
+                        .binary_search_by_key(&(case.person, case.strain), |row| row.0)
+                        .ok()
+                        .is_none_or(|index| existing[index].1 < tick)
+            })
+            .collect();
+        if cases.is_empty() {
+            return Ok(());
+        }
+        let mut keys: Vec<_> = cases
+            .par_iter()
+            .map(|case| (case.person, case.strain))
+            .collect();
+        keys.par_sort_unstable();
+        self.cases = std::mem::take(&mut self.cases)
+            .into_par_iter()
+            .filter(|case| keys.binary_search(&(case.person, case.strain)).is_err())
+            .collect();
+        self.events
+            .par_extend(preview.state.events.into_par_iter().filter(|event| {
+                keys.binary_search(&(event.person, event.strain)).is_ok()
+                    && matches!(event.kind, EventKind::Infected | EventKind::Recovered)
+            }));
+        self.cases.par_extend(cases);
+        self.cases
+            .par_sort_unstable_by_key(|case| (case.person, case.strain));
+        self.events.par_sort_unstable_by_key(|event| {
+            (
+                event.person,
+                event.strain,
+                match event.kind {
+                    EventKind::Recovered => 0,
+                    EventKind::Infected => 1,
+                    EventKind::Treated => 2,
+                },
+                event.source,
+            )
+        });
+        Ok(())
+    }
     /// Evaluate all distinct contacts against the prior generation; newly infected
     /// people cannot transmit until a later generation.
     pub fn prepare(
@@ -469,6 +542,12 @@ impl Disease {
                         kind: EventKind::Infected,
                     }),
             )
+            .chain(
+                self.events
+                    .par_iter()
+                    .filter(|event| event.tick == next && event.kind == EventKind::Recovered)
+                    .cloned(),
+            )
             .chain(infection.par_iter().map(|case| Event {
                 tick: next,
                 person: case.person,
@@ -495,6 +574,7 @@ impl Disease {
         {
             events.par_sort_unstable_by_key(event_key);
         }
+        events.dedup_by(|a, b| event_key(a) == event_key(b));
         let mut retained: Vec<_> = cases
             .par_iter()
             .filter(|case| {
@@ -608,6 +688,74 @@ mod tests {
             1
         );
         assert!(one.state.events.iter().all(|event| event.person != 3));
+    }
+    #[test]
+    fn staged_physical_contact_infections_are_unique_and_wait_until_next_generation() {
+        let mut previous = state();
+        previous.strains[0].incubation = 0;
+        let people = [
+            Person { id: 1, health: 100 },
+            Person { id: 2, health: 100 },
+            Person { id: 3, health: 100 },
+        ];
+        let mut staged = previous.clone();
+        staged
+            .admit_contacts_validated(&previous, &people, &[pair(1, 1, 2)], 7, 0)
+            .unwrap();
+        staged
+            .admit_contacts_validated(&previous, &people, &[pair(1, 1, 2)], 7, 0)
+            .unwrap();
+        assert_eq!(staged.cases.len(), 2);
+        assert_eq!(staged.events.len(), 1);
+        let next = staged
+            .prepare_validated(&people, &[pair(1, 2, 3)], 7, 0)
+            .unwrap();
+        assert_eq!(next.state.cases.len(), 2);
+        assert_eq!(next.state.events.len(), 1);
+        assert_eq!(
+            next.damage,
+            vec![Damage {
+                person: 1,
+                amount: 3
+            }]
+        );
+    }
+    #[test]
+    fn staged_contact_reinfection_keeps_the_recovery_receipt() {
+        let mut previous = state();
+        previous.strains[0].incubation = 0;
+        previous.strains[0].infectious_ticks = 1;
+        previous.strains[0].immunity_ticks = 0;
+        previous.cases = vec![
+            Case {
+                person: 1,
+                strain: 1,
+                infected_at: 1,
+                source: None,
+            },
+            Case {
+                person: 2,
+                strain: 1,
+                infected_at: 0,
+                source: None,
+            },
+        ];
+        let people = [Person { id: 1, health: 100 }, Person { id: 2, health: 100 }];
+        let mut staged = previous.clone();
+        staged
+            .admit_contacts_validated(&previous, &people, &[pair(2, 1, 2)], 7, 1)
+            .unwrap();
+        assert_eq!(staged.cases[1].infected_at, 2);
+        let next = staged.prepare_validated(&people, &[], 7, 1).unwrap();
+        assert_eq!(
+            next.state
+                .events
+                .iter()
+                .filter(|event| event.person == 2)
+                .map(|event| event.kind)
+                .collect::<Vec<_>>(),
+            vec![EventKind::Recovered, EventKind::Infected]
+        );
     }
     #[test]
     fn birth_exposure_uses_only_contagious_prior_cases() {
