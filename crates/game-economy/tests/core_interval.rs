@@ -492,6 +492,7 @@ fn core_host_autonomous_work_benchmark() {
         goals: None,
         agreements: None,
         sites: None,
+        tool_requirements: vec![],
         schedule: None,
         autowork: Some(game_autowork::Autowork {
             next_id: 2,
@@ -710,6 +711,7 @@ fn core_host_work_requests_benchmark() {
             events: vec![],
         }),
         sites: None,
+        tool_requirements: vec![],
         schedule: None,
     };
     rayon::ThreadPoolBuilder::new()
@@ -1527,6 +1529,7 @@ fn saved_core_host_coordinates_personal_work_meals_and_tool_ownership() {
                     goals: None,
                     agreements: None,
                     sites: None,
+                    tool_requirements: vec![],
                     schedule: None,
                     autowork: Some(game_autowork::Autowork {
                         next_id: 2,
@@ -1650,6 +1653,7 @@ fn externally_chosen_work_does_not_require_willingness_and_can_be_abandoned() {
             goals: None,
             agreements: None,
             sites: None,
+            tool_requirements: vec![],
             schedule: None,
         },
         &[(1, 1)],
@@ -1786,6 +1790,7 @@ fn scheduled_requests_use_directed_fear_and_obligation_without_binding_work() {
                     goals: None,
                     agreements: None,
                     sites: None,
+                    tool_requirements: vec![],
                     schedule: None,
                 };
                 let mut host = CoreHost::begin(snapshot, &[(1, 1)]).unwrap();
@@ -1914,6 +1919,7 @@ fn willing_request_response_with_missing_stock_remains_pending() {
             goals: None,
             agreements: None,
             sites: None,
+            tool_requirements: vec![],
             schedule: None,
         },
         &[(1, 1)],
@@ -2012,6 +2018,7 @@ fn contested_request_reservations_do_not_turn_shortage_into_refusal() {
                         goals: None,
                         agreements: None,
                         sites: None,
+                        tool_requirements: vec![],
                         schedule: None,
                     },
                     &[(1, 1)],
@@ -2101,6 +2108,7 @@ fn future_request_does_not_hide_an_existing_local_request() {
             goals: None,
             agreements: None,
             sites: None,
+            tool_requirements: vec![],
             schedule: None,
         },
         &[(1, 1)],
@@ -2167,6 +2175,7 @@ fn core_host_clears_old_request_events_at_the_boundary() {
             goals: None,
             agreements: None,
             sites: None,
+            tool_requirements: vec![],
             schedule: None,
         },
         &[(1, 1)],
@@ -2217,7 +2226,7 @@ fn scheduled_personal_goals_create_requests_and_count_only_witnessed_help() {
                 pending: vec![], events: vec![],
             };
             let goals = game_goals::Goals { retry_interval: 3, plan_inputs: false, people: vec![game_goals::Goal { person: 2, recipe: 1, priority: 1, target: 1, progress: 0, next_review: 0, enabled: true, recognize_help: true }], events: vec![] };
-            let snapshot = CoreHostSnapshot { core: initial, autowork: Some(game_autowork::Autowork { next_id: 2, policies: vec![], requests: Some(requests) }), tool_wear: None, opinions: None, goals: Some(goals), agreements: None, sites: None, schedule: None };
+            let snapshot = CoreHostSnapshot { core: initial, autowork: Some(game_autowork::Autowork { next_id: 2, policies: vec![], requests: Some(requests) }), tool_wear: None, opinions: None, goals: Some(goals), agreements: None, sites: None, tool_requirements: vec![], schedule: None };
             let mut host = CoreHost::begin(snapshot, &[(1, 1)]).unwrap();
             host.enable_schedule(1000, 1).unwrap();
             let run = host.advance_continuous(1000, &[]).unwrap();
@@ -2318,6 +2327,7 @@ fn core_host_goal_asking_benchmark() {
         goals: Some(goals),
         agreements: None,
         sites: None,
+        tool_requirements: vec![],
         schedule: None,
     };
     let pool = rayon::ThreadPoolBuilder::new()
@@ -2395,6 +2405,7 @@ fn personal_goal_selects_work_and_advances_only_after_completion() {
         goals: Some(goals),
         agreements: None,
         sites: None,
+        tool_requirements: vec![],
         schedule: None,
     };
     let mut host = CoreHost::begin(snapshot, &[(1, 1)]).unwrap();
@@ -2486,6 +2497,7 @@ fn an_unfunded_offer_can_motivate_work_without_forcing_delivery() {
         goals: None,
         agreements: Some(agreements),
         sites: None,
+        tool_requirements: vec![],
         schedule: None,
     };
     let mut without_offer = CoreHost::begin(snapshot.clone(), &[(1, 1)]).unwrap();
@@ -2584,6 +2596,7 @@ fn voluntary_deliveries_record_only_successful_physical_transfers() {
                         goals: None,
                         agreements: Some(agreements),
                         sites: None,
+                        tool_requirements: vec![],
                         schedule: None,
                     },
                     &[(1, 1)],
@@ -2699,7 +2712,7 @@ fn scheduled_delivery_is_a_personal_choice_that_fear_can_motivate() {
         let policy: game_agreements::Policy = serde_json::from_value(serde_json::json!({"person":2,"honor":false,"fear_honor_threshold":5})).unwrap();
         let agreements = game_agreements::Agreements { next_id: 2, policies: vec![policy], offering: vec![], work_offering: vec![], bulk_debtors: vec![], contracts: vec![game_agreements::Contract { id: 1, debtor: 2, creditor: 1, good: 1, quantity: 1, delivered: 0, due: 5, status: game_agreements::Status::Active }], events: vec![] };
         let opinions: game_opinions::Opinions = serde_json::from_value(serde_json::json!({"rules":{"minimum":-10,"maximum":10,"initial":0,"fulfilled_gain":1,"default_loss":1},"records":[{"observer":2,"target":1,"trust":0,"fear":fear}]})).unwrap();
-        let snapshot = CoreHostSnapshot { core: initial, autowork: None, tool_wear: None, opinions: Some(opinions), goals: None, agreements: Some(agreements), sites: None, schedule: None };
+        let snapshot = CoreHostSnapshot { core: initial, autowork: None, tool_wear: None, opinions: Some(opinions), goals: None, agreements: Some(agreements), sites: None, tool_requirements: vec![], schedule: None };
         let mut host = CoreHost::begin(snapshot, &[(1, 1)]).unwrap();
         host.enable_schedule(1000, 1).unwrap();
         let saved = serde_json::to_string(&host.snapshot()).unwrap();
@@ -2734,7 +2747,7 @@ fn people_can_propose_and_accept_unfunded_promises_without_enforcement() {
         let accept: game_agreements::Policy = serde_json::from_value(serde_json::json!({"person":3,"accept":true})).unwrap();
         let agreements = game_agreements::Agreements { next_id: 1, policies: vec![accept], offering: vec![offer], work_offering: vec![], bulk_debtors: vec![], contracts: vec![], events: vec![] };
         let opinions: game_opinions::Opinions = serde_json::from_value(serde_json::json!({"rules":{"minimum":-10,"maximum":10,"initial":0,"fulfilled_gain":1,"default_loss":1},"records":[{"observer":2,"target":3,"trust":0,"obligation":0}]})).unwrap();
-        let snapshot = CoreHostSnapshot { core: initial, autowork: None, tool_wear: None, opinions: Some(opinions.clone()), goals: None, agreements: Some(agreements), sites: None, schedule: None };
+        let snapshot = CoreHostSnapshot { core: initial, autowork: None, tool_wear: None, opinions: Some(opinions.clone()), goals: None, agreements: Some(agreements), sites: None, tool_requirements: vec![], schedule: None };
         let mut host = CoreHost::begin(snapshot, &[(1, 1)]).unwrap();
         host.enable_schedule(1000, 1).unwrap();
         let run = host.advance_scheduled(0, &[]).unwrap();
@@ -2786,6 +2799,7 @@ fn manually_making_a_promise_uses_the_makers_own_obligation_disposition() {
         goals: None,
         agreements: Some(agreements),
         sites: None,
+        tool_requirements: vec![],
         schedule: None,
     };
     let mut host = CoreHost::begin(snapshot, &[(1, 1)]).unwrap();
@@ -2906,7 +2920,7 @@ fn completed_work_wears_a_site_and_real_repairs_reopen_it() {
                         facilities,
                         maintenance: Some(maintenance),
                     }),
-                    schedule: None,
+                    tool_requirements: vec![], schedule: None,
                 };
                 let mut host = CoreHost::begin(snapshot, &[(1, 2)]).unwrap();
                 host.progress(500).unwrap();
@@ -3000,7 +3014,7 @@ fn scheduled_tool_repair_consumes_material_and_preserves_identity() {
         initial.physical.custody.containers.push(Container::new(Place::Person(2), 10, vec![Lot { item: Some(10), good: 1, quantity: 1, expires_at: None }, Lot { item: None, good: 2, quantity: 1, expires_at: None }]).unwrap());
         initial.physical.custody.containers.sort_by_key(|row| row.place);
         let tool_wear = game_economy_work::tool_wear::ToolWear { next_item: 11, rules: vec![game_economy_work::tool_wear::Rule { good: 1, durability: 10, wear: 1, repair_good: 2, repair_quantity: 1 }], conditions: vec![game_economy_work::tool_wear::Condition { item: 10, good: 1, damage: 4 }], repairs: vec![game_economy_work::tool_wear::RepairChoice { person: 2, item: 10, willing: true }], events: vec![] };
-        let snapshot = CoreHostSnapshot { core: initial, autowork: None, tool_wear: Some(tool_wear), opinions: None, goals: None, agreements: None, sites: None, schedule: None };
+        let snapshot = CoreHostSnapshot { core: initial, autowork: None, tool_wear: Some(tool_wear), opinions: None, goals: None, agreements: None, sites: None, tool_requirements: vec![], schedule: None };
         let mut no_material = snapshot.clone();
         let bag = no_material.core.physical.custody.containers.iter_mut().find(|row| row.place == Place::Person(2)).unwrap();
         *bag = Container::new(bag.place, 10, vec![Lot { item: Some(10), good: 1, quantity: 1, expires_at: None }]).unwrap();
@@ -3024,6 +3038,197 @@ fn scheduled_tool_repair_consumes_material_and_preserves_identity() {
         assert!(state.tool_wear.as_ref().unwrap().events.is_empty());
         state
     })
+    };
+    assert_eq!(run(1), run(6));
+}
+
+#[test]
+fn work_requires_carried_tools_and_wears_only_physically_started_jobs() {
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut initial = fixture();
+                initial.people[1].region = Some(1);
+                initial.travel = None;
+                initial.nutrition = None;
+                initial.pending_food.clear();
+                initial.physical.custody.containers.push(
+                    Container::new(
+                        Place::Person(2),
+                        10,
+                        vec![
+                            Lot {
+                                item: None,
+                                good: 1,
+                                quantity: 1,
+                                expires_at: None,
+                            },
+                            Lot {
+                                item: Some(10),
+                                good: 2,
+                                quantity: 1,
+                                expires_at: None,
+                            },
+                        ],
+                    )
+                    .unwrap(),
+                );
+                initial
+                    .physical
+                    .custody
+                    .containers
+                    .sort_by_key(|row| row.place);
+                let tool_wear = game_economy_work::tool_wear::ToolWear {
+                    next_item: 11,
+                    rules: vec![game_economy_work::tool_wear::Rule {
+                        good: 2,
+                        durability: 3,
+                        wear: 3,
+                        repair_good: 1,
+                        repair_quantity: 1,
+                    }],
+                    conditions: vec![game_economy_work::tool_wear::Condition {
+                        item: 10,
+                        good: 2,
+                        damage: 0,
+                    }],
+                    repairs: vec![game_economy_work::tool_wear::RepairChoice {
+                        person: 2,
+                        item: 10,
+                        willing: true,
+                    }],
+                    events: vec![],
+                };
+                let requirements = vec![game_economy_work::tools::Requirement {
+                    recipe: 1,
+                    good: 2,
+                    quantity: 1,
+                }];
+                let mut snapshot = CoreHostSnapshot {
+                    core: initial,
+                    autowork: None,
+                    tool_wear: Some(tool_wear),
+                    tool_requirements: requirements,
+                    opinions: None,
+                    goals: None,
+                    agreements: None,
+                    sites: None,
+                    schedule: None,
+                };
+                let start = (
+                    Start {
+                        id: 2,
+                        worker: 2,
+                        region: 1,
+                        recipe: 1,
+                        units: 1,
+                    },
+                    2,
+                );
+                let mut without_stock = CoreHost::begin(snapshot.clone(), &[(1, 2)]).unwrap();
+                assert_eq!(
+                    without_stock.start_chosen_work(&[start]).unwrap(),
+                    vec![(2, false)]
+                );
+                assert_eq!(
+                    without_stock.snapshot().tool_wear.unwrap().conditions[0].damage,
+                    0
+                );
+                let stock = snapshot
+                    .core
+                    .physical
+                    .custody
+                    .containers
+                    .iter_mut()
+                    .find(|row| row.place == Place::Stock { region: 1, good: 1 })
+                    .unwrap();
+                *stock = Container::new(
+                    stock.place,
+                    10,
+                    vec![Lot {
+                        item: None,
+                        good: 1,
+                        quantity: 4,
+                        expires_at: None,
+                    }],
+                )
+                .unwrap();
+                let mut missing_tool = snapshot.clone();
+                let bag = missing_tool
+                    .core
+                    .physical
+                    .custody
+                    .containers
+                    .iter_mut()
+                    .find(|row| row.place == Place::Person(2))
+                    .unwrap();
+                *bag = Container::new(
+                    bag.place,
+                    10,
+                    vec![Lot {
+                        item: None,
+                        good: 1,
+                        quantity: 1,
+                        expires_at: None,
+                    }],
+                )
+                .unwrap();
+                missing_tool.core.physical.custody.containers.push(
+                    Container::new(
+                        Place::Person(1),
+                        10,
+                        vec![Lot {
+                            item: Some(10),
+                            good: 2,
+                            quantity: 1,
+                            expires_at: None,
+                        }],
+                    )
+                    .unwrap(),
+                );
+                missing_tool
+                    .core
+                    .physical
+                    .custody
+                    .containers
+                    .sort_by_key(|row| row.place);
+                let mut missing_tool = CoreHost::begin(missing_tool, &[(1, 2)]).unwrap();
+                assert_eq!(
+                    missing_tool.start_chosen_work(&[start]).unwrap(),
+                    vec![(2, false)]
+                );
+                assert_eq!(
+                    missing_tool.snapshot().tool_wear.unwrap().conditions[0].damage,
+                    0
+                );
+                let mut host = CoreHost::begin(snapshot, &[(1, 2)]).unwrap();
+                assert_eq!(host.start_chosen_work(&[start]).unwrap(), vec![(2, true)]);
+                assert_eq!(
+                    host.snapshot().tool_wear.as_ref().unwrap().conditions[0].damage,
+                    3
+                );
+                let saved = serde_json::to_string(&host.snapshot()).unwrap();
+                let mut host = CoreHost::resume(serde_json::from_str(&saved).unwrap()).unwrap();
+                host.progress(500).unwrap();
+                assert_eq!(
+                    host.publish_early_work().unwrap().unwrap().finished,
+                    vec![1, 2]
+                );
+                let next = (Start { id: 3, ..start.0 }, 1);
+                assert_eq!(host.start_chosen_work(&[next]).unwrap(), vec![(3, false)]);
+                assert!(host.repair_tools_autonomously(&[]).unwrap().events[0].accepted);
+                assert_eq!(
+                    host.snapshot().tool_wear.as_ref().unwrap().conditions[0].damage,
+                    0
+                );
+                assert_eq!(host.start_chosen_work(&[next]).unwrap(), vec![(3, true)]);
+                let state = host.snapshot();
+                assert_eq!(state.tool_wear.as_ref().unwrap().conditions[0].damage, 3);
+                state
+            })
     };
     assert_eq!(run(1), run(6));
 }
@@ -3116,6 +3321,7 @@ fn core_host_tool_repair_benchmark() {
         goals: None,
         agreements: None,
         sites: None,
+        tool_requirements: vec![],
         schedule: None,
     };
     rayon::ThreadPoolBuilder::new()
@@ -3156,6 +3362,7 @@ fn core_host_site_admission_benchmark() {
         .unwrap_or(1);
     let scarce = std::env::var_os("LEGACY_SITE_SCARCE").is_some();
     let settle = std::env::var_os("LEGACY_SITE_SETTLE").is_some();
+    let tools = std::env::var_os("LEGACY_TOOLS").is_some();
     assert!(!scarce || !settle);
     assert!(count > 1);
     let mut initial = fixture();
@@ -3171,6 +3378,30 @@ fn core_host_site_admission_benchmark() {
     initial.travel = None;
     initial.nutrition = None;
     initial.pending_food.clear();
+    if tools {
+        initial
+            .physical
+            .custody
+            .containers
+            .extend((2..=count).map(|person| {
+                Container::new(
+                    Place::Person(person),
+                    10,
+                    vec![Lot {
+                        item: Some(person),
+                        good: 2,
+                        quantity: 1,
+                        expires_at: None,
+                    }],
+                )
+                .unwrap()
+            }));
+        initial
+            .physical
+            .custody
+            .containers
+            .sort_by_key(|row| row.place);
+    }
     let stock = initial
         .physical
         .custody
@@ -3237,7 +3468,25 @@ fn core_host_site_admission_benchmark() {
     let snapshot = CoreHostSnapshot {
         core: initial,
         autowork: Some(auto),
-        tool_wear: None,
+        tool_wear: tools.then(|| game_economy_work::tool_wear::ToolWear {
+            next_item: count + 1,
+            rules: vec![game_economy_work::tool_wear::Rule {
+                good: 2,
+                durability: 10,
+                wear: 1,
+                repair_good: 1,
+                repair_quantity: 1,
+            }],
+            conditions: (2..=count)
+                .map(|item| game_economy_work::tool_wear::Condition {
+                    item,
+                    good: 2,
+                    damage: 0,
+                })
+                .collect(),
+            repairs: vec![],
+            events: vec![],
+        }),
         opinions: None,
         goals: None,
         agreements: None,
@@ -3245,6 +3494,15 @@ fn core_host_site_admission_benchmark() {
             facilities,
             maintenance: Some(maintenance),
         }),
+        tool_requirements: if tools {
+            vec![game_economy_work::tools::Requirement {
+                recipe: 1,
+                good: 2,
+                quantity: 1,
+            }]
+        } else {
+            vec![]
+        },
         schedule: None,
     };
     rayon::ThreadPoolBuilder::new()
@@ -3257,6 +3515,20 @@ fn core_host_site_admission_benchmark() {
             let outcomes = host.start_autonomous_work(&[], 1).unwrap();
             let mut elapsed = start.elapsed();
             assert_eq!(outcomes.len(), (count - 1) as usize);
+            if tools {
+                let state = host.snapshot();
+                assert_eq!(
+                    state
+                        .tool_wear
+                        .as_ref()
+                        .unwrap()
+                        .conditions
+                        .iter()
+                        .filter(|condition| condition.damage == 1)
+                        .count(),
+                    outcomes.iter().filter(|outcome| outcome.1).count()
+                );
+            }
             assert_eq!(
                 outcomes.iter().filter(|outcome| outcome.1).count(),
                 if scarce {
@@ -3398,6 +3670,7 @@ fn core_host_site_repair_benchmark() {
             facilities,
             maintenance: Some(maintenance),
         }),
+        tool_requirements: vec![],
         schedule: None,
     };
     rayon::ThreadPoolBuilder::new()
@@ -3497,6 +3770,7 @@ fn core_host_offer_choices_benchmark() {
         goals: None,
         agreements: Some(agreements),
         sites: None,
+        tool_requirements: vec![],
         schedule: None,
     };
     rayon::ThreadPoolBuilder::new()
@@ -3626,6 +3900,7 @@ fn core_host_agreement_delivery_benchmark() {
         goals: None,
         agreements: Some(agreements),
         sites: None,
+        tool_requirements: vec![],
         schedule: None,
     };
     rayon::ThreadPoolBuilder::new()
@@ -3710,6 +3985,7 @@ fn core_host_physical_taking_preserves_item_identity_without_implied_permission(
             goals: None,
             agreements: None,
             sites: None,
+            tool_requirements: vec![],
             schedule: None,
         },
         &[(1, 1)],
@@ -3782,6 +4058,7 @@ fn core_host_rejects_unowned_identified_consumption_without_mutation() {
             goals: None,
             agreements: None,
             sites: None,
+            tool_requirements: vec![],
             schedule: None,
         },
         &[(1, 2)],
@@ -3806,7 +4083,7 @@ fn scheduled_core_host_is_partition_independent_at_tied_deadlines() {
         let snapshot = CoreHostSnapshot {
             core: initial,
             autowork: Some(game_autowork::Autowork { next_id: 2, policies: vec![game_autowork::Policy { person: 2, recipe: 1, enabled: true, disregard_claims: false }], requests: None }),
-            tool_wear: None, opinions: None, goals: None, agreements: None, sites: None, schedule: None,
+            tool_wear: None, opinions: None, goals: None, agreements: None, sites: None, tool_requirements: vec![], schedule: None,
         };
         let mut host = CoreHost::begin(snapshot, &[(1, 2)]).unwrap();
         host.progress(100).unwrap();
@@ -3902,6 +4179,7 @@ fn scheduled_decision_resumes_after_work_failure_without_repeating_meal() {
         goals: None,
         agreements: None,
         sites: None,
+        tool_requirements: vec![],
         schedule: None,
         autowork: Some(game_autowork::Autowork {
             next_id: u64::MAX,
@@ -4027,6 +4305,7 @@ fn scheduled_runner_defers_perishable_work_and_publishes_other_completion() {
             goals: None,
             agreements: None,
             sites: None,
+            tool_requirements: vec![],
             schedule: None,
         },
         &[(1, 2), (2, 2)],
@@ -4062,7 +4341,7 @@ fn continuous_core_host_crosses_boundaries_without_partition_or_reload_drift() {
         let tool_wear = game_economy_work::tool_wear::ToolWear { next_item: 10,
             rules: vec![game_economy_work::tool_wear::Rule { good: 2, durability: 10, wear: 1, repair_good: 1, repair_quantity: 1 }],
             conditions: vec![], repairs: vec![], events: vec![] };
-        let snapshot = CoreHostSnapshot { core: initial, tool_wear: Some(tool_wear), opinions: None, goals: None, agreements: None, sites: None, schedule: None,
+        let snapshot = CoreHostSnapshot { core: initial, tool_wear: Some(tool_wear), opinions: None, goals: None, agreements: None, sites: None, tool_requirements: vec![], schedule: None,
             autowork: Some(game_autowork::Autowork { next_id: 2, policies: vec![game_autowork::Policy { person: 2, recipe: 1, enabled: true, disregard_claims: false }], requests: None }) };
         let mut host = CoreHost::begin(snapshot, &[(1, 1)]).unwrap();
         host.enable_schedule(500, 1).unwrap();
@@ -4110,6 +4389,7 @@ fn long_decision_period_survives_save_and_crosses_a_boundary() {
         goals: None,
         agreements: None,
         sites: None,
+        tool_requirements: vec![],
         schedule: None,
     };
     let mut host = CoreHost::begin(snapshot, &[(1, 1)]).unwrap();
@@ -4150,6 +4430,7 @@ fn continuous_host_carries_long_work_rate_and_fractional_progress() {
                 goals: None,
                 agreements: None,
                 sites: None,
+                tool_requirements: vec![],
                 schedule: None,
             },
             &[(1, 1)],
@@ -4198,6 +4479,7 @@ fn continuous_host_retains_rate_for_work_paused_at_a_boundary() {
             goals: None,
             agreements: None,
             sites: None,
+            tool_requirements: vec![],
             schedule: None,
         },
         &[(1, 1)],
@@ -4249,6 +4531,7 @@ fn continuous_host_keeps_completed_interval_after_boundary_failure() {
             goals: None,
             agreements: None,
             sites: None,
+            tool_requirements: vec![],
             schedule: None,
         },
         &[(1, 1)],

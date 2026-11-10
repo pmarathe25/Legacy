@@ -377,16 +377,11 @@ impl ToolWear {
             },
         ))
     }
-    /// Both repairs and wear use opening-boundary custody; transfers take effect
-    /// afterwards, so condition stays with the same physical identity.
-    pub fn advance(
-        &mut self,
-        selected: &[(u64, u64)],
-        repairs: &[(u64, u64, Transaction)],
-        outcomes: &[game_lots::TransactionOutcome],
-        item_updates: &[(u64, Option<Place>)],
-        tick: u64,
-    ) {
+    /// Wear the identified items actually selected for committed work.
+    pub fn wear_items(&mut self, selected: &[(u64, u64)]) {
+        if selected.is_empty() {
+            return;
+        }
         let mut used: Vec<_> = selected.par_iter().map(|row| row.1).collect();
         if used.par_windows(2).any(|pair| pair[0] > pair[1]) {
             used.par_sort_unstable();
@@ -403,6 +398,18 @@ impl ToolWear {
                     .min(rule.durability);
             }
         });
+    }
+    /// Both repairs and wear use opening-boundary custody; transfers take effect
+    /// afterwards, so condition stays with the same physical identity.
+    pub fn advance(
+        &mut self,
+        selected: &[(u64, u64)],
+        repairs: &[(u64, u64, Transaction)],
+        outcomes: &[game_lots::TransactionOutcome],
+        item_updates: &[(u64, Option<Place>)],
+        tick: u64,
+    ) {
+        self.wear_items(selected);
         self.events = repairs
             .par_iter()
             .map(|(person, item, action)| RepairEvent {

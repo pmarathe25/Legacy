@@ -22,6 +22,8 @@ pub struct CoreHostSnapshot {
     #[serde(default)]
     pub tool_wear: Option<ToolWear>,
     #[serde(default)]
+    pub tool_requirements: Vec<game_economy_work::tools::Requirement>,
+    #[serde(default)]
     pub opinions: Option<game_opinions::Opinions>,
     #[serde(default)]
     pub goals: Option<game_goals::Goals>,
@@ -38,6 +40,7 @@ pub struct CoreHost {
     core: CoreInterval,
     autowork: Option<Autowork>,
     tool_wear: Option<ToolWear>,
+    tool_requirements: Vec<game_economy_work::tools::Requirement>,
     opinions: Option<game_opinions::Opinions>,
     goals: Option<game_goals::Goals>,
     agreements: Option<game_agreements::Agreements>,
@@ -50,6 +53,7 @@ impl CoreHost {
             core,
             autowork,
             tool_wear,
+            tool_requirements,
             opinions,
             goals,
             agreements,
@@ -64,7 +68,7 @@ impl CoreHost {
             opinions,
             goals,
             agreements,
-            (sites, schedule),
+            (sites, schedule, tool_requirements),
         )
     }
     pub fn resume(snapshot: CoreHostSnapshot) -> Result<Self, String> {
@@ -72,6 +76,7 @@ impl CoreHost {
             core,
             autowork,
             tool_wear,
+            tool_requirements,
             opinions,
             goals,
             agreements,
@@ -86,7 +91,7 @@ impl CoreHost {
             opinions,
             goals,
             agreements,
-            (sites, schedule),
+            (sites, schedule, tool_requirements),
         )
     }
     fn compile(
@@ -96,9 +101,13 @@ impl CoreHost {
         opinions: Option<game_opinions::Opinions>,
         goals: Option<game_goals::Goals>,
         agreements: Option<game_agreements::Agreements>,
-        site_and_schedule: (Option<CoreSites>, Option<CoreSchedule>),
+        site_and_schedule: (
+            Option<CoreSites>,
+            Option<CoreSchedule>,
+            Vec<game_economy_work::tools::Requirement>,
+        ),
     ) -> Result<Self, String> {
-        let (mut sites, schedule) = site_and_schedule;
+        let (mut sites, schedule, tool_requirements) = site_and_schedule;
         if let Some(owner) = &autowork {
             let people: Vec<_> = core
                 .people
@@ -122,6 +131,21 @@ impl CoreHost {
                 .collect();
             let people: HashSet<_> = core.people.par_iter().map(|person| person.id).collect();
             owner.validate(&core.physical, &goods, &people, core.physical.tick())?;
+        }
+        if !tool_requirements.is_empty() {
+            let goods: HashSet<_> = core
+                .physical
+                .goods()
+                .par_iter()
+                .map(|good| good.id)
+                .collect();
+            let recipes: HashSet<_> = core
+                .physical
+                .recipes()
+                .par_iter()
+                .map(|recipe| recipe.id)
+                .collect();
+            game_economy_work::tools::validate(&tool_requirements, &recipes, &goods)?;
         }
         if let Some(owner) = &opinions {
             let people: HashSet<_> = core.people.par_iter().map(|person| person.id).collect();
@@ -166,6 +190,7 @@ impl CoreHost {
             core,
             autowork,
             tool_wear,
+            tool_requirements,
             opinions,
             goals,
             agreements,
@@ -178,6 +203,7 @@ impl CoreHost {
             core: self.core.snapshot(),
             autowork: self.autowork.clone(),
             tool_wear: self.tool_wear.clone(),
+            tool_requirements: self.tool_requirements.clone(),
             opinions: self.opinions.clone(),
             goals: self.goals.clone(),
             agreements: self.agreements.clone(),
@@ -363,7 +389,7 @@ impl CoreHost {
         blocked: &[u64],
         rate: u64,
     ) -> Result<Vec<(u64, bool)>, String> {
-        if self.sites.is_some() {
+        if self.sites.is_some() || !self.tool_requirements.is_empty() {
             let Some(owner) = &self.autowork else {
                 return Ok(Vec::new());
             };

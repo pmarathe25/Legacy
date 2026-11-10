@@ -132,9 +132,9 @@ impl CoreHost {
     ) -> Result<Vec<(u64, bool)>, String> {
         let tick = self.core.physical.tick();
         let offset = self.core.elapsed_millis().ok_or("no physical interval")?;
-        let Some(owner) = &self.sites else {
+        if self.sites.is_none() && self.tool_requirements.is_empty() {
             return self.core.start_work(tick, offset, starts);
-        };
+        }
         let mut ids: Vec<_> = starts.par_iter().map(|(start, _)| start.id).collect();
         let mut workers: Vec<_> = starts.par_iter().map(|(start, _)| start.worker).collect();
         let recipes: std::collections::HashMap<_, _> = self
@@ -196,57 +196,106 @@ impl CoreHost {
         {
             return Err("invalid site work starts".into());
         }
-        let plain: Vec<_> = starts.par_iter().map(|row| row.0).collect();
-        let broken = owner
-            .maintenance
-            .as_ref()
-            .map_or_else(Vec::new, |maintenance| {
-                maintenance.broken(&owner.facilities)
+        let mut tools = if self.tool_requirements.is_empty() {
+            Vec::new()
+        } else {
+            let view = self.core.physical.view(tick)?;
+            starts
+                .par_iter()
+                .map(|(start, _)| {
+                    let selected = if let Some(owner) = &self.tool_wear {
+                        owner.select(
+                            &self.tool_requirements,
+                            &self.core.physical,
+                            &view,
+                            start.worker,
+                            start.recipe,
+                        )
+                    } else {
+                        game_economy_work::tools::available(
+                            &self.tool_requirements,
+                            &view,
+                            start.worker,
+                            start.recipe,
+                        )
+                        .then(Vec::new)
+                    };
+                    (start.id, start.worker, selected)
+                })
+                .collect::<Vec<_>>()
+        };
+        tools.par_sort_unstable_by_key(|row| row.0);
+        let tool_permits = |id: u64| {
+            self.tool_requirements.is_empty()
+                || tools
+                    .binary_search_by_key(&id, |row| row.0)
+                    .ok()
+                    .is_some_and(|index| tools[index].2.is_some())
+        };
+        let plain: Vec<_> = starts
+            .par_iter()
+            .filter(|(start, _)| tool_permits(start.id))
+            .map(|row| row.0)
+            .collect();
+        let plan = self.sites.as_ref().map(|owner| {
+            let broken = owner
+                .maintenance
+                .as_ref()
+                .map_or_else(Vec::new, |maintenance| {
+                    maintenance.broken(&owner.facilities)
+                });
+            let available = (!broken.is_empty()).then(|| {
+                let mut sites = owner.facilities.clone();
+                sites.sites = sites
+                    .sites
+                    .into_par_iter()
+                    .filter(|site| broken.binary_search(&site.id).is_err())
+                    .collect();
+                sites
             });
-        let available = (!broken.is_empty()).then(|| {
-            let mut sites = owner.facilities.clone();
-            sites.sites = sites
-                .sites
-                .into_par_iter()
-                .filter(|site| broken.binary_search(&site.id).is_err())
-                .collect();
-            sites
-        });
-        let plan =
             available
                 .as_ref()
                 .unwrap_or(&owner.facilities)
-                .prepare(&plain, self.core.seed, tick);
+                .prepare(&plain, self.core.seed, tick)
+        });
+        let permitted = |start: &game_production_model::Start| {
+            tool_permits(start.id)
+                && self.sites.as_ref().is_none_or(|owner| {
+                    owner
+                        .facilities
+                        .requirements
+                        .binary_search_by_key(&start.recipe, |row| row.recipe)
+                        .is_err()
+                        || plan.as_ref().is_some_and(|plan| plan.permits(start.id))
+                })
+        };
         let mut denied: Vec<_> = starts
             .par_iter()
-            .filter(|(start, _)| {
-                owner
-                    .facilities
-                    .requirements
-                    .binary_search_by_key(&start.recipe, |row| row.recipe)
-                    .is_ok()
-                    && !plan.permits(start.id)
-            })
+            .filter(|(start, _)| !permitted(start))
             .map(|(start, _)| (start.id, false))
             .collect();
         let allowed: Vec<_> = starts
             .par_iter()
             .copied()
-            .filter(|(start, _)| {
-                owner
-                    .facilities
-                    .requirements
-                    .binary_search_by_key(&start.recipe, |row| row.recipe)
-                    .is_err()
-                    || plan.permits(start.id)
-            })
+            .filter(|(start, _)| permitted(start))
             .collect();
         let mut outcomes = self.core.start_work(tick, offset, &allowed)?;
-        self.sites
-            .as_mut()
-            .expect("checked site owner")
-            .facilities
-            .record_started(&plan, &outcomes);
+        if let (Some(owner), Some(plan)) = (&mut self.sites, &plan) {
+            owner.facilities.record_started(plan, &outcomes);
+        }
+        if let Some(owner) = &mut self.tool_wear {
+            let selected: Vec<_> = tools
+                .par_iter()
+                .filter(|row| {
+                    outcomes
+                        .binary_search_by_key(&row.0, |outcome| outcome.0)
+                        .ok()
+                        .is_some_and(|index| outcomes[index].1)
+                })
+                .flat_map_iter(|row| row.2.iter().flatten().map(move |&item| (row.1, item)))
+                .collect();
+            owner.wear_items(&selected);
+        }
         outcomes.append(&mut denied);
         outcomes.par_sort_unstable_by_key(|row| row.0);
         Ok(outcomes)
