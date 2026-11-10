@@ -3255,7 +3255,7 @@ fn disease_uses_actual_meetings_and_does_not_require_social_to_progress() {
         };
         let snapshot = CoreHostSnapshot {
             core: initial, autowork: None, tool_wear: None, tool_requirements: vec![], paused_work_rates: vec![],
-            fatigue: None, activity: vec![], health: Some(game_economy::core_interval::CoreHealth {owner: disease, last_tick: None}),
+            fatigue: None, activity: vec![], health: Some(game_economy::core_interval::CoreHealth {owner: disease, treatment: vec![], last_tick: None}),
             claims: None, social: Some(social), knowledge: None, food_search: None,
             opinions: None, goals: None, agreements: None, sites: None, schedule: None,
         };
@@ -3297,6 +3297,211 @@ fn disease_uses_actual_meetings_and_does_not_require_social_to_progress() {
 }
 
 #[test]
+fn personal_treatment_consumes_medicine_and_only_clears_matching_episodes() {
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut initial = fixture();
+                initial.physical.custody.tick = 1;
+                initial.people[1].region = Some(1);
+                initial.people[1].health = 90;
+                let mut third = initial.people[1].clone();
+                third.id = 3;
+                third.controlled = true;
+                initial.people.push(third);
+                initial.travel = None;
+                initial.nutrition = None;
+                initial.pending_food.clear();
+                initial.physical.custody.containers.extend([2, 3].map(|id| {
+                    Container::new(
+                        Place::Person(id),
+                        10,
+                        vec![Lot {
+                            item: None,
+                            good: 2,
+                            quantity: 1,
+                            expires_at: None,
+                        }],
+                    )
+                    .unwrap()
+                }));
+                initial
+                    .physical
+                    .custody
+                    .containers
+                    .sort_by_key(|row| row.place);
+                let strain = |id| game_disease::Strain {
+                    id,
+                    name: format!("strain-{id}"),
+                    incubation: 0,
+                    infectious_ticks: 5,
+                    immunity_ticks: 0,
+                    damage_per_tick: 4,
+                    transmission_per_million: 0,
+                    combat_transmission_per_million: 0,
+                    birth_transmission_per_million: 0,
+                };
+                let health = game_economy::core_interval::CoreHealth {
+                    owner: game_disease::Disease {
+                        strains: vec![strain(1), strain(2)],
+                        treatments: vec![game_disease::Treatment {
+                            strain: 1,
+                            medicine: 2,
+                        }],
+                        cases: vec![
+                            game_disease::Case {
+                                person: 2,
+                                strain: 1,
+                                infected_at: 0,
+                                source: None,
+                            },
+                            game_disease::Case {
+                                person: 3,
+                                strain: 2,
+                                infected_at: 0,
+                                source: None,
+                            },
+                        ],
+                        events: vec![],
+                    },
+                    treatment: vec![
+                        game_economy_treatment::Policy {
+                            person: 2,
+                            medicine: 2,
+                            quantity: 1,
+                            willing: true,
+                            health_at_most: None,
+                        },
+                        game_economy_treatment::Policy {
+                            person: 3,
+                            medicine: 2,
+                            quantity: 1,
+                            willing: false,
+                            health_at_most: None,
+                        },
+                    ],
+                    last_tick: None,
+                };
+                let snapshot = CoreHostSnapshot {
+                    core: initial,
+                    autowork: None,
+                    tool_wear: None,
+                    tool_requirements: vec![],
+                    paused_work_rates: vec![],
+                    fatigue: None,
+                    activity: vec![],
+                    health: Some(health),
+                    social: None,
+                    knowledge: None,
+                    claims: None,
+                    food_search: None,
+                    opinions: None,
+                    goals: None,
+                    agreements: None,
+                    sites: None,
+                    schedule: None,
+                };
+                let mut identified = snapshot.clone();
+                let held = identified
+                    .core
+                    .physical
+                    .custody
+                    .containers
+                    .iter_mut()
+                    .find(|row| row.place == Place::Person(2))
+                    .unwrap();
+                *held = Container::new(
+                    held.place,
+                    10,
+                    vec![Lot {
+                        item: Some(10),
+                        good: 2,
+                        quantity: 1,
+                        expires_at: None,
+                    }],
+                )
+                .unwrap();
+                let mut failed = CoreHost::begin(identified, &[(1, 1)]).unwrap();
+                let before = failed.snapshot();
+                assert!(failed.treat_autonomously(&[]).is_err());
+                assert_eq!(failed.snapshot(), before);
+
+                let mut scheduled = CoreHost::begin(snapshot.clone(), &[(1, 1)]).unwrap();
+                scheduled.enable_schedule(1000, 1).unwrap();
+                assert_eq!(scheduled.advance_scheduled(0, &[]).unwrap().failure, None);
+                assert_eq!(scheduled.snapshot().core.people[1].health, 90);
+                assert!(
+                    scheduled
+                        .snapshot()
+                        .health
+                        .unwrap()
+                        .owner
+                        .cases
+                        .iter()
+                        .all(|case| case.person != 2)
+                );
+                assert!(
+                    scheduled
+                        .snapshot()
+                        .health
+                        .unwrap()
+                        .owner
+                        .events
+                        .iter()
+                        .any(|event| event.person == 2
+                            && event.kind == game_disease::EventKind::Treated)
+                );
+                let mut manual_only = CoreHost::begin(snapshot.clone(), &[(1, 1)]).unwrap();
+                assert_eq!(manual_only.treat_controlled(3).unwrap().actors, vec![3]);
+                assert_eq!(
+                    manual_only
+                        .snapshot()
+                        .core
+                        .physical
+                        .custody
+                        .containers
+                        .iter()
+                        .find(|row| row.place == Place::Person(2))
+                        .unwrap()
+                        .used,
+                    1
+                );
+                let mut host = CoreHost::begin(snapshot, &[(1, 1)]).unwrap();
+                let before = host.snapshot();
+                assert!(host.treat_controlled(2).is_err());
+                assert_eq!(host.snapshot(), before);
+                let result = host.treat_autonomously(&[]).unwrap();
+                assert_eq!(result.actors, vec![2]);
+                assert!(result.outcomes[0].accepted);
+                let state = host.snapshot();
+                assert_eq!(state.health.as_ref().unwrap().owner.cases.len(), 1);
+                let saved = serde_json::to_string(&state).unwrap();
+                let mut host = CoreHost::resume(serde_json::from_str(&saved).unwrap()).unwrap();
+                assert!(host.treat_controlled(3).unwrap().outcomes[0].accepted);
+                let result = host.snapshot();
+                assert_eq!(result.health.as_ref().unwrap().owner.cases[0].strain, 2);
+                assert_eq!(
+                    result
+                        .core
+                        .physical
+                        .custody
+                        .containers
+                        .iter()
+                        .find(|row| row.place == Place::Person(3))
+                        .unwrap()
+                        .used,
+                    0
+                );
+                result
+            })
+    };
+    assert_eq!(run(1), run(6));
+}
+
+#[test]
 #[ignore = "manual personal meetings and reporting scaling benchmark"]
 fn core_host_social_benchmark() {
     use std::hash::{Hash, Hasher};
@@ -3309,7 +3514,8 @@ fn core_host_social_benchmark() {
         .and_then(|value| value.parse().ok())
         .unwrap_or(1);
     assert!(count > 2);
-    let disease = std::env::var_os("LEGACY_DISEASE").is_some();
+    let treatment = std::env::var_os("LEGACY_TREATMENT").is_some();
+    let disease = std::env::var_os("LEGACY_DISEASE").is_some() || treatment;
     let mut initial = fixture();
     initial.physical.custody.tick = 1;
     let template = initial.people[0].clone();
@@ -3323,6 +3529,30 @@ fn core_host_social_benchmark() {
     initial.travel.as_mut().unwrap().journeys.clear();
     initial.nutrition = None;
     initial.pending_food.clear();
+    if treatment {
+        initial
+            .physical
+            .custody
+            .containers
+            .extend((2..=count).map(|person| {
+                Container::new(
+                    Place::Person(person),
+                    10,
+                    vec![Lot {
+                        item: None,
+                        good: 2,
+                        quantity: 1,
+                        expires_at: None,
+                    }],
+                )
+                .unwrap()
+            }));
+        initial
+            .physical
+            .custody
+            .containers
+            .sort_by_key(|row| row.place);
+    }
     let social = game_economy::core_interval::CoreSocial {
         owner: game_social::Social {
             rules: game_social::Rules {
@@ -3380,6 +3610,19 @@ fn core_host_social_benchmark() {
         fatigue: None,
         activity: vec![],
         health: disease.then(|| game_economy::core_interval::CoreHealth {
+            treatment: if treatment {
+                (2..=count)
+                    .map(|person| game_economy_treatment::Policy {
+                        person,
+                        medicine: 2,
+                        quantity: 1,
+                        willing: true,
+                        health_at_most: Some(100),
+                    })
+                    .collect()
+            } else {
+                vec![]
+            },
             owner: game_disease::Disease {
                 strains: vec![game_disease::Strain {
                     id: 1,
@@ -3392,9 +3635,16 @@ fn core_host_social_benchmark() {
                     combat_transmission_per_million: 0,
                     birth_transmission_per_million: 0,
                 }],
-                treatments: vec![],
+                treatments: if treatment {
+                    vec![game_disease::Treatment {
+                        strain: 1,
+                        medicine: 2,
+                    }]
+                } else {
+                    vec![]
+                },
                 cases: (2..=count)
-                    .step_by(2)
+                    .step_by(if treatment { 1 } else { 2 })
                     .map(|person| game_disease::Case {
                         person,
                         strain: 1,
@@ -3423,6 +3673,32 @@ fn core_host_social_benchmark() {
         .install(|| {
             let mut host = CoreHost::begin(snapshot, &[(1, 1)]).unwrap();
             let start = std::time::Instant::now();
+            if treatment {
+                let result = host.treat_autonomously(&[]).unwrap();
+                let elapsed = start.elapsed();
+                assert_eq!(result.actors.len(), (count - 1) as usize);
+                assert!(result.outcomes.iter().all(|row| row.accepted));
+                assert!(
+                    host.snapshot()
+                        .health
+                        .as_ref()
+                        .unwrap()
+                        .owner
+                        .cases
+                        .is_empty()
+                );
+                let mut hash = std::collections::hash_map::DefaultHasher::new();
+                serde_json::to_vec(&host.snapshot())
+                    .unwrap()
+                    .hash(&mut hash);
+                println!(
+                    "workers={workers} treatments={} elapsed={:.6} fingerprint={:016x}",
+                    result.actors.len(),
+                    elapsed.as_secs_f64(),
+                    hash.finish()
+                );
+                return;
+            }
             let meetings = host.meet_autonomously(&[]).unwrap();
             let elapsed = start.elapsed();
             assert_eq!(meetings.len(), ((count - 1) / 2) as usize);

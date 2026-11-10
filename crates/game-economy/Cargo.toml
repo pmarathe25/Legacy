@@ -33,6 +33,7 @@ game-lots = { path = "../game-lots" }
 game-economy-work = { path = "../game-economy-work" }
 game-economy-person = { path = "../game-economy-person" }
 game-economy-dynamics = { path = "../game-economy-dynamics" }
+game-economy-treatment = { path = "../game-economy-treatment" }
 game-economy-claims = { path = "../game-economy-claims" }
 game-economy-claims-output = { path = "../game-economy-claims-output" }
 game-economy-exposure = { path = "../game-economy-exposure" }

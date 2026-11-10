@@ -124,7 +124,7 @@ pub fn targets(disease: &Disease, choices: &[(u64, u32)], now: u64) -> Vec<(u64,
     if choices.is_empty() {
         return Vec::new();
     }
-    let mut choices = choices.to_vec();
+    let mut choices: Vec<_> = choices.par_iter().copied().collect();
     choices.par_sort_unstable();
     let choices = &choices;
     disease
@@ -170,6 +170,28 @@ pub fn prepare(
     base: u64,
     choice: Choice,
 ) -> Result<Plan, String> {
+    prepare_at(
+        disease,
+        policies,
+        people,
+        busy,
+        view,
+        base,
+        (choice, view.boundary.saturating_sub(1)),
+    )
+}
+
+/// Prepare against the actual current time when acting within a quantum.
+pub fn prepare_at(
+    disease: Option<&Disease>,
+    policies: &[Policy],
+    people: &[Person],
+    busy: &[u64],
+    view: &View,
+    base: u64,
+    timing: (Choice, u64),
+) -> Result<Plan, String> {
+    let (choice, now) = timing;
     let manual = choice.manual;
     let Some(disease) = disease else {
         if manual.is_some() {
@@ -248,7 +270,7 @@ pub fn prepare(
     Ok(Plan {
         actions,
         actors: chosen.par_iter().map(|p| p.person).collect(),
-        targets: targets(disease, &selected, view.boundary.saturating_sub(1)),
+        targets: targets(disease, &selected, now),
     })
 }
 #[macro_export]
@@ -276,6 +298,15 @@ macro_rules! prepare_treatment {
     }};
 }
 pub fn apply(disease: Option<&mut Disease>, plan: &Plan, events: &Events) {
+    apply_outcomes(disease, plan, &events.physical_actions, events.tick);
+}
+/// Apply only to episodes selected before the physical consumption was committed.
+pub fn apply_outcomes(
+    disease: Option<&mut Disease>,
+    plan: &Plan,
+    outcomes: &[game_lots::TransactionOutcome],
+    tick: u64,
+) {
     if plan.targets.is_empty() {
         return;
     }
@@ -284,11 +315,10 @@ pub fn apply(disease: Option<&mut Disease>, plan: &Plan, events: &Events) {
         .par_iter()
         .zip(plan.actors.par_iter())
         .filter_map(|(action, &person)| {
-            events
-                .physical_actions
+            outcomes
                 .binary_search_by_key(&action.id, |row| row.id)
                 .ok()
-                .filter(|&index| events.physical_actions[index].accepted)
+                .filter(|&index| outcomes[index].accepted)
                 .map(|_| (person, action.movements[0].good))
         })
         .collect();
@@ -300,7 +330,7 @@ pub fn apply(disease: Option<&mut Disease>, plan: &Plan, events: &Events) {
         .map(|row| (row.0, row.2, row.3))
         .collect();
     treated.par_sort_unstable();
-    apply_episodes(disease, &treated, events.tick);
+    apply_episodes(disease, &treated, tick);
 }
 /// Record only the opening episodes affected by actual consumed medicine.
 pub fn apply_episodes(disease: Option<&mut Disease>, treated: &[(u64, u32, u64)], tick: u64) {

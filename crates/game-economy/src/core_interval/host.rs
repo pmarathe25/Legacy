@@ -11,6 +11,7 @@ mod scheduler;
 mod sites;
 mod social;
 mod tools;
+mod treatment;
 pub use food_search::{CoreFoodProvision, CoreFoodSearch};
 pub use offers::CoreSocialResults;
 pub use requests::{CoreDeliveryResults, CoreRequestResults};
@@ -18,6 +19,7 @@ pub use scheduler::{CoreRun, CoreRunEvent, CoreSchedule, DecisionPhase};
 pub use sites::{CoreRepairResults, CoreSites};
 pub use social::{CoreDynamicsResults, CoreHealth, CoreSocial};
 pub use tools::CoreToolRepairResults;
+pub use treatment::CoreTreatmentResults;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -372,14 +374,15 @@ impl CoreHost {
                 || health
                     .last_tick
                     .is_some_and(|tick| tick == 0 || tick > core.physical.tick())
-                || health
-                    .owner
-                    .events
-                    .par_iter()
-                    .any(|event| Some(event.tick) != health.last_tick)
             {
                 return Err("invalid disease decision state".into());
             }
+            game_economy_treatment::validate(
+                &health.treatment,
+                Some(&health.owner),
+                &people,
+                &goods,
+            )?;
         }
         if let Some(owner) = &goals {
             let people: HashSet<_> = core.people.par_iter().map(|person| person.id).collect();

@@ -5,6 +5,7 @@ use super::*;
 #[serde(tag = "phase", rename_all = "snake_case")]
 pub enum DecisionPhase {
     Meals,
+    Treatment { meal_people: Vec<u64> },
     Provision { meal_people: Vec<u64> },
     Social { meal_people: Vec<u64> },
     Maintenance { meal_people: Vec<u64> },
@@ -53,7 +54,8 @@ impl CoreSchedule {
         {
             return Err("invalid core decision schedule".into());
         }
-        if let DecisionPhase::Provision { meal_people }
+        if let DecisionPhase::Treatment { meal_people }
+        | DecisionPhase::Provision { meal_people }
         | DecisionPhase::Social { meal_people }
         | DecisionPhase::Maintenance { meal_people }
         | DecisionPhase::ToolMaintenance { meal_people }
@@ -83,6 +85,7 @@ pub enum CoreRunEvent {
     Deferred(Vec<u64>),
     Work(game_lot_runtime::EarlyWorkEvents),
     Meals(Vec<(u64, u32)>),
+    Treatments(Vec<game_lots::TransactionOutcome>),
     Provisions(Vec<game_lots::TransactionOutcome>),
     Meetings(Vec<game_social::Encounter>),
     Disease(Vec<game_disease::Event>),
@@ -109,6 +112,13 @@ pub struct CoreRun {
     pub failure: Option<String>,
 }
 impl CoreHost {
+    fn after_treatment(&self, meal_people: Vec<u64>) -> DecisionPhase {
+        if self.food_search.is_some() {
+            DecisionPhase::Provision { meal_people }
+        } else {
+            self.after_provision(meal_people)
+        }
+    }
     fn after_provision(&self, meal_people: Vec<u64>) -> DecisionPhase {
         if self.social.is_some() || self.health.is_some() {
             DecisionPhase::Social { meal_people }
@@ -318,13 +328,32 @@ impl CoreHost {
                                 meals.iter().map(|meal| (meal.person, meal.good)).collect(),
                             ));
                         }
-                        let next = if self.food_search.is_some() {
-                            DecisionPhase::Provision {
+                        let next = if self
+                            .health
+                            .as_ref()
+                            .is_some_and(|owner| !owner.treatment.is_empty())
+                        {
+                            DecisionPhase::Treatment {
                                 meal_people: people,
                             }
                         } else {
-                            self.after_provision(people)
+                            self.after_treatment(people)
                         };
+                        self.schedule.as_mut().expect("active schedule").phase = next;
+                    }
+                    DecisionPhase::Treatment { mut meal_people } => {
+                        let mut busy = external_blocked.to_vec();
+                        busy.extend(meal_people.iter().copied());
+                        busy.par_sort_unstable();
+                        busy.dedup();
+                        let result = attempt!('run, self.treat_autonomously(&busy));
+                        meal_people.extend(result.actors);
+                        meal_people.par_sort_unstable();
+                        meal_people.dedup();
+                        if !result.outcomes.is_empty() {
+                            run.events.push(CoreRunEvent::Treatments(result.outcomes));
+                        }
+                        let next = self.after_treatment(meal_people);
                         self.schedule.as_mut().expect("active schedule").phase = next;
                     }
                     DecisionPhase::Provision { mut meal_people } => {

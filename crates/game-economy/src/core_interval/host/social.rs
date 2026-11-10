@@ -14,6 +14,8 @@ pub struct CoreSocial {
 pub struct CoreHealth {
     pub owner: game_disease::Disease,
     #[serde(default)]
+    pub treatment: Vec<game_economy_treatment::Policy>,
+    #[serde(default)]
     pub last_tick: Option<u64>,
 }
 impl Clone for CoreHealth {
@@ -25,6 +27,7 @@ impl Clone for CoreHealth {
                 cases: self.owner.cases.par_iter().cloned().collect(),
                 events: self.owner.events.par_iter().cloned().collect(),
             },
+            treatment: self.treatment.par_iter().cloned().collect(),
             last_tick: self.last_tick,
         }
     }
@@ -90,7 +93,7 @@ impl CoreHost {
             claims: None,
         };
         let mut people: Vec<_> = self.core.people.par_iter().cloned().collect();
-        let next = opening.prepare(
+        let mut next = opening.prepare(
             &self.core.people,
             &mut people,
             &busy,
@@ -109,6 +112,30 @@ impl CoreHost {
                 inquiry_meetings: &[],
             },
         )?;
+        if let (Some(previous), Some(disease)) = (health, &mut next.disease) {
+            disease.events.par_extend(
+                previous
+                    .owner
+                    .events
+                    .par_iter()
+                    .filter(|event| {
+                        event.tick == tick && event.kind == game_disease::EventKind::Treated
+                    })
+                    .cloned(),
+            );
+            disease.events.par_sort_unstable_by_key(|event| {
+                (
+                    event.person,
+                    event.strain,
+                    match event.kind {
+                        game_disease::EventKind::Recovered => 0,
+                        game_disease::EventKind::Infected => 1,
+                        game_disease::EventKind::Treated => 2,
+                    },
+                    event.source,
+                )
+            });
+        }
         let meetings: Vec<_> = next
             .social
             .as_ref()
@@ -177,8 +204,14 @@ impl CoreHost {
             });
         }
         if let Some(owner) = next.disease {
+            let treatment = self
+                .health
+                .as_mut()
+                .map(|health| std::mem::take(&mut health.treatment))
+                .unwrap_or_default();
             self.health = Some(CoreHealth {
                 owner,
+                treatment,
                 last_tick: Some(tick),
             });
         }

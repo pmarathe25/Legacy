@@ -18,7 +18,7 @@ Optional `CoreFoodSearch` adds the existing personal food-search preferences and
 
 Optional `CoreSocial` runs one social generation per physical tick, starting at tick one. Individuals can participate willingly or respond to directed fear or obligation, and their personal dispositions govern relationship changes. If personal knowledge or route sharing is enabled, actual encounters can transmit selected reports, including intentional misreports; listener reception remains personal. Meetings, relationship effects, and reports are staged together. Knowledge and claims are independently optional, and older saves with either nested under food search are migrated on load.
 
-Optional `CoreHealth` advances data-defined diseases once per physical tick, even if personal decisions occur less often. Actual meetings can transmit infection when social and health are both enabled; existing cases can progress without social. Damage and new infections publish with the same staged generation, and a worker killed by disease stops progressing immediately. This slice does not yet include treatment, exposure through other actions, or the other world owners absent from the limited host.
+Optional `CoreHealth` advances data-defined diseases once per physical tick, even if personal decisions occur less often. Actual meetings can transmit infection when social and health are both enabled; existing cases can progress without social. Damage and new infections publish with the same staged generation, and a worker killed by disease stops progressing immediately. People can choose to consume medicine they carry; controlled people can choose treatment explicitly. Only matching infection episodes are treated, so an ineffective medicine can be consumed without curing another strain. This slice does not yet include exposure through other actions or the other world owners absent from the limited host.
 
 Chosen living people can eat food they actually carry at a partial offset. Only accepted consumption reduces hunger immediately; health and nutrition effects are retained for the next boundary. Failed consumption and invalid batches do not grant effects, and a resumed interval preserves both the custody and pending effects.
 
@@ -95,6 +95,8 @@ Adding `LEGACY_FOOD_CLAIMS=1` makes each contender disregard a local person's cl
 The ignored `core_host_social_benchmark` measures 24,999 meetings and personal food reports among 50,000 people. One run took 25.8, 16.4, 11.9, and 10.0 ms at one, two, four, and six workers, with matching fingerprints. Setup and loading are excluded; scaling is sublinear.
 
 With `LEGACY_DISEASE=1`, the same workload includes 25,000 initial infections, disease damage, and possible transmission at actual meetings. A run took 37.1, 25.1, 16.0, and 14.4 ms at those worker counts, with matching fingerprints and setup excluded.
+
+With `LEGACY_TREATMENT=1`, the benchmark instead measures 49,999 people consuming carried medicine and treating their matching infection. A run took 67.2, 42.5, 30.1, and 28.4 ms at those worker counts, with matching fingerprints and setup excluded.
 
 The ignored `core_host_site_repair_benchmark` measures 49,999 people repairing separate sites using carried materials. One run took 47.3, 31.2, 24.5, and 26.2 ms at the same worker counts, with matching fingerprints and setup excluded.
 
