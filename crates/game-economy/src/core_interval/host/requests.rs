@@ -8,6 +8,12 @@ pub struct CoreRequestResults {
     pub actors: Vec<u64>,
     pub events: Vec<Event>,
 }
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct CoreDeliveryResults {
+    /// People who chose to attempt a delivery, even if custody rejected it.
+    pub actors: Vec<u64>,
+    pub outcomes: Vec<game_lots::TransactionOutcome>,
+}
 
 fn together(people: &[Person], requester: u64, worker: u64, region: u64) -> bool {
     [requester, worker].into_iter().all(|id| {
@@ -22,6 +28,76 @@ fn together(people: &[Person], requester: u64, worker: u64, region: u64) -> bool
 }
 
 impl CoreHost {
+    /// Each debtor evaluates their own policy and directed feelings. Neither
+    /// the promise nor another person's wishes force physical delivery.
+    pub fn deliver_agreements_autonomously(
+        &mut self,
+        blocked: &[u64],
+    ) -> Result<CoreDeliveryResults, String> {
+        if blocked.par_windows(2).any(|rows| rows[0] >= rows[1]) {
+            return Err("invalid occupied people".into());
+        }
+        let tick = self.core.physical.tick();
+        let offset = self.core.elapsed_millis().ok_or("no physical interval")?;
+        if offset >= self.core.physical.tick_millis()
+            || self.core.next_deadline(None)?.after_millis == 0
+        {
+            return Err("publish pending interval events before delivering".into());
+        }
+        let Some(owner) = self.agreements.as_ref().filter(|owner| {
+            !owner.contracts.is_empty()
+                && owner.policies.par_iter().any(|policy| {
+                    policy.honor
+                        || policy.fear_honor_threshold.is_some()
+                        || policy.obligation_honor_threshold.is_some()
+                })
+        }) else {
+            return Ok(CoreDeliveryResults::default());
+        };
+        let mut busy = blocked.to_vec();
+        busy.par_extend(
+            self.core
+                .people
+                .par_iter()
+                .filter(|person| {
+                    person.controlled
+                        || person.health == 0
+                        || person.hunger > self.core.rules.max_work_hunger
+                })
+                .map(|person| person.id),
+        );
+        busy.par_extend(
+            self.core
+                .physical
+                .work()
+                .par_iter()
+                .filter(|work| work.phase == game_lot_runtime::Phase::Working)
+                .map(|work| work.job.worker),
+        );
+        busy.par_sort_unstable();
+        busy.dedup();
+        let people: Vec<_> = self
+            .core
+            .people
+            .par_iter()
+            .map(|person| (person.id, person.region, person.health, person.hunger))
+            .collect();
+        let plan = game_lot_projection::agreement::Context {
+            agreements: owner,
+            opinions: self.opinions.as_ref(),
+            people: &people,
+            locations: None,
+            endpoint_together: None,
+            busy: &busy,
+            blocked_receivers: &[],
+            tick,
+        }
+        .plan(1)?;
+        let actors = plan.actors();
+        let deliveries = plan.selected_deliveries();
+        let outcomes = self.deliver_agreements(&deliveries)?;
+        Ok(CoreDeliveryResults { actors, outcomes })
+    }
     /// Record personally chosen offers without reserving the promised goods.
     pub fn propose_agreements(
         &mut self,
@@ -82,8 +158,7 @@ impl CoreHost {
     ) -> Result<Vec<game_lots::TransactionOutcome>, String> {
         let tick = self.core.physical.tick();
         let offset = self.core.elapsed_millis().ok_or("no physical interval")?;
-        if offset == 0
-            || offset >= self.core.physical.tick_millis()
+        if offset >= self.core.physical.tick_millis()
             || self.core.next_deadline(None)?.after_millis == 0
         {
             return Err("publish pending interval events before delivering".into());

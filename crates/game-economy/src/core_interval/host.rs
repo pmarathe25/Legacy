@@ -4,7 +4,7 @@ use game_autowork::Autowork;
 use game_economy_work::tool_wear::ToolWear;
 mod requests;
 mod scheduler;
-pub use requests::CoreRequestResults;
+pub use requests::{CoreDeliveryResults, CoreRequestResults};
 pub use scheduler::{CoreRun, CoreRunEvent, CoreSchedule, DecisionPhase};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

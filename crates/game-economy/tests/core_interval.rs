@@ -2656,6 +2656,43 @@ fn voluntary_deliveries_record_only_successful_physical_transfers() {
 }
 
 #[test]
+fn scheduled_delivery_is_a_personal_choice_that_fear_can_motivate() {
+    use game_economy::core_interval::CoreRunEvent;
+    let run = |workers, fear| {
+        rayon::ThreadPoolBuilder::new().num_threads(workers).build().unwrap().install(|| {
+        let mut initial = fixture();
+        initial.people[1].region = Some(1);
+        initial.people[1].willing_to_work = false;
+        initial.travel = None;
+        initial.nutrition = None;
+        initial.pending_food.clear();
+        initial.physical.custody.containers.extend([
+            Container::new(Place::Person(1), 10, vec![]).unwrap(),
+            Container::new(Place::Person(2), 10, vec![Lot { item: None, good: 1, quantity: 1, expires_at: None }]).unwrap(),
+        ]);
+        initial.physical.custody.containers.sort_by_key(|row| row.place);
+        let policy: game_agreements::Policy = serde_json::from_value(serde_json::json!({"person":2,"honor":false,"fear_honor_threshold":5})).unwrap();
+        let agreements = game_agreements::Agreements { next_id: 2, policies: vec![policy], offering: vec![], work_offering: vec![], bulk_debtors: vec![], contracts: vec![game_agreements::Contract { id: 1, debtor: 2, creditor: 1, good: 1, quantity: 1, delivered: 0, due: 5, status: game_agreements::Status::Active }], events: vec![] };
+        let opinions: game_opinions::Opinions = serde_json::from_value(serde_json::json!({"rules":{"minimum":-10,"maximum":10,"initial":0,"fulfilled_gain":1,"default_loss":1},"records":[{"observer":2,"target":1,"trust":0,"fear":fear}]})).unwrap();
+        let snapshot = CoreHostSnapshot { core: initial, autowork: None, tool_wear: None, opinions: Some(opinions), goals: None, agreements: Some(agreements), schedule: None };
+        let mut host = CoreHost::begin(snapshot, &[(1, 1)]).unwrap();
+        host.enable_schedule(1000, 1).unwrap();
+        let saved = serde_json::to_string(&host.snapshot()).unwrap();
+        let mut host = CoreHost::resume(serde_json::from_str(&saved).unwrap()).unwrap();
+        let run = host.advance_scheduled(0, &[]).unwrap();
+        assert_eq!(run.failure, None);
+        assert_eq!(run.elapsed_millis, 0);
+        let state = host.snapshot();
+        assert_eq!(state.agreements.as_ref().unwrap().contracts[0].delivered, u64::from(fear >= 5));
+        assert_eq!(run.events.iter().any(|event| matches!(event, CoreRunEvent::Deliveries(outcomes) if outcomes.iter().any(|row| row.accepted))), fear >= 5);
+        state
+    })
+    };
+    assert_eq!(run(1, 10), run(6, 10));
+    assert_eq!(run(1, 0), run(6, 0));
+}
+
+#[test]
 #[ignore = "manual voluntary agreement delivery scaling benchmark"]
 fn core_host_agreement_delivery_benchmark() {
     use std::hash::{Hash, Hasher};
@@ -2667,6 +2704,7 @@ fn core_host_agreement_delivery_benchmark() {
         .ok()
         .and_then(|value| value.parse().ok())
         .unwrap_or(1);
+    let automatic = std::env::var_os("LEGACY_AUTOMATIC").is_some();
     assert!(count >= 4 && count.is_multiple_of(2));
     let mut initial = fixture();
     let template = initial.people[0].clone();
@@ -2708,7 +2746,22 @@ fn core_host_agreement_delivery_benchmark() {
         .sort_by_key(|row| row.place);
     let agreements = game_agreements::Agreements {
         next_id: count / 2 + 1,
-        policies: vec![],
+        policies: if automatic {
+            (1..=count / 2)
+                .map(|id| game_agreements::Policy {
+                    person: id * 2 - 1,
+                    honor: true,
+                    accept: false,
+                    minimum_trust: None,
+                    minimum_honor_trust: None,
+                    fear_honor_threshold: None,
+                    obligation_honor_threshold: None,
+                    accept_pressure_threshold: None,
+                })
+                .collect()
+        } else {
+            vec![]
+        },
         offering: vec![],
         work_offering: vec![],
         bulk_debtors: vec![],
@@ -2750,9 +2803,13 @@ fn core_host_agreement_delivery_benchmark() {
             let mut host = CoreHost::begin(snapshot, &[(1, 1)]).unwrap();
             host.progress(1).unwrap();
             let start = std::time::Instant::now();
-            let outcomes = host.deliver_agreements(&deliveries).unwrap();
+            let outcomes = if automatic {
+                host.deliver_agreements_autonomously(&[]).unwrap().outcomes
+            } else {
+                host.deliver_agreements(&deliveries).unwrap()
+            };
             let elapsed = start.elapsed();
-            assert_eq!(outcomes.len(), count as usize / 2);
+            assert_eq!(outcomes.len(), count as usize / 2 - usize::from(automatic));
             assert!(outcomes.iter().all(|row| row.accepted));
             let mut hash = std::collections::hash_map::DefaultHasher::new();
             serde_json::to_vec(&host.snapshot())

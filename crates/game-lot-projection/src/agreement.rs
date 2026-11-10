@@ -168,6 +168,17 @@ impl Plan {
     pub fn actions(&self) -> &[Transaction] {
         &self.actions
     }
+    /// Personal delivery choices, before physical custody arbitration.
+    pub fn selected_deliveries(&self) -> Vec<Delivery> {
+        self.chosen
+            .par_iter()
+            .map(|(_, contract)| Delivery {
+                contract: contract.id,
+                actor: contract.debtor,
+                quantity: contract.quantity - contract.delivered,
+            })
+            .collect()
+    }
     /// Record only physical transfers that actually succeeded.
     pub fn deliveries(
         &self,

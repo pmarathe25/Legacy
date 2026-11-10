@@ -237,6 +237,13 @@ impl Runtime {
         actions: &[Transaction],
         seed: u64,
     ) -> Result<PhysicalOutcomes, String> {
+        if self
+            .work_interval
+            .as_ref()
+            .is_some_and(|interval| interval.elapsed_millis == 0)
+        {
+            return Err("transfer requires a valid partial interval".into());
+        }
         if actions.is_empty() {
             let interval = self
                 .work_interval
@@ -259,7 +266,8 @@ impl Runtime {
         self.commit_interval_consumption(draft)
     }
 
-    /// Stage local custody transfers for coordination with other owners.
+    /// Stage custody transfers, including at interval opening, for coordination
+    /// with other owners. The host must validate actors and locations.
     pub fn prepare_interval_transfer(
         &self,
         actions: &[Transaction],
@@ -271,7 +279,6 @@ impl Runtime {
             .ok_or("no physical work interval")?;
         if interval.tick != self.tick()
             || interval.custody_revision != self.store.revision()
-            || interval.elapsed_millis == 0
             || interval.elapsed_millis >= self.tick_millis
         {
             return Err("transfer requires a valid partial interval".into());
