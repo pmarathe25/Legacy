@@ -84,6 +84,7 @@ impl CoreHost {
         hunted: &[u64],
         feeding: &[game_fauna::Feeding],
         handling: Option<&crate::animal_handling::Plan>,
+        product_handling: &[game_fauna::handling::Event],
     ) -> Option<crate::AnimalFeelings> {
         let owner = self.animal_feelings.as_ref()?;
         let mut events: Vec<_> = feeding
@@ -125,6 +126,22 @@ impl CoreHost {
                 })
             }));
         }
+        events.par_extend(product_handling.par_iter().filter_map(|event| {
+            let kind = match event.outcome {
+                game_fauna::handling::Outcome::Accepted => {
+                    crate::animal_feelings::Experience::HandleAccepted
+                }
+                game_fauna::handling::Outcome::Refused => {
+                    crate::animal_feelings::Experience::HandleRefused
+                }
+                game_fauna::handling::Outcome::Unavailable => return None,
+            };
+            Some(crate::animal_feelings::Event {
+                person: event.person,
+                animal: event.animal,
+                kind,
+            })
+        }));
         let events = owner.relevant(events);
         (!events.is_empty()).then(|| owner.advance(&events))
     }

@@ -118,9 +118,25 @@ age = 2
 health = 10
 hunger = 1
 genome = { sex = "Male", alleles = [[300,300], [300,300], [300,300], [300,300]] }
+handling_response = { willing = true, on_accept = 0, on_refuse = 0 }
 
 [recovery]
 interval = 1
 health_per_interval = 2
 rest_bonus = 4
 max_hunger = 20
+
+[animal_products]
+[[animal_products.rules]]
+species = 1
+good = "raw-wool"
+quantity = 1
+grow_ticks = 1
+min_age = 1
+min_health = 1
+max_hunger = 10
+
+[[animal_products.policies]]
+person = 2
+animal = 1
+willing = true

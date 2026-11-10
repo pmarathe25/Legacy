@@ -299,3 +299,5 @@ After grouping social encounters by local endpoint, two repeat runs of the same 
 `economy-local-food-search` demonstrates a hungry person choosing to visit a known store and then acquiring and eating actual food. The existing local visit choice can be changed with `visit-local PERSON on|off`.
 
 The interval host can load fresh authored scenarios through `game_economy_cli::core_scenario` (or `core_scenario_with_options` for seed and population overlays). `content/scenarios/economy-core.toml` exercises family birth, dependent care, gathering, and wildlife. Import currently rejects scenario owners the host does not implement, naming them in the error; it does not silently discard those owners. The existing command-line runner still uses the whole-boundary host and is not yet connected to this API.
+
+The interval scenario also contains renewable animal-product rules and a personal collection policy. Collection depends on the animal's handling response and an accepted physical transfer.

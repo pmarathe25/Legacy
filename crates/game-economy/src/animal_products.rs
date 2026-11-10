@@ -225,7 +225,7 @@ impl AnimalProducts {
         AnimalProducts {
             rules: self.rules.clone(),
             progress,
-            policies: self.policies.clone(),
+            policies: self.policies.par_iter().cloned().collect(),
             events,
         }
     }

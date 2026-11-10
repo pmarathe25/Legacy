@@ -5,6 +5,7 @@ use game_economy_work::tool_wear::ToolWear;
 mod agriculture;
 mod animal_care;
 mod animal_handling;
+mod animal_products;
 mod claims;
 mod dependent_care;
 mod family;
@@ -75,6 +76,8 @@ pub struct CoreHostSnapshot {
     #[serde(default)]
     pub animal_care: Option<crate::AnimalCare>,
     #[serde(default)]
+    pub animal_products: Option<crate::AnimalProducts>,
+    #[serde(default)]
     pub animal_handling: Option<crate::AnimalHandling>,
     #[serde(default)]
     pub family: Option<game_economy_family::Families>,
@@ -115,6 +118,7 @@ pub struct CoreHost {
     hunting: Option<crate::Hunting>,
     animal_feelings: Option<crate::AnimalFeelings>,
     animal_care: Option<crate::AnimalCare>,
+    animal_products: Option<crate::AnimalProducts>,
     animal_handling: Option<crate::AnimalHandling>,
     family: Option<game_economy_family::Families>,
     dependent_care: Option<crate::DependentCare>,
@@ -147,6 +151,7 @@ struct CoreRuntimeOptions {
     hunting: Option<crate::Hunting>,
     animal_feelings: Option<crate::AnimalFeelings>,
     animal_care: Option<crate::AnimalCare>,
+    animal_products: Option<crate::AnimalProducts>,
     animal_handling: Option<crate::AnimalHandling>,
     family: Option<game_economy_family::Families>,
     dependent_care: Option<crate::DependentCare>,
@@ -175,6 +180,7 @@ impl CoreHost {
             hunting,
             animal_feelings,
             animal_care,
+            animal_products,
             animal_handling,
             family,
             dependent_care,
@@ -213,6 +219,7 @@ impl CoreHost {
                 hunting,
                 animal_feelings,
                 animal_care,
+                animal_products,
                 animal_handling,
                 family,
                 dependent_care,
@@ -242,6 +249,7 @@ impl CoreHost {
             hunting,
             animal_feelings,
             animal_care,
+            animal_products,
             animal_handling,
             family,
             dependent_care,
@@ -280,6 +288,7 @@ impl CoreHost {
                 hunting,
                 animal_feelings,
                 animal_care,
+                animal_products,
                 animal_handling,
                 family,
                 dependent_care,
@@ -316,6 +325,7 @@ impl CoreHost {
             hunting,
             mut animal_feelings,
             animal_care,
+            mut animal_products,
             mut animal_handling,
             family,
             dependent_care,
@@ -588,6 +598,16 @@ impl CoreHost {
             let people: HashSet<_> = core.people.par_iter().map(|person| person.id).collect();
             owner.validate(&people, fauna.as_ref(), core.physical.tick())?;
         }
+        if let Some(owner) = &mut animal_products {
+            let people: HashSet<_> = core.people.par_iter().map(|person| person.id).collect();
+            let goods: HashSet<_> = core
+                .physical
+                .goods()
+                .par_iter()
+                .map(|good| good.id)
+                .collect();
+            owner.validate(&people, &goods, fauna.as_ref(), core.physical.tick())?;
+        }
         if let Some(owner) = &animal_care {
             let people: HashSet<_> = core.people.par_iter().map(|person| person.id).collect();
             let goods: HashSet<_> = core
@@ -666,6 +686,7 @@ impl CoreHost {
             hunting,
             animal_feelings,
             animal_care,
+            animal_products,
             animal_handling,
             family,
             dependent_care,
@@ -701,6 +722,7 @@ impl CoreHost {
             hunting: self.hunting.clone(),
             animal_feelings: self.animal_feelings.clone(),
             animal_care: self.animal_care.clone(),
+            animal_products: self.animal_products.clone(),
             animal_handling: self.animal_handling.clone(),
             family: self.family.clone(),
             dependent_care: self.dependent_care.clone(),
@@ -1157,6 +1179,33 @@ impl CoreHost {
             (None, None, None)
         };
         growth.animal_yield = hunting.as_ref().map_or(&[], |plan| plan.yields.as_slice());
+        let products = if self.animal_products.is_some() {
+            let product_base = actions
+                .par_iter()
+                .map(|row| row.id)
+                .chain(growth.harvest.par_iter().map(|row| row.id))
+                .chain(growth.gathered.par_iter().map(|row| row.action))
+                .chain(growth.animal_yield.par_iter().map(|row| row.action))
+                .max()
+                .map_or(Ok(1), |id| {
+                    id.checked_add(1).ok_or("animal product action overflow")
+                })?;
+            self.plan_animal_products(
+                occupied,
+                (
+                    cultivation.as_ref(),
+                    irrigation_plan.as_ref(),
+                    gathering.as_ref().map(|(plan, _)| plan),
+                    care.as_ref(),
+                    handling.as_ref(),
+                    hunting.as_ref(),
+                ),
+                product_base,
+            )?
+        } else {
+            None
+        };
+        growth.animal_products = products.as_ref().map_or(&[], |plan| plan.yields.as_slice());
         let mut draft = self
             .core
             .prepare_settlement_with_growth(&actions, growth, config)?;
@@ -1240,8 +1289,19 @@ impl CoreHost {
         let feeding = care
             .as_ref()
             .map_or_else(Vec::new, |plan| plan.accepted(draft.events()));
-        let animal_feelings =
-            self.stage_animal_feelings(hunting.as_ref(), &hunted, &feeding, handling.as_ref());
+        let (products, product_handling) = products.map_or((None, Vec::new()), |plan| {
+            let (events, handling) = plan.publish(draft.events());
+            let owner = self.animal_products.as_ref().expect("product owner");
+            let fauna = self.fauna.as_ref().expect("product fauna");
+            (Some(owner.advance(fauna, events)), handling)
+        });
+        let animal_feelings = self.stage_animal_feelings(
+            hunting.as_ref(),
+            &hunted,
+            &feeding,
+            handling.as_ref(),
+            &product_handling,
+        );
         let fauna = self.stage_fauna(&mut gathering, &hunted, &feeding, draft.events().tick)?;
         let mut tools = self.stage_tools(
             draft.produced_items(),
@@ -1348,6 +1408,15 @@ impl CoreHost {
                 .as_mut()
                 .expect("handling owner")
                 .events = plan.events;
+        }
+        if let Some(owner) = products {
+            self.animal_products = Some(owner);
+        }
+        if !product_handling.is_empty() {
+            game_fauna::handling::apply(
+                self.fauna.as_mut().expect("product fauna"),
+                &product_handling,
+            );
         }
         if let Some(feelings) = animal_feelings {
             self.animal_feelings = Some(feelings);

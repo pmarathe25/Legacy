@@ -71,3 +71,137 @@ fn unsupported_scenario_owners_are_reported() {
     let error = game_economy::core_interval::CoreHostSnapshot::from_scenario(state).unwrap_err();
     assert!(error.contains("campaign"), "{error}");
 }
+
+#[test]
+fn renewable_animal_products_follow_the_animals_choice_and_physical_capacity() {
+    fn run(workers: usize, willing: bool, capacity: bool) -> serde_json::Value {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let root = root();
+                let initial = game_economy_cli::core_scenario(
+                    &root.join("content/scenarios/economy-core.toml"),
+                    &root.join("content"),
+                )
+                .unwrap();
+                let mut snapshot = initial.snapshot();
+                snapshot.dependent_care = None;
+                snapshot.fauna.as_mut().unwrap().animals[0]
+                    .handling_response
+                    .as_mut()
+                    .unwrap()
+                    .willing = willing;
+                snapshot.animal_products.as_mut().unwrap().progress =
+                    vec![game_economy::AnimalProductProgress {
+                        animal: 1,
+                        growth: 1,
+                    }];
+                if !capacity {
+                    let good = snapshot
+                        .core
+                        .physical
+                        .goods
+                        .iter()
+                        .find(|good| good.name == "grain")
+                        .unwrap()
+                        .id;
+                    let container = snapshot
+                        .core
+                        .physical
+                        .custody
+                        .containers
+                        .iter_mut()
+                        .find(|container| container.place == game_lots::Place::Person(2))
+                        .unwrap();
+                    *container = game_lots::Container::new(
+                        game_lots::Place::Person(2),
+                        1,
+                        vec![game_lots::Lot {
+                            item: None,
+                            good,
+                            quantity: 1,
+                            expires_at: None,
+                        }],
+                    )
+                    .unwrap();
+                }
+                let encoded = serde_json::to_string(&snapshot).unwrap();
+                let mut host = game_economy::core_interval::CoreHost::resume(
+                    serde_json::from_str(&encoded).unwrap(),
+                )
+                .unwrap();
+                assert_eq!(
+                    host.advance_continuous(3_600_000, &[]).unwrap().failure,
+                    None
+                );
+                let result = host.snapshot();
+                let products = result.animal_products.as_ref().unwrap();
+                assert_eq!(products.events.len(), 1);
+                let expected = if !willing {
+                    game_economy::AnimalProductOutcome::Refused
+                } else if !capacity {
+                    game_economy::AnimalProductOutcome::NoCapacity
+                } else {
+                    game_economy::AnimalProductOutcome::Collected
+                };
+                assert_eq!(products.events[0].outcome, expected);
+                assert_eq!(
+                    products.progress[0].growth,
+                    if willing && capacity { 0 } else { 1 }
+                );
+                let encoded = serde_json::to_string(&result).unwrap();
+                assert!(
+                    game_economy::core_interval::CoreHost::resume(
+                        serde_json::from_str(&encoded).unwrap()
+                    )
+                    .is_ok()
+                );
+                serde_json::to_value(result).unwrap()
+            })
+    }
+    for (willing, capacity) in [(true, true), (false, true), (true, false)] {
+        assert_eq!(run(1, willing, capacity), run(6, willing, capacity));
+    }
+}
+
+#[test]
+fn handling_reserves_animal_and_actor_before_product_collection() {
+    let root = root();
+    let initial = game_economy_cli::core_scenario(
+        &root.join("content/scenarios/economy-core.toml"),
+        &root.join("content"),
+    )
+    .unwrap();
+    let mut snapshot = initial.snapshot();
+    snapshot.dependent_care = None;
+    snapshot.animal_products.as_mut().unwrap().progress =
+        vec![game_economy::AnimalProductProgress {
+            animal: 1,
+            growth: 1,
+        }];
+    snapshot.animal_handling = Some(game_economy::AnimalHandling {
+        inherit_births: false,
+        policies: vec![game_economy::AnimalHandlingPolicy {
+            person: 2,
+            animal: Some(1),
+            willing: true,
+            affinity_at_least: None,
+            affinity_at_most: None,
+            pressured_by: None,
+            pressure_threshold: None,
+        }],
+        events: vec![],
+    });
+    let mut host = game_economy::core_interval::CoreHost::resume(snapshot).unwrap();
+    assert_eq!(
+        host.advance_continuous(3_600_000, &[]).unwrap().failure,
+        None
+    );
+    let result = host.snapshot();
+    assert_eq!(result.animal_handling.unwrap().events.len(), 1);
+    let products = result.animal_products.unwrap();
+    assert!(products.events.is_empty());
+    assert_eq!(products.progress[0].growth, 1);
+}
