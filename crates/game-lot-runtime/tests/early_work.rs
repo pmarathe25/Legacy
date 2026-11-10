@@ -156,6 +156,31 @@ fn starting_interval_work_invalidates_an_existing_completion_draft() {
 }
 
 #[test]
+fn abandoning_another_job_invalidates_a_completion_draft() {
+    let mut runtime = fixture(false, 1);
+    runtime
+        .start(
+            &[Start {
+                id: 2,
+                worker: 2,
+                region: 1,
+                recipe: 1,
+                units: 1,
+            }],
+            7,
+        )
+        .unwrap();
+    runtime.begin_work_interval(&[(1, 2), (2, 1)]).unwrap();
+    runtime.progress_work_interval(500).unwrap();
+    let stale = runtime.prepare_early_work(7).unwrap().unwrap();
+    runtime.abandon_interval_work(&[(2, 2)]).unwrap();
+    let before = runtime.snapshot();
+    assert!(runtime.commit_early_work(stale).is_err());
+    assert_eq!(runtime.snapshot(), before);
+    assert_eq!(runtime.work_interval().unwrap().rates, vec![(1, 2)]);
+}
+
+#[test]
 fn rejected_interval_starts_retire_both_new_holders() {
     let mut runtime = fixture(false, 1);
     runtime.begin_work_interval(&[(1, 1)]).unwrap();

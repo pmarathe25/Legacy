@@ -150,6 +150,138 @@ fn fixture() -> CoreSnapshot {
 }
 
 #[test]
+fn interval_abandonment_stops_progress_and_returns_real_inputs_at_boundary() {
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut core = CoreInterval::begin(fixture(), &[(1, 1)]).unwrap();
+                core.progress(300).unwrap();
+                let before = core.snapshot();
+                assert!(core.abandon_work(0, 299, &[(1, 1)]).is_err());
+                assert!(core.abandon_work(0, 300, &[(1, 2)]).is_err());
+                assert!(core.abandon_work(0, 300, &[(1, 1), (1, 1)]).is_err());
+                assert_eq!(core.snapshot(), before);
+                core.abandon_work(0, 300, &[(1, 1)]).unwrap();
+                let stopped = core.snapshot();
+                assert_eq!(
+                    stopped.physical.work[0].phase,
+                    game_lot_runtime::Phase::Returning
+                );
+                assert!(
+                    stopped
+                        .physical
+                        .work_interval
+                        .as_ref()
+                        .unwrap()
+                        .rates
+                        .is_empty()
+                );
+                let input = stopped
+                    .physical
+                    .custody
+                    .containers
+                    .iter()
+                    .find(|row| row.place == Place::JobInput(1))
+                    .unwrap();
+                assert_eq!(input.lots[0].quantity, 2);
+                let saved = serde_json::to_string(&stopped).unwrap();
+                let mut core = CoreInterval::resume(serde_json::from_str(&saved).unwrap()).unwrap();
+                core.progress(700).unwrap();
+                assert_eq!(
+                    core.snapshot().physical.work[0].job.remaining,
+                    stopped.physical.work[0].job.remaining
+                );
+                let events = core.settle().unwrap();
+                assert_eq!(events.returned, vec![1]);
+                assert!(events.finished.is_empty());
+                let result = core.snapshot();
+                let stock = result
+                    .physical
+                    .custody
+                    .containers
+                    .iter()
+                    .find(|row| row.place == Place::Stock { region: 1, good: 1 })
+                    .unwrap();
+                assert_eq!(stock.lots[0].quantity, 2);
+                (result, events)
+            })
+    };
+    assert_eq!(run(1), run(6));
+}
+
+#[test]
+fn abandoning_interval_work_frees_the_worker_without_freeing_reserved_goods() {
+    let mut initial = fixture();
+    let stock = initial
+        .physical
+        .custody
+        .containers
+        .iter_mut()
+        .find(|row| row.place == Place::Stock { region: 1, good: 1 })
+        .unwrap();
+    *stock = Container::new(
+        stock.place,
+        10,
+        vec![Lot {
+            item: None,
+            good: 1,
+            quantity: 2,
+            expires_at: None,
+        }],
+    )
+    .unwrap();
+    let mut core = CoreInterval::begin(initial, &[(1, 1)]).unwrap();
+    core.progress(300).unwrap();
+    core.abandon_work(0, 300, &[(1, 1)]).unwrap();
+    let start = Start {
+        id: 2,
+        worker: 1,
+        region: 1,
+        recipe: 1,
+        units: 1,
+    };
+    assert_eq!(
+        core.start_work(0, 300, &[(start, 1)]).unwrap(),
+        vec![(2, true)]
+    );
+    let snapshot = core.snapshot();
+    assert_eq!(
+        snapshot.physical.work[0].phase,
+        game_lot_runtime::Phase::Returning
+    );
+    assert_eq!(
+        snapshot.physical.work[1].phase,
+        game_lot_runtime::Phase::Working
+    );
+    assert_eq!(snapshot.physical.work_interval.unwrap().rates, vec![(2, 1)]);
+    assert_eq!(
+        snapshot
+            .physical
+            .custody
+            .containers
+            .iter()
+            .find(|row| row.place == Place::JobInput(1))
+            .unwrap()
+            .used,
+        2
+    );
+    assert_eq!(
+        snapshot
+            .physical
+            .custody
+            .containers
+            .iter()
+            .find(|row| row.place == Place::JobInput(2))
+            .unwrap()
+            .used,
+        2
+    );
+}
+
+#[test]
 fn composed_core_interval_is_chunk_independent_and_resumable() {
     let initial = fixture();
     let run = |workers, chunks: &[u64], reload| {
@@ -594,6 +726,7 @@ fn interval_work_admission_benchmark() {
         .unwrap()
         .install(|| {
             let mut samples = Vec::new();
+            let mut abandonment_samples = Vec::new();
             for round in 0..4 {
                 let mut core = CoreInterval::begin(initial.clone(), &[(1, 1)]).unwrap();
                 assert_eq!(core.progress(400).unwrap(), 400);
@@ -605,6 +738,18 @@ fn interval_work_admission_benchmark() {
                     result.iter().filter(|row| row.1).count() as u64,
                     stock_units
                 );
+                if std::env::var_os("LEGACY_ABANDON").is_some() {
+                    let requests: Vec<_> = result
+                        .iter()
+                        .filter(|row| row.1)
+                        .map(|row| (row.0, row.0))
+                        .collect();
+                    let start = std::time::Instant::now();
+                    core.abandon_work(0, 400, &requests).unwrap();
+                    if round > 0 {
+                        abandonment_samples.push(start.elapsed().as_secs_f64());
+                    }
+                }
                 if round == 3 {
                     let mut hash = std::collections::hash_map::DefaultHasher::new();
                     serde_json::to_vec(&core.snapshot())
@@ -622,6 +767,13 @@ fn interval_work_admission_benchmark() {
                 starts.len(),
                 samples[1]
             );
+            if !abandonment_samples.is_empty() {
+                abandonment_samples.sort_by(f64::total_cmp);
+                println!(
+                    "workers={workers} abandoned={stock_units} elapsed={:.6}",
+                    abandonment_samples[1]
+                );
+            }
             #[cfg(feature = "profile")]
             if std::env::var_os("LEGACY_PROFILE").is_some() {
                 for (name, sample) in game_diagnostics::snapshot() {

@@ -6,6 +6,8 @@ This composed simulation joins personal work, actual dated goods, food acquisiti
 
 The separate `core_interval` API composes already-admitted physical work, travel, hunger, nutrition, and pending food effects for fractional progress inside one existing quantum. It freezes work rates, saves and resumes the in-flight state, and settles periodic effects once at the quantum boundary. It can publish completed nonperishable work early into the job's physical output custody and publish completed living travelers at their destinations. After pending events are published, callers can explicitly start a batch of physically reserved jobs at the current offset; their workers must be able and local, and their work progresses only afterward. It does not run the rest of the economy or select actions, and is not arbitrary-time advancement of an `Economy`. Jobs whose outputs require identified items must be excluded from early work publication.
 
+Callers can also stop a batch of active workers at a partial offset. Their work stops immediately; reserved inputs remain in job custody until their physical return at the boundary, which can be blocked. Stale or invalid batches change nothing, and saved intervals preserve the stopped state.
+
 `CoreInterval::next_deadline` observes the earliest work completion, traveler arrival, optional hunger threshold, or quantum boundary, including ties. `progress_to_deadline` stops at that time. The core can publish nonperishable work and arrivals at the offset; other early deadlines remain pending until settlement.
 
 The ignored `composed_core_progress_benchmark` with `LEGACY_CORE_ARRIVALS=1` measures publication of 50,000 arrivals among 100,000 people. One run took 5.87, 2.86, 1.58, and 1.25 ms with one, two, four, and six workers, with matching fingerprints. This measures only arrival publication in the limited core.
@@ -17,6 +19,8 @@ Packing homogeneous single-input starts avoids per-job transaction vectors. In a
 At 199,999 packed starts, one run took 260, 163, 123, and 107 ms at one, two, four, and six workers, respectively, with matching fingerprints. Increasing the workload did not produce linear scaling.
 
 Building the packed holders and transfers in chunks reduced a subsequent instrumented comparison at that size from 263, 162, 116, and 114 ms to 250, 148, 108, and 96 ms at the same worker counts, with matching fingerprints. These timings remain sublinear and measure only partial-core work admission.
+
+Set `LEGACY_ABANDON=1` on the admission benchmark to stop every accepted worker at the same offset. Stopping 49,999 workers took 6.25, 2.98, 1.59, and 1.23 ms at one, two, four, and six workers in one run, with matching fingerprints. The timing excludes admission and later physical returns.
 
 An incapacitated traveler does not move during the core interval, even if an immortal recovers at its closing boundary. The existing coarse economy path can move such a traveler after recovery in the same boundary, so this case is not equivalent between the two paths.
 

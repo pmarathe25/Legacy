@@ -346,6 +346,26 @@ impl CoreInterval {
         }
         self.physical.start_interval_work(requests, self.seed)
     }
+    /// Stop chosen jobs at this offset. Inputs stay in job custody until the
+    /// boundary, where their return can succeed or remain blocked.
+    pub fn abandon_work(
+        &mut self,
+        tick: u64,
+        offset_millis: u64,
+        requests: &[(u64, u64)],
+    ) -> Result<(), String> {
+        if self.physical.tick() != tick
+            || self.elapsed_millis() != Some(offset_millis)
+            || offset_millis == 0
+            || offset_millis >= self.physical.tick_millis()
+        {
+            return Err("work abandonment has a stale or invalid interval time".into());
+        }
+        if self.next_deadline(None)?.after_millis == 0 {
+            return Err("publish pending interval events before abandoning work".into());
+        }
+        self.physical.abandon_interval_work(requests)
+    }
     /// Progress without repeating decisions, publishing arrivals, or completing work.
     /// Failed validation leaves all owners unchanged.
     pub fn progress(&mut self, requested_millis: u64) -> Result<u64, String> {

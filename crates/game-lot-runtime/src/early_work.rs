@@ -26,6 +26,64 @@ impl EarlyWorkDraft {
     }
 }
 impl Runtime {
+    /// Stop chosen jobs at this offset. Their surviving inputs remain in job
+    /// custody until the normal boundary return, even if that return is blocked.
+    pub fn abandon_interval_work(&mut self, requests: &[(u64, u64)]) -> Result<(), String> {
+        let interval = self
+            .work_interval
+            .as_ref()
+            .ok_or("no physical work interval")?;
+        if interval.tick != self.tick()
+            || interval.custody_revision != self.store.revision()
+            || interval.elapsed_millis == 0
+            || interval.elapsed_millis >= self.tick_millis
+        {
+            return Err("work abandonment requires a valid partial interval".into());
+        }
+        let mut ordered = requests.to_vec();
+        ordered.par_sort_unstable_by_key(|row| row.0);
+        if ordered.par_windows(2).any(|rows| rows[0].0 == rows[1].0)
+            || ordered.par_iter().any(|&(job, worker)| {
+                self.work
+                    .binary_search_by_key(&job, |row| row.job.id)
+                    .ok()
+                    .is_none_or(|index| {
+                        let row = &self.work[index];
+                        row.phase != Phase::Working
+                            || row.job.worker != worker
+                            || row.job.remaining == 0
+                    })
+            })
+        {
+            return Err("invalid interval work abandonment".into());
+        }
+        if ordered.is_empty() {
+            return Ok(());
+        }
+        let epoch = self
+            .epoch
+            .checked_add(1)
+            .ok_or("physical work revision overflow")?;
+        let rates: Vec<_> = interval
+            .rates
+            .par_iter()
+            .copied()
+            .filter(|(job, _)| ordered.binary_search_by_key(job, |row| row.0).is_err())
+            .collect();
+        // Parallel filtering preserves the sorted source order.
+        debug_assert!(rates.windows(2).all(|rows| rows[0].0 < rows[1].0));
+        self.work.par_iter_mut().for_each(|row| {
+            if ordered
+                .binary_search_by_key(&row.job.id, |request| request.0)
+                .is_ok()
+            {
+                row.phase = Phase::Returning;
+            }
+        });
+        self.work_interval.as_mut().expect("checked interval").rates = rates;
+        self.epoch = epoch;
+        Ok(())
+    }
     /// Reserve new physical work inside a partial interval after the host has
     /// admitted its actors. Rejected reservations leave no custody changes.
     pub fn start_interval_work(
