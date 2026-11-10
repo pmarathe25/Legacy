@@ -405,7 +405,8 @@ fn core_host_departure_benchmark() {
         .unwrap_or(1);
     assert!(count > 1);
     let automatic = std::env::var_os("LEGACY_AUTO_TRAVEL").is_some();
-    let food_search = std::env::var_os("LEGACY_FOOD_SEARCH").is_some();
+    let acquire = std::env::var_os("LEGACY_FOOD_ACQUIRE").is_some();
+    let food_search = std::env::var_os("LEGACY_FOOD_SEARCH").is_some() || acquire;
     assert!(!(automatic && food_search));
     let mut initial = fixture();
     let template = initial.people[0].clone();
@@ -436,6 +437,26 @@ fn core_host_departure_benchmark() {
             health_effect: 0,
             shelf_days: None,
         });
+        if acquire {
+            let stock = initial
+                .physical
+                .custody
+                .containers
+                .iter_mut()
+                .find(|row| row.place == Place::Stock { region: 1, good: 2 })
+                .unwrap();
+            *stock = Container::new(
+                stock.place,
+                count,
+                vec![Lot {
+                    item: None,
+                    good: 2,
+                    quantity: count / 2,
+                    expires_at: None,
+                }],
+            )
+            .unwrap();
+        }
         initial.people.iter_mut().skip(1).for_each(|person| {
             person.hunger = 5;
             person.seek_meals = true;
@@ -465,7 +486,7 @@ fn core_host_departure_benchmark() {
                     .collect(),
             },
             knowledge: game_economy_knowledge::Knowledge {
-                    max_records: 2,
+                max_records: 2,
                 retention: vec![],
                 minds: (2..=count)
                     .map(|person| game_economy_knowledge::Mind {
@@ -516,6 +537,26 @@ fn core_host_departure_benchmark() {
         .install(|| {
             let mut host = CoreHost::begin(snapshot, &[(1, 1)]).unwrap();
             let start = std::time::Instant::now();
+            if acquire {
+                let results = host.acquire_food_autonomously(&[]).unwrap();
+                let elapsed = start.elapsed();
+                assert_eq!(results.outcomes.len(), (count - 1) as usize);
+                assert_eq!(
+                    results.outcomes.iter().filter(|row| row.accepted).count(),
+                    (count / 2) as usize
+                );
+                let mut hash = std::collections::hash_map::DefaultHasher::new();
+                serde_json::to_vec(&host.snapshot())
+                    .unwrap()
+                    .hash(&mut hash);
+                println!(
+                    "workers={workers} acquisition_attempts={} elapsed={:.6} fingerprint={:016x}",
+                    count - 1,
+                    elapsed.as_secs_f64(),
+                    hash.finish()
+                );
+                return;
+            }
             let outcomes = if food_search {
                 host.seek_food_autonomously(&[]).unwrap()
             } else if automatic {
@@ -686,6 +727,52 @@ fn food_search_follows_personal_report_even_when_it_is_stale() {
         let records = &result.food_search.as_ref().unwrap().knowledge.minds[0].records;
         assert_eq!(records.iter().find(|row| row.region == 2).unwrap().food, 0);
         result
+    })
+    };
+    assert_eq!(run(1), run(6));
+}
+
+#[test]
+fn personal_food_acquisition_contends_for_real_stock_then_eats() {
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new().num_threads(workers).build().unwrap().install(|| {
+        let mut initial = fixture();
+        initial.people[1].region = Some(1);
+        initial.people[1].hunger = 5;
+        initial.people[1].seek_meals = true;
+        let mut other = initial.people[1].clone();
+        other.id = 3;
+        initial.people.push(other);
+        initial.travel.as_mut().unwrap().journeys.clear();
+        initial.nutrition = None;
+        initial.pending_food.clear();
+        initial.physical.goods[1].food = Some(game_production_model::FoodProfile {
+            portion: 1, hunger_relief: 2, nutrients: Default::default(), health_effect: 0, shelf_days: None,
+        });
+        let stock = initial.physical.custody.containers.iter_mut().find(|row| row.place == Place::Stock {region: 1, good: 2}).unwrap();
+        *stock = Container::new(stock.place, 10, vec![Lot {item: None, good: 2, quantity: 1, expires_at: None}]).unwrap();
+        initial.physical.custody.containers.extend([2,3].map(|id| Container::new(Place::Person(id), 10, vec![]).unwrap()));
+        initial.physical.custody.containers.sort_by_key(|row| row.place);
+        let snapshot = CoreHostSnapshot {
+            core: initial, autowork: None, tool_wear: None, tool_requirements: vec![], paused_work_rates: vec![],
+            fatigue: None, activity: vec![], food_search: Some(game_economy::core_interval::CoreFoodSearch {
+                search: game_economy::FoodSearch {min_hunger: 5, min_report_food: 1, max_report_age: 10, retry_ticks: 1, inherit_births: false, people: vec![]},
+                knowledge: game_economy_knowledge::Knowledge {max_records: 1, minds: vec![], retention: vec![]},
+            }), opinions: None, goals: None, agreements: None, sites: None, schedule: None,
+        };
+        let mut host = CoreHost::begin(snapshot, &[(1, 1)]).unwrap();
+        host.enable_schedule(500, 1).unwrap();
+        let run = host.advance_scheduled(0, &[]).unwrap();
+        assert_eq!(run.failure, None);
+        assert!(run.events.iter().any(|event| matches!(event, game_economy::core_interval::CoreRunEvent::Provisions(rows) if rows.len() == 2 && rows.iter().filter(|row| row.accepted).count() == 1)));
+        let saved = serde_json::to_string(&host.snapshot()).unwrap();
+        let mut restored = CoreHost::resume(serde_json::from_str(&saved).unwrap()).unwrap();
+        assert_eq!(host.advance_scheduled(500, &[]).unwrap().failure, None);
+        assert_eq!(restored.advance_scheduled(500, &[]).unwrap().failure, None);
+        let state = host.snapshot();
+        assert_eq!(restored.snapshot(), state);
+        assert_eq!(state.core.people[1..].iter().filter(|p| p.hunger == 3).count(), 1);
+        state
     })
     };
     assert_eq!(run(1), run(6));

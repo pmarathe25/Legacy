@@ -5,6 +5,7 @@ use super::*;
 #[serde(tag = "phase", rename_all = "snake_case")]
 pub enum DecisionPhase {
     Meals,
+    Provision { meal_people: Vec<u64> },
     Maintenance { meal_people: Vec<u64> },
     ToolMaintenance { meal_people: Vec<u64> },
     Delivery { meal_people: Vec<u64> },
@@ -51,7 +52,8 @@ impl CoreSchedule {
         {
             return Err("invalid core decision schedule".into());
         }
-        if let DecisionPhase::Maintenance { meal_people }
+        if let DecisionPhase::Provision { meal_people }
+        | DecisionPhase::Maintenance { meal_people }
         | DecisionPhase::ToolMaintenance { meal_people }
         | DecisionPhase::Delivery { meal_people }
         | DecisionPhase::Offers { meal_people }
@@ -79,6 +81,7 @@ pub enum CoreRunEvent {
     Deferred(Vec<u64>),
     Work(game_lot_runtime::EarlyWorkEvents),
     Meals(Vec<(u64, u32)>),
+    Provisions(Vec<game_lots::TransactionOutcome>),
     Repairs(Vec<game_economy_building::maintenance::Event>),
     ToolRepairs(Vec<game_economy_work::tool_wear::RepairEvent>),
     Deliveries(Vec<game_lots::TransactionOutcome>),
@@ -102,6 +105,27 @@ pub struct CoreRun {
     pub failure: Option<String>,
 }
 impl CoreHost {
+    fn after_food(&self, meal_people: Vec<u64>) -> DecisionPhase {
+        if self.sites.is_some() {
+            DecisionPhase::Maintenance { meal_people }
+        } else if self
+            .tool_wear
+            .as_ref()
+            .is_some_and(|owner| !owner.repairs.is_empty())
+        {
+            DecisionPhase::ToolMaintenance { meal_people }
+        } else if self.agreements.is_some() {
+            DecisionPhase::Delivery { meal_people }
+        } else if self
+            .autowork
+            .as_ref()
+            .is_some_and(|owner| owner.requests.is_some())
+        {
+            DecisionPhase::Asking { meal_people }
+        } else {
+            DecisionPhase::Work { meal_people }
+        }
+    }
     /// Begin periodic personal decisions at the current partial offset.
     pub fn enable_schedule(&mut self, period_millis: u64, work_rate: u64) -> Result<(), String> {
         if self.schedule.is_some() {
@@ -256,36 +280,29 @@ impl CoreHost {
                                 meals.iter().map(|meal| (meal.person, meal.good)).collect(),
                             ));
                         }
-                        self.schedule.as_mut().expect("active schedule").phase =
-                            if self.sites.is_some() {
-                                DecisionPhase::Maintenance {
-                                    meal_people: people,
-                                }
-                            } else if self
-                                .tool_wear
-                                .as_ref()
-                                .is_some_and(|owner| !owner.repairs.is_empty())
-                            {
-                                DecisionPhase::ToolMaintenance {
-                                    meal_people: people,
-                                }
-                            } else if self.agreements.is_some() {
-                                DecisionPhase::Delivery {
-                                    meal_people: people,
-                                }
-                            } else if self
-                                .autowork
-                                .as_ref()
-                                .is_some_and(|owner| owner.requests.is_some())
-                            {
-                                DecisionPhase::Asking {
-                                    meal_people: people,
-                                }
-                            } else {
-                                DecisionPhase::Work {
-                                    meal_people: people,
-                                }
-                            };
+                        let next = if self.food_search.is_some() {
+                            DecisionPhase::Provision {
+                                meal_people: people,
+                            }
+                        } else {
+                            self.after_food(people)
+                        };
+                        self.schedule.as_mut().expect("active schedule").phase = next;
+                    }
+                    DecisionPhase::Provision { mut meal_people } => {
+                        let mut busy = blocked.to_vec();
+                        busy.extend(meal_people.iter().copied());
+                        busy.par_sort_unstable();
+                        busy.dedup();
+                        let result = attempt!('run, self.acquire_food_autonomously(&busy));
+                        meal_people.extend(result.actors);
+                        meal_people.par_sort_unstable();
+                        meal_people.dedup();
+                        if !result.outcomes.is_empty() {
+                            run.events.push(CoreRunEvent::Provisions(result.outcomes));
+                        }
+                        let next = self.after_food(meal_people);
+                        self.schedule.as_mut().expect("active schedule").phase = next;
                     }
                     DecisionPhase::Maintenance { mut meal_people } => {
                         let mut busy = blocked.to_vec();

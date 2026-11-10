@@ -9,7 +9,7 @@ mod requests;
 mod scheduler;
 mod sites;
 mod tools;
-pub use food_search::CoreFoodSearch;
+pub use food_search::{CoreFoodProvision, CoreFoodSearch};
 pub use offers::CoreSocialResults;
 pub use requests::{CoreDeliveryResults, CoreRequestResults};
 pub use scheduler::{CoreRun, CoreRunEvent, CoreSchedule, DecisionPhase};
