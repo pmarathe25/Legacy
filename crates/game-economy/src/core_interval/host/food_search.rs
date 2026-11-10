@@ -6,7 +6,8 @@ use super::*;
 pub struct CoreFoodSearch {
     pub search: crate::FoodSearch,
     pub knowledge: game_economy_knowledge::Knowledge,
-    #[serde(default)]
+    /// Reads saves written before claims became an independent owner.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub claims: Option<game_economy_claims::Claims>,
 }
 
@@ -63,10 +64,7 @@ impl CoreHost {
         busy.dedup();
         let tick = self.core.physical.tick();
         let view = self.core.physical.view(tick)?;
-        let claims = self
-            .food_search
-            .as_ref()
-            .and_then(|owner| owner.claims.as_ref());
+        let claims = self.claims.as_ref();
         let index = claims.map(game_economy_claims::Claims::index);
         let plan = game_economy_person::provision::prepare(
             &self.core.people,
@@ -127,9 +125,7 @@ impl CoreHost {
                 .par_sort_unstable_by_key(|e| (e.tick, e.claimant, e.person, e.region, e.good));
         }
         let outcomes = self.core.physical.commit_interval_consumption(draft)?;
-        if let Some(owner) = &mut self.food_search {
-            owner.claims = staged_claims;
-        }
+        self.claims = staged_claims;
         if let Some(opinions) = staged_opinions {
             self.opinions = opinions;
         }
@@ -192,12 +188,9 @@ impl CoreHost {
         let mut next_owner = CoreFoodSearch {
             search: owner.search.clone(),
             knowledge,
-            claims: owner.claims.clone(),
+            claims: None,
         };
-        let claims = next_owner
-            .claims
-            .as_ref()
-            .map(game_economy_claims::Claims::index);
+        let claims = self.claims.as_ref().map(game_economy_claims::Claims::index);
         let mut plan = crate::food_search::Context {
             owner: &next_owner.search,
             knowledge: &next_owner.knowledge,

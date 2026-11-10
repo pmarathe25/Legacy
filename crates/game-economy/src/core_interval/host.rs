@@ -2,6 +2,7 @@
 use super::*;
 use game_autowork::Autowork;
 use game_economy_work::tool_wear::ToolWear;
+mod claims;
 mod fatigue;
 mod food_search;
 mod offers;
@@ -35,6 +36,8 @@ pub struct CoreHostSnapshot {
     #[serde(default)]
     pub food_search: Option<CoreFoodSearch>,
     #[serde(default)]
+    pub claims: Option<game_economy_claims::Claims>,
+    #[serde(default)]
     pub opinions: Option<game_opinions::Opinions>,
     #[serde(default)]
     pub goals: Option<game_goals::Goals>,
@@ -56,6 +59,7 @@ pub struct CoreHost {
     fatigue: Option<game_economy_fatigue::TimedFatigue>,
     activity: Vec<game_economy_fatigue::TimedActivity>,
     food_search: Option<CoreFoodSearch>,
+    claims: Option<game_economy_claims::Claims>,
     work_checked_revision: Option<u64>,
     work_checked_blocked: Vec<u64>,
     opinions: Option<game_opinions::Opinions>,
@@ -72,6 +76,7 @@ struct CoreRuntimeOptions {
     fatigue: Option<game_economy_fatigue::TimedFatigue>,
     activity: Vec<game_economy_fatigue::TimedActivity>,
     food_search: Option<CoreFoodSearch>,
+    claims: Option<game_economy_claims::Claims>,
 }
 impl CoreHost {
     pub fn begin(snapshot: CoreHostSnapshot, rates: &[(u64, u64)]) -> Result<Self, String> {
@@ -84,6 +89,7 @@ impl CoreHost {
             fatigue,
             activity,
             food_search,
+            claims,
             opinions,
             goals,
             agreements,
@@ -106,6 +112,7 @@ impl CoreHost {
                 fatigue,
                 activity,
                 food_search,
+                claims,
             },
         )
     }
@@ -119,6 +126,7 @@ impl CoreHost {
             fatigue,
             activity,
             food_search,
+            claims,
             opinions,
             goals,
             agreements,
@@ -141,6 +149,7 @@ impl CoreHost {
                 fatigue,
                 activity,
                 food_search,
+                claims,
             },
         )
     }
@@ -160,8 +169,15 @@ impl CoreHost {
             paused_work_rates,
             fatigue,
             mut activity,
-            food_search,
+            mut food_search,
+            mut claims,
         } = options;
+        if let Some(legacy) = food_search.as_mut().and_then(|owner| owner.claims.take()) {
+            if claims.is_some() {
+                return Err("duplicate personal claim owners".into());
+            }
+            claims = Some(legacy);
+        }
         if let Some(owner) = &autowork {
             let people: Vec<_> = core
                 .people
@@ -276,9 +292,11 @@ impl CoreHost {
             owner
                 .search
                 .validate(&people, Some(&owner.knowledge), core.travel.as_ref())?;
-            if let Some(claims) = &owner.claims {
-                claims.validate(&people, &view, core.physical.tick())?;
-            }
+        }
+        if let Some(claims) = &claims {
+            let people: HashSet<_> = core.people.par_iter().map(|person| person.id).collect();
+            let view = core.physical.view(core.physical.tick())?;
+            claims.validate(&people, &view, core.physical.tick())?;
         }
         if let Some(owner) = &goals {
             let people: HashSet<_> = core.people.par_iter().map(|person| person.id).collect();
@@ -322,6 +340,7 @@ impl CoreHost {
             fatigue,
             activity,
             food_search,
+            claims,
             work_checked_revision: None,
             work_checked_blocked: Vec::new(),
             opinions,
@@ -341,6 +360,7 @@ impl CoreHost {
             fatigue: self.fatigue.clone(),
             activity: self.activity.clone(),
             food_search: self.food_search.clone(),
+            claims: self.claims.clone(),
             opinions: self.opinions.clone(),
             goals: self.goals.clone(),
             agreements: self.agreements.clone(),
@@ -623,6 +643,9 @@ impl CoreHost {
         }
         let occupied = self.blocked_with_rest(blocked);
         let blocked = occupied.as_deref().unwrap_or(blocked);
+        if let Some(result) = self.start_claim_aware_work(blocked, rate)? {
+            return Ok(result);
+        }
         if self.sites.is_some() || !self.tool_requirements.is_empty() {
             let Some(owner) = &self.autowork else {
                 return Ok(Vec::new());
