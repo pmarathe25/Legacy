@@ -72,6 +72,29 @@ fn promises_need_consent_and_only_successful_transfer_can_publish_progress() {
             1,
         )
         .unwrap();
+    let preview = active
+        .preview_deliveries(
+            &[Delivery {
+                contract: ids[0],
+                actor: 1,
+                quantity: 2,
+            }],
+            1,
+        )
+        .unwrap();
+    assert_eq!(preview, staged.transfers);
+    assert!(
+        active
+            .preview_deliveries(
+                &[Delivery {
+                    contract: ids[0],
+                    actor: 2,
+                    quantity: 2
+                }],
+                1
+            )
+            .is_err()
+    );
     assert_eq!(active.contracts[0].delivered, 0);
     assert_eq!(
         staged.transfers,

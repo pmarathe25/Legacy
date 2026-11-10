@@ -46,7 +46,7 @@ The ignored `core_host_work_requests_benchmark` includes 49,999 fear-motivated p
 
 Setting `LEGACY_OFFERS=1` instead uses 49,999 addressed unfunded offers to motivate the responses. One run took 78.6, 47.3, 35.2, and 31.5 ms at those worker counts, with matching fingerprints; setup, fulfillment, and later work outcomes are excluded.
 
-The ignored `core_host_agreement_delivery_benchmark` measures 25,000 independent chosen deliveries. One run took 25.7, 17.4, 13.1, and 13.8 ms at one, two, four, and six workers, with matching fingerprints. Setup and personal delivery decisions are excluded.
+The ignored `core_host_agreement_delivery_benchmark` measures 25,000 independent chosen deliveries. One run took 25.7, 17.4, 13.1, and 13.8 ms at one, two, four, and six workers. After removing a duplicate agreement-state clone and adding dense-ID lookup, a repeat took 24.6, 17.8, 17.1, and 12.8 ms, with matching fingerprints. These samples do not establish a clear scaling improvement. Setup and personal delivery decisions are excluded.
 
 The ignored `core_host_goal_asking_benchmark`, with `LEGACY_PEOPLE=200000`, creates 99,999 requests at one endpoint. One run took 45.7, 30.8, 21.3, and 21.4 ms at one, two, four, and six workers, with matching fingerprints. Setup and responses are excluded; this workload levels off around four workers on the measured machine.
 

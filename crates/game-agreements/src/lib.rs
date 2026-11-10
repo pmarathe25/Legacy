@@ -227,6 +227,7 @@ pub struct DeliveryDraft {
     pub state: Agreements,
     pub transfers: Vec<Transfer>,
 }
+type DeliveryRow = (u64, u64, Transfer, Event);
 
 impl Agreements {
     /// Remove authored relationships when creating a new population.
@@ -527,16 +528,21 @@ impl Agreements {
         self.events = events;
         Ok(())
     }
-    /// Stage deliveries; the caller must perform their physical transfers atomically.
-    pub fn deliver(&self, requests: &[Delivery], now: u64) -> Result<DeliveryDraft, &'static str> {
+    fn delivery_rows(
+        &self,
+        requests: &[Delivery],
+        now: u64,
+    ) -> Result<Vec<DeliveryRow>, &'static str> {
         if requests.is_empty() {
-            return Ok(DeliveryDraft {
-                state: self.clone(),
-                transfers: Vec::new(),
-            });
+            return Ok(Vec::new());
         }
         let mut requests = requests.to_vec();
-        requests.par_sort_unstable_by_key(|d| d.contract);
+        if requests
+            .par_windows(2)
+            .any(|pair| pair[0].contract > pair[1].contract)
+        {
+            requests.par_sort_unstable_by_key(|d| d.contract);
+        }
         if requests
             .par_windows(2)
             .any(|w| w[0].contract == w[1].contract)
@@ -544,13 +550,32 @@ impl Agreements {
             return Err("duplicate agreement delivery");
         }
         let mut index: Vec<_> = self.contracts.par_iter().map(|c| (c.id, c)).collect();
-        index.par_sort_unstable_by_key(|row| row.0);
-        let rows: Vec<_> = requests
+        if index.par_windows(2).any(|pair| pair[0].0 > pair[1].0) {
+            index.par_sort_unstable_by_key(|row| row.0);
+        }
+        let dense = index
+            .first()
+            .filter(|_| {
+                index
+                    .par_windows(2)
+                    .all(|pair| pair[0].0.checked_add(1) == Some(pair[1].0))
+            })
+            .map(|row| row.0);
+        requests
             .par_iter()
             .map(|request| -> Result<_, &'static str> {
-                let i = index
-                    .binary_search_by_key(&request.contract, |row| row.0)
-                    .map_err(|_| "unknown agreement")?;
+                let i = if let Some(first) = dense {
+                    request
+                        .contract
+                        .checked_sub(first)
+                        .and_then(|value| usize::try_from(value).ok())
+                        .filter(|&i| i < index.len())
+                        .ok_or("unknown agreement")?
+                } else {
+                    index
+                        .binary_search_by_key(&request.contract, |row| row.0)
+                        .map_err(|_| "unknown agreement")?
+                };
                 let c = index[i].1;
                 let remaining = c
                     .quantity
@@ -586,10 +611,49 @@ impl Agreements {
                     },
                 ))
             })
-            .collect::<Result<_, _>>()?;
+            .collect()
+    }
+    /// Validate selected deliveries and expose the corresponding physical
+    /// transfers in contract-ID order without cloning or changing agreement state.
+    pub fn preview_deliveries(
+        &self,
+        requests: &[Delivery],
+        now: u64,
+    ) -> Result<Vec<Transfer>, &'static str> {
+        Ok(self
+            .delivery_rows(requests, now)?
+            .into_par_iter()
+            .map(|row| row.2)
+            .collect())
+    }
+    /// Stage deliveries; the caller must perform their physical transfers atomically.
+    pub fn deliver(&self, requests: &[Delivery], now: u64) -> Result<DeliveryDraft, &'static str> {
+        let rows = self.delivery_rows(requests, now)?;
+        if rows.is_empty() {
+            return Ok(DeliveryDraft {
+                state: self.clone(),
+                transfers: Vec::new(),
+            });
+        }
         let mut state = self.clone();
+        let dense = rows
+            .first()
+            .filter(|_| {
+                rows.par_windows(2)
+                    .all(|pair| pair[0].0.checked_add(1) == Some(pair[1].0))
+            })
+            .map(|row| row.0);
         state.contracts.par_iter_mut().for_each(|contract| {
-            if let Ok(i) = rows.binary_search_by_key(&contract.id, |row| row.0) {
+            let index = if let Some(first) = dense {
+                contract
+                    .id
+                    .checked_sub(first)
+                    .and_then(|value| usize::try_from(value).ok())
+                    .filter(|&index| index < rows.len())
+            } else {
+                rows.binary_search_by_key(&contract.id, |row| row.0).ok()
+            };
+            if let Some(i) = index {
                 contract.delivered = rows[i].1;
                 if contract.delivered == contract.quantity {
                     contract.status = Status::Fulfilled;

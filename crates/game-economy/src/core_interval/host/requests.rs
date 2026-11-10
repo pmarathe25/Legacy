@@ -94,8 +94,10 @@ impl CoreHost {
         let owner = self.agreements.as_ref().ok_or("no agreement owner")?;
         let mut ordered = deliveries.to_vec();
         ordered.par_sort_unstable_by_key(|delivery| delivery.contract);
-        let staged = owner.deliver(&ordered, tick).map_err(str::to_owned)?;
-        if staged.transfers.par_iter().any(|transfer| {
+        let transfers = owner
+            .preview_deliveries(&ordered, tick)
+            .map_err(str::to_owned)?;
+        if transfers.par_iter().any(|transfer| {
             self.core
                 .people
                 .binary_search_by_key(&transfer.debtor, |person| person.id)
@@ -114,7 +116,7 @@ impl CoreHost {
         }
         let actions: Vec<_> = ordered
             .par_iter()
-            .zip(staged.transfers.par_iter())
+            .zip(transfers.par_iter())
             .map(|(delivery, transfer)| game_lots::Transaction {
                 id: delivery.contract,
                 movements: vec![game_lots::Movement {

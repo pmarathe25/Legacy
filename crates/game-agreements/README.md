@@ -4,6 +4,8 @@
 
 Explicit, mutually accepted promises for future delivery of physically carried goods. Proposals and acceptance are distinct. Delivery plans become fulfilled only when the host has successfully transferred the goods; expired active promises default. The owner is data-defined and uses stable identities and generation-local events.
 
+`preview_deliveries` validates a batch and returns its physical transfers in contract-ID order without changing the owner. A host can arbitrate those transfers and call `deliver` only for accepted ones, then publish the resulting agreement state together with custody.
+
 `content/scenarios/agreements.toml` demonstrates manual proposals, recipient decisions, and partial delivery. Set `[[agreements.policies]] person = ...` and `honor = true` to let the fused host attempt a debtor's accepted agreements. `content/scenarios/agreements_auto.toml` demonstrates this policy. Candidates use the goods actually carried at the start of a tick; each available person can participate in at most one selected exchange. Deadlines are indexed, and unfinished accepted agreements default after the due tick.
 
 `minimum_honor_trust` optionally makes the debtor assess their own directed trust in each creditor before ordinary automatic fulfillment. An observed change in trust can therefore lead them to withhold one promise while fulfilling another. An optional `fear_honor_threshold` lets their personally experienced fear motivate fulfillment even if ordinary honoring is disabled; neither fear nor compliance grants approval. These choices require the opinions owner. The person can later withhold delivery as their fear subsides, and neither the promise nor the policy physically forces delivery.
