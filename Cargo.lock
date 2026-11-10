@@ -214,6 +214,7 @@ dependencies = [
  "game-purpose",
  "game-social",
  "game-tactics",
+ "game-work-asking",
  "rayon",
  "serde",
  "serde_json",

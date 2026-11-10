@@ -52,6 +52,7 @@ game-agreements = { path = "../game-agreements" }
 game-opinions = { path = "../game-opinions" }
 game-goals = { path = "../game-goals" }
 game-autowork = { path = "../game-autowork" }
+game-work-asking = { path = "../game-work-asking" }
 game-nutrition = { path = "../game-nutrition" }
 game-social = { path = "../game-social" }
 rayon.workspace = true

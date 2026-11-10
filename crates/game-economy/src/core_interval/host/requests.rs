@@ -22,6 +22,137 @@ fn together(people: &[Person], requester: u64, worker: u64, region: u64) -> bool
 }
 
 impl CoreHost {
+    /// Let people with active personal goals address local requests.
+    pub fn ask_for_work(&mut self, blocked: &[u64]) -> Result<Vec<u64>, String> {
+        if blocked.par_windows(2).any(|rows| rows[0] >= rows[1]) {
+            return Err("invalid occupied people".into());
+        }
+        let tick = self.core.physical.tick();
+        let offset = self.core.elapsed_millis().ok_or("no physical interval")?;
+        if offset >= self.core.physical.tick_millis()
+            || self.core.next_deadline(None)?.after_millis == 0
+        {
+            return Err("publish pending interval events before asking".into());
+        }
+        let Some(owner) = self
+            .autowork
+            .as_ref()
+            .and_then(|auto| auto.requests.as_ref())
+        else {
+            return Ok(Vec::new());
+        };
+        if self.goals.is_none() || owner.askers.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut busy = blocked.to_vec();
+        busy.par_extend(
+            self.core
+                .people
+                .par_iter()
+                .filter(|person| {
+                    person.controlled
+                        || person.health == 0
+                        || person.hunger > self.core.rules.max_work_hunger
+                })
+                .map(|person| person.id),
+        );
+        busy.par_extend(
+            self.core
+                .physical
+                .work()
+                .par_iter()
+                .filter(|work| work.phase == game_lot_runtime::Phase::Working)
+                .map(|work| work.job.worker),
+        );
+        busy.par_sort_unstable();
+        busy.dedup();
+        let people: Vec<_> = self
+            .core
+            .people
+            .par_iter()
+            .map(|person| (person.id, person.region, person.health, person.hunger))
+            .collect();
+        let Some(draft) =
+            game_work_asking::prepare(owner, self.goals.as_ref(), &people, &busy, None, tick)
+                .map_err(str::to_owned)?
+        else {
+            return Ok(Vec::new());
+        };
+        let actors = draft.actors.clone();
+        game_work_asking::publish(
+            self.autowork
+                .as_mut()
+                .expect("checked owner")
+                .requests
+                .as_mut()
+                .expect("checked requests"),
+            draft,
+        );
+        Ok(actors)
+    }
+
+    /// Stage progress for work actually completed and help personally witnessed.
+    pub(super) fn stage_goals(
+        &self,
+        finished: &[u64],
+        tick: u64,
+        people: &[Person],
+        clear_events: bool,
+    ) -> Result<Option<game_goals::Goals>, String> {
+        let Some(goals) = &self.goals else {
+            return Ok(None);
+        };
+        if finished.is_empty() {
+            if clear_events && !goals.events.is_empty() {
+                let mut next = goals.clone();
+                next.events.clear();
+                return Ok(Some(next));
+            }
+            return Ok(None);
+        }
+        let mut jobs = finished.to_vec();
+        jobs.par_sort_unstable();
+        let mut completed: Vec<_> = self
+            .core
+            .physical
+            .work()
+            .par_iter()
+            .filter(|work| jobs.binary_search(&work.job.id).is_ok())
+            .map(|work| game_goals::Completion {
+                person: work.job.worker,
+                recipe: work.job.recipe,
+            })
+            .collect();
+        if let Some(requests) = self
+            .autowork
+            .as_ref()
+            .and_then(|auto| auto.requests.as_ref())
+        {
+            let observed: Vec<_> = requests
+                .work_links
+                .par_iter()
+                .filter(|link| {
+                    jobs.binary_search(&link.job).is_ok()
+                        && together(people, link.requester, link.worker, link.region)
+                })
+                .map(|link| (link.requester, link.recipe))
+                .collect();
+            completed.par_extend(goals.recognized_help(&observed));
+        }
+        if let Some(next) = goals
+            .prepare(&completed, &[], tick)
+            .map_err(str::to_owned)?
+        {
+            return Ok(Some(next));
+        }
+        if clear_events && !goals.events.is_empty() {
+            let mut next = goals.clone();
+            next.events.clear();
+            return Ok(Some(next));
+        }
+        Ok(None)
+    }
+
     /// Resolve local addressed requests using each worker's directed feelings.
     /// No response binds future work; a failed reservation stays pending.
     pub fn respond_to_work_requests(

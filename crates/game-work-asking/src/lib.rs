@@ -86,8 +86,15 @@ pub fn prepare_at_endpoints(
         .par_iter()
         .map(|row| (row.person, row.recipe))
         .collect();
-    active_goals.par_sort_unstable();
-    goals.par_sort_unstable_by_key(|row| (row.person, Reverse(row.priority), row.recipe));
+    if active_goals.par_windows(2).any(|pair| pair[0] > pair[1]) {
+        active_goals.par_sort_unstable();
+    }
+    if goals.par_windows(2).any(|pair| {
+        (pair[0].person, Reverse(pair[0].priority), pair[0].recipe)
+            > (pair[1].person, Reverse(pair[1].priority), pair[1].recipe)
+    }) {
+        goals.par_sort_unstable_by_key(|row| (row.person, Reverse(row.priority), row.recipe));
+    }
     let goals: Vec<_> = goals
         .par_chunk_by(|a, b| a.person == b.person)
         .map(|rows| rows[0])
@@ -100,20 +107,34 @@ pub fn prepare_at_endpoints(
             (person.2 > 0).then_some((region, site, person.0))
         })
         .collect();
-    local.par_sort_unstable();
+    if local.par_windows(2).any(|pair| pair[0] > pair[1]) {
+        local.par_sort_unstable();
+    }
+    // A common concentrated case has contiguous people at one endpoint.
+    // Its direct index avoids three searches of the same shared population
+    // for every independent asker.
+    let dense_local = local.first().zip(local.last()).and_then(|(first, last)| {
+        ((first.0, first.1) == (last.0, last.1)
+            && last.2.checked_sub(first.2) == Some((local.len() - 1) as u64))
+        .then_some(*first)
+    });
     let mut old: Vec<_> = owner
         .pending
         .par_iter()
         .filter(|row| row.expires >= tick)
         .map(|row| (row.worker, row.requester, row.recipe))
         .collect();
-    old.par_sort_unstable();
+    if old.par_windows(2).any(|pair| pair[0] > pair[1]) {
+        old.par_sort_unstable();
+    }
     let mut active_work: Vec<_> = owner
         .work_links
         .par_iter()
         .map(|row| (row.worker, row.requester, row.recipe))
         .collect();
-    active_work.par_sort_unstable();
+    if active_work.par_windows(2).any(|pair| pair[0] > pair[1]) {
+        active_work.par_sort_unstable();
+    }
     let mut preferred: Vec<_> = practices
         .par_iter()
         .filter_map(|practice| {
@@ -189,11 +210,26 @@ pub fn prepare_at_endpoints(
             else {
                 return Ok(None);
             };
-            let Ok(index) = local.binary_search(&(region, site, asker.person)) else {
-                return Ok(None);
+            let (index, start, end) = if let Some((dense_region, dense_site, first)) = dense_local
+                && (region, site) == (dense_region, dense_site)
+            {
+                let Some(index) = asker
+                    .person
+                    .checked_sub(first)
+                    .and_then(|id| usize::try_from(id).ok())
+                    .filter(|&index| index < local.len())
+                else {
+                    return Ok(None);
+                };
+                (index, 0, local.len())
+            } else {
+                let Ok(index) = local.binary_search(&(region, site, asker.person)) else {
+                    return Ok(None);
+                };
+                let start = local.partition_point(|row| (row.0, row.1) < (region, site));
+                let end = local.partition_point(|row| (row.0, row.1) <= (region, site));
+                (index, start, end)
             };
-            let start = local.partition_point(|row| (row.0, row.1) < (region, site));
-            let end = local.partition_point(|row| (row.0, row.1) <= (region, site));
             if end - start < 2 {
                 return Ok(None);
             }
@@ -211,6 +247,9 @@ pub fn prepare_at_endpoints(
             let eligible = |worker| {
                 worker != asker.person
                     && old
+                        .binary_search(&(worker, asker.person, goal.recipe))
+                        .is_err()
+                    && active_work
                         .binary_search(&(worker, asker.person, goal.recipe))
                         .is_err()
                     && (!memories[first..last]
@@ -266,7 +305,12 @@ pub fn prepare_at_endpoints(
     }
     let mut candidates = candidates;
     candidates.par_extend(preferred);
-    candidates.par_sort_unstable_by_key(|row| (row.worker, row.requester));
+    if candidates
+        .par_windows(2)
+        .any(|pair| (pair[0].worker, pair[0].requester) > (pair[1].worker, pair[1].requester))
+    {
+        candidates.par_sort_unstable_by_key(|row| (row.worker, row.requester));
+    }
     let mut granted: Vec<_> = candidates
         .par_chunk_by(|a, b| a.worker == b.worker)
         .flat_map_iter(|group| {
@@ -275,7 +319,12 @@ pub fn prepare_at_endpoints(
             group.iter().take(4usize.saturating_sub(end - start))
         })
         .collect();
-    granted.par_sort_unstable_by_key(|row| (row.requester, row.worker));
+    if granted
+        .par_windows(2)
+        .any(|pair| (pair[0].requester, pair[0].worker) > (pair[1].requester, pair[1].worker))
+    {
+        granted.par_sort_unstable_by_key(|row| (row.requester, row.worker));
+    }
     let next_id = owner
         .next_id
         .checked_add(u64::try_from(granted.len()).map_err(|_| "work request id overflow")?)
@@ -463,6 +512,17 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
+        owner.askers.push(game_work_requests::Asker {
+            person: 1,
+            interval: 1,
+            lifetime: 5,
+            retry_after_offer: false,
+        });
+        assert!(
+            prepare(&owner, Some(&goals), &people, &[], None, 2)
+                .unwrap()
+                .is_none()
+        );
         owner.pending.clear();
         owner.work_links.push(WorkLink {
             request: 1,
@@ -472,6 +532,11 @@ mod tests {
             region: 4,
             recipe: 7,
         });
+        assert!(
+            prepare(&owner, Some(&goals), &people, &[], None, 2)
+                .unwrap()
+                .is_none()
+        );
         assert!(
             prepare_with_practices(&owner, Some(&goals), &people, &[], None, &[terms], 2)
                 .unwrap()

@@ -18,6 +18,8 @@ pub struct CoreHostSnapshot {
     #[serde(default)]
     pub opinions: Option<game_opinions::Opinions>,
     #[serde(default)]
+    pub goals: Option<game_goals::Goals>,
+    #[serde(default)]
     pub schedule: Option<CoreSchedule>,
 }
 
@@ -27,6 +29,7 @@ pub struct CoreHost {
     autowork: Option<Autowork>,
     tool_wear: Option<ToolWear>,
     opinions: Option<game_opinions::Opinions>,
+    goals: Option<game_goals::Goals>,
     schedule: Option<CoreSchedule>,
 }
 impl CoreHost {
@@ -36,10 +39,11 @@ impl CoreHost {
             autowork,
             tool_wear,
             opinions,
+            goals,
             schedule,
         } = snapshot;
         let core = CoreInterval::begin(core, rates)?;
-        Self::compile(core, autowork, tool_wear, opinions, schedule)
+        Self::compile(core, autowork, tool_wear, opinions, goals, schedule)
     }
     pub fn resume(snapshot: CoreHostSnapshot) -> Result<Self, String> {
         let CoreHostSnapshot {
@@ -47,16 +51,18 @@ impl CoreHost {
             autowork,
             tool_wear,
             opinions,
+            goals,
             schedule,
         } = snapshot;
         let core = CoreInterval::resume(core)?;
-        Self::compile(core, autowork, tool_wear, opinions, schedule)
+        Self::compile(core, autowork, tool_wear, opinions, goals, schedule)
     }
     fn compile(
         core: CoreInterval,
         autowork: Option<Autowork>,
         tool_wear: Option<ToolWear>,
         opinions: Option<game_opinions::Opinions>,
+        goals: Option<game_goals::Goals>,
         schedule: Option<CoreSchedule>,
     ) -> Result<Self, String> {
         if let Some(owner) = &autowork {
@@ -89,6 +95,18 @@ impl CoreHost {
                 .validate(&people, core.physical.tick())
                 .map_err(str::to_owned)?;
         }
+        if let Some(owner) = &goals {
+            let people: HashSet<_> = core.people.par_iter().map(|person| person.id).collect();
+            let recipes: HashSet<_> = core
+                .physical
+                .recipes()
+                .par_iter()
+                .map(|recipe| recipe.id)
+                .collect();
+            owner
+                .validate(&people, &recipes, core.physical.tick())
+                .map_err(str::to_owned)?;
+        }
         if let Some(schedule) = &schedule {
             schedule.validate(&core)?;
         }
@@ -97,6 +115,7 @@ impl CoreHost {
             autowork,
             tool_wear,
             opinions,
+            goals,
             schedule,
         })
     }
@@ -106,6 +125,7 @@ impl CoreHost {
             autowork: self.autowork.clone(),
             tool_wear: self.tool_wear.clone(),
             opinions: self.opinions.clone(),
+            goals: self.goals.clone(),
             schedule: self.schedule.clone(),
         }
     }
@@ -224,12 +244,21 @@ impl CoreHost {
         );
         let requests =
             self.stage_request_resolution(&outcomes, draft.events().tick, &self.core.people, false);
+        let goals = self.stage_goals(
+            &draft.events().finished,
+            draft.events().tick,
+            &self.core.people,
+            false,
+        )?;
         self.core.validate_early_work(&draft)?;
         let events = self.core.commit_early_work(draft)?;
         if let Some(tools) = tools {
             self.tool_wear = Some(tools);
         }
         self.publish_request_resolution(requests);
+        if let Some(goals) = goals {
+            self.goals = Some(goals);
+        }
         Ok(Some(events))
     }
     /// Stage and commit carried meals selected by individuals. Active workers
@@ -275,8 +304,17 @@ impl CoreHost {
         };
         let tick = self.core.physical.tick();
         let offset = self.core.elapsed_millis().ok_or("no physical interval")?;
-        self.core
-            .start_autonomous_work(tick, offset, owner, blocked, rate)
+        if let Some(goals) = &self.goals {
+            let mut effective = goals.policies(owner, tick);
+            let result =
+                self.core
+                    .start_autonomous_work(tick, offset, &mut effective, blocked, rate)?;
+            owner.next_id = effective.next_id;
+            Ok(result)
+        } else {
+            self.core
+                .start_autonomous_work(tick, offset, owner, blocked, rate)
+        }
     }
     /// Settle the completed quantum after staging tool conditions.
     pub fn settle(&mut self) -> Result<Events, String> {
@@ -319,12 +357,21 @@ impl CoreHost {
             &draft.people.people,
             true,
         );
+        let goals = self.stage_goals(
+            &draft.events().finished,
+            draft.events().tick,
+            &draft.people.people,
+            true,
+        )?;
         self.core.validate_settlement(&draft)?;
         let events = self.core.commit_settlement(draft)?;
         if let Some(tools) = tools {
             self.tool_wear = Some(tools);
         }
         self.publish_request_resolution(requests);
+        if let Some(goals) = goals {
+            self.goals = Some(goals);
+        }
         self.schedule = None;
         Ok(events)
     }
