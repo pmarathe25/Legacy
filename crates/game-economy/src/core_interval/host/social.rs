@@ -196,6 +196,14 @@ impl CoreHost {
             .social
             .as_ref()
             .and_then(|social| self.stage_skill_teaching(social, tick));
+        let writing = self.writing.as_ref().and_then(|opening| {
+            if opening.study.is_empty() || meetings.is_empty() {
+                return None;
+            }
+            let mut owner = opening.clone();
+            owner.advance_study(opening, &self.core.physical, &[], &meetings, tick);
+            Some(owner)
+        });
         if let Some(frame) = &teaching
             && self
                 .opinions
@@ -271,6 +279,9 @@ impl CoreHost {
         }
         if let Some(knowledge) = knowledge {
             self.knowledge = Some(knowledge);
+        }
+        if let Some(writing) = writing {
+            self.writing = Some(writing);
         }
         if let Some(travel) = travel {
             self.core.travel = Some(travel);

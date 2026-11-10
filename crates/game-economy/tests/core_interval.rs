@@ -6504,6 +6504,7 @@ fn core_host_social_benchmark() {
     assert!(count > 2);
     let personality_mode = std::env::var_os("LEGACY_PERSONALITY").is_some();
     let teaching_mode = std::env::var_os("LEGACY_TEACHING").is_some();
+    let literacy_mode = std::env::var_os("LEGACY_LITERACY_STUDY").is_some();
     let taking_inquiries = std::env::var_os("LEGACY_TAKING_INQUIRIES").is_some();
     let taking_reports = std::env::var_os("LEGACY_TAKING_REPORTS").is_some() || taking_inquiries;
     let treatment = std::env::var_os("LEGACY_TREATMENT").is_some();
@@ -6701,6 +6702,25 @@ fn core_host_social_benchmark() {
         .unwrap()
         .install(|| {
             let mut snapshot = snapshot;
+            if literacy_mode {
+                let mut probe = CoreHost::begin(snapshot.clone(), &[(1, 1)]).unwrap();
+                let pairs = probe.meet_autonomously(&[]).unwrap();
+                for (id, name) in [(3, "paper"), (4, "ink"), (5, "page")] {
+                    snapshot.core.physical.goods.push(Good { id, name: name.into(), food: None });
+                }
+                let mut pages = Vec::new();
+                let mut literacy = Vec::new();
+                let mut studies = Vec::new();
+                for (i, pair) in pairs.iter().enumerate() {
+                    let item = i as u64 + 1;
+                    snapshot.core.physical.custody.containers.push(Container::new(Place::Person(pair.a), 10, vec![Lot { item: Some(item), good: 5, quantity: 1, expires_at: None }]).unwrap());
+                    pages.push(serde_json::json!({"item":item,"author":pair.a,"script":1,"written_at":0,"text":"A page"}));
+                    literacy.push(serde_json::json!({"person":pair.a,"script":1,"read":true}));
+                    studies.push(serde_json::json!({"person":pair.b,"script":1,"required":1,"enabled":true}));
+                }
+                snapshot.core.physical.custody.containers.sort_by_key(|row| row.place);
+                snapshot.writing = Some(serde_json::from_value(serde_json::json!({"paper":3,"ink":4,"page":5,"paper_quantity":1,"ink_quantity":1,"next_item":pairs.len()+1,"pages":pages,"literacy":literacy,"study":studies})).unwrap());
+            }
             if taking_reports {
                 let mut probe = CoreHost::begin(snapshot.clone(), &[(1, 1)]).unwrap();
                 let pairs = probe.meet_autonomously(&[]).unwrap();
@@ -6829,6 +6849,7 @@ fn core_host_social_benchmark() {
             let elapsed = start.elapsed();
             assert_eq!(meetings.len(), ((count - 1) / 2) as usize);
             if teaching_mode { assert_eq!(host.snapshot().skills.unwrap().owner.lessons.len(), meetings.len()); }
+            if literacy_mode { assert_eq!(host.snapshot().writing.unwrap().study.iter().filter(|row| row.progress == 1).count(), meetings.len()); }
             if taking_reports {
                 let taking = host.snapshot().taking.unwrap();
                 assert_eq!(taking.reports.len(), meetings.len());
@@ -14300,4 +14321,119 @@ fn core_host_text_writing_benchmark() {
                 hash.finish()
             );
         });
+}
+
+#[test]
+fn literacy_study_depends_on_personal_choice_encounter_and_a_physical_page() {
+    fn run(
+        workers: usize,
+        enabled: bool,
+        page_present: bool,
+        partner_literate: bool,
+    ) -> serde_json::Value {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut snapshot = text_writing_fixture(false);
+                snapshot.core.physical.custody.tick = 1;
+                let writing = snapshot.writing.as_mut().unwrap();
+                writing.text_authors = Default::default();
+                writing.literacy = std::sync::Arc::new(vec![game_economy::Literacy {
+                    person: 2,
+                    script: 1,
+                    read: partner_literate,
+                    write: partner_literate,
+                    auto_read: false,
+                }]);
+                writing.study = std::sync::Arc::new(vec![game_economy::WritingStudy {
+                    person: 3,
+                    script: 1,
+                    required: 1,
+                    progress: 0,
+                    enabled,
+                }]);
+                if page_present {
+                    writing.next_item = 2;
+                    writing.pages = std::sync::Arc::new(vec![game_economy::WrittenPage {
+                        item: 1,
+                        author: 2,
+                        script: 1,
+                        written_at: 0,
+                        claim: None,
+                        text: Some("A page".into()),
+                    }]);
+                    let holder = snapshot
+                        .core
+                        .physical
+                        .custody
+                        .containers
+                        .iter_mut()
+                        .find(|row| row.place == Place::Person(2))
+                        .unwrap();
+                    *holder = Container::new(
+                        Place::Person(2),
+                        10,
+                        vec![Lot {
+                            item: Some(1),
+                            good: 5,
+                            quantity: 1,
+                            expires_at: None,
+                        }],
+                    )
+                    .unwrap();
+                }
+                snapshot.social = Some(game_economy::core_interval::CoreSocial {
+                    owner: game_social::Social {
+                        rules: game_social::Rules {
+                            interval: 1,
+                            min_health: 1,
+                            max_hunger: 10,
+                            familiarity_gain: 1,
+                            familiarity_max: 10,
+                            relationship_retention: None,
+                        },
+                        participants: vec![
+                            game_social::Participant {
+                                person: 2,
+                                willing: true,
+                            },
+                            game_social::Participant {
+                                person: 3,
+                                willing: true,
+                            },
+                        ],
+                        pressures: vec![],
+                        relationships: vec![],
+                        events: vec![],
+                        needs: None,
+                    },
+                    last_tick: None,
+                });
+                let mut host = CoreHost::begin(snapshot, &[(1, 1)]).unwrap();
+                assert_eq!(host.meet_autonomously(&[]).unwrap().len(), 1);
+                let state = host.snapshot();
+                let writing = state.writing.as_ref().unwrap();
+                let learned = enabled && page_present && partner_literate;
+                assert_eq!(writing.study[0].progress, u32::from(learned));
+                assert_eq!(writing.can_read(3, 1), learned);
+                let saved = serde_json::to_string(&state).unwrap();
+                let mut restored = CoreHost::resume(serde_json::from_str(&saved).unwrap()).unwrap();
+                assert!(restored.meet_autonomously(&[]).unwrap().is_empty());
+                assert_eq!(restored.snapshot(), state);
+                serde_json::to_value(state).unwrap()
+            })
+    }
+    for (enabled, page, literate) in [
+        (true, true, true),
+        (false, true, true),
+        (true, false, true),
+        (true, true, false),
+    ] {
+        assert_eq!(
+            run(1, enabled, page, literate),
+            run(6, enabled, page, literate)
+        );
+    }
 }

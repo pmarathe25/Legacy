@@ -980,11 +980,10 @@ impl CoreHost {
         }
         if let Some(owner) = &mut writing {
             if !owner.authors.is_empty()
-                || !owner.study.is_empty()
                 || !owner.practice.is_empty()
                 || owner.pages.par_iter().any(|page| page.claim.is_some())
             {
-                return Err("written claims and literacy training are not yet supported".into());
+                return Err("written claims and writing practice are not yet supported".into());
             }
             let people: HashSet<_> = core.people.par_iter().map(|p| p.id).collect();
             let goods: HashSet<_> = core.physical.goods().par_iter().map(|g| g.id).collect();

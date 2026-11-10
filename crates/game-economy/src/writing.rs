@@ -410,7 +410,7 @@ impl Writing {
             .par_chunk_by(|a, b| opening.study[*a].person == opening.study[*b].person)
             .map(|group| group[0])
             .collect();
-        let studies = Arc::make_mut(&mut self.study);
+        let mut studies: Vec<_> = self.study.par_iter().cloned().collect();
         studies
             .par_iter_mut()
             .enumerate()
@@ -426,10 +426,11 @@ impl Writing {
                 (study.progress == study.required).then_some((study.person, study.script))
             })
             .collect();
+        self.study = Arc::new(studies);
         if learned.is_empty() {
             return;
         }
-        let literacy = Arc::make_mut(&mut self.literacy);
+        let mut literacy: Vec<_> = self.literacy.par_iter().cloned().collect();
         literacy.par_iter_mut().for_each(|row| {
             if learned.binary_search(&(row.person, row.script)).is_ok() {
                 row.read = true;
@@ -452,6 +453,7 @@ impl Writing {
             .collect();
         literacy.par_extend(missing);
         literacy.par_sort_unstable_by_key(|row| (row.person, row.script));
+        self.literacy = Arc::new(literacy);
     }
 
     /// Independent people choose a held, unread page; no other person's knowledge is inspected.
