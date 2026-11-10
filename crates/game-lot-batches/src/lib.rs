@@ -3,6 +3,7 @@ use game_lot_model::{Container, SimpleTransfer, State, Transaction};
 use game_lot_planning::{Batch, Draft, prefixes};
 use rayon::prelude::*;
 mod compact_shared;
+mod disjoint_transform;
 mod fan_in;
 mod fan_out;
 mod grouped_sources;
@@ -10,6 +11,15 @@ mod independent;
 mod independent_transfer;
 mod local_creation;
 mod partitioned;
+
+/// Try no-time, disjoint fungible transformations after item validation.
+pub fn prepare_disjoint_transformations(
+    state: &State,
+    instance: u64,
+    transactions: &[Transaction],
+) -> Result<Option<Draft>, String> {
+    disjoint_transform::prepare(state, instance, transactions)
+}
 
 /// Try independent local two-input, identified-output transactions after the
 /// custody owner has validated identities. `None` selects the general arbiter.

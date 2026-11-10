@@ -3405,3 +3405,69 @@ fn oversized_large_creation_transaction_is_rejected_atomically() {
     };
     assert_eq!(run(1), run(4));
 }
+
+#[test]
+fn disjoint_transform_commit_matches_general_plan_and_rejects_stale_draft() {
+    let mut containers = Vec::new();
+    let mut actions = Vec::new();
+    for id in 1..=256u64 {
+        containers.push(container(Place::JobInput(id), 5, vec![lot(1, 2, None)]));
+        actions.push(Transaction {
+            id,
+            movements: vec![Movement {
+                id: id * 2 - 1,
+                from: Place::JobInput(id),
+                to: None,
+                good: 1,
+                quantity: if id % 4 == 0 { 3 } else { 2 },
+                item: None,
+            }],
+            creations: vec![Creation {
+                id: id * 2,
+                to: Place::JobOutput(id),
+                lot: lot(2, 1, None),
+            }],
+        });
+    }
+    for id in 1..=256u64 {
+        containers.push(container(Place::JobOutput(id), 2, vec![]));
+    }
+    let state = State {
+        tick: 0,
+        revision: 0,
+        containers,
+    };
+    let mut store = Store::compile(state.clone()).unwrap();
+    let reference = game_lot_batches::prepare_unpartitioned_validated(
+        &state,
+        store.instance,
+        7,
+        &actions,
+        false,
+        vec![],
+        &[],
+    )
+    .unwrap()
+    .0;
+    let expected_outcomes: Vec<_> = reference
+        .outcomes
+        .iter()
+        .map(|row| row.to_owned())
+        .collect();
+    let mut expected = state;
+    for (index, container) in reference.changes.into_flat() {
+        expected.containers[index] = container;
+    }
+    expected.revision += 1;
+    let draft = store.prepare_transactions_now(7, &actions).unwrap();
+    let stale = store.prepare_transactions_now(7, &actions).unwrap();
+    assert_eq!(draft.transactions(), reference.transactions);
+    assert_eq!(draft.creations(), reference.creations);
+    let (outcomes, spoiled) = store.commit(draft).unwrap();
+    assert_eq!(outcomes, expected_outcomes);
+    assert!(spoiled.is_empty());
+    assert_eq!(store.export(), expected);
+    let before = store.export();
+    assert!(store.commit(stale).is_err());
+    assert_eq!(store.export(), before);
+}

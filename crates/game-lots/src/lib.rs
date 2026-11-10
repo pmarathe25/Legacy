@@ -582,6 +582,17 @@ impl Store {
         additions: Vec<Container>,
     ) -> Result<Draft, String> {
         let check_items = self.check_creations(transactions)?;
+        if !check_items
+            && !advance
+            && additions.is_empty()
+            && let Some(inner) = game_lot_batches::prepare_disjoint_transformations(
+                &self.state,
+                self.instance,
+                transactions,
+            )?
+        {
+            return self.item_draft(inner, additions, false);
+        }
         if check_items
             && additions.is_empty()
             && let Some(inner) = game_lot_batches::prepare_local_creations(

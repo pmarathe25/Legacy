@@ -211,6 +211,75 @@ fn composed_core_interval_is_chunk_independent_and_resumable() {
 }
 
 #[test]
+fn core_publishes_early_work_without_advancing_periodic_systems() {
+    let run = |workers, chunks: &[u64]| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut core = CoreInterval::begin(fixture(), &[(1, 2)]).unwrap();
+                for &chunk in chunks {
+                    assert_eq!(core.progress_to_deadline(chunk, Some(3)).unwrap(), chunk);
+                }
+                assert_eq!(core.progress_to_deadline(1, Some(3)).unwrap(), 0);
+                let before = core.snapshot();
+                assert_eq!(before.physical.custody.tick, 0);
+                assert_eq!(before.people[0].health, 100);
+                let mut core = CoreInterval::resume(
+                    serde_json::from_str(&serde_json::to_string(&before).unwrap()).unwrap(),
+                )
+                .unwrap();
+                let early = core.publish_early_work().unwrap().unwrap();
+                assert_eq!((early.tick, early.offset_millis), (0, 500));
+                assert_eq!(early.finished, vec![1]);
+                let after = core.snapshot();
+                assert_eq!(after.physical.custody.tick, 0);
+                assert_eq!(after.people[0].health, 100);
+                assert_eq!(
+                    after
+                        .physical
+                        .custody
+                        .containers
+                        .iter()
+                        .find(|row| row.place == Place::JobOutput(1))
+                        .unwrap()
+                        .used,
+                    1
+                );
+                let mut core = CoreInterval::resume(
+                    serde_json::from_str(&serde_json::to_string(&after).unwrap()).unwrap(),
+                )
+                .unwrap();
+                assert!(core.publish_early_work().unwrap().is_none());
+                let next = core.next_deadline(Some(3)).unwrap();
+                assert_eq!(next.after_millis, 500);
+                assert!(next.quantum && next.arrival && next.hunger);
+                assert_eq!(core.progress_to_deadline(1000, Some(3)).unwrap(), 500);
+                let boundary = core.settle().unwrap();
+                let state = core.snapshot();
+                assert_eq!(state.physical.custody.tick, 1);
+                assert_eq!(state.people[0].health, 96);
+                assert_eq!(state.people[1].region, Some(2));
+                assert_eq!(
+                    state
+                        .physical
+                        .custody
+                        .containers
+                        .iter()
+                        .find(|row| row.place == Place::Stock { region: 1, good: 2 })
+                        .unwrap()
+                        .used,
+                    1
+                );
+                assert!(boundary.finished.is_empty());
+                (state, early, boundary)
+            })
+    };
+    assert_eq!(run(1, &[500]), run(4, &[333, 167]));
+}
+
+#[test]
 fn core_deadline_reports_earliest_and_tied_causes_without_publishing() {
     let mut core = CoreInterval::begin(fixture(), &[(1, 2)]).unwrap();
     let opening = core.snapshot();

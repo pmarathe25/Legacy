@@ -1,8 +1,8 @@
 //! Fractional progress for an explicitly limited physical, travel, and needs core.
 //!
 //! This coordinator does not run economic decisions or other world owners.
-//! Its caller supplies already admitted work rates; settlement occurs only at
-//! the existing quantum boundary, even if an individual counter finishes early.
+//! Its caller supplies already admitted work rates. Nonperishable work can be
+//! published early; other periodic effects settle at the existing quantum boundary.
 use game_economy_person::{
     Person, Rules,
     travel::{self, Travel},
@@ -203,8 +203,8 @@ impl CoreInterval {
             .work_interval()
             .map(|interval| interval.elapsed_millis)
     }
-    /// Inspect the earliest work, travel, or optional hunger threshold. This
-    /// reference core still publishes effects only at its quantum boundary.
+    /// Inspect the earliest work, travel, or optional hunger threshold. Early
+    /// publication is currently available only for nonperishable work.
     pub fn next_deadline(&self, hunger_threshold: Option<u32>) -> Result<CoreDeadline, String> {
         let interval = self
             .physical
@@ -268,6 +268,27 @@ impl CoreInterval {
             arrival: arrival == Some(after),
             hunger: hunger == Some(after),
         })
+    }
+    /// Progress no farther than the next observed deadline. A zero result
+    /// means a deadline is already pending and needs explicit handling.
+    pub fn progress_to_deadline(
+        &mut self,
+        requested_millis: u64,
+        hunger_threshold: Option<u32>,
+    ) -> Result<u64, String> {
+        let deadline = self.next_deadline(hunger_threshold)?;
+        self.progress(requested_millis.min(deadline.after_millis))
+    }
+    /// Publish admitted nonperishable work that has reached its deadline.
+    /// No other world decisions or periodic effects run at this offset.
+    /// The caller must exclude work whose outputs require identified items.
+    pub fn publish_early_work(
+        &mut self,
+    ) -> Result<Option<game_lot_runtime::EarlyWorkEvents>, String> {
+        let Some(draft) = self.physical.prepare_early_work(self.seed)? else {
+            return Ok(None);
+        };
+        self.physical.commit_early_work(draft).map(Some)
     }
     /// Progress without repeating decisions, publishing arrivals, or completing work.
     /// Failed validation leaves all owners unchanged.
