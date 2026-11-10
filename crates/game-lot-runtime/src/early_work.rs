@@ -156,7 +156,6 @@ impl Runtime {
             .ok_or("no physical work interval")?;
         if interval.tick != self.tick()
             || interval.custody_revision != self.store.revision()
-            || interval.elapsed_millis == 0
             || interval.elapsed_millis >= self.tick_millis
         {
             return Err("consumption requires a valid partial interval".into());
@@ -360,7 +359,6 @@ impl Runtime {
             .ok_or("no physical work interval")?;
         if interval.tick != self.tick()
             || interval.custody_revision != self.store.revision()
-            || interval.elapsed_millis == 0
             || interval.elapsed_millis >= self.tick_millis
             || requests.par_iter().any(|(_, rate)| *rate == 0)
         {

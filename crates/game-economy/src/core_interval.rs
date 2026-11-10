@@ -412,7 +412,6 @@ impl CoreInterval {
     ) -> Result<Vec<(u64, bool)>, String> {
         if self.physical.tick() != tick
             || self.elapsed_millis() != Some(offset_millis)
-            || offset_millis == 0
             || offset_millis >= self.physical.tick_millis()
         {
             return Err("work start has a stale or invalid interval time".into());
@@ -448,7 +447,6 @@ impl CoreInterval {
     ) -> Result<Vec<(u64, bool)>, String> {
         if self.physical.tick() != tick
             || self.elapsed_millis() != Some(offset_millis)
-            || offset_millis == 0
             || offset_millis >= self.physical.tick_millis()
             || rate == 0
             || owner.next_id == 0
@@ -568,7 +566,6 @@ impl CoreInterval {
         let mut phase = game_diagnostics::span("core.meal.validate");
         if self.physical.tick() != tick
             || self.elapsed_millis() != Some(offset_millis)
-            || offset_millis == 0
             || offset_millis >= self.physical.tick_millis()
         {
             return Err("meal has a stale or invalid interval time".into());

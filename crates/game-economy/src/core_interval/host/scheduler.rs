@@ -12,8 +12,12 @@ pub enum DecisionPhase {
 pub struct CoreSchedule {
     pub period_millis: u64,
     pub work_rate: u64,
-    pub next_decision_millis: Option<u64>,
+    /// Offset from this quantum's opening; it may lie in a later quantum.
+    pub next_decision_millis: Option<u128>,
     pub phase: DecisionPhase,
+    /// Rates retained across boundaries, including temporarily paused work.
+    #[serde(default)]
+    pub carried_rates: Vec<(u64, u64)>,
 }
 impl CoreSchedule {
     pub(super) fn validate(&self, core: &CoreInterval) -> Result<(), String> {
@@ -23,16 +27,24 @@ impl CoreSchedule {
         let quantum = core.physical.tick_millis();
         if self.period_millis == 0
             || self.work_rate == 0
-            || offset == 0
             || offset > quantum
             || self
                 .next_decision_millis
-                .is_some_and(|next| next < offset || next >= quantum)
+                .is_some_and(|next| next < u128::from(offset))
+            || self
+                .carried_rates
+                .par_windows(2)
+                .any(|rows| rows[0].0 >= rows[1].0)
+            || self
+                .carried_rates
+                .par_iter()
+                .any(|&(id, rate)| id == 0 || rate == 0)
         {
             return Err("invalid core decision schedule".into());
         }
         if let DecisionPhase::Work { meal_people } = &self.phase
-            && (self.next_decision_millis != Some(offset)
+            && (self.next_decision_millis != Some(u128::from(offset))
+                || offset == quantum
                 || meal_people.par_windows(2).any(|rows| rows[0] >= rows[1])
                 || meal_people
                     .par_iter()
@@ -50,11 +62,13 @@ pub enum CoreRunEvent {
     Work(game_lot_runtime::EarlyWorkEvents),
     Meals(Vec<(u64, u32)>),
     Starts(Vec<(u64, bool)>),
+    Boundary(Box<Events>),
 }
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct CoreRun {
     pub elapsed_millis: u64,
     pub boundary: bool,
+    pub boundaries: u64,
     pub decisions: u64,
     pub events: Vec<CoreRunEvent>,
     /// Earlier events and elapsed time remain committed when an action fails.
@@ -70,8 +84,15 @@ impl CoreHost {
         let schedule = CoreSchedule {
             period_millis,
             work_rate,
-            next_decision_millis: Some(offset),
+            next_decision_millis: Some(u128::from(offset)),
             phase: DecisionPhase::Meals,
+            carried_rates: self
+                .core
+                .physical
+                .work_interval()
+                .expect("active interval")
+                .rates
+                .clone(),
         };
         schedule.validate(&self.core)?;
         self.schedule = Some(schedule);
@@ -185,7 +206,7 @@ impl CoreHost {
                 continue;
             }
             let schedule = self.schedule.as_ref().expect("active schedule").clone();
-            if schedule.next_decision_millis == Some(offset) {
+            if schedule.next_decision_millis == Some(u128::from(offset)) {
                 match schedule.phase {
                     DecisionPhase::Meals => {
                         let meals = attempt!('run, self.eat_autonomously(blocked));
@@ -211,9 +232,7 @@ impl CoreHost {
                             run.events.push(CoreRunEvent::Starts(starts));
                         }
                         run.decisions += 1;
-                        let next = offset
-                            .checked_add(schedule.period_millis)
-                            .filter(|&time| time < quantum);
+                        let next = Some(u128::from(offset) + u128::from(schedule.period_millis));
                         let schedule = self.schedule.as_mut().expect("active schedule");
                         schedule.next_decision_millis = next;
                         schedule.phase = DecisionPhase::Meals;
@@ -225,9 +244,9 @@ impl CoreHost {
             if spent >= requested_millis {
                 break;
             }
-            let until_decision = schedule
-                .next_decision_millis
-                .map_or(u64::MAX, |next| next - offset);
+            let until_decision = schedule.next_decision_millis.map_or(u64::MAX, |next| {
+                (next - u128::from(offset)).min(u128::from(u64::MAX)) as u64
+            });
             let step = (requested_millis - spent)
                 .min(deadline.after_millis)
                 .min(until_decision);
@@ -239,5 +258,136 @@ impl CoreHost {
         }
         run.elapsed_millis = self.core.elapsed_millis().expect("active interval") - start;
         Ok(run)
+    }
+
+    /// Continue the limited host across boundaries, retaining decision timing
+    /// and work rates. Boundary events are emitted in order. A failure after a
+    /// boundary leaves the settled boundary committed and reports that failure.
+    pub fn advance_continuous(
+        &mut self,
+        requested_millis: u64,
+        blocked: &[u64],
+    ) -> Result<CoreRun, String> {
+        if blocked.par_windows(2).any(|rows| rows[0] >= rows[1]) {
+            return Err("invalid occupied people".into());
+        }
+        self.schedule
+            .as_ref()
+            .ok_or("no core schedule")?
+            .validate(&self.core)?;
+        let mut combined = CoreRun::default();
+        loop {
+            let remaining = requested_millis - combined.elapsed_millis;
+            let mut segment = self.advance_scheduled(remaining, blocked)?;
+            combined.elapsed_millis += segment.elapsed_millis;
+            combined.events.append(&mut segment.events);
+            let Some(decisions) = combined.decisions.checked_add(segment.decisions) else {
+                combined.failure = Some("decision count overflow".into());
+                combined.boundary = segment.boundary;
+                break;
+            };
+            combined.decisions = decisions;
+            if let Some(error) = segment.failure {
+                combined.failure = Some(error);
+                combined.boundary = segment.boundary;
+                break;
+            }
+            if !segment.boundary {
+                break;
+            }
+            let mut schedule = self.schedule.clone().expect("active schedule");
+            let quantum = self.core.physical.tick_millis();
+            let current_rates = self
+                .core
+                .physical
+                .work_interval()
+                .expect("active interval")
+                .rates
+                .clone();
+            let events = match self.settle() {
+                Ok(events) => events,
+                Err(error) => {
+                    combined.failure = Some(error);
+                    combined.boundary = true;
+                    break;
+                }
+            };
+            combined
+                .events
+                .push(CoreRunEvent::Boundary(Box::new(events)));
+            let Some(boundaries) = combined.boundaries.checked_add(1) else {
+                combined.failure = Some("boundary count overflow".into());
+                combined.boundary = true;
+                break;
+            };
+            combined.boundaries = boundaries;
+            schedule.next_decision_millis = schedule
+                .next_decision_millis
+                .map(|next| next - u128::from(quantum));
+            let mut candidates: Vec<_> = schedule
+                .carried_rates
+                .par_iter()
+                .map(|&(id, rate)| (id, 0u8, rate))
+                .collect();
+            candidates.par_extend(current_rates.par_iter().map(|&(id, rate)| (id, 1u8, rate)));
+            candidates.par_sort_unstable_by_key(|row| (row.0, row.1));
+            schedule.carried_rates = candidates
+                .par_chunk_by(|a, b| a.0 == b.0)
+                .filter_map(|group| {
+                    let &(id, _, rate) = group.last().expect("nonempty group");
+                    self.core
+                        .physical
+                        .work()
+                        .binary_search_by_key(&id, |row| row.job.id)
+                        .ok()
+                        .filter(|&index| {
+                            let row = &self.core.physical.work()[index];
+                            row.phase == game_lot_runtime::Phase::Working && row.job.remaining > 0
+                        })
+                        .map(|_| (id, rate))
+                })
+                .collect();
+            let rates: Vec<_> = schedule
+                .carried_rates
+                .par_iter()
+                .copied()
+                .filter(|(id, _)| {
+                    let index = self
+                        .core
+                        .physical
+                        .work()
+                        .binary_search_by_key(id, |row| row.job.id)
+                        .expect("carried job");
+                    let job = &self.core.physical.work()[index].job;
+                    self.core
+                        .people
+                        .binary_search_by_key(&job.worker, |person| person.id)
+                        .ok()
+                        .is_some_and(|person| {
+                            let person = &self.core.people[person];
+                            person.health > 0
+                                && person.hunger <= self.core.rules.max_work_hunger
+                                && person.region == Some(job.region)
+                                && blocked.binary_search(&person.id).is_err()
+                        })
+                })
+                .collect();
+            let next = CoreInterval::begin(self.core.snapshot(), &rates).and_then(|core| {
+                schedule.validate(&core)?;
+                Ok(core)
+            });
+            match next {
+                Ok(core) => {
+                    self.core = core;
+                    self.schedule = Some(schedule);
+                }
+                Err(error) => {
+                    combined.failure = Some(error);
+                    combined.boundary = true;
+                    break;
+                }
+            }
+        }
+        Ok(combined)
     }
 }

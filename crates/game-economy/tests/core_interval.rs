@@ -444,6 +444,8 @@ fn core_host_autonomous_work_benchmark() {
         .and_then(|value| value.parse().ok())
         .unwrap_or(1);
     let scheduled = std::env::var_os("LEGACY_SCHEDULED").is_some();
+    let continuous = std::env::var_os("LEGACY_CONTINUOUS").is_some();
+    assert!(!(scheduled && continuous));
     assert!(count > 1);
     let mut initial = fixture();
     let person = initial.people[0].clone();
@@ -502,11 +504,19 @@ fn core_host_autonomous_work_benchmark() {
             for round in 0..4 {
                 let mut host = CoreHost::begin(snapshot.clone(), &[(1, 1)]).unwrap();
                 host.progress(400).unwrap();
-                if scheduled {
+                if scheduled || continuous {
                     host.enable_schedule(200, 1).unwrap();
                 }
                 let start = std::time::Instant::now();
-                let outcomes = if scheduled {
+                let outcomes = if continuous {
+                    let run = host.advance_continuous(1500, &[]).unwrap();
+                    assert_eq!(run.failure, None);
+                    assert_eq!((run.elapsed_millis, run.decisions, run.boundaries), (1500, 8, 1));
+                    run.events.into_iter().find_map(|event| match event {
+                        game_economy::core_interval::CoreRunEvent::Starts(rows) => Some(rows),
+                        _ => None,
+                    }).unwrap()
+                } else if scheduled {
                     let run = host.advance_scheduled(500, &[]).unwrap();
                     assert_eq!(run.failure, None);
                     assert_eq!((run.elapsed_millis, run.decisions), (500, 3));
@@ -538,7 +548,7 @@ fn core_host_autonomous_work_benchmark() {
             }
             samples.sort_by(f64::total_cmp);
             println!(
-                "workers={workers} host_autonomous_starts={} scheduled={scheduled} elapsed={:.6}",
+                "workers={workers} host_autonomous_starts={} scheduled={scheduled} continuous={continuous} elapsed={:.6}",
                 count - 1,
                 samples[1]
             );
@@ -1201,6 +1211,51 @@ fn autonomous_interval_work_respects_personal_choices_and_real_stock() {
 }
 
 #[test]
+fn opening_offset_actions_do_not_receive_prior_progress() {
+    let mut initial = fixture();
+    initial.people[1].region = Some(1);
+    initial.travel = None;
+    initial.nutrition = None;
+    initial.pending_food.clear();
+    let stock = initial
+        .physical
+        .custody
+        .containers
+        .iter_mut()
+        .find(|row| row.place == Place::Stock { region: 1, good: 1 })
+        .unwrap();
+    *stock = Container::new(
+        stock.place,
+        10,
+        vec![Lot {
+            item: None,
+            good: 1,
+            quantity: 2,
+            expires_at: None,
+        }],
+    )
+    .unwrap();
+    let mut core = CoreInterval::begin(initial, &[(1, 1)]).unwrap();
+    let start = Start {
+        id: 2,
+        worker: 2,
+        region: 1,
+        recipe: 1,
+        units: 1,
+    };
+    assert_eq!(
+        core.start_work(0, 0, &[(start, 2)]).unwrap(),
+        vec![(2, true)]
+    );
+    let snapshot = core.snapshot();
+    assert_eq!(snapshot.physical.work[1].job.remaining, 1);
+    assert_eq!(snapshot.physical.work[1].progress_remainder, 0);
+    core.progress(250).unwrap();
+    assert_eq!(core.snapshot().physical.work[1].job.remaining, 1);
+    assert_eq!(core.snapshot().physical.work[1].progress_remainder, 500);
+}
+
+#[test]
 fn saved_core_host_coordinates_personal_work_meals_and_tool_ownership() {
     let run = |workers| {
         rayon::ThreadPoolBuilder::new()
@@ -1633,6 +1688,221 @@ fn scheduled_runner_defers_perishable_work_and_publishes_other_completion() {
         matches!(&result.events[1], game_economy::core_interval::CoreRunEvent::Work(events) if events.finished == vec![1])
     );
     assert_eq!(host.settle().unwrap().finished, vec![2]);
+}
+
+#[test]
+fn continuous_core_host_crosses_boundaries_without_partition_or_reload_drift() {
+    let run = |workers, chunks: &[u64], reload| {
+        rayon::ThreadPoolBuilder::new().num_threads(workers).build().unwrap().install(|| {
+        let mut initial = fixture();
+        initial.people[0].willing_to_work = true;
+        initial.people[1].region = Some(1);
+        initial.people[1].willing_to_work = true;
+        initial.travel = None;
+        initial.nutrition = None;
+        initial.pending_food.clear();
+        let stock = initial.physical.custody.containers.iter_mut().find(|row| row.place == Place::Stock { region: 1, good: 1 }).unwrap();
+        *stock = Container::new(stock.place, 10, vec![Lot { item: None, good: 1, quantity: 2, expires_at: None }]).unwrap();
+        let tool_wear = game_economy_work::tool_wear::ToolWear { next_item: 10,
+            rules: vec![game_economy_work::tool_wear::Rule { good: 2, durability: 10, wear: 1, repair_good: 1, repair_quantity: 1 }],
+            conditions: vec![], repairs: vec![], events: vec![] };
+        let snapshot = CoreHostSnapshot { core: initial, tool_wear: Some(tool_wear), schedule: None,
+            autowork: Some(game_autowork::Autowork { next_id: 2, policies: vec![game_autowork::Policy { person: 2, recipe: 1, enabled: true, disregard_claims: false }], requests: None }) };
+        let mut host = CoreHost::begin(snapshot, &[(1, 1)]).unwrap();
+        host.enable_schedule(500, 1).unwrap();
+        let mut events = Vec::new();
+        let mut boundaries = 0;
+        let mut decisions = 0;
+        for &chunk in chunks {
+            let result = host.advance_continuous(chunk, &[]).unwrap();
+            assert_eq!(result.failure, None);
+            assert_eq!(result.elapsed_millis, chunk);
+            boundaries += result.boundaries;
+            decisions += result.decisions;
+            events.extend(result.events);
+            if reload {
+                let saved = serde_json::to_string(&host.snapshot()).unwrap();
+                host = CoreHost::resume(serde_json::from_str(&saved).unwrap()).unwrap();
+            }
+        }
+        assert_eq!(boundaries, 2);
+        assert_eq!(decisions, 5);
+        let snapshot = host.snapshot();
+        assert_eq!(snapshot.core.physical.custody.tick, 2);
+        assert_eq!(snapshot.core.physical.work_interval.as_ref().unwrap().elapsed_millis, 400);
+        let physical = Runtime::compile(snapshot.core.physical.clone()).unwrap();
+        assert_eq!(physical.item_place(10), Some(Place::Stock { region: 1, good: 2 }));
+        assert_eq!(physical.item_place(11), Some(Place::Stock { region: 1, good: 2 }));
+        snapshot.tool_wear.as_ref().unwrap().validate(&physical, &[1,2].into_iter().collect(), &[1,2].into_iter().collect(), 2).unwrap();
+        assert!(matches!(&events[0], game_economy::core_interval::CoreRunEvent::Starts(rows) if rows == &vec![(2, true)]));
+        (snapshot, events)
+    })
+    };
+    assert_eq!(
+        run(1, &[2400], false),
+        run(6, &[400, 600, 0, 300, 700, 400], true)
+    );
+}
+
+#[test]
+fn long_decision_period_survives_save_and_crosses_a_boundary() {
+    let snapshot = CoreHostSnapshot {
+        core: fixture(),
+        autowork: None,
+        tool_wear: None,
+        schedule: None,
+    };
+    let mut host = CoreHost::begin(snapshot, &[(1, 1)]).unwrap();
+    host.progress(100).unwrap();
+    host.enable_schedule(u64::MAX, 1).unwrap();
+    assert_eq!(host.advance_continuous(0, &[]).unwrap().decisions, 1);
+    let before = host.snapshot();
+    assert!(
+        before
+            .schedule
+            .as_ref()
+            .unwrap()
+            .next_decision_millis
+            .unwrap()
+            > u128::from(u64::MAX)
+    );
+    let saved = serde_json::to_string(&before).unwrap();
+    let mut host = CoreHost::resume(serde_json::from_str(&saved).unwrap()).unwrap();
+    assert_eq!(host.snapshot(), before);
+    let result = host.advance_continuous(1000, &[]).unwrap();
+    assert_eq!(result.failure, None);
+    assert_eq!(result.boundaries, 1);
+    assert_eq!(result.decisions, 0);
+}
+
+#[test]
+fn continuous_host_carries_long_work_rate_and_fractional_progress() {
+    let run = |chunks: &[u64], reload| {
+        let mut initial = fixture();
+        initial.physical.recipes[0].ticks = 3;
+        initial.physical.work[0].job.remaining = 3;
+        let mut host = CoreHost::begin(
+            CoreHostSnapshot {
+                core: initial,
+                autowork: None,
+                tool_wear: None,
+                schedule: None,
+            },
+            &[(1, 1)],
+        )
+        .unwrap();
+        host.enable_schedule(10_000, 1).unwrap();
+        let mut events = Vec::new();
+        for &chunk in chunks {
+            let run = host.advance_continuous(chunk, &[]).unwrap();
+            assert_eq!(run.failure, None);
+            events.extend(run.events);
+            if reload {
+                let saved = serde_json::to_string(&host.snapshot()).unwrap();
+                host = CoreHost::resume(serde_json::from_str(&saved).unwrap()).unwrap();
+            }
+        }
+        let snapshot = host.snapshot();
+        assert_eq!(snapshot.core.physical.custody.tick, 3);
+        assert_eq!(
+            snapshot
+                .core
+                .physical
+                .work_interval
+                .as_ref()
+                .unwrap()
+                .elapsed_millis,
+            0
+        );
+        assert!(events.iter().any(|event| matches!(event, game_economy::core_interval::CoreRunEvent::Boundary(events) if events.finished == vec![1])));
+        (snapshot, events)
+    };
+    assert_eq!(run(&[3000], false), run(&[333, 667, 1300, 700], true));
+}
+
+#[test]
+fn continuous_host_retains_rate_for_work_paused_at_a_boundary() {
+    let mut initial = fixture();
+    initial.physical.recipes[0].ticks = 3;
+    initial.physical.work[0].job.remaining = 3;
+    let mut host = CoreHost::begin(
+        CoreHostSnapshot {
+            core: initial,
+            autowork: None,
+            tool_wear: None,
+            schedule: None,
+        },
+        &[(1, 1)],
+    )
+    .unwrap();
+    host.enable_schedule(10_000, 1).unwrap();
+    assert_eq!(host.advance_continuous(1000, &[1]).unwrap().failure, None);
+    let paused = host.snapshot();
+    assert_eq!(paused.core.physical.work[0].job.remaining, 2);
+    assert!(
+        paused
+            .core
+            .physical
+            .work_interval
+            .as_ref()
+            .unwrap()
+            .rates
+            .is_empty()
+    );
+    assert_eq!(
+        paused.schedule.as_ref().unwrap().carried_rates,
+        vec![(1, 1)]
+    );
+    assert_eq!(host.advance_continuous(1000, &[]).unwrap().failure, None);
+    let resumed = host.snapshot();
+    assert_eq!(resumed.core.physical.work[0].job.remaining, 2);
+    assert_eq!(
+        resumed.core.physical.work_interval.as_ref().unwrap().rates,
+        vec![(1, 1)]
+    );
+    assert_eq!(host.advance_continuous(1000, &[]).unwrap().failure, None);
+    assert_eq!(host.snapshot().core.physical.work[0].job.remaining, 1);
+}
+
+#[test]
+fn continuous_host_keeps_completed_interval_after_boundary_failure() {
+    let mut initial = fixture();
+    initial.physical.custody.tick = u64::MAX;
+    initial.people[1].region = Some(1);
+    initial.travel = None;
+    initial.nutrition = None;
+    initial.pending_food.clear();
+    let mut host = CoreHost::begin(
+        CoreHostSnapshot {
+            core: initial,
+            autowork: None,
+            tool_wear: None,
+            schedule: None,
+        },
+        &[(1, 1)],
+    )
+    .unwrap();
+    host.enable_schedule(10_000, 1).unwrap();
+    let run = host.advance_continuous(1000, &[]).unwrap();
+    assert_eq!(run.elapsed_millis, 1000);
+    assert!(run.boundary);
+    assert!(run.failure.is_some());
+    assert_eq!(run.boundaries, 0);
+    let before = host.snapshot();
+    assert_eq!(
+        before
+            .core
+            .physical
+            .work_interval
+            .as_ref()
+            .unwrap()
+            .elapsed_millis,
+        1000
+    );
+    let saved = serde_json::to_string(&before).unwrap();
+    let mut host = CoreHost::resume(serde_json::from_str(&saved).unwrap()).unwrap();
+    assert!(host.advance_continuous(0, &[]).unwrap().failure.is_some());
+    assert_eq!(host.snapshot(), before);
 }
 
 #[test]
