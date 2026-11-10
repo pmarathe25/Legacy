@@ -493,6 +493,7 @@ fn core_host_autonomous_work_benchmark() {
         agreements: None,
         sites: None,
         tool_requirements: vec![],
+        tool_paused_rates: vec![],
         schedule: None,
         autowork: Some(game_autowork::Autowork {
             next_id: 2,
@@ -712,6 +713,7 @@ fn core_host_work_requests_benchmark() {
         }),
         sites: None,
         tool_requirements: vec![],
+        tool_paused_rates: vec![],
         schedule: None,
     };
     rayon::ThreadPoolBuilder::new()
@@ -1530,6 +1532,7 @@ fn saved_core_host_coordinates_personal_work_meals_and_tool_ownership() {
                     agreements: None,
                     sites: None,
                     tool_requirements: vec![],
+                    tool_paused_rates: vec![],
                     schedule: None,
                     autowork: Some(game_autowork::Autowork {
                         next_id: 2,
@@ -1654,6 +1657,7 @@ fn externally_chosen_work_does_not_require_willingness_and_can_be_abandoned() {
             agreements: None,
             sites: None,
             tool_requirements: vec![],
+            tool_paused_rates: vec![],
             schedule: None,
         },
         &[(1, 1)],
@@ -1791,6 +1795,7 @@ fn scheduled_requests_use_directed_fear_and_obligation_without_binding_work() {
                     agreements: None,
                     sites: None,
                     tool_requirements: vec![],
+                    tool_paused_rates: vec![],
                     schedule: None,
                 };
                 let mut host = CoreHost::begin(snapshot, &[(1, 1)]).unwrap();
@@ -1920,6 +1925,7 @@ fn willing_request_response_with_missing_stock_remains_pending() {
             agreements: None,
             sites: None,
             tool_requirements: vec![],
+            tool_paused_rates: vec![],
             schedule: None,
         },
         &[(1, 1)],
@@ -2019,6 +2025,7 @@ fn contested_request_reservations_do_not_turn_shortage_into_refusal() {
                         agreements: None,
                         sites: None,
                         tool_requirements: vec![],
+                        tool_paused_rates: vec![],
                         schedule: None,
                     },
                     &[(1, 1)],
@@ -2109,6 +2116,7 @@ fn future_request_does_not_hide_an_existing_local_request() {
             agreements: None,
             sites: None,
             tool_requirements: vec![],
+            tool_paused_rates: vec![],
             schedule: None,
         },
         &[(1, 1)],
@@ -2176,6 +2184,7 @@ fn core_host_clears_old_request_events_at_the_boundary() {
             agreements: None,
             sites: None,
             tool_requirements: vec![],
+            tool_paused_rates: vec![],
             schedule: None,
         },
         &[(1, 1)],
@@ -2226,7 +2235,7 @@ fn scheduled_personal_goals_create_requests_and_count_only_witnessed_help() {
                 pending: vec![], events: vec![],
             };
             let goals = game_goals::Goals { retry_interval: 3, plan_inputs: false, people: vec![game_goals::Goal { person: 2, recipe: 1, priority: 1, target: 1, progress: 0, next_review: 0, enabled: true, recognize_help: true }], events: vec![] };
-            let snapshot = CoreHostSnapshot { core: initial, autowork: Some(game_autowork::Autowork { next_id: 2, policies: vec![], requests: Some(requests) }), tool_wear: None, opinions: None, goals: Some(goals), agreements: None, sites: None, tool_requirements: vec![], schedule: None };
+            let snapshot = CoreHostSnapshot { core: initial, autowork: Some(game_autowork::Autowork { next_id: 2, policies: vec![], requests: Some(requests) }), tool_wear: None, opinions: None, goals: Some(goals), agreements: None, sites: None, tool_requirements: vec![], tool_paused_rates: vec![], schedule: None };
             let mut host = CoreHost::begin(snapshot, &[(1, 1)]).unwrap();
             host.enable_schedule(1000, 1).unwrap();
             let run = host.advance_continuous(1000, &[]).unwrap();
@@ -2328,6 +2337,7 @@ fn core_host_goal_asking_benchmark() {
         agreements: None,
         sites: None,
         tool_requirements: vec![],
+        tool_paused_rates: vec![],
         schedule: None,
     };
     let pool = rayon::ThreadPoolBuilder::new()
@@ -2406,6 +2416,7 @@ fn personal_goal_selects_work_and_advances_only_after_completion() {
         agreements: None,
         sites: None,
         tool_requirements: vec![],
+        tool_paused_rates: vec![],
         schedule: None,
     };
     let mut host = CoreHost::begin(snapshot, &[(1, 1)]).unwrap();
@@ -2498,6 +2509,7 @@ fn an_unfunded_offer_can_motivate_work_without_forcing_delivery() {
         agreements: Some(agreements),
         sites: None,
         tool_requirements: vec![],
+        tool_paused_rates: vec![],
         schedule: None,
     };
     let mut without_offer = CoreHost::begin(snapshot.clone(), &[(1, 1)]).unwrap();
@@ -2597,6 +2609,7 @@ fn voluntary_deliveries_record_only_successful_physical_transfers() {
                         agreements: Some(agreements),
                         sites: None,
                         tool_requirements: vec![],
+                        tool_paused_rates: vec![],
                         schedule: None,
                     },
                     &[(1, 1)],
@@ -2712,7 +2725,7 @@ fn scheduled_delivery_is_a_personal_choice_that_fear_can_motivate() {
         let policy: game_agreements::Policy = serde_json::from_value(serde_json::json!({"person":2,"honor":false,"fear_honor_threshold":5})).unwrap();
         let agreements = game_agreements::Agreements { next_id: 2, policies: vec![policy], offering: vec![], work_offering: vec![], bulk_debtors: vec![], contracts: vec![game_agreements::Contract { id: 1, debtor: 2, creditor: 1, good: 1, quantity: 1, delivered: 0, due: 5, status: game_agreements::Status::Active }], events: vec![] };
         let opinions: game_opinions::Opinions = serde_json::from_value(serde_json::json!({"rules":{"minimum":-10,"maximum":10,"initial":0,"fulfilled_gain":1,"default_loss":1},"records":[{"observer":2,"target":1,"trust":0,"fear":fear}]})).unwrap();
-        let snapshot = CoreHostSnapshot { core: initial, autowork: None, tool_wear: None, opinions: Some(opinions), goals: None, agreements: Some(agreements), sites: None, tool_requirements: vec![], schedule: None };
+        let snapshot = CoreHostSnapshot { core: initial, autowork: None, tool_wear: None, opinions: Some(opinions), goals: None, agreements: Some(agreements), sites: None, tool_requirements: vec![], tool_paused_rates: vec![], schedule: None };
         let mut host = CoreHost::begin(snapshot, &[(1, 1)]).unwrap();
         host.enable_schedule(1000, 1).unwrap();
         let saved = serde_json::to_string(&host.snapshot()).unwrap();
@@ -2747,7 +2760,7 @@ fn people_can_propose_and_accept_unfunded_promises_without_enforcement() {
         let accept: game_agreements::Policy = serde_json::from_value(serde_json::json!({"person":3,"accept":true})).unwrap();
         let agreements = game_agreements::Agreements { next_id: 1, policies: vec![accept], offering: vec![offer], work_offering: vec![], bulk_debtors: vec![], contracts: vec![], events: vec![] };
         let opinions: game_opinions::Opinions = serde_json::from_value(serde_json::json!({"rules":{"minimum":-10,"maximum":10,"initial":0,"fulfilled_gain":1,"default_loss":1},"records":[{"observer":2,"target":3,"trust":0,"obligation":0}]})).unwrap();
-        let snapshot = CoreHostSnapshot { core: initial, autowork: None, tool_wear: None, opinions: Some(opinions.clone()), goals: None, agreements: Some(agreements), sites: None, tool_requirements: vec![], schedule: None };
+        let snapshot = CoreHostSnapshot { core: initial, autowork: None, tool_wear: None, opinions: Some(opinions.clone()), goals: None, agreements: Some(agreements), sites: None, tool_requirements: vec![], tool_paused_rates: vec![], schedule: None };
         let mut host = CoreHost::begin(snapshot, &[(1, 1)]).unwrap();
         host.enable_schedule(1000, 1).unwrap();
         let run = host.advance_scheduled(0, &[]).unwrap();
@@ -2800,6 +2813,7 @@ fn manually_making_a_promise_uses_the_makers_own_obligation_disposition() {
         agreements: Some(agreements),
         sites: None,
         tool_requirements: vec![],
+        tool_paused_rates: vec![],
         schedule: None,
     };
     let mut host = CoreHost::begin(snapshot, &[(1, 1)]).unwrap();
@@ -2920,7 +2934,7 @@ fn completed_work_wears_a_site_and_real_repairs_reopen_it() {
                         facilities,
                         maintenance: Some(maintenance),
                     }),
-                    tool_requirements: vec![], schedule: None,
+                    tool_requirements: vec![], tool_paused_rates: vec![], schedule: None,
                 };
                 let mut host = CoreHost::begin(snapshot, &[(1, 2)]).unwrap();
                 host.progress(500).unwrap();
@@ -3014,7 +3028,7 @@ fn scheduled_tool_repair_consumes_material_and_preserves_identity() {
         initial.physical.custody.containers.push(Container::new(Place::Person(2), 10, vec![Lot { item: Some(10), good: 1, quantity: 1, expires_at: None }, Lot { item: None, good: 2, quantity: 1, expires_at: None }]).unwrap());
         initial.physical.custody.containers.sort_by_key(|row| row.place);
         let tool_wear = game_economy_work::tool_wear::ToolWear { next_item: 11, rules: vec![game_economy_work::tool_wear::Rule { good: 1, durability: 10, wear: 1, repair_good: 2, repair_quantity: 1 }], conditions: vec![game_economy_work::tool_wear::Condition { item: 10, good: 1, damage: 4 }], repairs: vec![game_economy_work::tool_wear::RepairChoice { person: 2, item: 10, willing: true }], events: vec![] };
-        let snapshot = CoreHostSnapshot { core: initial, autowork: None, tool_wear: Some(tool_wear), opinions: None, goals: None, agreements: None, sites: None, tool_requirements: vec![], schedule: None };
+        let snapshot = CoreHostSnapshot { core: initial, autowork: None, tool_wear: Some(tool_wear), opinions: None, goals: None, agreements: None, sites: None, tool_requirements: vec![], tool_paused_rates: vec![], schedule: None };
         let mut no_material = snapshot.clone();
         let bag = no_material.core.physical.custody.containers.iter_mut().find(|row| row.place == Place::Person(2)).unwrap();
         *bag = Container::new(bag.place, 10, vec![Lot { item: Some(10), good: 1, quantity: 1, expires_at: None }]).unwrap();
@@ -3116,6 +3130,7 @@ fn work_requires_carried_tools_and_wears_only_physically_started_jobs() {
                     goals: None,
                     agreements: None,
                     sites: None,
+                    tool_paused_rates: vec![],
                     schedule: None,
                 };
                 let start = (
@@ -3215,7 +3230,7 @@ fn work_requires_carried_tools_and_wears_only_physically_started_jobs() {
                 host.progress(500).unwrap();
                 assert_eq!(
                     host.publish_early_work().unwrap().unwrap().finished,
-                    vec![1, 2]
+                    vec![2]
                 );
                 let next = (Start { id: 3, ..start.0 }, 1);
                 assert_eq!(host.start_chosen_work(&[next]).unwrap(), vec![(3, false)]);
@@ -3228,6 +3243,196 @@ fn work_requires_carried_tools_and_wears_only_physically_started_jobs() {
                 let state = host.snapshot();
                 assert_eq!(state.tool_wear.as_ref().unwrap().conditions[0].damage, 3);
                 state
+            })
+    };
+    assert_eq!(run(1), run(6));
+}
+
+#[test]
+fn work_pauses_when_a_required_tool_moves_and_resumes_after_its_return() {
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut initial = fixture();
+                initial.people[1].region = Some(1);
+                initial.travel = None;
+                initial.nutrition = None;
+                initial.pending_food.clear();
+                let mut recipe = initial.physical.recipes[0].clone();
+                recipe.id = 2;
+                initial.physical.recipes.push(recipe);
+                let stock = initial
+                    .physical
+                    .custody
+                    .containers
+                    .iter_mut()
+                    .find(|row| row.place == Place::Stock { region: 1, good: 1 })
+                    .unwrap();
+                *stock = Container::new(
+                    stock.place,
+                    10,
+                    vec![Lot {
+                        item: None,
+                        good: 1,
+                        quantity: 2,
+                        expires_at: None,
+                    }],
+                )
+                .unwrap();
+                initial.physical.custody.containers.extend([
+                    Container::new(Place::Person(1), 10, vec![]).unwrap(),
+                    Container::new(
+                        Place::Person(2),
+                        10,
+                        vec![Lot {
+                            item: Some(10),
+                            good: 2,
+                            quantity: 1,
+                            expires_at: None,
+                        }],
+                    )
+                    .unwrap(),
+                ]);
+                initial
+                    .physical
+                    .custody
+                    .containers
+                    .sort_by_key(|row| row.place);
+                let tool_wear = game_economy_work::tool_wear::ToolWear {
+                    next_item: 11,
+                    rules: vec![game_economy_work::tool_wear::Rule {
+                        good: 2,
+                        durability: 1,
+                        wear: 1,
+                        repair_good: 1,
+                        repair_quantity: 1,
+                    }],
+                    conditions: vec![game_economy_work::tool_wear::Condition {
+                        item: 10,
+                        good: 2,
+                        damage: 0,
+                    }],
+                    repairs: vec![],
+                    events: vec![],
+                };
+                let snapshot = CoreHostSnapshot {
+                    core: initial,
+                    autowork: None,
+                    tool_wear: Some(tool_wear),
+                    tool_requirements: vec![game_economy_work::tools::Requirement {
+                        recipe: 2,
+                        good: 2,
+                        quantity: 1,
+                    }],
+                    tool_paused_rates: vec![],
+                    opinions: None,
+                    goals: None,
+                    agreements: None,
+                    sites: None,
+                    schedule: None,
+                };
+                let scheduled_snapshot = snapshot.clone();
+                let mut host = CoreHost::begin(snapshot, &[(1, 1)]).unwrap();
+                assert_eq!(
+                    host.start_chosen_work(&[(
+                        Start {
+                            id: 2,
+                            worker: 2,
+                            region: 1,
+                            recipe: 2,
+                            units: 1
+                        },
+                        1
+                    )])
+                    .unwrap(),
+                    vec![(2, true)]
+                );
+                host.progress(200).unwrap();
+                let transfer = |from, to| game_lots::Transaction {
+                    id: 1,
+                    movements: vec![game_lots::Movement {
+                        id: 1,
+                        from: Place::Person(from),
+                        to: Some(Place::Person(to)),
+                        good: 2,
+                        quantity: 1,
+                        item: Some(10),
+                    }],
+                    creations: vec![],
+                };
+                assert!(host.transfer_goods(&[transfer(2, 1)]).unwrap().transactions[0].accepted);
+                host.progress(300).unwrap();
+                let paused = host.snapshot();
+                assert_eq!(paused.tool_paused_rates, vec![(2, 1)]);
+                assert_eq!(paused.core.physical.work[1].progress_remainder, 200);
+                let saved = serde_json::to_string(&paused).unwrap();
+                let mut host = CoreHost::resume(serde_json::from_str(&saved).unwrap()).unwrap();
+                assert!(host.transfer_goods(&[transfer(1, 2)]).unwrap().transactions[0].accepted);
+                host.progress(300).unwrap();
+                let state = host.snapshot();
+                assert!(state.tool_paused_rates.is_empty());
+                assert_eq!(state.core.physical.work[1].progress_remainder, 500);
+                assert_eq!(state.tool_wear.as_ref().unwrap().conditions[0].damage, 1);
+                let mut scheduled = CoreHost::begin(scheduled_snapshot, &[(1, 1)]).unwrap();
+                scheduled
+                    .start_chosen_work(&[(
+                        Start {
+                            id: 2,
+                            worker: 2,
+                            region: 1,
+                            recipe: 2,
+                            units: 1,
+                        },
+                        1,
+                    )])
+                    .unwrap();
+                scheduled.enable_schedule(1000, 1).unwrap();
+                assert_eq!(
+                    scheduled.advance_continuous(200, &[]).unwrap().failure,
+                    None
+                );
+                assert!(
+                    scheduled
+                        .transfer_goods(&[transfer(2, 1)])
+                        .unwrap()
+                        .transactions[0]
+                        .accepted
+                );
+                assert_eq!(
+                    scheduled.advance_continuous(800, &[]).unwrap().failure,
+                    None
+                );
+                let at_boundary = scheduled.snapshot();
+                assert_eq!(at_boundary.tool_paused_rates, vec![(2, 1)]);
+                let saved = serde_json::to_string(&at_boundary).unwrap();
+                let mut scheduled =
+                    CoreHost::resume(serde_json::from_str(&saved).unwrap()).unwrap();
+                assert_eq!(scheduled.advance_continuous(1, &[]).unwrap().failure, None);
+                assert!(
+                    scheduled
+                        .transfer_goods(&[transfer(1, 2)])
+                        .unwrap()
+                        .transactions[0]
+                        .accepted
+                );
+                assert_eq!(
+                    scheduled.advance_continuous(300, &[]).unwrap().failure,
+                    None
+                );
+                let resumed = scheduled.snapshot();
+                assert!(resumed.tool_paused_rates.is_empty());
+                let work = resumed
+                    .core
+                    .physical
+                    .work
+                    .iter()
+                    .find(|row| row.job.id == 2)
+                    .unwrap();
+                assert_eq!(work.progress_remainder, 500);
+                (state, resumed)
             })
     };
     assert_eq!(run(1), run(6));
@@ -3322,6 +3527,7 @@ fn core_host_tool_repair_benchmark() {
         agreements: None,
         sites: None,
         tool_requirements: vec![],
+        tool_paused_rates: vec![],
         schedule: None,
     };
     rayon::ThreadPoolBuilder::new()
@@ -3363,7 +3569,9 @@ fn core_host_site_admission_benchmark() {
     let scarce = std::env::var_os("LEGACY_SITE_SCARCE").is_some();
     let settle = std::env::var_os("LEGACY_SITE_SETTLE").is_some();
     let tools = std::env::var_os("LEGACY_TOOLS").is_some();
+    let pause_tools = std::env::var_os("LEGACY_TOOL_PAUSE").is_some();
     assert!(!scarce || !settle);
+    assert!(!pause_tools || (tools && !settle && !scarce));
     assert!(count > 1);
     let mut initial = fixture();
     let template = initial.people[0].clone();
@@ -3396,6 +3604,18 @@ fn core_host_site_admission_benchmark() {
                 )
                 .unwrap()
             }));
+        initial
+            .physical
+            .custody
+            .containers
+            .sort_by_key(|row| row.place);
+    }
+    if pause_tools {
+        initial
+            .physical
+            .custody
+            .containers
+            .push(Container::new(Place::Person(1), count, vec![]).unwrap());
         initial
             .physical
             .custody
@@ -3503,6 +3723,7 @@ fn core_host_site_admission_benchmark() {
         } else {
             vec![]
         },
+        tool_paused_rates: vec![],
         schedule: None,
     };
     rayon::ThreadPoolBuilder::new()
@@ -3552,6 +3773,32 @@ fn core_host_site_admission_benchmark() {
                         .conditions
                         .iter()
                         .all(|condition| condition.wear == 1)
+                );
+            }
+            if pause_tools {
+                host.progress(1).unwrap();
+                let actions: Vec<_> = (2..=count)
+                    .map(|person| game_lots::Transaction {
+                        id: person - 1,
+                        movements: vec![game_lots::Movement {
+                            id: person - 1,
+                            from: Place::Person(person),
+                            to: Some(Place::Person(1)),
+                            good: 2,
+                            quantity: 1,
+                            item: Some(person),
+                        }],
+                        creations: vec![],
+                    })
+                    .collect();
+                let start = std::time::Instant::now();
+                let transfers = host.transfer_goods(&actions).unwrap();
+                assert!(transfers.transactions.iter().all(|row| row.accepted));
+                host.progress(1).unwrap();
+                elapsed = start.elapsed();
+                assert_eq!(
+                    host.snapshot().tool_paused_rates.len(),
+                    (count - 1) as usize
                 );
             }
             let mut hash = std::collections::hash_map::DefaultHasher::new();
@@ -3671,6 +3918,7 @@ fn core_host_site_repair_benchmark() {
             maintenance: Some(maintenance),
         }),
         tool_requirements: vec![],
+        tool_paused_rates: vec![],
         schedule: None,
     };
     rayon::ThreadPoolBuilder::new()
@@ -3771,6 +4019,7 @@ fn core_host_offer_choices_benchmark() {
         agreements: Some(agreements),
         sites: None,
         tool_requirements: vec![],
+        tool_paused_rates: vec![],
         schedule: None,
     };
     rayon::ThreadPoolBuilder::new()
@@ -3901,6 +4150,7 @@ fn core_host_agreement_delivery_benchmark() {
         agreements: Some(agreements),
         sites: None,
         tool_requirements: vec![],
+        tool_paused_rates: vec![],
         schedule: None,
     };
     rayon::ThreadPoolBuilder::new()
@@ -3986,6 +4236,7 @@ fn core_host_physical_taking_preserves_item_identity_without_implied_permission(
             agreements: None,
             sites: None,
             tool_requirements: vec![],
+            tool_paused_rates: vec![],
             schedule: None,
         },
         &[(1, 1)],
@@ -4059,6 +4310,7 @@ fn core_host_rejects_unowned_identified_consumption_without_mutation() {
             agreements: None,
             sites: None,
             tool_requirements: vec![],
+            tool_paused_rates: vec![],
             schedule: None,
         },
         &[(1, 2)],
@@ -4083,7 +4335,7 @@ fn scheduled_core_host_is_partition_independent_at_tied_deadlines() {
         let snapshot = CoreHostSnapshot {
             core: initial,
             autowork: Some(game_autowork::Autowork { next_id: 2, policies: vec![game_autowork::Policy { person: 2, recipe: 1, enabled: true, disregard_claims: false }], requests: None }),
-            tool_wear: None, opinions: None, goals: None, agreements: None, sites: None, tool_requirements: vec![], schedule: None,
+            tool_wear: None, opinions: None, goals: None, agreements: None, sites: None, tool_requirements: vec![], tool_paused_rates: vec![], schedule: None,
         };
         let mut host = CoreHost::begin(snapshot, &[(1, 2)]).unwrap();
         host.progress(100).unwrap();
@@ -4180,6 +4432,7 @@ fn scheduled_decision_resumes_after_work_failure_without_repeating_meal() {
         agreements: None,
         sites: None,
         tool_requirements: vec![],
+        tool_paused_rates: vec![],
         schedule: None,
         autowork: Some(game_autowork::Autowork {
             next_id: u64::MAX,
@@ -4306,6 +4559,7 @@ fn scheduled_runner_defers_perishable_work_and_publishes_other_completion() {
             agreements: None,
             sites: None,
             tool_requirements: vec![],
+            tool_paused_rates: vec![],
             schedule: None,
         },
         &[(1, 2), (2, 2)],
@@ -4341,7 +4595,7 @@ fn continuous_core_host_crosses_boundaries_without_partition_or_reload_drift() {
         let tool_wear = game_economy_work::tool_wear::ToolWear { next_item: 10,
             rules: vec![game_economy_work::tool_wear::Rule { good: 2, durability: 10, wear: 1, repair_good: 1, repair_quantity: 1 }],
             conditions: vec![], repairs: vec![], events: vec![] };
-        let snapshot = CoreHostSnapshot { core: initial, tool_wear: Some(tool_wear), opinions: None, goals: None, agreements: None, sites: None, tool_requirements: vec![], schedule: None,
+        let snapshot = CoreHostSnapshot { core: initial, tool_wear: Some(tool_wear), opinions: None, goals: None, agreements: None, sites: None, tool_requirements: vec![], tool_paused_rates: vec![], schedule: None,
             autowork: Some(game_autowork::Autowork { next_id: 2, policies: vec![game_autowork::Policy { person: 2, recipe: 1, enabled: true, disregard_claims: false }], requests: None }) };
         let mut host = CoreHost::begin(snapshot, &[(1, 1)]).unwrap();
         host.enable_schedule(500, 1).unwrap();
@@ -4390,6 +4644,7 @@ fn long_decision_period_survives_save_and_crosses_a_boundary() {
         agreements: None,
         sites: None,
         tool_requirements: vec![],
+        tool_paused_rates: vec![],
         schedule: None,
     };
     let mut host = CoreHost::begin(snapshot, &[(1, 1)]).unwrap();
@@ -4431,6 +4686,7 @@ fn continuous_host_carries_long_work_rate_and_fractional_progress() {
                 agreements: None,
                 sites: None,
                 tool_requirements: vec![],
+                tool_paused_rates: vec![],
                 schedule: None,
             },
             &[(1, 1)],
@@ -4480,6 +4736,7 @@ fn continuous_host_retains_rate_for_work_paused_at_a_boundary() {
             agreements: None,
             sites: None,
             tool_requirements: vec![],
+            tool_paused_rates: vec![],
             schedule: None,
         },
         &[(1, 1)],
@@ -4532,6 +4789,7 @@ fn continuous_host_keeps_completed_interval_after_boundary_failure() {
             agreements: None,
             sites: None,
             tool_requirements: vec![],
+            tool_paused_rates: vec![],
             schedule: None,
         },
         &[(1, 1)],

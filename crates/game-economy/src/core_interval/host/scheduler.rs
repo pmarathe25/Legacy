@@ -102,18 +102,21 @@ impl CoreHost {
             return Err("core schedule already active".into());
         }
         let offset = self.core.elapsed_millis().ok_or("no physical interval")?;
+        let mut carried_rates = self
+            .core
+            .physical
+            .work_interval()
+            .expect("active interval")
+            .rates
+            .clone();
+        carried_rates.extend(self.tool_paused_rates.iter().copied());
+        carried_rates.par_sort_unstable_by_key(|row| row.0);
         let schedule = CoreSchedule {
             period_millis,
             work_rate,
             next_decision_millis: Some(u128::from(offset)),
             phase: DecisionPhase::Meals,
-            carried_rates: self
-                .core
-                .physical
-                .work_interval()
-                .expect("active interval")
-                .rates
-                .clone(),
+            carried_rates,
         };
         schedule.validate(&self.core)?;
         self.schedule = Some(schedule);
@@ -164,6 +167,7 @@ impl CoreHost {
                 run.boundary = true;
                 break;
             }
+            attempt!('run, self.sync_tool_work(blocked));
             let deadline = attempt!('run, self.core.next_deadline(None));
             if deadline.after_millis == 0 {
                 let mut handled = false;
@@ -515,6 +519,11 @@ impl CoreHost {
                 .map(|&(id, rate)| (id, 0u8, rate))
                 .collect();
             candidates.par_extend(current_rates.par_iter().map(|&(id, rate)| (id, 1u8, rate)));
+            candidates.par_extend(
+                self.tool_paused_rates
+                    .par_iter()
+                    .map(|&(id, rate)| (id, 2u8, rate)),
+            );
             candidates.par_sort_unstable_by_key(|row| (row.0, row.1));
             schedule.carried_rates = candidates
                 .par_chunk_by(|a, b| a.0 == b.0)
@@ -537,6 +546,13 @@ impl CoreHost {
                 .par_iter()
                 .copied()
                 .filter(|(id, _)| {
+                    if self
+                        .tool_paused_rates
+                        .binary_search_by_key(id, |row| row.0)
+                        .is_ok()
+                    {
+                        return false;
+                    }
                     let index = self
                         .core
                         .physical
@@ -565,6 +581,7 @@ impl CoreHost {
                 Ok(core) => {
                     self.core = core;
                     self.schedule = Some(schedule);
+                    self.tool_checked_revision = None;
                 }
                 Err(error) => {
                     combined.failure = Some(error);

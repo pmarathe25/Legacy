@@ -8,6 +8,86 @@ pub struct CoreToolRepairResults {
 }
 
 impl CoreHost {
+    /// Pause work while its required goods are absent and restore the saved
+    /// rate when they return. Only new custody revisions need a rescan.
+    pub(super) fn sync_tool_work(&mut self, blocked: &[u64]) -> Result<(), String> {
+        if self.tool_requirements.is_empty() {
+            return Ok(());
+        }
+        let interval = self
+            .core
+            .physical
+            .work_interval()
+            .ok_or("no physical interval")?;
+        let revision = interval.custody_revision;
+        if self.tool_checked_revision == Some(revision) && self.tool_checked_blocked == blocked {
+            return Ok(());
+        }
+        let mut rates: Vec<_> = interval
+            .rates
+            .par_iter()
+            .map(|&(job, rate)| (job, rate, false))
+            .collect();
+        rates.par_extend(
+            self.tool_paused_rates
+                .par_iter()
+                .map(|&(job, rate)| (job, rate, true)),
+        );
+        rates.par_sort_unstable_by_key(|row| row.0);
+        let view = self.core.physical.view(self.core.physical.tick())?;
+        let choices: Vec<_> = rates
+            .par_iter()
+            .filter_map(|&(id, rate, was_paused)| {
+                let index = self
+                    .core
+                    .physical
+                    .work()
+                    .binary_search_by_key(&id, |row| row.job.id)
+                    .ok()?;
+                let work = &self.core.physical.work()[index];
+                if work.phase != game_lot_runtime::Phase::Working {
+                    return None;
+                }
+                if work.job.remaining == 0 {
+                    return Some((id, rate, false));
+                }
+                let present = game_economy_work::tools::available(
+                    &self.tool_requirements,
+                    &view,
+                    work.job.worker,
+                    work.job.recipe,
+                );
+                let able = self
+                    .core
+                    .people
+                    .binary_search_by_key(&work.job.worker, |person| person.id)
+                    .ok()
+                    .is_some_and(|i| {
+                        let person = &self.core.people[i];
+                        person.health > 0
+                            && person.hunger <= self.core.rules.max_work_hunger
+                            && person.region == Some(work.job.region)
+                            && blocked.binary_search(&person.id).is_err()
+                    });
+                Some((id, rate, !present || (was_paused && !able)))
+            })
+            .collect();
+        let enabled: Vec<_> = choices
+            .par_iter()
+            .filter(|row| !row.2)
+            .map(|row| (row.0, row.1))
+            .collect();
+        let paused: Vec<_> = choices
+            .par_iter()
+            .filter(|row| row.2)
+            .map(|row| (row.0, row.1))
+            .collect();
+        self.core.physical.replace_interval_rates(&enabled)?;
+        self.tool_paused_rates = paused;
+        self.tool_checked_revision = Some(revision);
+        self.tool_checked_blocked = blocked.to_vec();
+        Ok(())
+    }
     /// Stage each person's repair and its actual consumed material together.
     pub fn repair_tools_autonomously(
         &mut self,

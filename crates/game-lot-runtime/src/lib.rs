@@ -180,6 +180,31 @@ impl Runtime {
         Ok(())
     }
 
+    /// Replace active rates at the current offset without granting past progress.
+    pub fn replace_interval_rates(&mut self, rates: &[(u64, u64)]) -> Result<(), String> {
+        let interval = self
+            .work_interval
+            .as_ref()
+            .ok_or("no physical work interval")?;
+        if interval.tick != self.tick()
+            || interval.custody_revision != self.store.revision()
+            || interval.elapsed_millis >= self.tick_millis
+        {
+            return Err("stale physical work interval".into());
+        }
+        let next = self.checked_work_rates(rates)?;
+        if interval.rates == next {
+            return Ok(());
+        }
+        let epoch = self
+            .epoch
+            .checked_add(1)
+            .ok_or("physical work revision overflow")?;
+        self.work_interval.as_mut().expect("checked interval").rates = next;
+        self.epoch = epoch;
+        Ok(())
+    }
+
     /// Consume at most the remaining interval and retain progress for saving.
     pub fn progress_work_interval(&mut self, requested_millis: u64) -> Result<u64, String> {
         let interval = self

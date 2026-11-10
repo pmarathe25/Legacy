@@ -24,6 +24,8 @@ pub struct CoreHostSnapshot {
     #[serde(default)]
     pub tool_requirements: Vec<game_economy_work::tools::Requirement>,
     #[serde(default)]
+    pub tool_paused_rates: Vec<(u64, u64)>,
+    #[serde(default)]
     pub opinions: Option<game_opinions::Opinions>,
     #[serde(default)]
     pub goals: Option<game_goals::Goals>,
@@ -41,11 +43,20 @@ pub struct CoreHost {
     autowork: Option<Autowork>,
     tool_wear: Option<ToolWear>,
     tool_requirements: Vec<game_economy_work::tools::Requirement>,
+    tool_paused_rates: Vec<(u64, u64)>,
+    tool_checked_revision: Option<u64>,
+    tool_checked_blocked: Vec<u64>,
     opinions: Option<game_opinions::Opinions>,
     goals: Option<game_goals::Goals>,
     agreements: Option<game_agreements::Agreements>,
     sites: Option<CoreSites>,
     schedule: Option<CoreSchedule>,
+}
+struct CoreRuntimeOptions {
+    sites: Option<CoreSites>,
+    schedule: Option<CoreSchedule>,
+    tool_requirements: Vec<game_economy_work::tools::Requirement>,
+    tool_paused_rates: Vec<(u64, u64)>,
 }
 impl CoreHost {
     pub fn begin(snapshot: CoreHostSnapshot, rates: &[(u64, u64)]) -> Result<Self, String> {
@@ -54,6 +65,7 @@ impl CoreHost {
             autowork,
             tool_wear,
             tool_requirements,
+            tool_paused_rates,
             opinions,
             goals,
             agreements,
@@ -68,7 +80,12 @@ impl CoreHost {
             opinions,
             goals,
             agreements,
-            (sites, schedule, tool_requirements),
+            CoreRuntimeOptions {
+                sites,
+                schedule,
+                tool_requirements,
+                tool_paused_rates,
+            },
         )
     }
     pub fn resume(snapshot: CoreHostSnapshot) -> Result<Self, String> {
@@ -77,6 +94,7 @@ impl CoreHost {
             autowork,
             tool_wear,
             tool_requirements,
+            tool_paused_rates,
             opinions,
             goals,
             agreements,
@@ -91,7 +109,12 @@ impl CoreHost {
             opinions,
             goals,
             agreements,
-            (sites, schedule, tool_requirements),
+            CoreRuntimeOptions {
+                sites,
+                schedule,
+                tool_requirements,
+                tool_paused_rates,
+            },
         )
     }
     fn compile(
@@ -101,13 +124,14 @@ impl CoreHost {
         opinions: Option<game_opinions::Opinions>,
         goals: Option<game_goals::Goals>,
         agreements: Option<game_agreements::Agreements>,
-        site_and_schedule: (
-            Option<CoreSites>,
-            Option<CoreSchedule>,
-            Vec<game_economy_work::tools::Requirement>,
-        ),
+        options: CoreRuntimeOptions,
     ) -> Result<Self, String> {
-        let (mut sites, schedule, tool_requirements) = site_and_schedule;
+        let CoreRuntimeOptions {
+            mut sites,
+            schedule,
+            tool_requirements,
+            tool_paused_rates,
+        } = options;
         if let Some(owner) = &autowork {
             let people: Vec<_> = core
                 .people
@@ -146,6 +170,30 @@ impl CoreHost {
                 .map(|recipe| recipe.id)
                 .collect();
             game_economy_work::tools::validate(&tool_requirements, &recipes, &goods)?;
+        }
+        let rates = &core
+            .physical
+            .work_interval()
+            .ok_or("no physical interval")?
+            .rates;
+        if (tool_requirements.is_empty() && !tool_paused_rates.is_empty())
+            || tool_paused_rates
+                .par_windows(2)
+                .any(|rows| rows[0].0 >= rows[1].0)
+            || tool_paused_rates.par_iter().any(|&(job, rate)| {
+                rate == 0
+                    || rates.binary_search_by_key(&job, |row| row.0).is_ok()
+                    || core
+                        .physical
+                        .work()
+                        .binary_search_by_key(&job, |row| row.job.id)
+                        .ok()
+                        .is_none_or(|index| {
+                            core.physical.work()[index].phase != game_lot_runtime::Phase::Working
+                        })
+            })
+        {
+            return Err("invalid tool-paused work".into());
         }
         if let Some(owner) = &opinions {
             let people: HashSet<_> = core.people.par_iter().map(|person| person.id).collect();
@@ -191,6 +239,9 @@ impl CoreHost {
             autowork,
             tool_wear,
             tool_requirements,
+            tool_paused_rates,
+            tool_checked_revision: None,
+            tool_checked_blocked: Vec::new(),
             opinions,
             goals,
             agreements,
@@ -204,6 +255,7 @@ impl CoreHost {
             autowork: self.autowork.clone(),
             tool_wear: self.tool_wear.clone(),
             tool_requirements: self.tool_requirements.clone(),
+            tool_paused_rates: self.tool_paused_rates.clone(),
             opinions: self.opinions.clone(),
             goals: self.goals.clone(),
             agreements: self.agreements.clone(),
@@ -218,9 +270,23 @@ impl CoreHost {
         if self.schedule.is_some() {
             return Err("use scheduled advancement while a schedule is active".into());
         }
+        if self
+            .core
+            .elapsed_millis()
+            .is_some_and(|offset| offset < self.core.physical.tick_millis())
+        {
+            self.sync_tool_work(&[])?;
+        }
         self.core.progress(millis)
     }
-    pub fn next_deadline(&self, hunger: Option<u32>) -> Result<CoreDeadline, String> {
+    pub fn next_deadline(&mut self, hunger: Option<u32>) -> Result<CoreDeadline, String> {
+        if self
+            .core
+            .elapsed_millis()
+            .is_some_and(|offset| offset < self.core.physical.tick_millis())
+        {
+            self.sync_tool_work(&[])?;
+        }
         self.core.next_deadline(hunger)
     }
     pub fn publish_arrivals(&mut self) -> Result<Option<CoreArrivals>, String> {
@@ -243,9 +309,13 @@ impl CoreHost {
         let offset = self.core.elapsed_millis().ok_or("no physical interval")?;
         let stopped: Vec<_> = requests.par_iter().map(|&(job, _)| (job, false)).collect();
         let next = self.stage_request_resolution(&stopped, tick, &self.core.people, false);
-        let ended: Vec<_> = requests.par_iter().map(|&(job, _)| job).collect();
+        let mut ended: Vec<_> = requests.par_iter().map(|&(job, _)| job).collect();
+        ended.par_sort_unstable();
         let sites = self.stage_sites(&[], &ended, false);
         self.core.abandon_work(tick, offset, requests)?;
+        self.tool_paused_rates
+            .retain(|row| ended.binary_search(&row.0).is_err());
+        self.tool_checked_revision = None;
         self.publish_request_resolution(next);
         if let Some(sites) = sites {
             self.sites = Some(sites);
@@ -519,6 +589,17 @@ impl CoreHost {
         if let Some(agreements) = agreements {
             self.agreements = Some(agreements);
         }
+        self.tool_paused_rates.retain(|(job, _)| {
+            self.core
+                .physical
+                .work()
+                .binary_search_by_key(job, |row| row.job.id)
+                .ok()
+                .is_some_and(|index| {
+                    self.core.physical.work()[index].phase == game_lot_runtime::Phase::Working
+                })
+        });
+        self.tool_checked_revision = None;
         self.schedule = None;
         Ok(events)
     }
