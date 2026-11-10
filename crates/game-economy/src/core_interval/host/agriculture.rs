@@ -24,6 +24,7 @@ impl CoreHost {
             .changes
             .par_iter()
             .map(|row| row.1)
+            .chain(actions.par_iter().map(|row| row.id))
             .max()
             .map_or(Ok(1), |id| {
                 id.checked_add(1).ok_or("irrigation action overflow")
@@ -77,6 +78,7 @@ impl CoreHost {
         &self,
         plan: Option<game_economy_agriculture::Plan>,
         events: &Events,
+        care_uses: &[game_economy_claims::Use],
     ) -> Result<
         (
             Option<game_economy_agriculture::Agriculture>,
@@ -85,7 +87,24 @@ impl CoreHost {
         String,
     > {
         let Some(plan) = plan else {
-            return Ok((None, None));
+            let claims = self
+                .claims
+                .as_ref()
+                .filter(|_| !care_uses.is_empty())
+                .map(|owner| {
+                    let mut claims = owner.clone();
+                    let mut opinions = self.opinions.clone();
+                    game_economy_claims::publish(
+                        &mut claims,
+                        care_uses,
+                        events,
+                        &self.core.people,
+                        &mut opinions,
+                        None,
+                    );
+                    (claims, opinions)
+                });
+            return Ok((None, claims));
         };
         let owner = self
             .agriculture
@@ -94,9 +113,14 @@ impl CoreHost {
         let claims = if let Some(claims) = &self.claims {
             let mut claims = claims.clone();
             let mut opinions = self.opinions.clone();
+            let uses = (!care_uses.is_empty()).then(|| {
+                let mut uses = plan.uses.clone();
+                uses.par_extend(care_uses.par_iter().cloned());
+                uses
+            });
             game_economy_claims::publish(
                 &mut claims,
-                &plan.uses,
+                uses.as_deref().unwrap_or(&plan.uses),
                 events,
                 &self.core.people,
                 &mut opinions,
@@ -152,6 +176,7 @@ impl CoreHost {
     pub(super) fn plan_cultivation(
         &self,
         occupied: &[u64],
+        base: u64,
     ) -> Result<Option<game_economy_agriculture::Plan>, String> {
         let Some(owner) = &self.agriculture else {
             return Ok(None);
@@ -204,6 +229,6 @@ impl CoreHost {
                 .as_ref()
                 .and_then(|environment| environment.season(tick)),
         };
-        Ok(Some(context.prepare(1)?))
+        Ok(Some(context.prepare(base)?))
     }
 }

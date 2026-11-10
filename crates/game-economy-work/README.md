@@ -1,6 +1,6 @@
 # Personal requested work
 
-Composes addressed requests, personal willingness and social pressure with physically admitted work. Completion and refusal memories are recorded only for people who were actually present.
+Composes addressed requests, personal willingness and social pressure with physically admitted work. Completion and refusal memories are recorded only for people who were actually present. Dependent-care plans can stage neglect effects separately from publishing their receipts, so the enclosing host can commit them with physical food transfers.
 
 When local walking is enabled, a witness must share the worker's endpoint. A person may ask for work or decline a received request at a store; beginning site work still requires reaching that site.
 

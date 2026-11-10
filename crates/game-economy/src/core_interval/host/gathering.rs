@@ -7,21 +7,11 @@ impl CoreHost {
         occupied: &[u64],
         cultivation: Option<&game_economy_agriculture::Plan>,
         irrigation: Option<&game_economy_agriculture::irrigation::Plan>,
+        base: u64,
     ) -> Result<Option<(crate::gathering::Plan, Vec<game_lot_runtime::Gathered>)>, String> {
         let Some(owner) = &self.gathering else {
             return Ok(None);
         };
-        let farm_end = cultivation
-            .and_then(|plan| plan.changes.par_iter().map(|row| row.1).max())
-            .map_or(Ok(1), |id| {
-                id.checked_add(1).ok_or("gathering action overflow")
-            })?;
-        let base = farm_end
-            .checked_add(
-                u64::try_from(irrigation.map_or(0, |plan| plan.len()))
-                    .map_err(|_| "gathering action overflow")?,
-            )
-            .ok_or("gathering action overflow")?;
         let rest = self.blocked_with_rest(occupied);
         let occupied = rest.as_deref().unwrap_or(occupied);
         let mut busy = occupied.to_vec();

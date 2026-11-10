@@ -240,7 +240,8 @@ impl Context<'_> {
     }
 }
 impl Plan {
-    pub fn apply(self, care: &mut DependentCare, people: &mut [Person]) {
+    /// Stage the health effects separately from publishing care receipts.
+    pub fn apply_health(&self, neglect_damage: u32, people: &mut [Person]) {
         let mut neglected: Vec<_> = self
             .draft
             .events
@@ -251,9 +252,17 @@ impl Plan {
         neglected.par_sort_unstable();
         people.par_iter_mut().for_each(|person| {
             if neglected.binary_search(&person.id).is_ok() {
-                person.health = person.health.saturating_sub(care.rules.neglect_damage);
+                person.health = person.health.saturating_sub(neglect_damage);
             }
         });
+    }
+
+    pub fn publish(self, care: &mut DependentCare) {
         care.events = self.draft.events;
+    }
+
+    pub fn apply(self, care: &mut DependentCare, people: &mut [Person]) {
+        self.apply_health(care.rules.neglect_damage, people);
+        self.publish(care);
     }
 }

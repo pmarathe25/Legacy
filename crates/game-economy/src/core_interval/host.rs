@@ -6,6 +6,7 @@ mod agriculture;
 mod animal_care;
 mod animal_handling;
 mod claims;
+mod dependent_care;
 mod family;
 mod fatigue;
 mod fauna;
@@ -75,6 +76,8 @@ pub struct CoreHostSnapshot {
     #[serde(default)]
     pub family: Option<game_economy_family::Families>,
     #[serde(default)]
+    pub dependent_care: Option<crate::DependentCare>,
+    #[serde(default)]
     pub opinions: Option<game_opinions::Opinions>,
     #[serde(default)]
     pub goals: Option<game_goals::Goals>,
@@ -110,6 +113,7 @@ pub struct CoreHost {
     animal_care: Option<crate::AnimalCare>,
     animal_handling: Option<crate::AnimalHandling>,
     family: Option<game_economy_family::Families>,
+    dependent_care: Option<crate::DependentCare>,
     work_checked_revision: Option<u64>,
     work_checked_blocked: Vec<u64>,
     opinions: Option<game_opinions::Opinions>,
@@ -140,6 +144,7 @@ struct CoreRuntimeOptions {
     animal_care: Option<crate::AnimalCare>,
     animal_handling: Option<crate::AnimalHandling>,
     family: Option<game_economy_family::Families>,
+    dependent_care: Option<crate::DependentCare>,
 }
 impl CoreHost {
     pub fn begin(snapshot: CoreHostSnapshot, rates: &[(u64, u64)]) -> Result<Self, String> {
@@ -166,6 +171,7 @@ impl CoreHost {
             animal_care,
             animal_handling,
             family,
+            dependent_care,
             opinions,
             goals,
             agreements,
@@ -202,6 +208,7 @@ impl CoreHost {
                 animal_care,
                 animal_handling,
                 family,
+                dependent_care,
             },
         )
     }
@@ -229,6 +236,7 @@ impl CoreHost {
             animal_care,
             animal_handling,
             family,
+            dependent_care,
             opinions,
             goals,
             agreements,
@@ -265,6 +273,7 @@ impl CoreHost {
                 animal_care,
                 animal_handling,
                 family,
+                dependent_care,
             },
         )
     }
@@ -299,6 +308,7 @@ impl CoreHost {
             animal_care,
             mut animal_handling,
             family,
+            dependent_care,
         } = options;
         if let Some(legacy) = food_search.as_mut().and_then(|owner| owner.claims.take()) {
             if claims.is_some() {
@@ -543,6 +553,15 @@ impl CoreHost {
             let people: HashSet<_> = core.people.par_iter().map(|person| person.id).collect();
             owner.normalize_and_validate(&people, fauna.as_ref())?;
         }
+        if let Some(owner) = &dependent_care {
+            let people: HashSet<_> = core.people.par_iter().map(|person| person.id).collect();
+            game_economy_work::care::validate(
+                owner,
+                family.as_ref(),
+                &people,
+                core.physical.tick(),
+            )?;
+        }
         if let Some(owner) = &family {
             game_economy_family::validate(
                 owner,
@@ -635,6 +654,7 @@ impl CoreHost {
             animal_care,
             animal_handling,
             family,
+            dependent_care,
             work_checked_revision: None,
             work_checked_blocked: Vec::new(),
             opinions,
@@ -668,6 +688,7 @@ impl CoreHost {
             animal_care: self.animal_care.clone(),
             animal_handling: self.animal_handling.clone(),
             family: self.family.clone(),
+            dependent_care: self.dependent_care.clone(),
             opinions: self.opinions.clone(),
             goals: self.goals.clone(),
             agreements: self.agreements.clone(),
@@ -1013,12 +1034,50 @@ impl CoreHost {
         if occupied.par_windows(2).any(|rows| rows[0] >= rows[1]) {
             return Err("invalid occupied people".into());
         }
-        let mut cultivation = self.plan_cultivation(occupied)?;
-        let mut actions = Vec::new();
+        let mut dependent = self.plan_dependent_care(occupied)?;
+        let mut actions = dependent
+            .as_mut()
+            .map_or_else(Vec::new, |plan| std::mem::take(&mut plan.actions));
+        let active = dependent.as_ref().map(|plan| {
+            let mut active = occupied.to_vec();
+            active.par_extend(plan.actors.par_iter().copied());
+            active.par_extend(game_economy_work::care::dependents(
+                self.dependent_care.as_ref().expect("care owner"),
+                self.family.as_ref().expect("care family"),
+            ));
+            active.par_sort_unstable();
+            active.dedup();
+            active
+        });
+        let occupied = active.as_deref().unwrap_or(occupied);
+        let base = u64::try_from(actions.len())
+            .map_err(|_| "care action overflow")?
+            .checked_add(1)
+            .ok_or("care action overflow")?;
+        let mut cultivation = self.plan_cultivation(occupied, base)?;
         let compact = game_economy_agriculture::append_planting(&mut cultivation, &mut actions);
         let irrigation_plan = self.plan_irrigation(occupied, &mut cultivation, &mut actions)?;
-        let gathering =
-            self.plan_gathering(occupied, cultivation.as_ref(), irrigation_plan.as_ref())?;
+        let gathering_base = if self.gathering.is_some() {
+            let changes = cultivation
+                .as_ref()
+                .map_or(&[][..], |plan| plan.changes.as_slice());
+            actions
+                .par_iter()
+                .map(|action| action.id)
+                .chain(changes.par_iter().map(|row| row.1))
+                .max()
+                .map_or(Ok(1), |id| {
+                    id.checked_add(1).ok_or("gathering action overflow")
+                })?
+        } else {
+            1
+        };
+        let gathering = self.plan_gathering(
+            occupied,
+            cultivation.as_ref(),
+            irrigation_plan.as_ref(),
+            gathering_base,
+        )?;
         let goods: Vec<_> = self.tool_wear.as_ref().map_or_else(Vec::new, |owner| {
             owner.rules.iter().map(|rule| rule.good).collect()
         });
@@ -1102,13 +1161,27 @@ impl CoreHost {
                 tick,
             );
         }
+        if let Some(plan) = &dependent {
+            plan.apply_health(
+                self.dependent_care
+                    .as_ref()
+                    .expect("care owner")
+                    .rules
+                    .neglect_damage,
+                &mut draft.people.people,
+            );
+        }
         let family = self.stage_family(&mut draft)?;
         let irrigation = self
             .irrigation
             .as_ref()
             .zip(irrigation_plan)
             .map(|(owner, plan)| owner.advance(plan, draft.events(), draft.events().tick));
-        let (agriculture, claims) = self.stage_cultivation(cultivation, draft.events())?;
+        let care_uses = dependent
+            .as_ref()
+            .map_or(&[][..], |plan| plan.uses.as_slice());
+        let (agriculture, claims) =
+            self.stage_cultivation(cultivation, draft.events(), care_uses)?;
         let mut gathering = gathering
             .map(|(plan, _)| {
                 plan.publish(
@@ -1212,8 +1285,14 @@ impl CoreHost {
         if let Some(owner) = gathering {
             self.gathering = Some(owner);
         }
-        if let Some(owner) = family {
+        if let Some((owner, newborns)) = family {
+            if let Some(care) = &mut self.dependent_care {
+                game_economy_work::care::inherit(care, &owner, &newborns);
+            }
             self.family = Some(owner);
+        }
+        if let Some(plan) = dependent {
+            plan.publish(self.dependent_care.as_mut().expect("care owner"));
         }
         self.publish_fauna(fauna);
         if let Some(plan) = handling {

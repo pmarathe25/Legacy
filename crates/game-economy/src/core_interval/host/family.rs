@@ -5,7 +5,7 @@ impl CoreHost {
     pub(super) fn stage_family(
         &mut self,
         draft: &mut CoreSettlementDraft,
-    ) -> Result<Option<game_economy_family::Families>, String> {
+    ) -> Result<Option<(game_economy_family::Families, Vec<u64>)>, String> {
         let Some(owner) = &self.family else {
             return Ok(None);
         };
@@ -16,7 +16,7 @@ impl CoreHost {
             &mut draft.travel,
             self.core.seed,
             tick,
-            false,
+            self.dependent_care.is_some(),
         )?;
         let newborns: Vec<_> = next
             .newborns
@@ -43,6 +43,6 @@ impl CoreHost {
                 .physical
                 .stage_interval_people(&mut draft.physical, &newborns, &deceased)?;
         }
-        Ok(Some(next.family))
+        Ok(Some((next.family, next.newborns)))
     }
 }
