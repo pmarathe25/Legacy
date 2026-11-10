@@ -12,6 +12,10 @@ The ignored `composed_core_progress_benchmark` with `LEGACY_CORE_ARRIVALS=1` mea
 
 The ignored `interval_work_admission_benchmark` starts 49,999 jobs from one shared stock within a partial interval. A specialized physical path reduced one instrumented run from 111, 70, 52, and 46 ms to 73, 45, 35, and 31 ms with one, two, four, and six workers, with matching fingerprints. Set `LEGACY_ADMISSION_STOCK=25000` to admit only 25,000 jobs; one run took 83, 52, 37, and 34 ms with matching fingerprints across worker counts. These isolated admission workloads are sublinear and do not measure whole-economy time advancement.
 
+Packing homogeneous single-input starts avoids per-job transaction vectors. In a later instrumented comparison, the same abundant-stock workload fell from 69.6, 43.6, 33.4, and 30.5 ms to 59.5, 37.0, 27.5, and 25.6 ms with one, two, four, and six workers, with identical fingerprints. With stock for 25,000 jobs, a separate run took 69, 42, 30, and 27 ms. These are synthetic partial-core measurements, not full-campaign timings.
+
+At 199,999 packed starts, one run took 260, 163, 123, and 107 ms at one, two, four, and six workers, respectively, with matching fingerprints. Increasing the workload did not produce linear scaling.
+
 An incapacitated traveler does not move during the core interval, even if an immortal recovers at its closing boundary. The existing coarse economy path can move such a traveler after recovery in the same boundary, so this case is not equivalent between the two paths.
 
 Work sites can optionally wear with completed production and require real repair materials before they admit more work. An individual may choose to repair an idle site, including under their own fear or felt obligation; competing activity and material consumption are resolved at the physical boundary.

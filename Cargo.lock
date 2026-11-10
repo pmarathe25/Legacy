@@ -902,6 +902,7 @@ dependencies = [
 name = "game-lot-work"
 version = "0.2.0"
 dependencies = [
+ "game-diagnostics",
  "game-lot-content",
  "game-lot-model",
  "game-lot-planning",

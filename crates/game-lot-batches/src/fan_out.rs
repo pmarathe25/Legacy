@@ -190,6 +190,54 @@ pub fn prepare_flat(
     )
 }
 
+/// Action identities and empty additions have been validated by the caller.
+pub(crate) fn prepare_flat_with_additions(
+    state: &State,
+    instance: u64,
+    seed: u64,
+    transfers: &[SimpleTransfer],
+    additions: &[Container],
+    advance: bool,
+) -> Result<Option<Draft>, String> {
+    if transfers.len() < 128 || additions.is_empty() {
+        return Ok(None);
+    }
+    let first = transfers[0].movement;
+    if state
+        .containers
+        .binary_search_by_key(&first.from, |row| row.place)
+        .is_err()
+    {
+        return Ok(None);
+    }
+    let index = PlaceIndex::new(additions, |row| row.place);
+    if transfers.par_iter().any(|row| {
+        let movement = row.movement;
+        movement.from != first.from
+            || movement.good != first.good
+            || movement.id == 0
+            || movement.quantity == 0
+            || !movement.from.accepts(movement.good)
+            || movement.to.is_none_or(|to| {
+                to == movement.from || !to.accepts(movement.good) || index.locate(to).is_none()
+            })
+    }) {
+        return Ok(None);
+    }
+    prepare_rows(
+        state,
+        instance,
+        seed,
+        transfers.len(),
+        |index| {
+            let row = transfers[index];
+            (row.action, row.movement)
+        },
+        additions,
+        advance,
+    )
+}
+
 fn prepare_rows(
     state: &State,
     instance: u64,

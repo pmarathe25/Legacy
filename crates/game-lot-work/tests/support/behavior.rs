@@ -5,6 +5,73 @@ use game_production_model::{FoodProfile, Good};
 use std::collections::BTreeMap;
 
 #[test]
+fn packed_starts_match_ordinary_planning_and_fall_back_for_other_shapes() {
+    let recipe = Recipe {
+        id: 1,
+        name: "work".into(),
+        ticks: 2,
+        inputs: vec![Amount {
+            good: 1,
+            quantity: 2,
+        }],
+        outputs: vec![Amount {
+            good: 2,
+            quantity: 3,
+        }],
+    };
+    let requests: Vec<_> = (1..=256)
+        .rev()
+        .map(|id| Start {
+            id,
+            worker: id + 1000,
+            region: 1,
+            recipe: 1,
+            units: (id % 3 + 1) as u32,
+        })
+        .collect();
+    for workers in [1, 2, 4, 6] {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let normal = start(&requests, std::slice::from_ref(&recipe)).unwrap();
+                let flat = start_flat(&requests, std::slice::from_ref(&recipe))
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(flat.jobs, normal.jobs);
+                assert_eq!(flat.containers, normal.containers);
+                let actions: Vec<_> = flat
+                    .transfers
+                    .into_iter()
+                    .map(|row| Transaction {
+                        id: row.action,
+                        movements: vec![row.movement],
+                        creations: vec![],
+                    })
+                    .collect();
+                assert_eq!(actions, normal.transactions);
+                let mut duplicate = requests.clone();
+                duplicate[1].worker = duplicate[0].worker;
+                assert!(start_flat(&duplicate, std::slice::from_ref(&recipe)).is_err());
+                let mut varied = requests.clone();
+                varied[0].region = 2;
+                assert!(
+                    start_flat(&varied, std::slice::from_ref(&recipe))
+                        .unwrap()
+                        .is_none()
+                );
+                let mut multi_input = recipe.clone();
+                multi_input.inputs.push(Amount {
+                    good: 3,
+                    quantity: 1,
+                });
+                assert!(start_flat(&requests, &[multi_input]).unwrap().is_none());
+            });
+    }
+}
+
+#[test]
 fn physical_job_reserves_then_produces_and_delivers_without_refreshing_output() {
     let catalog = Catalog::compile(
         &[

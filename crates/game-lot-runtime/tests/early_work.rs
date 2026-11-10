@@ -183,6 +183,71 @@ fn rejected_interval_starts_retire_both_new_holders() {
     let saved = runtime.snapshot();
     assert_eq!(Runtime::compile(saved.clone()).unwrap().snapshot(), saved);
 }
+
+#[test]
+fn packed_interval_starts_fall_back_for_identified_source_items() {
+    let mut snapshot = fixture(false, 1).snapshot();
+    let source = snapshot
+        .custody
+        .containers
+        .iter_mut()
+        .find(|row| row.place == Place::Stock { region: 1, good: 1 })
+        .unwrap();
+    *source = Container::new(
+        source.place,
+        100,
+        vec![
+            Lot {
+                item: Some(41),
+                good: 1,
+                quantity: 1,
+                expires_at: None,
+            },
+            Lot {
+                item: Some(42),
+                good: 1,
+                quantity: 1,
+                expires_at: None,
+            },
+        ],
+    )
+    .unwrap();
+    let mut runtime = Runtime::compile(snapshot).unwrap();
+    runtime.begin_work_interval(&[(1, 1)]).unwrap();
+    runtime.progress_work_interval(400).unwrap();
+    let requests: Vec<_> = (2..=257)
+        .map(|id| {
+            (
+                Start {
+                    id,
+                    worker: id,
+                    region: 1,
+                    recipe: 1,
+                    units: 1,
+                },
+                1,
+            )
+        })
+        .collect();
+    let outcomes = runtime.start_interval_work(&requests, 7).unwrap();
+    let accepted: Vec<_> = outcomes
+        .iter()
+        .filter(|row| row.1)
+        .map(|row| row.0)
+        .collect();
+    assert_eq!(accepted.len(), 1);
+    let input = runtime.custody(Place::JobInput(accepted[0])).unwrap();
+    assert_eq!(
+        input
+            .lots
+            .iter()
+            .filter_map(|lot| lot.item)
+            .collect::<Vec<_>>(),
+        vec![41, 42]
+    );
+    let saved = runtime.snapshot();
+    assert_eq!(Runtime::compile(saved.clone()).unwrap().snapshot(), saved);
+}
 #[test]
 fn early_completions_preserve_other_jobs_and_the_quantum_boundary() {
     let mut runtime = fixture(false, 1);

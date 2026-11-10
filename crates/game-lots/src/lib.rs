@@ -689,6 +689,37 @@ impl Store {
             item_updates: Vec::new(),
         }))
     }
+    /// Attempt a shared-source batch into newly staged empty custody.
+    pub fn prepare_fan_out_flat_with_empty(
+        &self,
+        seed: u64,
+        transfers: &[SimpleTransfer],
+        additions: Vec<Container>,
+        advance: bool,
+    ) -> Result<Option<Draft>, String> {
+        if transfers.par_iter().any(|row| row.movement.item.is_some())
+            || (!self.item_places.is_empty()
+                && transfers
+                    .par_iter()
+                    .any(|row| self.touches_item(&row.movement)))
+        {
+            return Ok(None);
+        }
+        Ok(game_lot_batches::prepare_fan_out_flat_with_empty_fungible(
+            &self.state,
+            self.instance,
+            seed,
+            transfers,
+            additions,
+            advance,
+        )?
+        .map(|(inner, additions)| Draft {
+            inner,
+            additions,
+            retire: Vec::new(),
+            item_updates: Vec::new(),
+        }))
+    }
     /// Check this owner before publishing any part of a composed generation.
     pub fn validate_commit(&self, draft: &Draft) -> Result<(), String> {
         let inner = &draft.inner;

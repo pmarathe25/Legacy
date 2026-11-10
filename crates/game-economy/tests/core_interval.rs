@@ -625,7 +625,7 @@ fn interval_work_admission_benchmark() {
             #[cfg(feature = "profile")]
             if std::env::var_os("LEGACY_PROFILE").is_some() {
                 for (name, sample) in game_diagnostics::snapshot() {
-                    if name.starts_with("physical.") {
+                    if name.starts_with("physical.") || name.starts_with("work.start.") {
                         println!(
                             "{name}: {:.3} ms/call",
                             sample.nanoseconds as f64 / sample.calls as f64 / 1_000_000.0

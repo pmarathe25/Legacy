@@ -61,15 +61,28 @@ impl Runtime {
             drop(phase);
             phase = game_diagnostics::span("physical.interval_start.plan");
         }
-        let plan = game_lot_work::start(&starts, &self.recipes)?;
+        let flat = game_lot_work::start_flat(&starts, &self.recipes)?;
         #[cfg(feature = "profile")]
         {
             drop(phase);
             phase = game_diagnostics::span("physical.interval_start.custody");
         }
-        let mut custody =
+        let fast = if let Some(plan) = flat {
             self.store
-                .prepare_with_empty(seed, &plan.transactions, plan.containers, false)?;
+                .prepare_fan_out_flat_with_empty(seed, &plan.transfers, plan.containers, false)?
+                .map(|custody| (plan.jobs, custody))
+        } else {
+            None
+        };
+        let (jobs, mut custody) = if let Some(fast) = fast {
+            fast
+        } else {
+            let plan = game_lot_work::start(&starts, &self.recipes)?;
+            let custody =
+                self.store
+                    .prepare_with_empty(seed, &plan.transactions, plan.containers, false)?;
+            (plan.jobs, custody)
+        };
         let (_, spoiled) = custody.take_outcome_batch();
         if !spoiled.is_empty() {
             return Err("interval work cannot publish pending spoilage".into());
@@ -92,8 +105,7 @@ impl Runtime {
                 .binary_search_by_key(&id, |row| row.0)
                 .is_ok_and(|index| results[index].1)
         };
-        let retire: Vec<_> = plan
-            .jobs
+        let retire: Vec<_> = jobs
             .par_iter()
             .filter(|job| !accepted(job.id))
             .flat_map_iter(|job| [Place::JobInput(job.id), Place::JobOutput(job.id)])
@@ -102,8 +114,7 @@ impl Runtime {
         self.store.validate_commit(&custody)?;
         let mut work: Vec<_> = self.work.par_iter().cloned().collect();
         work.par_extend(
-            plan.jobs
-                .into_par_iter()
+            jobs.into_par_iter()
                 .filter(|job| accepted(job.id))
                 .map(|job| Work {
                     job,

@@ -1554,6 +1554,7 @@ fn shared_stock_to_new_custody_matches_general_commit_and_stale_checks() {
                     .install(|| {
                         let mut expected = store(initial.clone());
                         let mut actual = store(initial.clone());
+                        let mut packed = store(initial.clone());
                         let (inner, added) = game_lot_batches::prepare_unpartitioned_validated(
                             &expected.state,
                             expected.instance,
@@ -1571,14 +1572,57 @@ fn shared_stock_to_new_custody_matches_general_commit_and_stale_checks() {
                         let stale = actual
                             .prepare_with_empty(17, &actions, additions.clone(), advance)
                             .unwrap();
+                        let flat: Vec<_> = actions
+                            .iter()
+                            .map(|action| crate::SimpleTransfer {
+                                action: action.id,
+                                movement: action.movements[0],
+                            })
+                            .collect();
+                        let packed_draft = packed
+                            .prepare_fan_out_flat_with_empty(17, &flat, additions.clone(), advance)
+                            .unwrap()
+                            .expect("eligible packed transfers");
                         assert_eq!(draft.transactions(), reference.transactions());
                         assert_eq!(draft.outcomes(), reference.outcomes());
                         assert_eq!(draft.spoiled(), reference.spoiled());
+                        assert_eq!(packed_draft.transactions(), reference.transactions());
+                        assert_eq!(packed_draft.outcomes(), reference.outcomes());
+                        assert_eq!(packed_draft.spoiled(), reference.spoiled());
                         expected.commit(reference).unwrap();
                         actual.commit(draft).unwrap();
+                        packed.commit(packed_draft).unwrap();
                         assert!(actual.commit(stale).is_err());
                         assert_eq!(actual.export(), expected.export());
+                        assert_eq!(packed.export(), expected.export());
                         assert_eq!(actual.item_place(42), Some(Place::Person(9002)));
+                        let fresh = store(initial.clone());
+                        let mut duplicate_action = flat.clone();
+                        duplicate_action[1].action = duplicate_action[0].action;
+                        assert!(
+                            fresh
+                                .prepare_fan_out_flat_with_empty(
+                                    17,
+                                    &duplicate_action,
+                                    additions.clone(),
+                                    advance,
+                                )
+                                .is_err()
+                        );
+                        let mut duplicate_movement = flat.clone();
+                        duplicate_movement[1].movement.id = duplicate_movement[0].movement.id;
+                        assert!(
+                            fresh
+                                .prepare_fan_out_flat_with_empty(
+                                    17,
+                                    &duplicate_movement,
+                                    additions.clone(),
+                                    advance,
+                                )
+                                .unwrap()
+                                .is_none()
+                        );
+                        assert_eq!(fresh.export(), store(initial.clone()).export());
                     });
             }
         }

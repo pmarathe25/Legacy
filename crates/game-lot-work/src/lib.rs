@@ -2,7 +2,7 @@
 mod state;
 mod validation;
 use game_lot_content::Catalog;
-use game_lot_model::{Container, Movement, Place, Transaction};
+use game_lot_model::{Container, Movement, Place, SimpleTransfer, Transaction};
 use game_production_model::{Amount, Job, JobPhase, Recipe, Start};
 use rayon::prelude::*;
 pub use state::{Phase, Snapshot, Work, WorkInterval, WorkProgress};
@@ -65,8 +65,9 @@ fn capacity(items: &[Amount]) -> Result<u64, String> {
         .filter(|sum| *sum > 0)
         .ok_or("invalid bundle capacity".into())
 }
-/// Construct custody and input reservations; the caller decides who attempts work.
-pub fn start(requests: &[Start], recipes: &[Recipe]) -> Result<Starts, String> {
+fn start_jobs(requests: &[Start], recipes: &[Recipe]) -> Result<Vec<Job>, String> {
+    #[cfg(feature = "profile")]
+    let mut phase = game_diagnostics::span("work.start.validate");
     let mut ordered = requests.to_vec();
     ordered.par_sort_unstable_by_key(|row| row.id);
     let mut workers: Vec<_> = ordered.par_iter().map(|row| row.worker).collect();
@@ -81,6 +82,11 @@ pub fn start(requests: &[Start], recipes: &[Recipe]) -> Result<Starts, String> {
         if recipe.id == 0 || index.insert(recipe.id, recipe).is_some() {
             return Err("invalid recipe identity".into());
         }
+    }
+    #[cfg(feature = "profile")]
+    {
+        drop(phase);
+        phase = game_diagnostics::span("work.start.jobs");
     }
     let jobs: Vec<Job> = ordered
         .par_iter()
@@ -125,6 +131,16 @@ pub fn start(requests: &[Start], recipes: &[Recipe]) -> Result<Starts, String> {
             })
         })
         .collect::<Result<_, String>>()?;
+    #[cfg(feature = "profile")]
+    drop(phase);
+    Ok(jobs)
+}
+
+/// Construct custody and input reservations; the caller decides who attempts work.
+pub fn start(requests: &[Start], recipes: &[Recipe]) -> Result<Starts, String> {
+    let jobs = start_jobs(requests, recipes)?;
+    #[cfg(feature = "profile")]
+    let phase = game_diagnostics::span("work.start.transactions");
     let counts: Vec<_> = jobs
         .par_iter()
         .map(|job| job.reserved.len() as u64)
@@ -176,11 +192,78 @@ pub fn start(requests: &[Start], recipes: &[Recipe]) -> Result<Starts, String> {
         .into_par_iter()
         .map(|(_, _, transaction)| transaction)
         .collect();
+    #[cfg(feature = "profile")]
+    drop(phase);
     Ok(Starts {
         containers,
         jobs,
         transactions,
     })
+}
+
+/// Packed single-input starts for one shared stock. Unsupported shapes retain
+/// the ordinary transaction planner and its validation behavior.
+pub struct FlatStarts {
+    pub containers: Vec<Container>,
+    pub jobs: Vec<Job>,
+    pub transfers: Vec<SimpleTransfer>,
+}
+
+pub fn start_flat(requests: &[Start], recipes: &[Recipe]) -> Result<Option<FlatStarts>, String> {
+    if requests.len() < 128 {
+        return Ok(None);
+    }
+    let first = requests[0];
+    if requests
+        .par_iter()
+        .any(|row| row.region != first.region || row.recipe != first.recipe)
+        || recipes
+            .iter()
+            .find(|recipe| recipe.id == first.recipe)
+            .is_none_or(|recipe| recipe.inputs.len() != 1)
+    {
+        return Ok(None);
+    }
+    let jobs = start_jobs(requests, recipes)?;
+    #[cfg(feature = "profile")]
+    let _phase = game_diagnostics::span("work.start.flat_transactions");
+    let rows: Vec<_> = jobs
+        .par_iter()
+        .enumerate()
+        .map(|(index, job)| {
+            let input = Container::new(Place::JobInput(job.id), capacity(&job.reserved)?, vec![])?;
+            let output = Container::new(Place::JobOutput(job.id), capacity(&job.outputs)?, vec![])?;
+            let amount = &job.reserved[0];
+            let movement = Movement {
+                item: None,
+                id: u64::try_from(index)
+                    .map_err(|_| "operation identity overflow")?
+                    .checked_add(1)
+                    .ok_or("operation identity overflow")?,
+                from: Place::Stock {
+                    region: job.region,
+                    good: amount.good,
+                },
+                to: Some(input.place),
+                good: amount.good,
+                quantity: amount.quantity,
+            };
+            Ok((
+                [input, output],
+                SimpleTransfer {
+                    action: job.id,
+                    movement,
+                },
+            ))
+        })
+        .collect::<Result<_, String>>()?;
+    let (pairs, transfers): (Vec<_>, Vec<_>) = rows.into_par_iter().unzip();
+    let containers = pairs.into_par_iter().flat_map_iter(|pair| pair).collect();
+    Ok(Some(FlatStarts {
+        containers,
+        jobs,
+        transfers,
+    }))
 }
 
 /// A completed worker may discover that reserved inputs spoiled or disappeared.

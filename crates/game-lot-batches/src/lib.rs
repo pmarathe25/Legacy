@@ -118,6 +118,48 @@ pub fn prepare_partitioned_flat_fungible(
     partitioned::prepare(state, instance, seed, transfers, advance)
 }
 
+/// Stage homogeneous fungible transfers into new empty custody. Unsupported
+/// shapes return `None` so the caller can use ordinary transactions.
+/// The caller must exclude precise-item requests and any transfer touching
+/// identified custody; identified items must be nonexpiring.
+pub fn prepare_fan_out_flat_with_empty_fungible(
+    state: &State,
+    instance: u64,
+    seed: u64,
+    transfers: &[SimpleTransfer],
+    mut additions: Vec<Container>,
+    advance: bool,
+) -> Result<Option<(Draft, Vec<Container>)>, String> {
+    additions.par_sort_unstable_by_key(|row| row.place);
+    if additions
+        .par_windows(2)
+        .any(|pair| pair[0].place == pair[1].place)
+        || additions.par_iter().any(|row| {
+            row.validate().is_err()
+                || row.used != 0
+                || state
+                    .containers
+                    .binary_search_by_key(&row.place, |old| old.place)
+                    .is_ok()
+        })
+    {
+        return Err("invalid or existing new custody".into());
+    }
+    let mut ids: Vec<_> = transfers.par_iter().map(|row| row.action).collect();
+    if ids.par_windows(2).any(|pair| pair[0] > pair[1]) {
+        ids.par_sort_unstable();
+    }
+    if ids.first() == Some(&0) || ids.par_windows(2).any(|pair| pair[0] == pair[1]) {
+        return Err("invalid or duplicate transaction id".into());
+    }
+    Ok(
+        fan_out::prepare_flat_with_additions(
+            state, instance, seed, transfers, &additions, advance,
+        )?
+        .map(|draft| (draft, additions)),
+    )
+}
+
 pub fn prepare(
     state: &State,
     instance: u64,
