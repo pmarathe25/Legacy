@@ -4651,8 +4651,9 @@ fn core_host_cultivation_benchmark() {
     assert!(count > 1);
     let dependent = std::env::var_os("LEGACY_DEPENDENT_CARE").is_some();
     assert!(!dependent || count.is_multiple_of(3));
+    let inheritance = std::env::var_os("LEGACY_BIRTH_INHERITANCE").is_some();
     let birth_disease = std::env::var_os("LEGACY_BIRTH_DISEASE").is_some();
-    let births = std::env::var_os("LEGACY_FAMILY_BIRTHS").is_some() || birth_disease;
+    let births = std::env::var_os("LEGACY_FAMILY_BIRTHS").is_some() || birth_disease || inheritance;
     let family_mode = std::env::var_os("LEGACY_FAMILY").is_some() || births || dependent;
     assert!(!(births && dependent));
     assert!(!births || count.is_multiple_of(2));
@@ -4774,7 +4775,7 @@ fn core_host_cultivation_benchmark() {
         }],
     )
     .unwrap();
-    let agriculture = Agriculture {
+    let mut agriculture = Agriculture {
         inherit_births: false,
         requests: None,
         soil: None,
@@ -4809,6 +4810,12 @@ fn core_host_cultivation_benchmark() {
             .collect(),
         max_hunger: 10,
     };
+    if inheritance {
+        agriculture.inherit_births = true;
+        for policy in &mut agriculture.policies {
+            policy.willing = false;
+        }
+    }
     let snapshot = CoreHostSnapshot {
         core: initial,
         autowork: None,
@@ -4853,6 +4860,7 @@ fn core_host_cultivation_benchmark() {
                 member
             }).collect();
             family.next_id = count + 1;
+            family.rules.enroll_births = inheritance;
             family
         }),
         animal_handling: handling.then(|| game_economy::AnimalHandling {
@@ -4996,10 +5004,10 @@ fn core_host_cultivation_benchmark() {
                 .collect(),
             events: vec![],
         }),
-        agriculture: (!gathering && !family_mode).then_some(agriculture),
-        gathering: gathering.then(|| game_economy::Gathering {
+        agriculture: ((!gathering && !family_mode) || inheritance).then_some(agriculture),
+        gathering: (gathering || inheritance).then(|| game_economy::Gathering {
             max_hunger: 10,
-            inherit_births: false,
+            inherit_births: inheritance,
             nodes: vec![game_economy::ResourceNode {
                 id: 1,
                 region: 1,
@@ -5014,7 +5022,7 @@ fn core_host_cultivation_benchmark() {
                 .map(|person| game_economy::GatherPolicy {
                     person,
                     node: 1,
-                    willing: true,
+                    willing: !inheritance,
                     pressured_by: None,
                     pressure_threshold: None,
                 })
@@ -5033,7 +5041,14 @@ fn core_host_cultivation_benchmark() {
         }),
         social: None,
         knowledge: None,
-        claims: None,
+        claims: inheritance.then(|| {
+            let mut owner: game_economy_claims::Claims = serde_json::from_value(serde_json::json!({
+                "inherit_births": true, "preferences": [{"person": 1, "disregard_others": true}]
+            })).unwrap();
+            let preference = owner.preferences[0].clone();
+            owner.preferences = (1..=count).map(|person| { let mut preference = preference.clone(); preference.person = person; preference }).collect();
+            owner
+        }),
         food_search: None,
         opinions: None,
         goals: None,
@@ -5079,6 +5094,20 @@ fn core_host_cultivation_benchmark() {
             if family_mode {
                 let family = state.family.as_ref().unwrap();
                 assert_eq!(family.totals.births, if births { count / 2 } else { 0 });
+                if inheritance {
+                    assert_eq!(
+                        state.agriculture.as_ref().unwrap().policies.len(),
+                        (count - 1 + count / 2) as usize
+                    );
+                    assert_eq!(
+                        state.gathering.as_ref().unwrap().policies.len(),
+                        (count - 1 + count / 2) as usize
+                    );
+                    assert_eq!(
+                        state.claims.as_ref().unwrap().preferences.len(),
+                        (count + count / 2) as usize
+                    );
+                }
                 if birth_disease {
                     let health = &state.health.as_ref().unwrap().owner;
                     assert_eq!(health.cases.len(), count as usize);
@@ -10222,6 +10251,99 @@ fn family_birth_custody_and_worker_death_commit_atomically() {
             let neglected = run_care(false, false);
             assert_eq!(neglected.dependent_care.as_ref().unwrap().events[0].caregiver, None);
             assert_eq!(neglected.core.people.iter().find(|person| person.id == 3).unwrap().health, 45);
+            let mut inherited = snapshot.clone();
+            inherited.family.as_mut().unwrap().rules.enroll_births = true;
+            inherited.gathering = Some(game_economy::Gathering { max_hunger: 10, inherit_births: true,
+                nodes: vec![game_economy::ResourceNode { id: 1, region: 1, good: 2, available: 1,
+                    capacity: 1, regrowth: 0, seasonal: false, yield_per_action: 1 }],
+                policies: vec![game_economy::GatherPolicy { person: 2, node: 1, willing: true,
+                    pressured_by: Some(1), pressure_threshold: Some(1) }] });
+            inherited.agriculture = Some(game_economy_agriculture::Agriculture {
+                inherit_births: true, requests: None, soil: None,
+                crops: vec![game_economy_agriculture::Crop { id: 1, seed: 1, seed_quantity: 1,
+                    output: 2, output_quantity: 1, growth_ticks: 1 }],
+                fields: vec![game_economy_agriculture::Field { id: 1, region: 1, crop: 1,
+                    phase: game_economy_agriculture::Phase::Fallow, remaining: 0 }],
+                policies: vec![game_economy_agriculture::Policy { person: 2, willing: true,
+                    pressured_by: Some(1), pressure_threshold: Some(1) }], max_hunger: 10,
+            });
+            inherited.claims = Some(serde_json::from_value(serde_json::json!({
+                "inherit_births": true, "claims": [{"person": 2, "region": 1, "good": 1}],
+                "preferences": [{"person": 2, "disregard_others": true}]
+            })).unwrap());
+            inherited.dependent_care = Some(serde_json::from_value(serde_json::json!({
+                "inherit_births": true, "rules": {"dependent_until": 2, "max_caregiver_hunger": 100,
+                    "neglect_damage": 5}, "policies": [{"person": 2, "willing": false}]
+            })).unwrap());
+            inherited.fauna = Some(serde_json::from_value(serde_json::json!({
+                "species": [{"id": 1, "name": "grazer", "food_good": 2, "intake": 1,
+                    "hunger_per_tick": 1, "relief_per_unit": 1, "starvation_threshold": 10,
+                    "starvation_damage": 1, "max_health": 10, "adult_age": 1, "fertile_until": 10,
+                    "lifespan": 30, "gestation": 1, "conception_one_in": 1,
+                    "breeding_max_hunger": 5, "newborn_health": 8}],
+                "animals": [{"id": 1, "species": 1, "region": 1, "age": 1, "health": 10, "hunger": 1,
+                    "genome": {"sex": "Male", "alleles": [[100,100],[100,100],[100,100],[100,100]]}}],
+                "next_id": 2, "last_tick": 0
+            })).unwrap());
+            inherited.hunting = Some(serde_json::from_value(serde_json::json!({
+                "inherit_births": true, "policies": [{"person": 2, "animal": 1, "willing": true,
+                    "pressured_by": 1, "pressure_threshold": 1}]
+            })).unwrap());
+            inherited.animal_care = Some(serde_json::from_value(serde_json::json!({
+                "inherit_births": true, "policies": [{"person": 2, "animal": 1, "good": 2,
+                    "quantity": 1, "willing": true, "health_at_most": 10,
+                    "pressured_by": 1, "pressure_threshold": 1}]
+            })).unwrap());
+            inherited.animal_handling = Some(serde_json::from_value(serde_json::json!({
+                "inherit_births": true, "policies": [{"person": 2, "animal": 1, "willing": true,
+                    "pressured_by": 1, "pressure_threshold": 1}]
+            })).unwrap());
+            let mut routes = fixture().travel.unwrap();
+            routes.journeys.clear();
+            inherited.core.travel = Some(routes);
+            inherited.knowledge = Some(game_economy_knowledge::Knowledge {
+                max_records: 4, retention: vec![], minds: vec![game_economy_knowledge::Mind {
+                    person: 2, remember_people: false, people_seen: vec![], people_reporting: None,
+                    people_reports: vec![], reporting: None, misreport: None,
+                    records: vec![game_economy_knowledge::Record { region: 2, food: 10,
+                        observed_at: 0, witness: 1, learned_from: Some(1) }],
+                }],
+            });
+            inherited.food_search = Some(game_economy::core_interval::CoreFoodSearch {
+                search: game_economy::FoodSearch { min_hunger: 5, min_report_food: 1,
+                    max_report_age: 20, retry_ticks: 3, inherit_births: true,
+                    people: vec![game_economy::FoodSearchPreference { person: 2, enabled: true,
+                        next_review: 0, target: Some(2) }] }, knowledge: None, claims: None,
+            });
+            inherited.opinions = Some(serde_json::from_value(serde_json::json!({
+                "rules": {"minimum": -10, "maximum": 10, "initial": 0, "fulfilled_gain": 1, "default_loss": 1},
+                "records": [{"observer": 2, "target": 1, "trust": 0, "fear": 3, "obligation": 2}]
+            })).unwrap());
+            let mut inherited = CoreHost::begin(inherited, &[(1, 1)]).unwrap();
+            inherited.progress(1000).unwrap(); inherited.settle().unwrap();
+            let inherited = inherited.snapshot();
+            let preference = inherited.gathering.as_ref().unwrap().policies.iter().find(|policy| policy.person == 3).unwrap();
+            assert!(preference.willing);
+            assert_eq!(preference.pressured_by, None);
+            let preference = inherited.agriculture.as_ref().unwrap().policies.iter().find(|policy| policy.person == 3).unwrap();
+            assert!(preference.willing);
+            assert_eq!(preference.pressured_by, None);
+            assert!(inherited.claims.as_ref().unwrap().preferences.iter().any(|policy| policy.person == 3 && policy.disregard_others));
+            assert!(!inherited.claims.as_ref().unwrap().claims.iter().any(|claim| claim.person == 3));
+            let hunt = inherited.hunting.as_ref().unwrap().policies.iter().find(|policy| policy.person == 3).unwrap();
+            assert_eq!((hunt.animal, hunt.pressured_by, hunt.pressure_threshold), (None, None, None));
+            let care = inherited.animal_care.as_ref().unwrap().policies.iter().find(|policy| policy.person == 3).unwrap();
+            assert_eq!((care.animal, care.pressured_by, care.pressure_threshold), (None, None, None));
+            let handling = inherited.animal_handling.as_ref().unwrap().policies.iter().find(|policy| policy.person == 3).unwrap();
+            assert_eq!((handling.animal, handling.pressured_by, handling.pressure_threshold), (None, None, None));
+            assert!(inherited.dependent_care.as_ref().unwrap().policies.iter().any(|policy| policy.person == 3 && !policy.willing));
+            assert!(!inherited.opinions.as_ref().unwrap().records.iter().any(|opinion| opinion.observer == 3 || opinion.target == 3));
+            let search = inherited.food_search.as_ref().unwrap().search.people.iter().find(|policy| policy.person == 3).unwrap();
+            assert!(search.enabled);
+            assert_eq!(search.target, None);
+            assert!(inherited.knowledge.as_ref().unwrap().minds.iter().find(|mind| mind.person == 3).unwrap().records.is_empty());
+            let saved = serde_json::to_string(&inherited).unwrap();
+            assert_eq!(CoreHost::begin(serde_json::from_str(&saved).unwrap(), &[]).unwrap().snapshot().family, inherited.family);
             let mut infected = snapshot.clone();
             infected.health = Some(game_economy::core_interval::CoreHealth {
                 owner: game_disease::Disease {

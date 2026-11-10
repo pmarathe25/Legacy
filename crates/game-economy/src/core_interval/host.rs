@@ -1286,12 +1286,15 @@ impl CoreHost {
         if let Some(owner) = gathering {
             self.gathering = Some(owner);
         }
-        if let Some(family) = family {
+        let newborns = if let Some(family) = family {
             if let Some(care) = &mut self.dependent_care {
                 game_economy_work::care::inherit(care, &family.owner, &family.newborns);
             }
             self.family = Some(family.owner);
-        }
+            family.newborns
+        } else {
+            Vec::new()
+        };
         if let Some(health) = birth_health {
             self.health = Some(health);
         }
@@ -1313,6 +1316,7 @@ impl CoreHost {
             self.claims = Some(owner);
             self.opinions = opinions;
         }
+        self.inherit_birth_preferences(&newborns, events.tick);
         if let Some(fatigue) = fatigue {
             self.fatigue = Some(fatigue);
             self.activity = self
