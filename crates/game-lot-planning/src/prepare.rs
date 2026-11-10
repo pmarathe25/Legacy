@@ -210,10 +210,20 @@ pub fn prepare(
                 .ok_or_else(|| "missing output custody".to_string())
         })
         .collect::<Result<_, _>>()?;
-    let mut spoiled: Vec<_> = containers
+    let expiring: Vec<_> = containers
         .par_iter()
-        .filter(|container| container.next_expiry.is_some_and(|at| at <= next))
-        .flat_map(|container| {
+        .enumerate()
+        .filter_map(|(index, container)| {
+            container
+                .next_expiry
+                .is_some_and(|at| at <= next)
+                .then_some(index)
+        })
+        .collect();
+    let mut spoiled: Vec<_> = expiring
+        .par_iter()
+        .flat_map(|&index| {
+            let container = containers[index];
             container.lots.par_iter().filter_map(move |lot| {
                 lot.expires_at.filter(|&at| at <= next).map(|at| Spoilage {
                     place: container.place,
@@ -780,17 +790,7 @@ pub fn prepare(
         .map(|row| row.0)
         .chain(precise.par_iter().map(|row| row.0))
         .chain(incoming.par_iter().map(|row| row.0))
-        .chain(
-            containers
-                .par_iter()
-                .enumerate()
-                .filter_map(|(index, container)| {
-                    container
-                        .next_expiry
-                        .is_some_and(|at| at <= next)
-                        .then_some(index)
-                }),
-        )
+        .chain(expiring.par_iter().copied())
         .collect();
     touched.par_sort_unstable();
     let touched: Vec<_> = touched
