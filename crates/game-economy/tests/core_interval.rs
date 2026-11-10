@@ -969,6 +969,124 @@ fn autonomous_interval_meals_follow_personal_preferences_and_occupancy() {
 }
 
 #[test]
+fn autonomous_interval_work_respects_personal_choices_and_real_stock() {
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut initial = fixture();
+                initial.travel = None;
+                initial.nutrition = None;
+                initial.pending_food.clear();
+                initial.people = (1..=7)
+                    .map(|id| {
+                        let mut person = initial.people[0].clone();
+                        person.id = id;
+                        person.willing_to_work = true;
+                        person
+                    })
+                    .collect();
+                initial.people[2].willing_to_work = false;
+                initial.people[3].controlled = true;
+                initial.people[5].hunger = 11;
+                let stock = initial
+                    .physical
+                    .custody
+                    .containers
+                    .iter_mut()
+                    .find(|row| row.place == Place::Stock { region: 1, good: 1 })
+                    .unwrap();
+                *stock = Container::new(
+                    stock.place,
+                    10,
+                    vec![Lot {
+                        item: None,
+                        good: 1,
+                        quantity: 2,
+                        expires_at: None,
+                    }],
+                )
+                .unwrap();
+                let mut owner = game_autowork::Autowork {
+                    next_id: 2,
+                    policies: (2..=7)
+                        .map(|person| game_autowork::Policy {
+                            person,
+                            recipe: 1,
+                            enabled: person != 5,
+                            disregard_claims: false,
+                        })
+                        .collect(),
+                    requests: None,
+                };
+                let mut core = CoreInterval::begin(initial, &[(1, 1)]).unwrap();
+                core.progress(300).unwrap();
+                let before = core.snapshot();
+                let owner_before = owner.clone();
+                assert!(
+                    core.start_autonomous_work(0, 299, &mut owner, &[], 2)
+                        .is_err()
+                );
+                assert!(
+                    core.start_autonomous_work(0, 300, &mut owner, &[7, 2], 2)
+                        .is_err()
+                );
+                assert_eq!(core.snapshot(), before);
+                assert_eq!(owner, owner_before);
+                let mut invalid = owner.clone();
+                invalid.policies.push(invalid.policies[0].clone());
+                let invalid_before = invalid.clone();
+                assert!(
+                    core.start_autonomous_work(0, 300, &mut invalid, &[], 2)
+                        .is_err()
+                );
+                assert_eq!(invalid, invalid_before);
+                assert_eq!(core.snapshot(), before);
+                assert_eq!(
+                    core.start_autonomous_work(0, 300, &mut owner, &[], 2)
+                        .unwrap(),
+                    vec![(2, true)]
+                );
+                assert_eq!(owner.next_id, 3);
+                let after = core.snapshot();
+                assert_eq!(
+                    after
+                        .physical
+                        .work
+                        .iter()
+                        .map(|row| row.job.worker)
+                        .collect::<Vec<_>>(),
+                    vec![1, 2]
+                );
+                assert_eq!(
+                    after
+                        .physical
+                        .custody
+                        .containers
+                        .iter()
+                        .find(|row| row.place == Place::Stock { region: 1, good: 1 })
+                        .unwrap()
+                        .used,
+                    0
+                );
+                let saved = serde_json::to_string(&(after, owner)).unwrap();
+                let (snapshot, owner): (CoreSnapshot, game_autowork::Autowork) =
+                    serde_json::from_str(&saved).unwrap();
+                let mut core = CoreInterval::resume(snapshot).unwrap();
+                core.progress(500).unwrap();
+                assert_eq!(
+                    core.publish_early_work().unwrap().unwrap().finished,
+                    vec![2]
+                );
+                (core.snapshot(), owner)
+            })
+    };
+    assert_eq!(run(1), run(6));
+}
+
+#[test]
 fn unsupported_completed_work_can_be_deferred_without_blocking_other_jobs() {
     let run =
         |workers| {
@@ -1809,11 +1927,13 @@ fn interval_work_admission_benchmark() {
     let defer = std::env::var_os("LEGACY_DEFER").is_some();
     let identified = std::env::var_os("LEGACY_IDENTIFIED_SETTLE").is_some();
     let identified_early = std::env::var_os("LEGACY_IDENTIFIED_EARLY").is_some();
+    let automatic = std::env::var_os("LEGACY_AUTOWORK").is_some();
     assert!(
         [
             defer,
             identified,
             identified_early,
+            automatic,
             std::env::var_os("LEGACY_ABANDON").is_some()
         ]
         .iter()
@@ -1828,6 +1948,9 @@ fn interval_work_admission_benchmark() {
         .map(|id| {
             let mut p = person.clone();
             p.id = id;
+            if automatic {
+                p.willing_to_work = true;
+            }
             p
         })
         .collect();
@@ -1886,12 +2009,35 @@ fn interval_work_admission_benchmark() {
             let mut early_samples = Vec::new();
             for round in 0..4 {
                 let mut settled_owner = None;
+                let mut auto = automatic.then(|| game_autowork::Autowork {
+                    next_id: 2,
+                    policies: (2..=count)
+                        .map(|person| game_autowork::Policy {
+                            person,
+                            recipe: 1,
+                            enabled: true,
+                            disregard_claims: false,
+                        })
+                        .collect(),
+                    requests: None,
+                });
                 let mut core = CoreInterval::begin(initial.clone(), &[(1, 1)]).unwrap();
                 assert_eq!(core.progress(400).unwrap(), 400);
                 let start = std::time::Instant::now();
-                let result = core.start_work(0, 400, &starts).unwrap();
+                let result = if let Some(owner) = &mut auto {
+                    core.start_autonomous_work(0, 400, owner, &[], 1).unwrap()
+                } else {
+                    core.start_work(0, 400, &starts).unwrap()
+                };
                 let elapsed = start.elapsed().as_secs_f64();
-                assert_eq!(result.len(), starts.len());
+                assert_eq!(
+                    result.len(),
+                    if automatic {
+                        stock_units as usize
+                    } else {
+                        starts.len()
+                    }
+                );
                 assert_eq!(
                     result.iter().filter(|row| row.1).count() as u64,
                     stock_units
@@ -1998,6 +2144,9 @@ fn interval_work_admission_benchmark() {
                     if let Some(owner) = settled_owner {
                         serde_json::to_vec(&owner).unwrap().hash(&mut hash);
                     }
+                    if let Some(owner) = auto {
+                        serde_json::to_vec(&owner).unwrap().hash(&mut hash);
+                    }
                     println!("fingerprint={:016x}", hash.finish());
                 }
                 if round > 0 {
@@ -2010,6 +2159,12 @@ fn interval_work_admission_benchmark() {
                 starts.len(),
                 samples[1]
             );
+            if automatic {
+                println!(
+                    "workers={workers} autonomous_starts={stock_units} elapsed={:.6}",
+                    samples[1]
+                );
+            }
             if !abandonment_samples.is_empty() {
                 abandonment_samples.sort_by(f64::total_cmp);
                 println!(

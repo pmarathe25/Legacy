@@ -433,6 +433,67 @@ impl CoreInterval {
         }
         self.physical.start_interval_work(requests, self.seed)
     }
+    /// Let enabled personal work policies select and physically reserve work.
+    /// The host excludes people occupied by other activities or blocked by
+    /// owners absent from this limited core, such as sites, tools and claims.
+    pub fn start_autonomous_work(
+        &mut self,
+        tick: u64,
+        offset_millis: u64,
+        owner: &mut game_autowork::Autowork,
+        blocked: &[u64],
+        rate: u64,
+    ) -> Result<Vec<(u64, bool)>, String> {
+        if self.physical.tick() != tick
+            || self.elapsed_millis() != Some(offset_millis)
+            || offset_millis == 0
+            || offset_millis >= self.physical.tick_millis()
+            || rate == 0
+            || owner.next_id == 0
+            || blocked.par_windows(2).any(|rows| rows[0] >= rows[1])
+        {
+            return Err("invalid autonomous work request".into());
+        }
+        if self.next_deadline(None)?.after_millis == 0 {
+            return Err("publish pending interval events before starting work".into());
+        }
+        let mut busy = blocked.to_vec();
+        busy.par_extend(
+            self.people
+                .par_iter()
+                .filter(|person| person.controlled || !person.willing_to_work)
+                .map(|person| person.id),
+        );
+        busy.par_extend(
+            self.physical
+                .work()
+                .par_iter()
+                .filter(|row| row.phase == game_lot_runtime::Phase::Working)
+                .map(|row| row.job.worker),
+        );
+        busy.par_sort_unstable();
+        busy.dedup();
+        let people: Vec<_> = self
+            .people
+            .par_iter()
+            .map(|person| (person.id, person.region, person.health, person.hunger))
+            .collect();
+        let view = self.physical.view(tick)?;
+        let production =
+            game_lot_projection::production(&self.physical, &view, self.rules.max_work_hunger);
+        let max_job = self.physical.work().last().map(|row| row.job.id);
+        let Some(plan) = owner.plan(&people, &production, &busy, max_job)? else {
+            return Ok(Vec::new());
+        };
+        let requests: Vec<_> = plan
+            .requests
+            .par_iter()
+            .map(|start| (*start, rate))
+            .collect();
+        let results = self.start_work(tick, offset_millis, &requests)?;
+        owner.next_id = plan.next_id;
+        Ok(results)
+    }
     /// Stop chosen jobs at this offset. Inputs stay in job custody until the
     /// boundary, where their return can succeed or remain blocked.
     pub fn abandon_work(

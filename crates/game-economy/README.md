@@ -14,6 +14,8 @@ Chosen living people can eat food they actually carry at a partial offset. Only 
 
 The host can also stage autonomous meal choices at an offset: hungry people with `seek_meals` select an unexpired portion from their own custody. Controlled people are excluded, and the host supplies people occupied by other activities. This does not yet schedule the rest of their decisions or food acquisition.
 
+`start_autonomous_work` lets enabled personal work policies choose and reserve inputs at an offset, while respecting personal willingness, health, hunger, and existing active work. The host must exclude actors blocked by owners absent from this core, including site, tool, claim, and other activity constraints. This slice does not process work requests or the rest of the autonomous decision system.
+
 When a meal consumes identified property, the host uses `prepare_meals` to stage its item-owner changes before committing the physical and physiological effects. The `eat` convenience method rejects identified consumption. Likewise, ordinary early-work and boundary convenience calls reject identified input consumption; the host must use their staged forms to update item owners.
 
 `CoreInterval::next_deadline` observes the earliest work completion, traveler arrival, optional hunger threshold, or quantum boundary, including ties. `progress_to_deadline` stops at that time. The core can publish nonperishable work and arrivals at the offset; other early deadlines remain pending until settlement.
@@ -41,6 +43,8 @@ Set `LEGACY_DEFER=1` instead to let the admitted jobs finish and defer their pub
 Set `LEGACY_IDENTIFIED_SETTLE=1` to stage and commit identified output with tool conditions at the boundary. A 50,000-job run took 170, 99, 69, and 74 ms at one, two, four, and six workers, with matching physical and tool-owner fingerprints. It excludes earlier admission and does not run whole-economy decisions.
 
 Set `LEGACY_IDENTIFIED_EARLY=1` to stage and publish identified nonperishable output before the boundary. A 49,999-job run including staged tool conditions took 161, 95, 67, and 59 ms at those worker counts, with matching combined fingerprints. Earlier admission and later delivery are excluded.
+
+Set `LEGACY_AUTOWORK=1` to include personal policy selection, stock projection, and work admission. One 49,999-start run took 64.5, 37.8, 27.0, and 27.1 ms at one, two, four, and six workers. With `LEGACY_ADMISSION_STOCK=25000`, 25,000 starts took 33.2, 21.6, 15.9, and 14.1 ms. Fingerprints matched within each workload; these partial-core timings are sublinear.
 
 The ignored `interval_shared_transfer_benchmark` measures transfers from one stock into existing personal custody. A 50,000-transfer run took 27.4, 16.3, 10.6, and 10.4 ms at one, two, four, and six workers, with matching fingerprints. It excludes social choices and is not a campaign measurement.
 
