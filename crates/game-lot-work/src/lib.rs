@@ -227,38 +227,48 @@ pub fn start_flat(requests: &[Start], recipes: &[Recipe]) -> Result<Option<FlatS
     let jobs = start_jobs(requests, recipes)?;
     #[cfg(feature = "profile")]
     let _phase = game_diagnostics::span("work.start.flat_transactions");
-    let rows: Vec<_> = jobs
-        .par_iter()
+    let chunk_size = jobs.len().div_ceil(64).clamp(16, 2048);
+    let chunks: Vec<_> = jobs
+        .par_chunks(chunk_size)
         .enumerate()
-        .map(|(index, job)| {
-            let input = Container::new(Place::JobInput(job.id), capacity(&job.reserved)?, vec![])?;
-            let output = Container::new(Place::JobOutput(job.id), capacity(&job.outputs)?, vec![])?;
-            let amount = &job.reserved[0];
-            let movement = Movement {
-                item: None,
-                id: u64::try_from(index)
-                    .map_err(|_| "operation identity overflow")?
-                    .checked_add(1)
-                    .ok_or("operation identity overflow")?,
-                from: Place::Stock {
-                    region: job.region,
+        .map(|(chunk_index, chunk)| {
+            let mut containers = Vec::with_capacity(chunk.len() * 2);
+            let mut transfers = Vec::with_capacity(chunk.len());
+            for (offset, job) in chunk.iter().enumerate() {
+                let index = chunk_index * chunk_size + offset;
+                let input =
+                    Container::new(Place::JobInput(job.id), capacity(&job.reserved)?, vec![])?;
+                let output =
+                    Container::new(Place::JobOutput(job.id), capacity(&job.outputs)?, vec![])?;
+                let amount = &job.reserved[0];
+                let movement = Movement {
+                    item: None,
+                    id: u64::try_from(index)
+                        .map_err(|_| "operation identity overflow")?
+                        .checked_add(1)
+                        .ok_or("operation identity overflow")?,
+                    from: Place::Stock {
+                        region: job.region,
+                        good: amount.good,
+                    },
+                    to: Some(input.place),
                     good: amount.good,
-                },
-                to: Some(input.place),
-                good: amount.good,
-                quantity: amount.quantity,
-            };
-            Ok((
-                [input, output],
-                SimpleTransfer {
+                    quantity: amount.quantity,
+                };
+                containers.extend([input, output]);
+                transfers.push(SimpleTransfer {
                     action: job.id,
                     movement,
-                },
-            ))
+                });
+            }
+            Ok((containers, transfers))
         })
         .collect::<Result<_, String>>()?;
-    let (pairs, transfers): (Vec<_>, Vec<_>) = rows.into_par_iter().unzip();
-    let containers = pairs.into_par_iter().flat_map_iter(|pair| pair).collect();
+    let (container_chunks, transfer_chunks): (Vec<_>, Vec<_>) = chunks.into_iter().unzip();
+    let (containers, transfers) = rayon::join(
+        || container_chunks.into_par_iter().flatten().collect(),
+        || transfer_chunks.into_par_iter().flatten().collect(),
+    );
     Ok(Some(FlatStarts {
         containers,
         jobs,

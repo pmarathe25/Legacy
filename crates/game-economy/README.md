@@ -16,6 +16,8 @@ Packing homogeneous single-input starts avoids per-job transaction vectors. In a
 
 At 199,999 packed starts, one run took 260, 163, 123, and 107 ms at one, two, four, and six workers, respectively, with matching fingerprints. Increasing the workload did not produce linear scaling.
 
+Building the packed holders and transfers in chunks reduced a subsequent instrumented comparison at that size from 263, 162, 116, and 114 ms to 250, 148, 108, and 96 ms at the same worker counts, with matching fingerprints. These timings remain sublinear and measure only partial-core work admission.
+
 An incapacitated traveler does not move during the core interval, even if an immortal recovers at its closing boundary. The existing coarse economy path can move such a traveler after recovery in the same boundary, so this case is not equivalent between the two paths.
 
 Work sites can optionally wear with completed production and require real repair materials before they admit more work. An individual may choose to repair an idle site, including under their own fear or felt obligation; competing activity and material consumption are resolved at the physical boundary.
