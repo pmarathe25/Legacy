@@ -741,6 +741,39 @@ impl Travel {
         self.settle_journeys(people, self.journeys.par_iter().cloned().collect())
     }
 
+    /// Publish living travelers whose elapsed journey has completed, without
+    /// settling deaths or changing any other journey.
+    /// People and journeys must be ordered by person ID as in a validated world.
+    pub fn publish_arrivals(&mut self, people: &mut [Person]) -> Vec<u64> {
+        let arrivals: Vec<_> = self
+            .journeys
+            .par_iter()
+            .filter_map(|journey| {
+                let person = people
+                    .binary_search_by_key(&journey.person, |p| p.id)
+                    .ok()?;
+                (journey.pending_arrival && people[person].health > 0).then_some(journey.person)
+            })
+            .collect();
+        if arrivals.is_empty() {
+            return arrivals;
+        }
+        people.par_iter_mut().for_each(|person| {
+            if arrivals.binary_search(&person.id).is_ok() {
+                let index = self
+                    .journeys
+                    .binary_search_by_key(&person.id, |j| j.person)
+                    .expect("arrival came from journey");
+                person.region = Some(self.journeys[index].destination);
+            }
+        });
+        self.journeys = std::mem::take(&mut self.journeys)
+            .into_par_iter()
+            .filter(|journey| arrivals.binary_search(&journey.person).is_err())
+            .collect();
+        arrivals
+    }
+
     fn settle_journeys(&self, people: &mut [Person], mut journeys: Vec<Journey>) -> Self {
         journeys.par_sort_unstable_by_key(|j| j.person);
         people.par_iter_mut().for_each(|person| {
@@ -815,6 +848,39 @@ mod elapsed_tests {
             progress_millis: 0,
             pending_arrival: false,
         }
+    }
+
+    #[test]
+    fn early_arrivals_do_not_settle_dead_or_unfinished_travelers() {
+        let person = |id, health| Person {
+            id,
+            region: None,
+            health,
+            hunger: 0,
+            hunger_remainder: 0,
+            immortal: None,
+            willing_to_work: false,
+            seek_meals: false,
+            controlled: false,
+        };
+        let mut people = vec![person(1, 100), person(2, 0), person(3, 100)];
+        let mut rows = vec![journey(1), journey(2), journey(3)];
+        rows[0].advance_elapsed(2000, 1000).unwrap();
+        rows[1].advance_elapsed(2000, 1000).unwrap();
+        let mut travel = Travel {
+            journeys: rows,
+            ..Travel::default()
+        };
+        assert_eq!(travel.publish_arrivals(&mut people), vec![1]);
+        assert_eq!(
+            people.iter().map(|p| p.region).collect::<Vec<_>>(),
+            vec![Some(2), None, None]
+        );
+        assert_eq!(
+            travel.journeys.iter().map(|j| j.person).collect::<Vec<_>>(),
+            vec![2, 3]
+        );
+        assert!(travel.publish_arrivals(&mut people).is_empty());
     }
 
     #[test]

@@ -16,7 +16,7 @@ Directed routes can have authored half-open closure intervals. A valid departure
 
 Journeys retain exact fractional progress and can report an arrival deadline. A finished journey can be saved as pending until arrival is published; the traveler remains in transit until settlement. Travelers on the same route are colocated only when their recorded progress matches. These are owner-level facilities; whole-boundary economy advancement still publishes arrivals at a boundary, and partial-boundary world advancement is not yet supported.
 
-`Travel::progress_elapsed` validates a sorted batch before progressing independent journeys in parallel. It leaves incapacitated travelers in place and does not publish arrivals; `settle_elapsed` publishes completed arrivals without adding another interval of travel. The caller coordinates world time and draft invalidation.
+`Travel::progress_elapsed` validates a sorted batch before progressing independent journeys in parallel. It leaves incapacitated travelers in place and does not publish arrivals; `publish_arrivals` publishes completed living travelers without settling deaths, and `settle_elapsed` publishes boundary arrivals and deaths without adding another interval of travel. The caller coordinates world time and draft invalidation.
 
 The existing `traveling_social_benchmark` accepts `LEGACY_INTERVAL_PROGRESS=1` to time only the travel and hunger counter batches. For 100,000 people, one run took 5.24 ms with one worker and 1.28 ms with six, with matching state fingerprints. This excludes settlement and all other world systems.
 

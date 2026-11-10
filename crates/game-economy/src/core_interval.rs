@@ -2,7 +2,7 @@
 //!
 //! This coordinator does not run economic decisions or other world owners.
 //! Its caller supplies already admitted work rates. Nonperishable work can be
-//! published early; other periodic effects settle at the existing quantum boundary.
+//! published early, as can completed travel; periodic effects settle at the boundary.
 use game_economy_person::{
     Person, Rules,
     travel::{self, Travel},
@@ -48,6 +48,13 @@ pub struct CoreDeadline {
     pub work: bool,
     pub arrival: bool,
     pub hunger: bool,
+}
+/// Travelers published at a partial-interval offset.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CoreArrivals {
+    pub tick: u64,
+    pub offset_millis: u64,
+    pub people: Vec<u64>,
 }
 fn earliest(left: Option<u128>, right: Option<u128>) -> Option<u128> {
     match (left, right) {
@@ -204,7 +211,7 @@ impl CoreInterval {
             .map(|interval| interval.elapsed_millis)
     }
     /// Inspect the earliest work, travel, or optional hunger threshold. Early
-    /// publication is currently available only for nonperishable work.
+    /// Work and travel can be published early under the restrictions below.
     pub fn next_deadline(&self, hunger_threshold: Option<u32>) -> Result<CoreDeadline, String> {
         let interval = self
             .physical
@@ -289,6 +296,22 @@ impl CoreInterval {
             return Ok(None);
         };
         self.physical.commit_early_work(draft).map(Some)
+    }
+    /// Publish completed living travelers without running other world effects.
+    pub fn publish_arrivals(&mut self) -> Result<Option<CoreArrivals>, String> {
+        let offset = self.elapsed_millis().ok_or("no physical interval")?;
+        if offset == 0 || offset >= self.physical.tick_millis() {
+            return Err("early arrival requires a partial interval".into());
+        }
+        let Some(travel) = &mut self.travel else {
+            return Ok(None);
+        };
+        let people = travel.publish_arrivals(&mut self.people);
+        Ok((!people.is_empty()).then_some(CoreArrivals {
+            tick: self.physical.tick(),
+            offset_millis: offset,
+            people,
+        }))
     }
     /// Progress without repeating decisions, publishing arrivals, or completing work.
     /// Failed validation leaves all owners unchanged.

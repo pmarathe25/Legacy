@@ -211,6 +211,56 @@ fn composed_core_interval_is_chunk_independent_and_resumable() {
 }
 
 #[test]
+fn early_arrival_is_resumable_and_does_not_run_periodic_effects() {
+    let run = |workers, chunks: &[u64]| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut initial = fixture();
+                initial.travel.as_mut().unwrap().journeys[0].progress_millis = 500;
+                let mut core = CoreInterval::begin(initial, &[(1, 1)]).unwrap();
+                assert!(core.publish_arrivals().is_err());
+                for &chunk in chunks {
+                    assert_eq!(core.progress_to_deadline(chunk, None).unwrap(), chunk);
+                }
+                assert!(core.next_deadline(None).unwrap().arrival);
+                let before = core.snapshot();
+                assert_eq!(before.people[1].region, None);
+                let mut core = CoreInterval::resume(
+                    serde_json::from_str(&serde_json::to_string(&before).unwrap()).unwrap(),
+                )
+                .unwrap();
+                let arrived = core.publish_arrivals().unwrap().unwrap();
+                assert_eq!((arrived.tick, arrived.offset_millis), (0, 500));
+                assert_eq!(arrived.people, vec![2]);
+                let after = core.snapshot();
+                assert_eq!(after.people[1].region, Some(2));
+                assert_eq!(after.people[1].health, 100);
+                assert_eq!(after.physical.custody.tick, 0);
+                assert_eq!(after.pending_food.len(), 1);
+                assert!(after.travel.as_ref().unwrap().journeys.is_empty());
+                let mut core = CoreInterval::resume(
+                    serde_json::from_str(&serde_json::to_string(&after).unwrap()).unwrap(),
+                )
+                .unwrap();
+                assert_eq!(core.publish_arrivals().unwrap(), None);
+                assert!(!core.next_deadline(None).unwrap().arrival);
+                assert_eq!(core.progress_to_deadline(500, None).unwrap(), 500);
+                assert!(core.publish_arrivals().is_err());
+                core.settle().unwrap();
+                core.snapshot()
+            })
+    };
+    let one = run(1, &[500]);
+    let multiple = run(4, &[125, 375]);
+    assert_eq!(one, multiple);
+    assert_eq!(one.people[1].region, Some(2));
+    assert_eq!(one.physical.custody.tick, 1);
+}
+
+#[test]
 fn core_publishes_early_work_without_advancing_periodic_systems() {
     let run = |workers, chunks: &[u64]| {
         rayon::ThreadPoolBuilder::new()
@@ -394,6 +444,7 @@ fn composed_core_progress_benchmark() {
         .and_then(|value| value.parse().ok())
         .unwrap_or(100_000u64);
     let deadline = std::env::var_os("LEGACY_CORE_DEADLINE").is_some();
+    let arrivals = std::env::var_os("LEGACY_CORE_ARRIVALS").is_some();
     let many_jobs = std::env::var_os("LEGACY_CORE_JOBS").is_some();
     assert!(count >= 2 && count.is_multiple_of(2));
     let mut initial = fixture();
@@ -417,7 +468,7 @@ fn composed_core_progress_benchmark() {
             source: 1,
             destination: 2,
             remaining: 1,
-            progress_millis: 0,
+            progress_millis: if arrivals { 500 } else { 0 },
             pending_arrival: false,
         })
         .collect();
@@ -475,8 +526,13 @@ fn composed_core_progress_benchmark() {
             let mut samples = Vec::new();
             for round in 0..4 {
                 let mut interval = CoreInterval::begin(initial.clone(), &rates).unwrap();
+                if arrivals {
+                    assert_eq!(interval.progress(500).unwrap(), 500);
+                }
                 let started = std::time::Instant::now();
-                if deadline {
+                if arrivals {
+                    assert_eq!(interval.publish_arrivals().unwrap().unwrap().people.len(), (count / 2) as usize);
+                } else if deadline {
                     assert_eq!(interval.next_deadline(Some(3)).unwrap().after_millis, 500);
                 } else {
                     assert_eq!(interval.progress(500).unwrap(), 500);
@@ -511,7 +567,7 @@ fn composed_core_progress_benchmark() {
             }
             samples.sort_by(f64::total_cmp);
             println!(
-                "workers={workers} people={count} travelers={} jobs={} deadline={deadline} elapsed={:.6}",
+                "workers={workers} people={count} travelers={} jobs={} deadline={deadline} arrivals={arrivals} elapsed={:.6}",
                 count / 2,
                 rates.len(),
                 samples[1]
