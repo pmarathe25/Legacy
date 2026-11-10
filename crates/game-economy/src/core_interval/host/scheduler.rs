@@ -643,7 +643,7 @@ impl CoreHost {
                 .expect("active interval")
                 .rates
                 .clone();
-            let events = match self.settle() {
+            let events = match self.settle_with_occupied(blocked) {
                 Ok(events) => events,
                 Err(error) => {
                     combined.failure = Some(error);

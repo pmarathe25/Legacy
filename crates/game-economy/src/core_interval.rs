@@ -803,6 +803,16 @@ impl CoreInterval {
         &mut self,
         identified: Option<game_lot_runtime::IdentifiedProduction<'_>>,
     ) -> Result<CoreSettlementDraft, String> {
+        self.prepare_settlement_with_growth(&[], game_lot_runtime::Growth::default(), identified)
+    }
+
+    /// Stage boundary actions alongside the physical and personal settlement.
+    pub fn prepare_settlement_with_growth(
+        &mut self,
+        actions: &[game_lots::Transaction],
+        growth: game_lot_runtime::Growth<'_>,
+        identified: Option<game_lot_runtime::IdentifiedProduction<'_>>,
+    ) -> Result<CoreSettlementDraft, String> {
         let quantum = self.physical.tick_millis();
         if self.elapsed_millis() != Some(quantum) {
             return Err("interval is not complete".into());
@@ -825,7 +835,7 @@ impl CoreInterval {
             .map(|travel| travel.settle_elapsed(&mut draft.people));
         let physical = self
             .physical
-            .prepare_interval_settlement(self.seed, identified)?;
+            .prepare_interval_settlement_with_growth(actions, growth, self.seed, identified)?;
         Ok(CoreSettlementDraft {
             generation: self.generation,
             physical,

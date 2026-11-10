@@ -31,6 +31,17 @@ impl Runtime {
         seed: u64,
         identified: Option<IdentifiedProduction<'_>>,
     ) -> Result<IntervalSettlementDraft, String> {
+        self.prepare_interval_settlement_with_growth(&[], Growth::default(), seed, identified)
+    }
+
+    /// Stage boundary-owned actions and growth with the same physical generation.
+    pub fn prepare_interval_settlement_with_growth(
+        &mut self,
+        external: &[game_lots::Transaction],
+        growth: Growth<'_>,
+        seed: u64,
+        identified: Option<IdentifiedProduction<'_>>,
+    ) -> Result<IntervalSettlementDraft, String> {
         let interval = self
             .work_interval
             .as_ref()
@@ -44,10 +55,10 @@ impl Runtime {
         let interval = self.work_interval.take().expect("checked interval");
         let result = self.prepare_with_identified_production(
             &[],
+            external,
             &[],
             &[],
-            &[],
-            (Growth::default(), &[]),
+            (growth, &[]),
             seed,
             identified,
         );
