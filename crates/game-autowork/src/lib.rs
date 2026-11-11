@@ -35,10 +35,12 @@ pub struct Policy {
     #[serde(default)]
     pub disregard_claims: bool,
 }
-struct Intent {
-    person: u64,
-    region: u64,
-    recipe: u32,
+/// A person's possible work start, before any shared stock is awarded.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Opportunity {
+    pub person: u64,
+    pub region: u64,
+    pub recipe: u32,
 }
 struct Claim {
     region: u64,
@@ -146,13 +148,87 @@ impl Autowork {
         max_job_id: Option<u64>,
         property: Option<&game_property::Property>,
     ) -> Result<Option<Plan>, String> {
-        let rights = property.map(|property| property.index());
         let recipes: HashMap<_, _> = production.recipes.iter().map(|r| (r.id, r)).collect();
         let inventories: HashMap<_, _> = production
             .inventories
             .iter()
             .map(|i| (i.region, i))
             .collect();
+        let intents = self.opportunities_validated(
+            people,
+            production,
+            busy,
+            property,
+            &recipes,
+            &inventories,
+        );
+        let granted = grant(intents, &recipes, &inventories);
+        if granted.is_empty() {
+            return Ok(None);
+        }
+        let after_live = max_job_id
+            .map_or(Some(0), |id| id.checked_add(1))
+            .ok_or("job id overflow")?;
+        let first = self.next_id.max(after_live);
+        let next_id = first
+            .checked_add(u64::try_from(granted.len()).map_err(|_| "job count overflow")?)
+            .ok_or("job id overflow")?;
+        let requests: Vec<_> = granted
+            .par_iter()
+            .enumerate()
+            .map(|(index, intent)| Start {
+                id: first + index as u64,
+                worker: intent.person,
+                region: intent.region,
+                recipe: intent.recipe,
+                units: 1,
+            })
+            .collect();
+        let actors = granted.par_iter().map(|intent| intent.person).collect();
+        Ok(Some(Plan {
+            requests,
+            next_id,
+            actors,
+        }))
+    }
+
+    /// Inspect eligible personal intentions without reserving supplies or jobs.
+    pub fn opportunities(
+        &self,
+        people: &[PersonSnapshot],
+        production: &Production,
+        busy: &[u64],
+        property: Option<&game_property::Property>,
+    ) -> Result<Vec<Opportunity>, String> {
+        self.validate(people, production)?;
+        let recipes = production.recipes.iter().map(|r| (r.id, r)).collect();
+        let inventories = production
+            .inventories
+            .iter()
+            .map(|i| (i.region, i))
+            .collect();
+        Ok(
+            self.opportunities_validated(
+                people,
+                production,
+                busy,
+                property,
+                &recipes,
+                &inventories,
+            ),
+        )
+    }
+
+    fn opportunities_validated(
+        &self,
+        people: &[PersonSnapshot],
+        production: &Production,
+        busy: &[u64],
+        property: Option<&game_property::Property>,
+        recipes: &HashMap<u32, &Recipe>,
+        inventories: &HashMap<u64, &Inventory>,
+    ) -> Vec<Opportunity> {
+        let rights = property.map(|property| property.index());
         // The composed work owner already supplies ordered IDs. Preserve the
         // public API's support for unordered callers without copying that
         // ordered hot path on every boundary.
@@ -197,7 +273,7 @@ impl Autowork {
                 {
                     return None;
                 }
-                Some(Intent {
+                Some(Opportunity {
                     person: policy.person,
                     region,
                     recipe: policy.recipe,
@@ -210,44 +286,17 @@ impl Autowork {
         {
             intents.par_sort_unstable_by_key(|intent| intent.person);
         }
-        let granted = grant(intents, &recipes, &inventories);
-        if granted.is_empty() {
-            return Ok(None);
-        }
-        let after_live = max_job_id
-            .map_or(Some(0), |id| id.checked_add(1))
-            .ok_or("job id overflow")?;
-        let first = self.next_id.max(after_live);
-        let next_id = first
-            .checked_add(u64::try_from(granted.len()).map_err(|_| "job count overflow")?)
-            .ok_or("job id overflow")?;
-        let requests: Vec<_> = granted
-            .par_iter()
-            .enumerate()
-            .map(|(index, intent)| Start {
-                id: first + index as u64,
-                worker: intent.person,
-                region: intent.region,
-                recipe: intent.recipe,
-                units: 1,
-            })
-            .collect();
-        let actors = granted.par_iter().map(|intent| intent.person).collect();
-        Ok(Some(Plan {
-            requests,
-            next_id,
-            actors,
-        }))
+        intents
     }
 }
 
 /// Resolve all claims directly when stock is abundant; otherwise preserve the
 /// deterministic per-resource prefix rule for contested atomic jobs.
 fn grant(
-    intents: Vec<Intent>,
+    intents: Vec<Opportunity>,
     recipes: &HashMap<u32, &Recipe>,
     inventories: &HashMap<u64, &Inventory>,
-) -> Vec<Intent> {
+) -> Vec<Opportunity> {
     let homogeneous = intents.first().is_some_and(|first| {
         intents
             .par_iter()

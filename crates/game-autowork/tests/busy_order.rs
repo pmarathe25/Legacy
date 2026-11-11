@@ -63,4 +63,24 @@ fn ordered_and_unordered_busy_people_exclude_the_same_workers() {
     assert_eq!(ordered.actors, shuffled.actors);
     assert_eq!(ordered.requests, shuffled.requests);
     assert_eq!(ordered.next_id, shuffled.next_id);
+
+    // A scarce stock does not erase anyone's personal opportunity before
+    // physical admission; only one later start can obtain the material.
+    let mut scarce = production.clone();
+    scarce.inventories[0].stocks[0].quantity = 1;
+    let opportunities = auto
+        .opportunities(&people, &scarce, &[4, 2, 2], None)
+        .unwrap();
+    assert_eq!(
+        opportunities
+            .iter()
+            .map(|row| row.person)
+            .collect::<Vec<_>>(),
+        vec![1, 3]
+    );
+    let admitted = auto
+        .plan_validated(&people, &scarce, &[2, 4], None)
+        .unwrap()
+        .unwrap();
+    assert_eq!(admitted.actors, vec![1]);
 }
