@@ -16,3 +16,7 @@ serde.workspace=true
 game-family-model = { path = "../game-family-model" }
 
 game-family-index = { path = "../game-family-index" }
+
+[dev-dependencies]
+game-opinions = { path = "../game-opinions" }
+serde_json.workspace = true

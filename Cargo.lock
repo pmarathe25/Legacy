@@ -671,8 +671,10 @@ dependencies = [
  "game-family-model",
  "game-genetics",
  "game-matching",
+ "game-opinions",
  "rayon",
  "serde",
+ "serde_json",
 ]
 
 [[package]]

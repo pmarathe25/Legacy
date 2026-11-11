@@ -523,3 +523,96 @@ fn concentrated_mate_choice_benchmark() {
         }
     }
 }
+
+#[test]
+#[ignore = "manual concentrated mate-choice benchmark with directed opinion records"]
+fn concentrated_mate_choice_with_opinions_benchmark() {
+    struct OpinionView<'a>(game_opinions::Index<'a>);
+    impl PhysicalView for OpinionView<'_> {
+        fn read(&self, id: u64) -> LifeInput {
+            LifeInput {
+                id,
+                region: Some(1),
+                health: 100,
+                hunger: 0,
+            }
+        }
+        fn mate_feelings(&self, observer: u64, target: u64) -> MateFeelings {
+            let (trust, affinity, fear, obligation) = self.0.subjective(observer, target);
+            MateFeelings {
+                trust,
+                affinity,
+                fear,
+                obligation,
+            }
+        }
+    }
+    let mut state = family();
+    state.members = (1..=20_000)
+        .map(|id| {
+            let mut person = member(id, if id % 2 == 0 { Sex::Male } else { Sex::Female }, None);
+            person.mate_preference = Some(MatePreference {
+                desire: 1000,
+                genetic_weight: 0,
+                affinity_weight: 3,
+                trust_weight: 1,
+                fear_weight: 1,
+                obligation_weight: 1,
+                attraction_weight: 100,
+                female_attraction: 0,
+                male_attraction: 0,
+                hunger_weight: 0,
+                dependent_weight: 0,
+                minimum: -1000,
+            });
+            person
+        })
+        .collect();
+    state.next_id = 20_001;
+    let mut opinions: game_opinions::Opinions = serde_json::from_value(serde_json::json!({
+        "rules":{"minimum":-100,"maximum":100,"initial":0,"fulfilled_gain":1,"default_loss":1}
+    }))
+    .unwrap();
+    for observer in 1..=20_000 {
+        for offset in 1..=4 {
+            opinions.records.push(game_opinions::Opinion {
+                observer,
+                target: (observer + offset - 1) % 20_000 + 1,
+                trust: offset as i32,
+                affinity: offset as i32,
+                fear: offset,
+                obligation: offset,
+            });
+        }
+    }
+    opinions
+        .records
+        .sort_unstable_by_key(|row| (row.observer, row.target));
+    let mut reference = None;
+    for workers in [1, 6] {
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap();
+        let mut durations = Vec::new();
+        for _ in 0..4 {
+            let started = std::time::Instant::now();
+            let output = pool.install(|| {
+                let view = OpinionView(opinions.index());
+                state.advance_validated(&view, 9, 1).unwrap().families
+            });
+            durations.push(started.elapsed());
+            if let Some(expected) = &reference {
+                assert_eq!(expected, &output);
+            } else {
+                reference = Some(output);
+            }
+        }
+        durations.remove(0);
+        durations.sort();
+        println!(
+            "20,000 people, 80,000 opinions, {workers} workers: median {:?}",
+            durations[1]
+        );
+    }
+}
