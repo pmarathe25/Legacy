@@ -22,6 +22,9 @@ pub struct MatePreference {
     pub affinity_weight: i32,
     /// Personal response to a stable, directed attraction toward this person.
     pub attraction_weight: i32,
+    /// Individual attraction adjustments for the candidate's modeled sex.
+    pub female_attraction: i32,
+    pub male_attraction: i32,
     /// Personal response to own hunger.
     pub hunger_weight: i32,
     /// Personal response to each living minor child; either sign is permitted.
@@ -36,6 +39,8 @@ impl Default for MatePreference {
             genetic_weight: 250,
             affinity_weight: 10,
             attraction_weight: 100,
+            female_attraction: 0,
+            male_attraction: 0,
             hunger_weight: -2,
             dependent_weight: -100,
             minimum: 0,

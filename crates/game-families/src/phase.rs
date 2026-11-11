@@ -27,6 +27,9 @@ fn eligible(m: &Member, p: &LifeInput, rules: &FamilyRules) -> bool {
         && p.health >= rules.minimum_health
         && p.hunger <= rules.maximum_hunger
 }
+fn eligible_for_partnership(m: &Member, p: &LifeInput, rules: &FamilyRules) -> bool {
+    m.alive && m.age >= rules.adult_age && p.health > 0 && p.region.is_some()
+}
 fn seeks_mate(m: &Member, p: &LifeInput, dependents: u64, seed: u64, tick: u64) -> bool {
     let pref = m.mate_preference.unwrap_or_default();
     let genetic = (i128::from(m.genome.expressed_mate_desire()) - 500)
@@ -48,6 +51,10 @@ fn mate_score(
     let attraction = (random(seed ^ observer.id ^ 0x41545452, target.id, 0) % 2001) as i64 - 1000;
     i64::from(pref.affinity_weight) * i64::from(physical.affinity(observer.id, target.id))
         + i64::from(pref.attraction_weight) * attraction / 1000
+        + i64::from(match target.genome.sex {
+            Sex::Female => pref.female_attraction,
+            Sex::Male => pref.male_attraction,
+        })
 }
 fn accepts_mate(
     observer: &Member,
@@ -86,6 +93,89 @@ fn ancestors(id: u64, members: &OrderedMemberIndex<'_>) -> Ancestors {
         }
     }
     all
+}
+
+/// Each person ranks a bounded sample and each endpoint independently chooses
+/// its favorite of the proposed edges. Only mutual choices become partnerships.
+fn subjective_partnerships(
+    group: &[(u64, game_family_model::ContactPartition, &Member)],
+    index: &OrderedMemberIndex<'_>,
+    physical: &impl game_family_model::PhysicalView,
+    seed: u64,
+    tick: u64,
+) -> Vec<(u64, u64, u64)> {
+    if group.len() < 2 {
+        return Vec::new();
+    }
+    let region = group[0].0;
+    let mut candidates: Vec<_> = group.par_iter().map(|row| row.2).collect();
+    candidates.par_sort_unstable_by_key(|member| (random(seed ^ 31, member.id, tick), member.id));
+    let kin: Vec<_> = candidates
+        .par_iter()
+        .map(|member| ancestors(member.id, index))
+        .collect();
+    let mut edges: Vec<_> = candidates
+        .par_iter()
+        .filter_map(|person| {
+            let own_kin = ancestors(person.id, index);
+            let offset = (random(seed ^ 71, person.id, tick) % candidates.len() as u64) as usize;
+            let choice = (0..candidates.len().min(32))
+                .map(|n| (offset + n) % candidates.len())
+                .filter(|&i| {
+                    candidates[i].id != person.id
+                        && own_kin.is_disjoint(&kin[i])
+                        && accepts_mate(person, candidates[i], physical, seed)
+                        && accepts_mate(candidates[i], person, physical, seed)
+                })
+                .max_by_key(|&i| {
+                    (
+                        mate_score(person, candidates[i], physical, seed),
+                        std::cmp::Reverse(candidates[i].id),
+                    )
+                })?;
+            let other = candidates[choice].id;
+            Some((person.id.min(other), person.id.max(other)))
+        })
+        .collect();
+    edges.par_sort_unstable();
+    edges.dedup();
+    let mut rankings: Vec<_> = edges
+        .par_iter()
+        .flat_map_iter(|&(a, b)| {
+            [
+                (
+                    a,
+                    std::cmp::Reverse(mate_score(&index[&a], &index[&b], physical, seed)),
+                    random(seed ^ tick, a, b),
+                    b,
+                ),
+                (
+                    b,
+                    std::cmp::Reverse(mate_score(&index[&b], &index[&a], physical, seed)),
+                    random(seed ^ tick, b, a),
+                    a,
+                ),
+            ]
+        })
+        .collect();
+    rankings.par_sort_unstable();
+    let selected: Vec<_> = rankings
+        .par_iter()
+        .enumerate()
+        .filter_map(|(i, row)| (i == 0 || rankings[i - 1].0 != row.0).then_some((row.0, row.3)))
+        .collect();
+    edges
+        .into_par_iter()
+        .filter_map(|(a, b)| {
+            let accepts = |person, other| {
+                selected
+                    .binary_search_by_key(&person, |row| row.0)
+                    .ok()
+                    .is_some_and(|i| selected[i].1 == other)
+            };
+            (accepts(a, b) && accepts(b, a)).then_some((a, b, region))
+        })
+        .collect()
 }
 impl Families {
     /// One immutable read phase, local matching, canonical IDs, then disjoint inheritance.
@@ -201,7 +291,56 @@ impl Families {
             profile_phase = game_diagnostics::span("family.reconsider");
         }
         game_family_index::reconsider(&mut members, physical, rules.fertile_until)?;
+        if rules.subjective_mating {
+            let index = OrderedMemberIndex::new(&members);
+            let mut separations: Vec<_> = members
+                .par_iter()
+                .filter_map(|person| {
+                    let partner = index.get(&person.partner?)?;
+                    (!physical.controlled(person.id)
+                        && !accepts_mate(person, partner, physical, seed))
+                    .then_some((person.id.min(partner.id), person.id.max(partner.id)))
+                })
+                .collect();
+            separations.par_sort_unstable();
+            separations.dedup();
+            let mut separated: Vec<_> = separations
+                .par_iter()
+                .flat_map_iter(|&(a, b)| [a, b])
+                .collect();
+            separated.par_sort_unstable();
+            events.par_extend(
+                separations
+                    .par_iter()
+                    .map(|&(a, b)| event(tick, "separation", vec![a, b], physical.read(a).region)),
+            );
+            members.par_iter_mut().for_each(|member| {
+                if separated.binary_search(&member.id).is_ok() {
+                    member.partner = None;
+                }
+            });
+        }
         let index = OrderedMemberIndex::new(&members);
+        let mut parents: Vec<_> = if rules.subjective_mating {
+            members
+                .par_iter()
+                .filter(|child| child.alive && child.age < rules.adult_age)
+                .flat_map_iter(|child| child.parents.iter().copied())
+                .collect()
+        } else {
+            Vec::new()
+        };
+        parents.par_sort_unstable();
+        let dependents: Vec<_> = parents
+            .par_chunk_by(|a, b| a == b)
+            .map(|group| (group[0], group.len() as u64))
+            .collect();
+        let dependent_count = |id| {
+            dependents
+                .binary_search_by_key(&id, |row| row.0)
+                .ok()
+                .map_or(0, |index| dependents[index].1)
+        };
         #[cfg(feature = "profile")]
         {
             drop(profile_phase);
@@ -211,10 +350,14 @@ impl Families {
             .par_iter()
             .filter_map(|m| {
                 let person = physical.read(m.id);
-                (!rules.subjective_mating
-                    && m.partner.is_none()
+                (m.partner.is_none()
                     && !physical.controlled(m.id)
-                    && eligible(m, &person, rules))
+                    && if rules.subjective_mating {
+                        eligible_for_partnership(m, &person, rules)
+                            && seeks_mate(m, &person, dependent_count(m.id), seed, tick)
+                    } else {
+                        eligible(m, &person, rules)
+                    })
                 .then(|| (person.region.unwrap(), physical.contact_partition(m.id), m))
             })
             .collect();
@@ -224,6 +367,9 @@ impl Families {
         let matches: Vec<Vec<_>> = local
             .par_chunk_by(|a, b| (a.0, a.1) == (b.0, b.1))
             .map(|group| {
+                if rules.subjective_mating {
+                    return subjective_partnerships(group, &index, physical, seed, tick);
+                }
                 let area = group[0].0;
                 let females: Vec<_> = group
                     .par_iter()
@@ -246,10 +392,11 @@ impl Families {
                         let ancestors = ancestors(mother.id, &index);
                         let offset =
                             (random(seed ^ 71, mother.id, tick) % males.len() as u64) as usize;
-                        (0..males.len().min(32))
+                        let candidates = (0..males.len().min(32))
                             .map(|n| (offset + n) % males.len())
-                            .find(|&candidate| ancestors.is_disjoint(&kin[candidate]))
-                            .map(|candidate| (mother.id, males[candidate].id, area))
+                            .filter(|&candidate| ancestors.is_disjoint(&kin[candidate]));
+                        let chosen = candidates.into_iter().next();
+                        chosen.map(|candidate| (mother.id, males[candidate].id, area))
                     })
                     .collect();
                 resolve(proposed, seed, tick)
@@ -363,26 +510,6 @@ impl Families {
             drop(profile_phase);
             profile_phase = game_diagnostics::span("family.conceptions");
         }
-        let mut parents: Vec<_> = if rules.subjective_mating {
-            members
-                .par_iter()
-                .filter(|child| child.alive && child.age < rules.adult_age)
-                .flat_map_iter(|child| child.parents.iter().copied())
-                .collect()
-        } else {
-            Vec::new()
-        };
-        parents.par_sort_unstable();
-        let dependents: Vec<_> = parents
-            .par_chunk_by(|a, b| a == b)
-            .map(|group| (group[0], group.len() as u64))
-            .collect();
-        let dependent_count = |id| {
-            dependents
-                .binary_search_by_key(&id, |row| row.0)
-                .ok()
-                .map_or(0, |index| dependents[index].1)
-        };
         let mut prospective_fathers: Vec<_> = if rules.subjective_mating {
             members
                 .par_iter()

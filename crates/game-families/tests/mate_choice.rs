@@ -18,6 +18,9 @@ impl PhysicalView for View {
         match (observer, target) {
             (1, 3) => 10,
             (3, 1) => self.reverse_affinity,
+            (1, 2) | (2, 1) => 5,
+            (4, 3) => 10,
+            (3, 4) => 15,
             _ => -10,
         }
     }
@@ -28,6 +31,8 @@ fn pref() -> MatePreference {
         genetic_weight: 0,
         affinity_weight: 1,
         attraction_weight: 0,
+        female_attraction: 0,
+        male_attraction: 0,
         hunger_weight: 0,
         dependent_weight: 0,
         minimum: 1,
@@ -111,7 +116,115 @@ fn each_persons_affinity_matters_and_partnership_does_not_restrict_conception() 
             1,
         )
         .unwrap();
-    assert!(rejected.families.members[0].pregnancy.is_none());
+    assert_eq!(
+        rejected.families.members[0]
+            .pregnancy
+            .as_ref()
+            .unwrap()
+            .father,
+        2
+    );
+}
+#[test]
+fn people_choose_partnerships_subjectively_and_either_can_leave() {
+    let mut state = family();
+    state.members[0].partner = None;
+    state.members[1].partner = None;
+    let view = View {
+        reverse_affinity: 10,
+        hunger: 0,
+    };
+    let partnered = state.advance_validated(&view, 9, 1).unwrap().families;
+    assert_eq!(partnered.members[0].partner, Some(3));
+    assert_eq!(partnered.members[2].partner, Some(1));
+    let next = partnered
+        .advance_validated(
+            &View {
+                reverse_affinity: -10,
+                hunger: 0,
+            },
+            9,
+            2,
+        )
+        .unwrap()
+        .families;
+    assert_ne!(next.members[0].partner, Some(3));
+    assert!(
+        next.events
+            .iter()
+            .any(|event| event.kind == "separation" && event.people == [1, 3])
+    );
+}
+#[test]
+fn recipient_chooses_their_preferred_acceptable_suitor() {
+    let mut state = family();
+    state.members[0].partner = None;
+    state.members[1].partner = None;
+    state.members[1].reproduction_allowed = false;
+    state.members.push(member(4, Sex::Female, None));
+    state.next_id = 5;
+    let next = state
+        .advance_validated(
+            &View {
+                reverse_affinity: 10,
+                hunger: 0,
+            },
+            9,
+            1,
+        )
+        .unwrap()
+        .families;
+    assert_eq!(next.members[2].partner, Some(4));
+    assert_eq!(next.members[3].partner, Some(3));
+    assert_eq!(next.members[0].partner, None);
+}
+
+#[test]
+fn partnership_does_not_require_fertility_or_a_wish_to_reproduce() {
+    let mut state = family();
+    state.members[0].partner = None;
+    state.members[1].partner = None;
+    state.members[0].age = 50;
+    state.members[2].age = 50;
+    state.members[0].reproduction_allowed = false;
+    state.members[2].reproduction_allowed = false;
+    let result = state
+        .advance_validated(
+            &View {
+                reverse_affinity: 10,
+                hunger: 0,
+            },
+            9,
+            1,
+        )
+        .unwrap()
+        .families;
+    assert_eq!(result.members[0].partner, Some(3));
+    assert!(result.members[0].pregnancy.is_none());
+}
+
+#[test]
+fn same_sex_partnerships_and_individual_attraction_preferences_are_possible() {
+    let mut state = family();
+    state.members.truncate(2);
+    state.next_id = 3;
+    for person in &mut state.members {
+        person.partner = None;
+        person.genome.sex = Sex::Male;
+    }
+    let view = View {
+        reverse_affinity: 10,
+        hunger: 0,
+    };
+    let paired = state.advance_validated(&view, 9, 1).unwrap().families;
+    assert_eq!(paired.members[0].partner, Some(2));
+    state.members[0]
+        .mate_preference
+        .as_mut()
+        .unwrap()
+        .male_attraction = -10;
+    let declined = state.advance_validated(&view, 9, 1).unwrap().families;
+    assert_eq!(declined.members[0].partner, None);
 }
 #[test]
 fn genetic_desire_and_personal_circumstances_affect_choices() {
@@ -255,6 +368,8 @@ fn concentrated_mate_choice_benchmark() {
                 genetic_weight: 0,
                 affinity_weight: 0,
                 attraction_weight: 0,
+                female_attraction: 0,
+                male_attraction: 0,
                 hunger_weight: 0,
                 dependent_weight: 0,
                 minimum: 0,

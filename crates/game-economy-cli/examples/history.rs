@@ -393,6 +393,8 @@ mod tests {
                     genetic_weight: 0,
                     affinity_weight: 1,
                     attraction_weight: 0,
+                    female_attraction: 0,
+                    male_attraction: 0,
                     hunger_weight: 0,
                     dependent_weight: 0,
                     minimum: 1,
@@ -457,6 +459,12 @@ mod tests {
                 && state.agreements.is_some()
                 && state.sites.is_some()
         );
+        assert!(
+            state.animal_feelings.is_some()
+                && state.dreams.is_some()
+                && state.food_search.is_some()
+        );
+        assert!(state.shared_work.is_some() && state.taking.is_some() && state.tool_wear.is_some());
     }
 
     #[test]

@@ -39,7 +39,8 @@ health = 100
 hunger = 0
 willing_to_work = true
 seek_meals = true
-goods = { paper = 4, ink = 4 }
+items = [{ id = 1001, good = "tool" }]
+goods = { paper = 4, ink = 4, timber = 2 }
 recipe = "fixture-tool"
 
 [[people]]
@@ -49,6 +50,7 @@ health = 100
 hunger = 0
 willing_to_work = true
 seek_meals = true
+items = [{ id = 1002, good = "tool" }]
 goods = { paper = 4, ink = 4 }
 recipe = "fixture-tool"
 
@@ -59,6 +61,7 @@ health = 100
 hunger = 0
 willing_to_work = true
 seek_meals = true
+items = [{ id = 1003, good = "tool" }]
 recipe = "fixture-tool"
 
 [[people]]
@@ -68,6 +71,7 @@ health = 100
 hunger = 0
 willing_to_work = true
 seek_meals = true
+items = [{ id = 1004, good = "tool" }]
 recipe = "fixture-tool"
 
 [[people]]
@@ -425,7 +429,7 @@ seek_meals = true
 
 [[people]]
 id = 49
-region = 1
+region = 2
 health = 100
 hunger = 0
 willing_to_work = false
@@ -433,7 +437,7 @@ seek_meals = true
 
 [[people]]
 id = 50
-region = 1
+region = 2
 health = 100
 hunger = 0
 willing_to_work = false
@@ -441,7 +445,7 @@ seek_meals = true
 
 [[people]]
 id = 51
-region = 1
+region = 2
 health = 100
 hunger = 0
 willing_to_work = false
@@ -449,7 +453,7 @@ seek_meals = true
 
 [[people]]
 id = 52
-region = 1
+region = 2
 health = 100
 hunger = 0
 willing_to_work = false
@@ -457,7 +461,7 @@ seek_meals = true
 
 [[people]]
 id = 53
-region = 1
+region = 2
 health = 100
 hunger = 0
 willing_to_work = false
@@ -465,7 +469,7 @@ seek_meals = true
 
 [[people]]
 id = 54
-region = 1
+region = 2
 health = 100
 hunger = 0
 willing_to_work = false
@@ -473,7 +477,7 @@ seek_meals = true
 
 [[people]]
 id = 55
-region = 1
+region = 2
 health = 100
 hunger = 0
 willing_to_work = false
@@ -481,7 +485,7 @@ seek_meals = true
 
 [[people]]
 id = 56
-region = 1
+region = 2
 health = 100
 hunger = 0
 willing_to_work = false
@@ -489,7 +493,7 @@ seek_meals = true
 
 [[people]]
 id = 57
-region = 1
+region = 2
 health = 100
 hunger = 0
 willing_to_work = false
@@ -497,7 +501,7 @@ seek_meals = true
 
 [[people]]
 id = 58
-region = 1
+region = 2
 health = 100
 hunger = 0
 willing_to_work = false
@@ -505,7 +509,7 @@ seek_meals = true
 
 [[people]]
 id = 59
-region = 1
+region = 2
 health = 100
 hunger = 0
 willing_to_work = false
@@ -513,7 +517,7 @@ seek_meals = true
 
 [[people]]
 id = 60
-region = 1
+region = 2
 health = 100
 hunger = 0
 willing_to_work = false
@@ -1004,7 +1008,7 @@ restraint_response = { resistance = 1, escape_willing = true, escape_effort = 1 
 [[fauna.animals]]
 id = 7
 species = 1
-region = 1
+region = 2
 age = 72
 health = 100
 hunger = 0
@@ -1016,7 +1020,7 @@ restraint_response = { resistance = 1, escape_willing = true, escape_effort = 1 
 [[fauna.animals]]
 id = 8
 species = 1
-region = 1
+region = 2
 age = 36
 health = 100
 hunger = 0
@@ -1028,7 +1032,7 @@ restraint_response = { resistance = 1, escape_willing = true, escape_effort = 1 
 [[fauna.animals]]
 id = 9
 species = 1
-region = 1
+region = 2
 age = 48
 health = 100
 hunger = 0
@@ -1040,7 +1044,7 @@ restraint_response = { resistance = 1, escape_willing = true, escape_effort = 1 
 [[fauna.animals]]
 id = 10
 species = 1
-region = 1
+region = 2
 age = 60
 health = 100
 hunger = 0
@@ -1052,7 +1056,7 @@ restraint_response = { resistance = 1, escape_willing = true, escape_effort = 1 
 [[fauna.animals]]
 id = 11
 species = 1
-region = 1
+region = 2
 age = 72
 health = 100
 hunger = 0
@@ -1064,7 +1068,7 @@ restraint_response = { resistance = 1, escape_willing = true, escape_effort = 1 
 [[fauna.animals]]
 id = 12
 species = 1
-region = 1
+region = 2
 age = 36
 health = 100
 hunger = 0
@@ -1341,7 +1345,7 @@ people = [{ person = 1, sociability = 400, diligence = 400 }, { person = 2, soci
 [gathering]
 inherit_births = true
 max_hunger = 20
-policies = [{ person = 1, node = 1, willing = true }, { person = 2, node = 1, willing = true }, { person = 3, node = 1, willing = true }, { person = 4, node = 1, willing = true }, { person = 5, node = 1, willing = true }, { person = 6, node = 1, willing = true }, { person = 7, node = 1, willing = true }, { person = 8, node = 1, willing = true }, { person = 9, node = 1, willing = true }, { person = 10, node = 1, willing = true }, { person = 11, node = 1, willing = true }, { person = 12, node = 1, willing = true }, { person = 13, node = 1, willing = true }, { person = 14, node = 1, willing = true }, { person = 15, node = 1, willing = true }, { person = 16, node = 1, willing = true }, { person = 17, node = 1, willing = true }, { person = 18, node = 1, willing = true }, { person = 19, node = 1, willing = true }, { person = 20, node = 1, willing = true }, { person = 21, node = 1, willing = true }, { person = 22, node = 1, willing = true }, { person = 23, node = 1, willing = true }, { person = 24, node = 1, willing = true }, { person = 25, node = 1, willing = true }, { person = 26, node = 1, willing = true }, { person = 27, node = 1, willing = true }, { person = 28, node = 1, willing = true }, { person = 29, node = 1, willing = true }, { person = 30, node = 1, willing = true }, { person = 31, node = 1, willing = true }, { person = 32, node = 1, willing = true }, { person = 33, node = 1, willing = true }, { person = 34, node = 1, willing = true }, { person = 35, node = 1, willing = true }, { person = 36, node = 1, willing = true }, { person = 37, node = 1, willing = true }, { person = 38, node = 1, willing = true }, { person = 39, node = 1, willing = true }, { person = 40, node = 1, willing = true }, { person = 41, node = 1, willing = true }, { person = 42, node = 1, willing = true }, { person = 43, node = 1, willing = true }, { person = 44, node = 1, willing = true }, { person = 45, node = 1, willing = true }, { person = 46, node = 1, willing = true }, { person = 47, node = 1, willing = true }, { person = 48, node = 1, willing = true }, { person = 49, node = 1, willing = true }, { person = 50, node = 1, willing = true }, { person = 51, node = 1, willing = true }, { person = 52, node = 1, willing = true }, { person = 53, node = 1, willing = true }, { person = 54, node = 1, willing = true }, { person = 55, node = 1, willing = true }, { person = 56, node = 1, willing = true }, { person = 57, node = 1, willing = true }, { person = 58, node = 1, willing = true }, { person = 59, node = 1, willing = true }, { person = 60, node = 1, willing = true }]
+policies = [{ person = 1, node = 1, willing = true }, { person = 2, node = 1, willing = true }, { person = 3, node = 1, willing = true }, { person = 4, node = 1, willing = true }, { person = 5, node = 1, willing = true }, { person = 6, node = 1, willing = true }, { person = 7, node = 1, willing = true }, { person = 8, node = 1, willing = true }, { person = 9, node = 1, willing = true }, { person = 10, node = 1, willing = true }, { person = 11, node = 1, willing = true }, { person = 12, node = 1, willing = true }, { person = 13, node = 1, willing = true }, { person = 14, node = 1, willing = true }, { person = 15, node = 1, willing = true }, { person = 16, node = 1, willing = true }, { person = 17, node = 1, willing = true }, { person = 18, node = 1, willing = true }, { person = 19, node = 1, willing = true }, { person = 20, node = 1, willing = true }, { person = 21, node = 1, willing = true }, { person = 22, node = 1, willing = true }, { person = 23, node = 1, willing = true }, { person = 24, node = 1, willing = true }, { person = 25, node = 1, willing = true }, { person = 26, node = 1, willing = true }, { person = 27, node = 1, willing = true }, { person = 28, node = 1, willing = true }, { person = 29, node = 1, willing = true }, { person = 30, node = 1, willing = true }, { person = 31, node = 1, willing = true }, { person = 32, node = 1, willing = true }, { person = 33, node = 1, willing = true }, { person = 34, node = 1, willing = true }, { person = 35, node = 1, willing = true }, { person = 36, node = 1, willing = true }, { person = 37, node = 1, willing = true }, { person = 38, node = 1, willing = true }, { person = 39, node = 1, willing = true }, { person = 40, node = 1, willing = true }, { person = 41, node = 1, willing = true }, { person = 42, node = 1, willing = true }, { person = 43, node = 1, willing = true }, { person = 44, node = 1, willing = true }, { person = 45, node = 1, willing = true }, { person = 46, node = 1, willing = true }, { person = 47, node = 1, willing = true }, { person = 48, node = 1, willing = true }, { person = 49, node = 2, willing = true }, { person = 50, node = 2, willing = true }, { person = 51, node = 2, willing = true }, { person = 52, node = 2, willing = true }, { person = 53, node = 2, willing = true }, { person = 54, node = 2, willing = true }, { person = 55, node = 2, willing = true }, { person = 56, node = 2, willing = true }, { person = 57, node = 2, willing = true }, { person = 58, node = 2, willing = true }, { person = 59, node = 2, willing = true }, { person = 60, node = 2, willing = true }]
 
 [[gathering.nodes]]
 id = 1
@@ -1351,6 +1355,16 @@ seasonal = true
 available = 3000
 capacity = 4000
 regrowth = 1000
+yield_per_action = 20
+
+[[gathering.nodes]]
+id = 2
+region = 2
+good = "barley"
+seasonal = true
+available = 900
+capacity = 1200
+regrowth = 300
 yield_per_action = 20
 
 [care]
@@ -1490,7 +1504,11 @@ give = { barley = 1 }
 receive = { bread = 1 }
 
 [work_sites]
-sites = []
+sites = [{ id = 1, region = 1, kind = "workshop", capacity = 3 }]
+[[work_sites.requirements]]
+recipe = "fixture-tool"
+kind = "workshop"
+slots = 1
 [construction]
 [[construction.blueprints]]
 id = 1
@@ -1672,3 +1690,68 @@ assert_outputs = true
 [agreements]
 next_id = 1
 policies = [{ person = 16, accept = true, honor = true }]
+
+[animal_feelings]
+[[animal_feelings.minds]]
+person = 8
+minimum = -10
+maximum = 10
+capacity = 16
+on_hunt = -1
+on_feed = 1
+
+[food_search]
+inherit_births = true
+min_hunger = 10
+min_report_food = 1
+max_report_age = 12
+retry_ticks = 3
+people = [{ person = 18, enabled = true }]
+
+[[aspirations]]
+person = 3
+recipe = "fixture-tool"
+priority = 2
+batch = 2
+review_interval = 12
+
+[taking]
+[[taking.policies]]
+person = 17
+target = 18
+good = "barley"
+quantity = 2
+willing = true
+interval = 12
+[[taking.responses]]
+person = 18
+notices = true
+resist = true
+
+[[shared_work.rules]]
+recipe = "fixture-tool"
+max_helpers = 1
+[[shared_work.preferences]]
+person = 4
+lead = 2
+recipe = "fixture-tool"
+willing = true
+
+[[work_tools]]
+recipe = "fixture-tool"
+good = "tool"
+quantity = 1
+[[tool_wear.rules]]
+good = "tool"
+durability = 5
+wear = 1
+repair_good = "timber"
+repair_quantity = 1
+[[tool_wear.conditions]]
+item = 1001
+good = "tool"
+damage = 3
+[[tool_wear.repairs]]
+person = 1
+item = 1001
+willing = true
