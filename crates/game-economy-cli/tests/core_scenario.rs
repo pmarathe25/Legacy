@@ -67,6 +67,47 @@ fn authored_core_scenario_runs_and_survives_save_resume() {
 }
 
 #[test]
+fn hourly_history_food_supply_supports_founders_and_is_worker_deterministic() {
+    fn run(workers: usize) -> serde_json::Value {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let root = root();
+                let mut host = game_economy_cli::core_scenario(
+                    &root.join("content/scenarios/economy-history-hourly.toml"),
+                    &root.join("content"),
+                )
+                .unwrap();
+                // The earlier hourly configuration exhausted food and began
+                // losing people before hour 1,000, after its initial stocks ran out.
+                for _ in 0..1_200 {
+                    let result = host.advance_continuous(3_600_000, &[]).unwrap();
+                    assert_eq!(result.failure, None);
+                    assert_eq!(result.boundaries, 1);
+                }
+                let snapshot = host.snapshot();
+                assert!(snapshot.core.people.iter().filter(|p| p.health > 0).count() >= 55);
+                // Hunting is enabled, so some founder animals may be killed.
+                assert!(
+                    snapshot
+                        .fauna
+                        .as_ref()
+                        .unwrap()
+                        .animals
+                        .iter()
+                        .filter(|a| a.health > 0)
+                        .count()
+                        >= 10
+                );
+                serde_json::to_value(snapshot).unwrap()
+            })
+    }
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
 fn unsupported_scenario_owners_are_reported() {
     let root = root();
     let state = game_economy_cli::scenario(

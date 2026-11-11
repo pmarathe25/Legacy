@@ -1,0 +1,1953 @@
+# Experimental hourly history: rates are exploratory and are not empirically calibrated.
+# Durations and ages are in hourly ticks; rates are experimental and incompletely calibrated.
+seed = 1701
+tick_millis = 3600000
+stock_capacity = 100000
+food_relief_divisor = 1
+
+[rules]
+hunger_per_tick = 1
+meal_threshold = 48
+starvation_threshold = 120
+starvation_damage = 1
+max_health = 100
+carrying_capacity = 100
+max_work_hunger = 120
+
+[[regions]]
+id = 1
+stock = { timber = 3000, barley = 3000, bread = 800, grain-seed = 200, fresh-water = 300, paper = 100, ink = 100 }
+
+[[regions]]
+id = 2
+stock = { barley = 200, timber = 100 }
+
+[[routes]]
+source = 1
+destination = 2
+ticks = 1
+
+[[routes]]
+source = 2
+destination = 1
+ticks = 1
+
+[[people]]
+id = 1
+region = 1
+health = 100
+hunger = 0
+willing_to_work = true
+seek_meals = true
+items = [{ id = 1001, good = "tool" }]
+goods = { paper = 4, ink = 4, timber = 2 }
+recipe = "fixture-tool"
+
+[[people]]
+id = 2
+region = 1
+health = 100
+hunger = 0
+willing_to_work = true
+seek_meals = true
+items = [{ id = 1002, good = "tool" }]
+goods = { paper = 4, ink = 4 }
+recipe = "fixture-tool"
+
+[[people]]
+id = 3
+region = 1
+health = 100
+hunger = 0
+willing_to_work = true
+seek_meals = true
+items = [{ id = 1003, good = "tool" }]
+recipe = "fixture-tool"
+
+[[people]]
+id = 4
+region = 1
+health = 100
+hunger = 0
+willing_to_work = true
+seek_meals = true
+items = [{ id = 1004, good = "tool" }]
+recipe = "fixture-tool"
+
+[[people]]
+id = 5
+region = 1
+health = 100
+hunger = 0
+willing_to_work = false
+seek_meals = true
+
+[[people]]
+id = 6
+region = 1
+health = 100
+hunger = 0
+willing_to_work = false
+seek_meals = true
+
+[[people]]
+id = 7
+region = 1
+health = 100
+hunger = 0
+willing_to_work = false
+seek_meals = true
+
+[[people]]
+id = 8
+region = 1
+health = 100
+hunger = 0
+willing_to_work = false
+seek_meals = true
+
+[[people]]
+id = 9
+region = 1
+health = 100
+hunger = 0
+willing_to_work = false
+seek_meals = true
+
+[[people]]
+id = 10
+region = 1
+health = 100
+hunger = 0
+willing_to_work = false
+seek_meals = true
+
+[[people]]
+id = 11
+region = 1
+health = 100
+hunger = 0
+willing_to_work = false
+seek_meals = true
+
+[[people]]
+id = 12
+region = 1
+health = 100
+hunger = 0
+willing_to_work = false
+seek_meals = true
+
+
+[[people]]
+id = 13
+region = 1
+health = 100
+hunger = 0
+willing_to_work = false
+seek_meals = true
+
+[[people]]
+id = 14
+region = 1
+health = 100
+hunger = 0
+willing_to_work = false
+seek_meals = true
+
+[[people]]
+id = 15
+region = 1
+health = 100
+hunger = 0
+willing_to_work = false
+seek_meals = true
+
+[[people]]
+id = 16
+region = 1
+health = 100
+hunger = 0
+willing_to_work = false
+seek_meals = true
+
+[[people]]
+id = 17
+region = 1
+health = 100
+hunger = 0
+willing_to_work = false
+seek_meals = true
+
+[[people]]
+id = 18
+region = 1
+health = 100
+hunger = 0
+willing_to_work = false
+seek_meals = true
+
+[[people]]
+id = 19
+region = 1
+health = 100
+hunger = 0
+willing_to_work = false
+seek_meals = true
+
+[[people]]
+id = 20
+region = 1
+health = 100
+hunger = 0
+willing_to_work = false
+seek_meals = true
+
+[[people]]
+id = 21
+region = 1
+health = 100
+hunger = 0
+willing_to_work = false
+seek_meals = true
+
+[[people]]
+id = 22
+region = 1
+health = 100
+hunger = 0
+willing_to_work = false
+seek_meals = true
+
+[[people]]
+id = 23
+region = 1
+health = 100
+hunger = 0
+willing_to_work = false
+seek_meals = true
+
+[[people]]
+id = 24
+region = 1
+health = 100
+hunger = 0
+willing_to_work = false
+seek_meals = true
+
+[[people]]
+id = 25
+region = 1
+health = 100
+hunger = 0
+willing_to_work = false
+seek_meals = true
+
+[[people]]
+id = 26
+region = 1
+health = 100
+hunger = 0
+willing_to_work = false
+seek_meals = true
+
+[[people]]
+id = 27
+region = 1
+health = 100
+hunger = 0
+willing_to_work = false
+seek_meals = true
+
+[[people]]
+id = 28
+region = 1
+health = 100
+hunger = 0
+willing_to_work = false
+seek_meals = true
+
+[[people]]
+id = 29
+region = 1
+health = 100
+hunger = 0
+willing_to_work = false
+seek_meals = true
+
+[[people]]
+id = 30
+region = 1
+health = 100
+hunger = 0
+willing_to_work = false
+seek_meals = true
+
+[[people]]
+id = 31
+region = 1
+health = 100
+hunger = 0
+willing_to_work = false
+seek_meals = true
+
+[[people]]
+id = 32
+region = 1
+health = 100
+hunger = 0
+willing_to_work = false
+seek_meals = true
+
+[[people]]
+id = 33
+region = 1
+health = 100
+hunger = 0
+willing_to_work = false
+seek_meals = true
+
+[[people]]
+id = 34
+region = 1
+health = 100
+hunger = 0
+willing_to_work = false
+seek_meals = true
+
+[[people]]
+id = 35
+region = 1
+health = 100
+hunger = 0
+willing_to_work = false
+seek_meals = true
+
+[[people]]
+id = 36
+region = 1
+health = 100
+hunger = 0
+willing_to_work = false
+seek_meals = true
+
+[[people]]
+id = 37
+region = 1
+health = 100
+hunger = 0
+willing_to_work = false
+seek_meals = true
+
+[[people]]
+id = 38
+region = 1
+health = 100
+hunger = 0
+willing_to_work = false
+seek_meals = true
+
+[[people]]
+id = 39
+region = 1
+health = 100
+hunger = 0
+willing_to_work = false
+seek_meals = true
+
+[[people]]
+id = 40
+region = 1
+health = 100
+hunger = 0
+willing_to_work = false
+seek_meals = true
+
+[[people]]
+id = 41
+region = 1
+health = 100
+hunger = 0
+willing_to_work = false
+seek_meals = true
+
+[[people]]
+id = 42
+region = 1
+health = 100
+hunger = 0
+willing_to_work = false
+seek_meals = true
+
+[[people]]
+id = 43
+region = 1
+health = 100
+hunger = 0
+willing_to_work = false
+seek_meals = true
+
+[[people]]
+id = 44
+region = 1
+health = 100
+hunger = 0
+willing_to_work = false
+seek_meals = true
+
+[[people]]
+id = 45
+region = 1
+health = 100
+hunger = 0
+willing_to_work = false
+seek_meals = true
+
+[[people]]
+id = 46
+region = 1
+health = 100
+hunger = 0
+willing_to_work = false
+seek_meals = true
+
+[[people]]
+id = 47
+region = 1
+health = 100
+hunger = 0
+willing_to_work = false
+seek_meals = true
+
+[[people]]
+id = 48
+region = 1
+health = 100
+hunger = 0
+willing_to_work = false
+seek_meals = true
+
+[[people]]
+id = 49
+region = 2
+health = 100
+hunger = 0
+willing_to_work = false
+seek_meals = true
+
+[[people]]
+id = 50
+region = 2
+health = 100
+hunger = 0
+willing_to_work = false
+seek_meals = true
+
+[[people]]
+id = 51
+region = 2
+health = 100
+hunger = 0
+willing_to_work = false
+seek_meals = true
+
+[[people]]
+id = 52
+region = 2
+health = 100
+hunger = 0
+willing_to_work = false
+seek_meals = true
+
+[[people]]
+id = 53
+region = 2
+health = 100
+hunger = 0
+willing_to_work = false
+seek_meals = true
+
+[[people]]
+id = 54
+region = 2
+health = 100
+hunger = 0
+willing_to_work = false
+seek_meals = true
+
+[[people]]
+id = 55
+region = 2
+health = 100
+hunger = 0
+willing_to_work = false
+seek_meals = true
+
+[[people]]
+id = 56
+region = 2
+health = 100
+hunger = 0
+willing_to_work = false
+seek_meals = true
+
+[[people]]
+id = 57
+region = 2
+health = 100
+hunger = 0
+willing_to_work = false
+seek_meals = true
+
+[[people]]
+id = 58
+region = 2
+health = 100
+hunger = 0
+willing_to_work = false
+seek_meals = true
+
+[[people]]
+id = 59
+region = 2
+health = 100
+hunger = 0
+willing_to_work = false
+seek_meals = true
+
+[[people]]
+id = 60
+region = 2
+health = 100
+hunger = 0
+willing_to_work = false
+seek_meals = true
+
+[family]
+next_id = 61
+last_tick = 0
+
+[family.rules]
+adult_age = 140160
+min_work_age = 140160
+fertile_until = 394200
+gestation = 6570
+birth_spacing = 35040
+lifespan_min = 569400
+lifespan_max = 744600
+conception_one_in = 17520
+minimum_health = 50
+maximum_hunger = 120
+newborn_health = 100
+mutation_per_million = 10000
+mutation_step = 15
+enroll_births = true
+subjective_mating = true
+
+[[family.members]]
+id = 1
+age = 166440
+genome = { sex = "Female", alleles = [[720,740], [310,510], [405,605], [510,710]], mate_desire = [367, 401] }
+mate_preference = { desire = 650, genetic_weight = 150, affinity_weight = 4, trust_weight = 2, fear_weight = 3, obligation_weight = 2, attraction_weight = 60, hunger_weight = -1, minimum = -20 }
+
+[[family.members]]
+id = 2
+age = 175200
+genome = { sex = "Male", alleles = [[740,760], [320,520], [410,610], [520,720]], mate_desire = [434, 502] }
+mate_preference = { desire = 750, genetic_weight = 200, affinity_weight = 8, trust_weight = 1, fear_weight = -2, obligation_weight = 0, attraction_weight = 100, hunger_weight = -1, minimum = -40 }
+
+[[family.members]]
+id = 3
+age = 183960
+genome = { sex = "Female", alleles = [[760,780], [330,530], [415,615], [530,730]], mate_desire = [501, 603] }
+mate_preference = { desire = 850, genetic_weight = 250, affinity_weight = 12, attraction_weight = 140, hunger_weight = -1, minimum = -60 }
+
+[[family.members]]
+id = 4
+age = 192720
+genome = { sex = "Male", alleles = [[780,800], [340,540], [420,620], [540,740]], mate_desire = [568, 303] }
+mate_preference = { desire = 650, genetic_weight = 300, affinity_weight = 16, attraction_weight = 60, hunger_weight = -1, minimum = -20 }
+
+[[family.members]]
+id = 5
+age = 201480
+genome = { sex = "Female", alleles = [[800,820], [350,550], [425,625], [550,750]], mate_desire = [635, 404] }
+mate_preference = { desire = 750, genetic_weight = 150, affinity_weight = 4, attraction_weight = 100, hunger_weight = -1, minimum = -40 }
+
+[[family.members]]
+id = 6
+age = 157680
+genome = { sex = "Male", alleles = [[820,840], [360,560], [430,630], [560,760]], mate_desire = [301, 505] }
+mate_preference = { desire = 850, genetic_weight = 200, affinity_weight = 8, attraction_weight = 140, hunger_weight = -1, minimum = -60 }
+
+[[family.members]]
+id = 7
+age = 166440
+genome = { sex = "Female", alleles = [[840,860], [370,570], [435,635], [570,770]], mate_desire = [368, 606] }
+mate_preference = { desire = 650, genetic_weight = 250, affinity_weight = 12, attraction_weight = 60, hunger_weight = -1, minimum = -20 }
+
+[[family.members]]
+id = 8
+age = 175200
+genome = { sex = "Male", alleles = [[860,880], [380,580], [440,640], [580,780]], mate_desire = [435, 306] }
+mate_preference = { desire = 750, genetic_weight = 300, affinity_weight = 16, attraction_weight = 100, hunger_weight = -1, minimum = -40 }
+
+[[family.members]]
+id = 9
+age = 183960
+genome = { sex = "Female", alleles = [[880,900], [390,590], [445,645], [590,790]], mate_desire = [502, 407] }
+mate_preference = { desire = 850, genetic_weight = 150, affinity_weight = 4, attraction_weight = 140, hunger_weight = -1, minimum = -60 }
+
+[[family.members]]
+id = 10
+age = 192720
+genome = { sex = "Male", alleles = [[900,920], [400,600], [450,650], [600,800]], mate_desire = [569, 508] }
+mate_preference = { desire = 650, genetic_weight = 200, affinity_weight = 8, attraction_weight = 60, hunger_weight = -1, minimum = -20 }
+
+[[family.members]]
+id = 11
+age = 201480
+genome = { sex = "Female", alleles = [[920,940], [410,610], [455,655], [610,810]], mate_desire = [636, 609] }
+mate_preference = { desire = 750, genetic_weight = 250, affinity_weight = 12, attraction_weight = 100, hunger_weight = -1, minimum = -40 }
+
+[[family.members]]
+id = 12
+age = 157680
+genome = { sex = "Male", alleles = [[940,960], [420,620], [460,660], [620,820]], mate_desire = [302, 309] }
+mate_preference = { desire = 850, genetic_weight = 300, affinity_weight = 16, attraction_weight = 140, hunger_weight = -1, minimum = -60 }
+
+
+[[family.members]]
+id = 13
+age = 166440
+genome = { sex = "Female", alleles = [[502,502], [400,600], [400,600], [500,700]], mate_desire = [577, 692] }
+mate_preference = { desire = 750, genetic_weight = 200, affinity_weight = 8, attraction_weight = 100, hunger_weight = -1, minimum = -40 }
+
+[[family.members]]
+id = 14
+age = 227760
+genome = { sex = "Male", alleles = [[533,533], [400,600], [400,600], [500,700]], mate_desire = [660, 352] }
+mate_preference = { desire = 850, genetic_weight = 250, affinity_weight = 12, attraction_weight = 140, hunger_weight = -1, minimum = -60 }
+
+[[family.members]]
+id = 15
+age = 289080
+genome = { sex = "Female", alleles = [[564,564], [400,600], [400,600], [500,700]], mate_desire = [342, 413] }
+mate_preference = { desire = 650, genetic_weight = 300, affinity_weight = 16, attraction_weight = 60, hunger_weight = -1, minimum = -20 }
+
+[[family.members]]
+id = 16
+age = 192720
+genome = { sex = "Male", alleles = [[595,595], [400,600], [400,600], [500,700]], mate_desire = [425, 474] }
+mate_preference = { desire = 750, genetic_weight = 150, affinity_weight = 4, attraction_weight = 100, hunger_weight = -1, minimum = -40 }
+
+[[family.members]]
+id = 17
+age = 254040
+genome = { sex = "Female", alleles = [[626,626], [400,600], [400,600], [500,700]], mate_desire = [508, 535] }
+mate_preference = { desire = 850, genetic_weight = 200, affinity_weight = 8, attraction_weight = 140, hunger_weight = -1, minimum = -60 }
+
+[[family.members]]
+id = 18
+age = 157680
+genome = { sex = "Male", alleles = [[657,657], [400,600], [400,600], [500,700]], mate_desire = [591, 596] }
+mate_preference = { desire = 650, genetic_weight = 250, affinity_weight = 12, attraction_weight = 60, hunger_weight = -1, minimum = -20 }
+
+[[family.members]]
+id = 19
+age = 219000
+genome = { sex = "Female", alleles = [[688,688], [400,600], [400,600], [500,700]], mate_desire = [674, 657] }
+mate_preference = { desire = 750, genetic_weight = 300, affinity_weight = 16, attraction_weight = 100, hunger_weight = -1, minimum = -40 }
+
+[[family.members]]
+id = 20
+age = 280320
+genome = { sex = "Male", alleles = [[719,719], [400,600], [400,600], [500,700]], mate_desire = [356, 317] }
+mate_preference = { desire = 850, genetic_weight = 150, affinity_weight = 4, attraction_weight = 140, hunger_weight = -1, minimum = -60 }
+
+[[family.members]]
+id = 21
+age = 183960
+genome = { sex = "Female", alleles = [[750,750], [400,600], [400,600], [500,700]], mate_desire = [439, 378] }
+mate_preference = { desire = 650, genetic_weight = 200, affinity_weight = 8, attraction_weight = 60, hunger_weight = -1, minimum = -20 }
+
+[[family.members]]
+id = 22
+age = 245280
+genome = { sex = "Male", alleles = [[781,781], [400,600], [400,600], [500,700]], mate_desire = [522, 439] }
+mate_preference = { desire = 750, genetic_weight = 250, affinity_weight = 12, attraction_weight = 100, hunger_weight = -1, minimum = -40 }
+
+[[family.members]]
+id = 23
+age = 306600
+genome = { sex = "Female", alleles = [[812,812], [400,600], [400,600], [500,700]], mate_desire = [605, 500] }
+mate_preference = { desire = 850, genetic_weight = 300, affinity_weight = 16, attraction_weight = 140, hunger_weight = -1, minimum = -60 }
+
+[[family.members]]
+id = 24
+age = 210240
+genome = { sex = "Male", alleles = [[843,843], [400,600], [400,600], [500,700]], mate_desire = [688, 561] }
+mate_preference = { desire = 650, genetic_weight = 150, affinity_weight = 4, attraction_weight = 60, hunger_weight = -1, minimum = -20 }
+
+[[family.members]]
+id = 25
+age = 271560
+genome = { sex = "Female", alleles = [[874,874], [400,600], [400,600], [500,700]], mate_desire = [370, 622] }
+mate_preference = { desire = 750, genetic_weight = 200, affinity_weight = 8, attraction_weight = 100, hunger_weight = -1, minimum = -40 }
+
+[[family.members]]
+id = 26
+age = 175200
+genome = { sex = "Male", alleles = [[504,504], [400,600], [400,600], [500,700]], mate_desire = [453, 683] }
+mate_preference = { desire = 850, genetic_weight = 250, affinity_weight = 12, attraction_weight = 140, hunger_weight = -1, minimum = -60 }
+
+[[family.members]]
+id = 27
+age = 236520
+genome = { sex = "Female", alleles = [[535,535], [400,600], [400,600], [500,700]], mate_desire = [536, 343] }
+mate_preference = { desire = 650, genetic_weight = 300, affinity_weight = 16, attraction_weight = 60, hunger_weight = -1, minimum = -20 }
+
+[[family.members]]
+id = 28
+age = 297840
+genome = { sex = "Male", alleles = [[566,566], [400,600], [400,600], [500,700]], mate_desire = [619, 404] }
+mate_preference = { desire = 750, genetic_weight = 150, affinity_weight = 4, attraction_weight = 100, hunger_weight = -1, minimum = -40 }
+
+[[family.members]]
+id = 29
+age = 201480
+genome = { sex = "Female", alleles = [[597,597], [400,600], [400,600], [500,700]], mate_desire = [301, 465] }
+mate_preference = { desire = 850, genetic_weight = 200, affinity_weight = 8, attraction_weight = 140, hunger_weight = -1, minimum = -60 }
+
+[[family.members]]
+id = 30
+age = 262800
+genome = { sex = "Male", alleles = [[628,628], [400,600], [400,600], [500,700]], mate_desire = [384, 526] }
+mate_preference = { desire = 650, genetic_weight = 250, affinity_weight = 12, attraction_weight = 60, hunger_weight = -1, minimum = -20 }
+
+[[family.members]]
+id = 31
+age = 166440
+genome = { sex = "Female", alleles = [[659,659], [400,600], [400,600], [500,700]], mate_desire = [467, 587] }
+mate_preference = { desire = 750, genetic_weight = 300, affinity_weight = 16, attraction_weight = 100, hunger_weight = -1, minimum = -40 }
+
+[[family.members]]
+id = 32
+age = 227760
+genome = { sex = "Male", alleles = [[690,690], [400,600], [400,600], [500,700]], mate_desire = [550, 648] }
+mate_preference = { desire = 850, genetic_weight = 150, affinity_weight = 4, attraction_weight = 140, hunger_weight = -1, minimum = -60 }
+
+[[family.members]]
+id = 33
+age = 289080
+genome = { sex = "Female", alleles = [[721,721], [400,600], [400,600], [500,700]], mate_desire = [633, 308] }
+mate_preference = { desire = 650, genetic_weight = 200, affinity_weight = 8, attraction_weight = 60, hunger_weight = -1, minimum = -20 }
+
+[[family.members]]
+id = 34
+age = 192720
+genome = { sex = "Male", alleles = [[752,752], [400,600], [400,600], [500,700]], mate_desire = [315, 369] }
+mate_preference = { desire = 750, genetic_weight = 250, affinity_weight = 12, attraction_weight = 100, hunger_weight = -1, minimum = -40 }
+
+[[family.members]]
+id = 35
+age = 254040
+genome = { sex = "Female", alleles = [[783,783], [400,600], [400,600], [500,700]], mate_desire = [398, 430] }
+mate_preference = { desire = 850, genetic_weight = 300, affinity_weight = 16, attraction_weight = 140, hunger_weight = -1, minimum = -60 }
+
+[[family.members]]
+id = 36
+age = 157680
+genome = { sex = "Male", alleles = [[814,814], [400,600], [400,600], [500,700]], mate_desire = [481, 491] }
+mate_preference = { desire = 650, genetic_weight = 150, affinity_weight = 4, attraction_weight = 60, hunger_weight = -1, minimum = -20 }
+
+[[family.members]]
+id = 37
+age = 219000
+genome = { sex = "Female", alleles = [[845,845], [400,600], [400,600], [500,700]], mate_desire = [564, 552] }
+mate_preference = { desire = 750, genetic_weight = 200, affinity_weight = 8, attraction_weight = 100, hunger_weight = -1, minimum = -40 }
+
+[[family.members]]
+id = 38
+age = 280320
+genome = { sex = "Male", alleles = [[876,876], [400,600], [400,600], [500,700]], mate_desire = [647, 613] }
+mate_preference = { desire = 850, genetic_weight = 250, affinity_weight = 12, attraction_weight = 140, hunger_weight = -1, minimum = -60 }
+
+[[family.members]]
+id = 39
+age = 183960
+genome = { sex = "Female", alleles = [[506,506], [400,600], [400,600], [500,700]], mate_desire = [329, 674] }
+mate_preference = { desire = 650, genetic_weight = 300, affinity_weight = 16, attraction_weight = 60, hunger_weight = -1, minimum = -20 }
+
+[[family.members]]
+id = 40
+age = 245280
+genome = { sex = "Male", alleles = [[537,537], [400,600], [400,600], [500,700]], mate_desire = [412, 334] }
+mate_preference = { desire = 750, genetic_weight = 150, affinity_weight = 4, attraction_weight = 100, hunger_weight = -1, minimum = -40 }
+
+[[family.members]]
+id = 41
+age = 306600
+genome = { sex = "Female", alleles = [[568,568], [400,600], [400,600], [500,700]], mate_desire = [495, 395] }
+mate_preference = { desire = 850, genetic_weight = 200, affinity_weight = 8, attraction_weight = 140, hunger_weight = -1, minimum = -60 }
+
+[[family.members]]
+id = 42
+age = 210240
+genome = { sex = "Male", alleles = [[599,599], [400,600], [400,600], [500,700]], mate_desire = [578, 456] }
+mate_preference = { desire = 650, genetic_weight = 250, affinity_weight = 12, attraction_weight = 60, hunger_weight = -1, minimum = -20 }
+
+[[family.members]]
+id = 43
+age = 271560
+genome = { sex = "Female", alleles = [[630,630], [400,600], [400,600], [500,700]], mate_desire = [661, 517] }
+mate_preference = { desire = 750, genetic_weight = 300, affinity_weight = 16, attraction_weight = 100, hunger_weight = -1, minimum = -40 }
+
+[[family.members]]
+id = 44
+age = 175200
+genome = { sex = "Male", alleles = [[661,661], [400,600], [400,600], [500,700]], mate_desire = [343, 578] }
+mate_preference = { desire = 850, genetic_weight = 150, affinity_weight = 4, attraction_weight = 140, hunger_weight = -1, minimum = -60 }
+
+[[family.members]]
+id = 45
+age = 236520
+genome = { sex = "Female", alleles = [[692,692], [400,600], [400,600], [500,700]], mate_desire = [426, 639] }
+mate_preference = { desire = 650, genetic_weight = 200, affinity_weight = 8, attraction_weight = 60, hunger_weight = -1, minimum = -20 }
+
+[[family.members]]
+id = 46
+age = 297840
+genome = { sex = "Male", alleles = [[723,723], [400,600], [400,600], [500,700]], mate_desire = [509, 700] }
+mate_preference = { desire = 750, genetic_weight = 250, affinity_weight = 12, attraction_weight = 100, hunger_weight = -1, minimum = -40 }
+
+[[family.members]]
+id = 47
+age = 201480
+genome = { sex = "Female", alleles = [[754,754], [400,600], [400,600], [500,700]], mate_desire = [592, 360] }
+mate_preference = { desire = 850, genetic_weight = 300, affinity_weight = 16, attraction_weight = 140, hunger_weight = -1, minimum = -60 }
+
+[[family.members]]
+id = 48
+age = 262800
+genome = { sex = "Male", alleles = [[785,785], [400,600], [400,600], [500,700]], mate_desire = [675, 421] }
+mate_preference = { desire = 650, genetic_weight = 150, affinity_weight = 4, attraction_weight = 60, hunger_weight = -1, minimum = -20 }
+
+[[family.members]]
+id = 49
+age = 166440
+genome = { sex = "Female", alleles = [[816,816], [400,600], [400,600], [500,700]], mate_desire = [357, 482] }
+mate_preference = { desire = 750, genetic_weight = 200, affinity_weight = 8, attraction_weight = 100, hunger_weight = -1, minimum = -40 }
+
+[[family.members]]
+id = 50
+age = 227760
+genome = { sex = "Male", alleles = [[847,847], [400,600], [400,600], [500,700]], mate_desire = [440, 543] }
+mate_preference = { desire = 850, genetic_weight = 250, affinity_weight = 12, attraction_weight = 140, hunger_weight = -1, minimum = -60 }
+
+[[family.members]]
+id = 51
+age = 289080
+genome = { sex = "Female", alleles = [[878,878], [400,600], [400,600], [500,700]], mate_desire = [523, 604] }
+mate_preference = { desire = 650, genetic_weight = 300, affinity_weight = 16, attraction_weight = 60, hunger_weight = -1, minimum = -20 }
+
+[[family.members]]
+id = 52
+age = 192720
+genome = { sex = "Male", alleles = [[508,508], [400,600], [400,600], [500,700]], mate_desire = [606, 665] }
+mate_preference = { desire = 750, genetic_weight = 150, affinity_weight = 4, attraction_weight = 100, hunger_weight = -1, minimum = -40 }
+
+[[family.members]]
+id = 53
+age = 254040
+genome = { sex = "Female", alleles = [[539,539], [400,600], [400,600], [500,700]], mate_desire = [689, 325] }
+mate_preference = { desire = 850, genetic_weight = 200, affinity_weight = 8, attraction_weight = 140, hunger_weight = -1, minimum = -60 }
+
+[[family.members]]
+id = 54
+age = 157680
+genome = { sex = "Male", alleles = [[570,570], [400,600], [400,600], [500,700]], mate_desire = [371, 386] }
+mate_preference = { desire = 650, genetic_weight = 250, affinity_weight = 12, attraction_weight = 60, hunger_weight = -1, minimum = -20 }
+
+[[family.members]]
+id = 55
+age = 219000
+genome = { sex = "Female", alleles = [[601,601], [400,600], [400,600], [500,700]], mate_desire = [454, 447] }
+mate_preference = { desire = 750, genetic_weight = 300, affinity_weight = 16, attraction_weight = 100, hunger_weight = -1, minimum = -40 }
+
+[[family.members]]
+id = 56
+age = 280320
+genome = { sex = "Male", alleles = [[632,632], [400,600], [400,600], [500,700]], mate_desire = [537, 508] }
+mate_preference = { desire = 850, genetic_weight = 150, affinity_weight = 4, attraction_weight = 140, hunger_weight = -1, minimum = -60 }
+
+[[family.members]]
+id = 57
+age = 183960
+genome = { sex = "Female", alleles = [[663,663], [400,600], [400,600], [500,700]], mate_desire = [620, 569] }
+mate_preference = { desire = 650, genetic_weight = 200, affinity_weight = 8, attraction_weight = 60, hunger_weight = -1, minimum = -20 }
+
+[[family.members]]
+id = 58
+age = 245280
+genome = { sex = "Male", alleles = [[694,694], [400,600], [400,600], [500,700]], mate_desire = [302, 630] }
+mate_preference = { desire = 750, genetic_weight = 250, affinity_weight = 12, attraction_weight = 100, hunger_weight = -1, minimum = -40 }
+
+[[family.members]]
+id = 59
+age = 306600
+genome = { sex = "Female", alleles = [[725,725], [400,600], [400,600], [500,700]], mate_desire = [385, 691] }
+mate_preference = { desire = 850, genetic_weight = 300, affinity_weight = 16, attraction_weight = 140, hunger_weight = -1, minimum = -60 }
+
+[[family.members]]
+id = 60
+age = 210240
+genome = { sex = "Male", alleles = [[756,756], [400,600], [400,600], [500,700]], mate_desire = [468, 351] }
+mate_preference = { desire = 650, genetic_weight = 150, affinity_weight = 4, attraction_weight = 60, hunger_weight = -1, minimum = -20 }
+
+[fauna]
+next_id = 25
+last_tick = 0
+
+[[fauna.species]]
+id = 1
+name = "pilot grazer"
+newborn_social_response = { feed_affinity = 2, minimum = -10, maximum = 10, capacity = 8 }
+newborn_handling_response = { willing = true, on_accept = 0, on_refuse = 0 }
+newborn_restraint_response = { resistance = 1, escape_willing = true, escape_effort = 1 }
+hunting = { good = "raw-meat", quantity = 10, success_per_thousand = 600 }
+food_good = "barley"
+intake = 2
+hunger_per_tick = 1
+relief_per_unit = 24
+starvation_threshold = 120
+starvation_damage = 1
+max_health = 100
+adult_age = 17520
+fertile_until = 157680
+lifespan = 262800
+gestation = 2920
+conception_one_in = 52560
+breeding_max_hunger = 60
+newborn_health = 100
+mutation_per_million = 10000
+mutation_step = 15
+
+[[fauna.species]]
+id = 2
+name = "berry browser"
+food_good = "wild-berries"
+intake = 2
+hunger_per_tick = 1
+relief_per_unit = 24
+starvation_threshold = 120
+starvation_damage = 1
+max_health = 100
+adult_age = 17520
+fertile_until = 131400
+lifespan = 219000
+gestation = 2920
+conception_one_in = 35040
+breeding_max_hunger = 60
+newborn_health = 100
+mutation_per_million = 10000
+mutation_step = 15
+climate = { tolerance = 1, inherited_tolerance = 2, hardiness_locus = 1, damage_per_excess = 1 }
+hunting = { good = "raw-meat", quantity = 10, success_per_thousand = 600 }
+newborn_social_response = { feed_affinity = 2, minimum = -10, maximum = 10, capacity = 8 }
+newborn_handling_response = { willing = true, on_accept = 0, on_refuse = 0 }
+newborn_restraint_response = { resistance = 1, escape_willing = true, escape_effort = 1 }
+
+[[fauna.animals]]
+id = 1
+species = 1
+region = 1
+age = 35040
+health = 100
+hunger = 0
+genome = { sex = "Female", alleles = [[715,735], [260,460], [355,555], [460,660]], mate_desire = [369, 410] }
+social_response = { feed_affinity = 2, minimum = -10, maximum = 10, capacity = 8 }
+handling_response = { willing = true, on_accept = 0, on_refuse = 0 }
+restraint_response = { resistance = 1, escape_willing = true, escape_effort = 1 }
+
+[[fauna.animals]]
+id = 2
+species = 1
+region = 1
+age = 43800
+health = 100
+hunger = 0
+genome = { sex = "Male", alleles = [[730,750], [270,470], [360,560], [470,670]], mate_desire = [436, 511] }
+social_response = { feed_affinity = 2, minimum = -10, maximum = 10, capacity = 8 }
+handling_response = { willing = true, on_accept = 0, on_refuse = 0 }
+restraint_response = { resistance = 1, escape_willing = true, escape_effort = 1 }
+
+[[fauna.animals]]
+id = 3
+species = 1
+region = 1
+age = 52560
+health = 100
+hunger = 0
+genome = { sex = "Female", alleles = [[745,765], [280,480], [365,565], [480,680]], mate_desire = [503, 612] }
+social_response = { feed_affinity = 2, minimum = -10, maximum = 10, capacity = 8 }
+handling_response = { willing = true, on_accept = 0, on_refuse = 0 }
+restraint_response = { resistance = 1, escape_willing = true, escape_effort = 1 }
+
+[[fauna.animals]]
+id = 4
+species = 1
+region = 1
+age = 26280
+health = 100
+hunger = 0
+genome = { sex = "Male", alleles = [[760,780], [290,490], [370,570], [490,690]], mate_desire = [570, 312] }
+social_response = { feed_affinity = 2, minimum = -10, maximum = 10, capacity = 8 }
+handling_response = { willing = true, on_accept = 0, on_refuse = 0 }
+restraint_response = { resistance = 1, escape_willing = true, escape_effort = 1 }
+
+[[fauna.animals]]
+id = 5
+species = 1
+region = 1
+age = 35040
+health = 100
+hunger = 0
+genome = { sex = "Female", alleles = [[775,795], [300,500], [375,575], [500,700]], mate_desire = [637, 413] }
+social_response = { feed_affinity = 2, minimum = -10, maximum = 10, capacity = 8 }
+handling_response = { willing = true, on_accept = 0, on_refuse = 0 }
+restraint_response = { resistance = 1, escape_willing = true, escape_effort = 1 }
+
+[[fauna.animals]]
+id = 6
+species = 1
+region = 1
+age = 43800
+health = 100
+hunger = 0
+genome = { sex = "Male", alleles = [[790,810], [310,510], [380,580], [510,710]], mate_desire = [303, 514] }
+social_response = { feed_affinity = 2, minimum = -10, maximum = 10, capacity = 8 }
+handling_response = { willing = true, on_accept = 0, on_refuse = 0 }
+restraint_response = { resistance = 1, escape_willing = true, escape_effort = 1 }
+
+[[fauna.animals]]
+id = 7
+species = 1
+region = 2
+age = 52560
+health = 100
+hunger = 0
+genome = { sex = "Female", alleles = [[805,825], [320,520], [385,585], [520,720]], mate_desire = [370, 615] }
+social_response = { feed_affinity = 2, minimum = -10, maximum = 10, capacity = 8 }
+handling_response = { willing = true, on_accept = 0, on_refuse = 0 }
+restraint_response = { resistance = 1, escape_willing = true, escape_effort = 1 }
+
+[[fauna.animals]]
+id = 8
+species = 1
+region = 2
+age = 26280
+health = 100
+hunger = 0
+genome = { sex = "Male", alleles = [[820,840], [330,530], [390,590], [530,730]], mate_desire = [437, 315] }
+social_response = { feed_affinity = 2, minimum = -10, maximum = 10, capacity = 8 }
+handling_response = { willing = true, on_accept = 0, on_refuse = 0 }
+restraint_response = { resistance = 1, escape_willing = true, escape_effort = 1 }
+
+[[fauna.animals]]
+id = 9
+species = 1
+region = 2
+age = 35040
+health = 100
+hunger = 0
+genome = { sex = "Female", alleles = [[835,855], [340,540], [395,595], [540,740]], mate_desire = [504, 416] }
+social_response = { feed_affinity = 2, minimum = -10, maximum = 10, capacity = 8 }
+handling_response = { willing = true, on_accept = 0, on_refuse = 0 }
+restraint_response = { resistance = 1, escape_willing = true, escape_effort = 1 }
+
+[[fauna.animals]]
+id = 10
+species = 1
+region = 2
+age = 43800
+health = 100
+hunger = 0
+genome = { sex = "Male", alleles = [[850,870], [350,550], [400,600], [550,750]], mate_desire = [571, 517] }
+social_response = { feed_affinity = 2, minimum = -10, maximum = 10, capacity = 8 }
+handling_response = { willing = true, on_accept = 0, on_refuse = 0 }
+restraint_response = { resistance = 1, escape_willing = true, escape_effort = 1 }
+
+[[fauna.animals]]
+id = 11
+species = 1
+region = 2
+age = 52560
+health = 100
+hunger = 0
+genome = { sex = "Female", alleles = [[865,885], [360,560], [405,605], [560,760]], mate_desire = [638, 618] }
+social_response = { feed_affinity = 2, minimum = -10, maximum = 10, capacity = 8 }
+handling_response = { willing = true, on_accept = 0, on_refuse = 0 }
+restraint_response = { resistance = 1, escape_willing = true, escape_effort = 1 }
+
+[[fauna.animals]]
+id = 12
+species = 1
+region = 2
+age = 26280
+health = 100
+hunger = 0
+genome = { sex = "Male", alleles = [[880,900], [370,570], [410,610], [570,770]], mate_desire = [304, 318] }
+social_response = { feed_affinity = 2, minimum = -10, maximum = 10, capacity = 8 }
+handling_response = { willing = true, on_accept = 0, on_refuse = 0 }
+restraint_response = { resistance = 1, escape_willing = true, escape_effort = 1 }
+
+
+[[fauna.animals]]
+id = 13
+species = 2
+region = 1
+age = 26280
+health = 100
+hunger = 0
+genome = { sex = "Female", alleles = [[700,800], [676,676], [400,600], [500,700]], mate_desire = [500,500] }
+social_response = { feed_affinity = 2, minimum = -10, maximum = 10, capacity = 8 }
+handling_response = { willing = true, on_accept = 0, on_refuse = 0 }
+restraint_response = { resistance = 1, escape_willing = true, escape_effort = 1 }
+
+[[fauna.animals]]
+id = 14
+species = 2
+region = 1
+age = 35040
+health = 100
+hunger = 0
+genome = { sex = "Male", alleles = [[700,800], [755,755], [400,600], [500,700]], mate_desire = [500,500] }
+social_response = { feed_affinity = 2, minimum = -10, maximum = 10, capacity = 8 }
+handling_response = { willing = true, on_accept = 0, on_refuse = 0 }
+restraint_response = { resistance = 1, escape_willing = true, escape_effort = 1 }
+
+[[fauna.animals]]
+id = 15
+species = 2
+region = 1
+age = 17520
+health = 100
+hunger = 0
+genome = { sex = "Female", alleles = [[700,800], [834,834], [400,600], [500,700]], mate_desire = [500,500] }
+social_response = { feed_affinity = 2, minimum = -10, maximum = 10, capacity = 8 }
+handling_response = { willing = true, on_accept = 0, on_refuse = 0 }
+restraint_response = { resistance = 1, escape_willing = true, escape_effort = 1 }
+
+[[fauna.animals]]
+id = 16
+species = 2
+region = 1
+age = 26280
+health = 100
+hunger = 0
+genome = { sex = "Male", alleles = [[700,800], [312,312], [400,600], [500,700]], mate_desire = [500,500] }
+social_response = { feed_affinity = 2, minimum = -10, maximum = 10, capacity = 8 }
+handling_response = { willing = true, on_accept = 0, on_refuse = 0 }
+restraint_response = { resistance = 1, escape_willing = true, escape_effort = 1 }
+
+[[fauna.animals]]
+id = 17
+species = 2
+region = 1
+age = 35040
+health = 100
+hunger = 0
+genome = { sex = "Female", alleles = [[700,800], [391,391], [400,600], [500,700]], mate_desire = [500,500] }
+social_response = { feed_affinity = 2, minimum = -10, maximum = 10, capacity = 8 }
+handling_response = { willing = true, on_accept = 0, on_refuse = 0 }
+restraint_response = { resistance = 1, escape_willing = true, escape_effort = 1 }
+
+[[fauna.animals]]
+id = 18
+species = 2
+region = 1
+age = 17520
+health = 100
+hunger = 0
+genome = { sex = "Male", alleles = [[700,800], [470,470], [400,600], [500,700]], mate_desire = [500,500] }
+social_response = { feed_affinity = 2, minimum = -10, maximum = 10, capacity = 8 }
+handling_response = { willing = true, on_accept = 0, on_refuse = 0 }
+restraint_response = { resistance = 1, escape_willing = true, escape_effort = 1 }
+
+[[fauna.animals]]
+id = 19
+species = 2
+region = 2
+age = 26280
+health = 100
+hunger = 0
+genome = { sex = "Female", alleles = [[700,800], [549,549], [400,600], [500,700]], mate_desire = [500,500] }
+social_response = { feed_affinity = 2, minimum = -10, maximum = 10, capacity = 8 }
+handling_response = { willing = true, on_accept = 0, on_refuse = 0 }
+restraint_response = { resistance = 1, escape_willing = true, escape_effort = 1 }
+
+[[fauna.animals]]
+id = 20
+species = 2
+region = 2
+age = 35040
+health = 100
+hunger = 0
+genome = { sex = "Male", alleles = [[700,800], [628,628], [400,600], [500,700]], mate_desire = [500,500] }
+social_response = { feed_affinity = 2, minimum = -10, maximum = 10, capacity = 8 }
+handling_response = { willing = true, on_accept = 0, on_refuse = 0 }
+restraint_response = { resistance = 1, escape_willing = true, escape_effort = 1 }
+
+[[fauna.animals]]
+id = 21
+species = 2
+region = 2
+age = 17520
+health = 100
+hunger = 0
+genome = { sex = "Female", alleles = [[700,800], [707,707], [400,600], [500,700]], mate_desire = [500,500] }
+social_response = { feed_affinity = 2, minimum = -10, maximum = 10, capacity = 8 }
+handling_response = { willing = true, on_accept = 0, on_refuse = 0 }
+restraint_response = { resistance = 1, escape_willing = true, escape_effort = 1 }
+
+[[fauna.animals]]
+id = 22
+species = 2
+region = 2
+age = 26280
+health = 100
+hunger = 0
+genome = { sex = "Male", alleles = [[700,800], [786,786], [400,600], [500,700]], mate_desire = [500,500] }
+social_response = { feed_affinity = 2, minimum = -10, maximum = 10, capacity = 8 }
+handling_response = { willing = true, on_accept = 0, on_refuse = 0 }
+restraint_response = { resistance = 1, escape_willing = true, escape_effort = 1 }
+
+[[fauna.animals]]
+id = 23
+species = 2
+region = 2
+age = 35040
+health = 100
+hunger = 0
+genome = { sex = "Female", alleles = [[700,800], [264,264], [400,600], [500,700]], mate_desire = [500,500] }
+social_response = { feed_affinity = 2, minimum = -10, maximum = 10, capacity = 8 }
+handling_response = { willing = true, on_accept = 0, on_refuse = 0 }
+restraint_response = { resistance = 1, escape_willing = true, escape_effort = 1 }
+
+[[fauna.animals]]
+id = 24
+species = 2
+region = 2
+age = 17520
+health = 100
+hunger = 0
+genome = { sex = "Male", alleles = [[700,800], [343,343], [400,600], [500,700]], mate_desire = [500,500] }
+social_response = { feed_affinity = 2, minimum = -10, maximum = 10, capacity = 8 }
+handling_response = { willing = true, on_accept = 0, on_refuse = 0 }
+restraint_response = { resistance = 1, escape_willing = true, escape_effort = 1 }
+
+[dynamics.social]
+inherit_births = true
+
+[dynamics.social.rules]
+interval = 1
+min_health = 1
+max_hunger = 100
+familiarity_gain = 1
+familiarity_max = 20
+
+[[dynamics.social.participants]]
+person = 1
+willing = true
+
+[[dynamics.social.participants]]
+person = 2
+willing = true
+
+[[dynamics.social.participants]]
+person = 3
+willing = true
+
+[[dynamics.social.participants]]
+person = 4
+willing = true
+
+[[dynamics.social.participants]]
+person = 5
+willing = true
+
+[[dynamics.social.participants]]
+person = 6
+willing = true
+
+[[dynamics.social.participants]]
+person = 7
+willing = true
+
+[[dynamics.social.participants]]
+person = 8
+willing = true
+
+[[dynamics.social.participants]]
+person = 9
+willing = true
+
+[[dynamics.social.participants]]
+person = 10
+willing = true
+
+[[dynamics.social.participants]]
+person = 11
+willing = true
+
+[[dynamics.social.participants]]
+person = 12
+willing = true
+
+
+[[dynamics.social.participants]]
+person = 13
+willing = true
+
+[[dynamics.social.participants]]
+person = 14
+willing = true
+
+[[dynamics.social.participants]]
+person = 15
+willing = true
+
+[[dynamics.social.participants]]
+person = 16
+willing = true
+
+[[dynamics.social.participants]]
+person = 17
+willing = true
+
+[[dynamics.social.participants]]
+person = 18
+willing = true
+
+[[dynamics.social.participants]]
+person = 19
+willing = true
+
+[[dynamics.social.participants]]
+person = 20
+willing = true
+
+[[dynamics.social.participants]]
+person = 21
+willing = true
+
+[[dynamics.social.participants]]
+person = 22
+willing = true
+
+[[dynamics.social.participants]]
+person = 23
+willing = true
+
+[[dynamics.social.participants]]
+person = 24
+willing = true
+
+[[dynamics.social.participants]]
+person = 25
+willing = true
+
+[[dynamics.social.participants]]
+person = 26
+willing = true
+
+[[dynamics.social.participants]]
+person = 27
+willing = true
+
+[[dynamics.social.participants]]
+person = 28
+willing = true
+
+[[dynamics.social.participants]]
+person = 29
+willing = true
+
+[[dynamics.social.participants]]
+person = 30
+willing = true
+
+[[dynamics.social.participants]]
+person = 31
+willing = true
+
+[[dynamics.social.participants]]
+person = 32
+willing = true
+
+[[dynamics.social.participants]]
+person = 33
+willing = true
+
+[[dynamics.social.participants]]
+person = 34
+willing = true
+
+[[dynamics.social.participants]]
+person = 35
+willing = true
+
+[[dynamics.social.participants]]
+person = 36
+willing = true
+
+[[dynamics.social.participants]]
+person = 37
+willing = true
+
+[[dynamics.social.participants]]
+person = 38
+willing = true
+
+[[dynamics.social.participants]]
+person = 39
+willing = true
+
+[[dynamics.social.participants]]
+person = 40
+willing = true
+
+[[dynamics.social.participants]]
+person = 41
+willing = true
+
+[[dynamics.social.participants]]
+person = 42
+willing = true
+
+[[dynamics.social.participants]]
+person = 43
+willing = true
+
+[[dynamics.social.participants]]
+person = 44
+willing = true
+
+[[dynamics.social.participants]]
+person = 45
+willing = true
+
+[[dynamics.social.participants]]
+person = 46
+willing = true
+
+[[dynamics.social.participants]]
+person = 47
+willing = true
+
+[[dynamics.social.participants]]
+person = 48
+willing = true
+
+[[dynamics.social.participants]]
+person = 49
+willing = true
+
+[[dynamics.social.participants]]
+person = 50
+willing = true
+
+[[dynamics.social.participants]]
+person = 51
+willing = true
+
+[[dynamics.social.participants]]
+person = 52
+willing = true
+
+[[dynamics.social.participants]]
+person = 53
+willing = true
+
+[[dynamics.social.participants]]
+person = 54
+willing = true
+
+[[dynamics.social.participants]]
+person = 55
+willing = true
+
+[[dynamics.social.participants]]
+person = 56
+willing = true
+
+[[dynamics.social.participants]]
+person = 57
+willing = true
+
+[[dynamics.social.participants]]
+person = 58
+willing = true
+
+[[dynamics.social.participants]]
+person = 59
+willing = true
+
+[[dynamics.social.participants]]
+person = 60
+willing = true
+
+[opinions.rules]
+minimum = -100
+maximum = 100
+initial = 0
+fulfilled_gain = 1
+default_loss = 2
+encounter_gain = 1
+affinity = { limit = 10, encounter_change = 1, help_change = 2, harm_change_per_damage = -1 }
+
+[[opinions.sensitivities]]
+person = 1
+gratitude_gain = 1
+
+[dynamics.personality]
+social_urgency_per_isolation = 1
+inherit_births = true
+people = [{ person = 1, sociability = 400, diligence = 400 }, { person = 2, sociability = 500, diligence = 550 }, { person = 3, sociability = 600, diligence = 700 }, { person = 4, sociability = 700, diligence = 850 }, { person = 5, sociability = 800, diligence = 400 }, { person = 6, sociability = 400, diligence = 550 }, { person = 7, sociability = 500, diligence = 700 }, { person = 8, sociability = 600, diligence = 850 }, { person = 9, sociability = 700, diligence = 400 }, { person = 10, sociability = 800, diligence = 550 }, { person = 11, sociability = 400, diligence = 700 }, { person = 12, sociability = 500, diligence = 850 }, { person = 13, sociability = 700, diligence = 550 }, { person = 14, sociability = 800, diligence = 700 }, { person = 15, sociability = 400, diligence = 850 }, { person = 16, sociability = 500, diligence = 400 }, { person = 17, sociability = 600, diligence = 550 }, { person = 18, sociability = 700, diligence = 700 }, { person = 19, sociability = 800, diligence = 850 }, { person = 20, sociability = 400, diligence = 400 }, { person = 21, sociability = 500, diligence = 550 }, { person = 22, sociability = 600, diligence = 700 }, { person = 23, sociability = 700, diligence = 850 }, { person = 24, sociability = 800, diligence = 400 }, { person = 25, sociability = 400, diligence = 550 }, { person = 26, sociability = 500, diligence = 700 }, { person = 27, sociability = 600, diligence = 850 }, { person = 28, sociability = 700, diligence = 400 }, { person = 29, sociability = 800, diligence = 550 }, { person = 30, sociability = 400, diligence = 700 }, { person = 31, sociability = 500, diligence = 850 }, { person = 32, sociability = 600, diligence = 400 }, { person = 33, sociability = 700, diligence = 550 }, { person = 34, sociability = 800, diligence = 700 }, { person = 35, sociability = 400, diligence = 850 }, { person = 36, sociability = 500, diligence = 400 }, { person = 37, sociability = 600, diligence = 550 }, { person = 38, sociability = 700, diligence = 700 }, { person = 39, sociability = 800, diligence = 850 }, { person = 40, sociability = 400, diligence = 400 }, { person = 41, sociability = 500, diligence = 550 }, { person = 42, sociability = 600, diligence = 700 }, { person = 43, sociability = 700, diligence = 850 }, { person = 44, sociability = 800, diligence = 400 }, { person = 45, sociability = 400, diligence = 550 }, { person = 46, sociability = 500, diligence = 700 }, { person = 47, sociability = 600, diligence = 850 }, { person = 48, sociability = 700, diligence = 400 }, { person = 49, sociability = 800, diligence = 550 }, { person = 50, sociability = 400, diligence = 700 }, { person = 51, sociability = 500, diligence = 850 }, { person = 52, sociability = 600, diligence = 400 }, { person = 53, sociability = 700, diligence = 550 }, { person = 54, sociability = 800, diligence = 700 }, { person = 55, sociability = 400, diligence = 850 }, { person = 56, sociability = 500, diligence = 400 }, { person = 57, sociability = 600, diligence = 550 }, { person = 58, sociability = 700, diligence = 700 }, { person = 59, sociability = 800, diligence = 850 }, { person = 60, sociability = 400, diligence = 400 }]
+
+[gathering]
+inherit_births = true
+max_hunger = 120
+policies = [{ person = 1, node = 1, willing = true }, { person = 2, node = 1, willing = true }, { person = 3, node = 1, willing = true }, { person = 4, node = 1, willing = true }, { person = 5, node = 1, willing = true }, { person = 6, node = 1, willing = true }, { person = 7, node = 1, willing = true }, { person = 8, node = 1, willing = true }, { person = 9, node = 1, willing = true }, { person = 10, node = 1, willing = true }, { person = 11, node = 1, willing = true }, { person = 12, node = 1, willing = true }, { person = 13, node = 1, willing = true }, { person = 14, node = 1, willing = true }, { person = 15, node = 1, willing = true }, { person = 16, node = 1, willing = true }, { person = 17, node = 1, willing = true }, { person = 18, node = 1, willing = true }, { person = 19, node = 1, willing = true }, { person = 20, node = 1, willing = true }, { person = 21, node = 1, willing = true }, { person = 22, node = 1, willing = true }, { person = 23, node = 1, willing = true }, { person = 24, node = 1, willing = true }, { person = 25, node = 1, willing = true }, { person = 26, node = 1, willing = true }, { person = 27, node = 1, willing = true }, { person = 28, node = 1, willing = true }, { person = 29, node = 1, willing = true }, { person = 30, node = 1, willing = true }, { person = 31, node = 1, willing = true }, { person = 32, node = 1, willing = true }, { person = 33, node = 1, willing = true }, { person = 34, node = 1, willing = true }, { person = 35, node = 1, willing = true }, { person = 36, node = 1, willing = true }, { person = 37, node = 1, willing = true }, { person = 38, node = 1, willing = true }, { person = 39, node = 1, willing = true }, { person = 40, node = 1, willing = true }, { person = 41, node = 1, willing = true }, { person = 42, node = 1, willing = true }, { person = 43, node = 1, willing = true }, { person = 44, node = 1, willing = true }, { person = 45, node = 1, willing = true }, { person = 46, node = 1, willing = true }, { person = 47, node = 1, willing = true }, { person = 48, node = 1, willing = true }, { person = 49, node = 2, willing = true }, { person = 50, node = 2, willing = true }, { person = 51, node = 2, willing = true }, { person = 52, node = 2, willing = true }, { person = 53, node = 2, willing = true }, { person = 54, node = 2, willing = true }, { person = 55, node = 2, willing = true }, { person = 56, node = 2, willing = true }, { person = 57, node = 2, willing = true }, { person = 58, node = 2, willing = true }, { person = 59, node = 2, willing = true }, { person = 60, node = 2, willing = true }]
+
+[[gathering.nodes]]
+id = 1
+region = 1
+good = "barley"
+seasonal = true
+available = 3000
+capacity = 4000
+regrowth = 48
+yield_per_action = 20
+
+[[gathering.nodes]]
+id = 2
+region = 2
+good = "barley"
+seasonal = true
+available = 900
+capacity = 1200
+regrowth = 48
+yield_per_action = 20
+
+
+[[gathering.nodes]]
+id = 3
+region = 1
+good = "wild-berries"
+seasonal = true
+available = 900
+capacity = 1200
+regrowth = 48
+yield_per_action = 20
+
+[[gathering.nodes]]
+id = 4
+region = 2
+good = "wild-berries"
+seasonal = true
+available = 900
+capacity = 1200
+regrowth = 48
+yield_per_action = 20
+
+[care]
+inherit_births = true
+policies = [{ person = 1, willing = true }, { person = 2, willing = true }, { person = 3, willing = true }, { person = 4, willing = true }, { person = 5, willing = true }, { person = 6, willing = true }, { person = 7, willing = true }, { person = 8, willing = true }, { person = 9, willing = true }, { person = 10, willing = true }, { person = 11, willing = true }, { person = 12, willing = true }, { person = 13, willing = true }, { person = 14, willing = true }, { person = 15, willing = true }, { person = 16, willing = true }, { person = 17, willing = true }, { person = 18, willing = true }, { person = 19, willing = true }, { person = 20, willing = true }, { person = 21, willing = true }, { person = 22, willing = true }, { person = 23, willing = true }, { person = 24, willing = true }, { person = 25, willing = true }, { person = 26, willing = true }, { person = 27, willing = true }, { person = 28, willing = true }, { person = 29, willing = true }, { person = 30, willing = true }, { person = 31, willing = true }, { person = 32, willing = true }, { person = 33, willing = true }, { person = 34, willing = true }, { person = 35, willing = true }, { person = 36, willing = true }, { person = 37, willing = true }, { person = 38, willing = true }, { person = 39, willing = true }, { person = 40, willing = true }, { person = 41, willing = true }, { person = 42, willing = true }, { person = 43, willing = true }, { person = 44, willing = true }, { person = 45, willing = true }, { person = 46, willing = true }, { person = 47, willing = true }, { person = 48, willing = true }, { person = 49, willing = true }, { person = 50, willing = true }, { person = 51, willing = true }, { person = 52, willing = true }, { person = 53, willing = true }, { person = 54, willing = true }, { person = 55, willing = true }, { person = 56, willing = true }, { person = 57, willing = true }, { person = 58, willing = true }, { person = 59, willing = true }, { person = 60, willing = true }]
+
+[care.rules]
+dependent_until = 140160
+care_interval = 24
+max_caregiver_hunger = 120
+neglect_damage = 1
+fetch_local_food = true
+feed_from_cargo = true
+
+[recovery]
+interval = 1
+health_per_interval = 1
+rest_bonus = 1
+max_hunger = 120
+
+[animal_products]
+[[animal_products.rules]]
+species = 1
+good = "raw-wool"
+quantity = 1
+grow_ticks = 8760
+min_age = 17520
+min_health = 1
+max_hunger = 10
+
+[[dynamics.disease.strains]]
+id = 1
+name = "fever"
+incubation = 24
+infectious_ticks = 72
+immunity_ticks = 8760
+damage_per_tick = 1
+transmission_per_million = 500
+
+[medical]
+
+[[remedies]]
+strain = 1
+medicine = "barley"
+quantity = 1
+people = []
+
+
+[purpose]
+[purpose.rules]
+max = 100
+per_tick = 1
+blocked_increase = 1
+completion_relief = 4
+damage_threshold = 100
+damage = 0
+[[purpose.people]]
+person = 1
+deprivation = 0
+[[purpose.people]]
+person = 2
+deprivation = 0
+[[purpose.people]]
+person = 3
+deprivation = 0
+[[purpose.people]]
+person = 4
+deprivation = 0
+[[purpose.people]]
+person = 5
+deprivation = 0
+[[purpose.people]]
+person = 6
+deprivation = 0
+[[purpose.people]]
+person = 7
+deprivation = 0
+[[purpose.people]]
+person = 8
+deprivation = 0
+[[purpose.people]]
+person = 9
+deprivation = 0
+[[purpose.people]]
+person = 10
+deprivation = 0
+[[purpose.people]]
+person = 11
+deprivation = 0
+[[purpose.people]]
+person = 12
+deprivation = 0
+
+[goals]
+retry_interval = 2190
+plan_inputs = true
+[[goals.people]]
+person = 1
+recipe = "fixture-tool"
+priority = 1
+target = 1
+
+[skills]
+rules = []
+[skills.catalog_training]
+completions_per_level = 1
+max_level = 5
+work_per_level = 1
+practice_each_tick = true
+
+[giving]
+[[giving.policies]]
+person = 2
+recipient = 1
+good = "barley"
+quantity = 10
+recipient_hunger_at_least = 5
+willing = true
+requires_request = true
+[[giving.asking]]
+person = 1
+target = 2
+min_hunger = 5
+enabled = true
+retry_ticks = 24
+request_lifetime = 3
+
+[market]
+[[market.policies]]
+person = 2
+enabled = true
+min_gain = 1
+values = { barley = 10, bread = 1 }
+[[market.offers]]
+proposer = 1
+recipient = 2
+give = { barley = 1 }
+receive = { bread = 1 }
+
+[work_sites]
+sites = [{ id = 1, region = 1, kind = "workshop", capacity = 3 }]
+[[work_sites.requirements]]
+recipe = "fixture-tool"
+kind = "workshop"
+slots = 1
+[construction]
+[[construction.blueprints]]
+id = 1
+name = "Timber shelter"
+kind = "shelter"
+capacity = 4
+kit = "timber"
+quantity = 2
+salvage = 1
+[[construction.policies]]
+person = 3
+blueprint = 1
+target_sites = 1
+willing = true
+
+[local_transport]
+[[local_transport.stores]]
+id = 1
+region = 1
+name = "Food store"
+capacity = 500
+[[local_transport.policies]]
+person = 4
+region = 1
+source = { kind = "stock" }
+destination = { kind = "store", id = 1 }
+good = "barley"
+quantity = 10
+willing = true
+
+[writing]
+paper = "paper"
+ink = "ink"
+page = "written-page"
+paper_quantity = 1
+ink_quantity = 1
+next_item = 1
+literacy = [{person=1,script=1,read=true,auto_read=true},{person=2,script=1,read=true,write=true}]
+[[writing.practice]]
+person = 1
+script = 1
+required = 1
+enabled = true
+[[writing.text_templates]]
+id = 1
+text = "The river is cold."
+[[writing.text_authors]]
+person = 2
+script = 1
+template = 1
+enabled = true
+[[writing.text_retention]]
+person = 1
+capacity = 2
+enabled = true
+[[writing.text_retention]]
+person = 2
+capacity = 2
+enabled = true
+
+[knowledge]
+max_records = 4
+minds = []
+
+[environment]
+[[environment.regions]]
+region = 1
+damage = 1
+shelter = 80
+shelter_reduction = 1
+shelter_good = "reed-shelter-kit"
+[[environment.regions]]
+region = 2
+damage = 1
+shelter = 10
+shelter_reduction = 1
+shelter_good = "reed-shelter-kit"
+[[environment.seasons]]
+name = "growing season"
+duration = 5840
+food_growth_per_thousand = 1000
+exposure_per_thousand = 1000
+planting_allowed = true
+tending_allowed = true
+harvest_allowed = true
+[[environment.seasons]]
+name = "cold season"
+duration = 2920
+food_growth_per_thousand = 500
+exposure_per_thousand = 1000
+planting_allowed = false
+tending_allowed = true
+harvest_allowed = true
+
+[cultivation]
+max_hunger = 120
+policies = [{ person = 6, willing = true }]
+[[cultivation.fields]]
+id = 1
+region = 1
+crop = "grain"
+[irrigation]
+water = "fresh-water"
+capacity = 2
+minimum_growth = 1
+evaporation = 1
+moisture = [{ field = 1, amount = 0 }]
+choices = [{ person = 7, field = 1, quantity = 1, willing = true }]
+
+[hunting]
+inherit_births = true
+[[hunting.policies]]
+person = 8
+willing = true
+hunger_at_least = 5
+reserve_good = "raw-meat"
+reserve_below = 20
+request_response = { willing = true }
+
+[hauling]
+policies = [{ person = 9, source = 1, destination = 2, good = "barley", quantity = 10, willing = true }]
+
+[[dynamics.disease.cases]]
+person = 10
+strain = 1
+infected_at = 0
+
+[[animal_products.policies]]
+person = 11
+animal = 1
+willing = true
+
+[animal_care]
+inherit_births = true
+[[animal_care.policies]]
+person = 12
+animal = 2
+good = "barley"
+quantity = 1
+willing = true
+health_at_most = 90
+
+[animal_handling]
+inherit_births = true
+policies = [{ person = 13, animal = 2, willing = true }]
+
+[animal_restraints]
+inherit_births = true
+default_effort = 2
+capacity_per_handler = 1
+policies = [{ person = 14, animal = 3, willing = false, effort = 2 }]
+
+[construction.maintenance]
+[[construction.maintenance.rules]]
+kind = "shelter"
+wear_limit = 10
+wear_per_slot = 1
+repair_good = "timber"
+repair_quantity = 1
+
+[fatigue.rules]
+capacity = 30
+baseline_gain = 1
+work_gain = 2
+travel_gain = 1
+idle_recovery = 1
+rest_recovery = 5
+rest_at = 15
+resume_at = 5
+exhaustion_at = 25
+exhaustion_damage = 1
+
+[dynamics.claims]
+inherit_births = true
+[[dynamics.claims.preferences]]
+person = 15
+assert_outputs = true
+
+[agreements]
+next_id = 1
+policies = [{ person = 16, accept = true, honor = true }]
+
+[animal_feelings]
+[[animal_feelings.minds]]
+person = 8
+minimum = -10
+maximum = 10
+capacity = 16
+on_hunt = -1
+on_feed = 1
+
+[food_search]
+inherit_births = true
+min_hunger = 10
+min_report_food = 1
+max_report_age = 8760
+retry_ticks = 24
+people = [{ person = 18, enabled = true }]
+
+[[aspirations]]
+person = 3
+recipe = "fixture-tool"
+priority = 2
+batch = 2
+review_interval = 8760
+
+[taking]
+[[taking.policies]]
+person = 17
+target = 18
+good = "barley"
+quantity = 2
+willing = true
+interval = 12
+[[taking.responses]]
+person = 18
+notices = true
+resist = true
+
+[[shared_work.rules]]
+recipe = "fixture-tool"
+max_helpers = 1
+[[shared_work.preferences]]
+person = 4
+lead = 2
+recipe = "fixture-tool"
+willing = true
+
+[[work_tools]]
+recipe = "fixture-tool"
+good = "tool"
+quantity = 1
+[[tool_wear.rules]]
+good = "tool"
+durability = 5
+wear = 1
+repair_good = "timber"
+repair_quantity = 1
+[[tool_wear.conditions]]
+item = 1001
+good = "tool"
+damage = 3
+[[tool_wear.repairs]]
+person = 1
+item = 1001
+willing = true
