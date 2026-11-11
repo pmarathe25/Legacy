@@ -598,6 +598,7 @@ pub struct Context<'a> {
     pub busy: &'a [u64],
     pub communication: &'a game_economy_confinement::Communication<'a>,
     pub manual: Option<(u64, u64, u32, u64)>,
+    pub signal_gifts: &'a [game_signals::GiftOpportunity],
     pub tick: u64,
     pub seed: u64,
     pub locations: &'a Colocation,
@@ -1013,6 +1014,45 @@ impl Context<'_> {
             })
             .collect();
         chosen.par_extend(reciprocal);
+        if !self.signal_gifts.is_empty() {
+            let mut occupied: Vec<_> = chosen.par_iter().map(|row| row.0).collect();
+            occupied.par_sort_unstable();
+            let mut opportunities: Vec<_> = self
+                .signal_gifts
+                .par_iter()
+                .filter_map(|offer| {
+                    let giver = find(offer.giver)?;
+                    let recipient = find(offer.recipient)?;
+                    let from = holder(giver.id)?;
+                    let to = holder(recipient.id)?;
+                    (!giver.controlled
+                        && giver.health > 0
+                        && recipient.health > 0
+                        && self.busy.binary_search(&giver.id).is_err()
+                        && occupied.binary_search(&giver.id).is_err()
+                        && self.communication.allows(giver.id, recipient.id)
+                        && self
+                            .locations
+                            .region((giver.id, giver.region), (recipient.id, recipient.region))
+                            .is_some()
+                        && self.locally_together(giver, recipient)
+                        && from.quantity(offer.good) >= offer.quantity
+                        && to.capacity.saturating_sub(to.used) >= offer.quantity)
+                        .then_some((
+                            giver.id,
+                            std::cmp::Reverse(offer.value),
+                            recipient.id,
+                            offer.good,
+                            offer.quantity,
+                        ))
+                })
+                .collect();
+            opportunities.par_sort_unstable();
+            chosen.par_extend(opportunities.par_chunk_by(|a, b| a.0 == b.0).map(|group| {
+                let row = group[0];
+                (row.0, row.2, row.3, row.4)
+            }));
+        }
         if let Some((sender, recipient, good, quantity)) = self.manual {
             let a = find(sender).ok_or("unknown person")?;
             let b = find(recipient).ok_or("unknown recipient")?;

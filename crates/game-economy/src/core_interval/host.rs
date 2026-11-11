@@ -692,6 +692,17 @@ impl CoreHost {
                 signals
                     .validate(&people, core.physical.tick())
                     .map_err(str::to_owned)?;
+                if signals.minds.par_iter().any(|mind| {
+                    mind.gift_preferences.iter().any(|preference| {
+                        !core
+                            .physical
+                            .goods()
+                            .iter()
+                            .any(|good| good.id == preference.good)
+                    })
+                }) {
+                    return Err("unknown signal gift good".into());
+                }
                 if signals
                     .events
                     .par_iter()

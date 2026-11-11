@@ -66,6 +66,25 @@ pub struct FeelingChange {
     pub reaction: Reaction,
 }
 
+/// A personally valued possible gift in response to an interpreted meaning.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GiftPreference {
+    pub meaning: u32,
+    pub good: u32,
+    pub quantity: u64,
+    pub value: i64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct GiftOpportunity {
+    pub giver: u64,
+    pub recipient: u64,
+    pub good: u32,
+    pub quantity: u64,
+    pub value: i64,
+}
+
 /// A listener's own recollection, without access to the sender's intention.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -91,6 +110,12 @@ pub struct Mind {
     pub interpretations: Vec<Interpretation>,
     #[serde(default)]
     pub reactions: Vec<Reaction>,
+    #[serde(default)]
+    pub gift_preferences: Vec<GiftPreference>,
+    #[serde(default)]
+    pub gift_idle: i64,
+    #[serde(default)]
+    pub gift_on_tie: bool,
     #[serde(default)]
     pub remember: bool,
     #[serde(default)]
@@ -235,6 +260,9 @@ impl Signals {
                         .reactions
                         .iter()
                         .any(|row| !self.valid_meaning(row.meaning))
+                    || mind.gift_preferences.iter().any(|row| {
+                        !self.valid_meaning(row.meaning) || row.good == 0 || row.quantity == 0
+                    })
                     || mind
                         .observations
                         .windows(2)
@@ -332,6 +360,29 @@ impl Signals {
                     observer: event.observer,
                     target: event.actor,
                     reaction: mind.reactions[index],
+                })
+            })
+            .collect()
+    }
+
+    /// Opportunities arise from the potential giver's inference, not a request.
+    pub fn gift_opportunities(&self) -> Vec<GiftOpportunity> {
+        self.events
+            .par_iter()
+            .flat_map_iter(|event| {
+                self.mind(event.observer).into_iter().flat_map(move |mind| {
+                    mind.gift_preferences.iter().filter_map(move |preference| {
+                        (event.interpreted == Some(preference.meaning)
+                            && (preference.value > mind.gift_idle
+                                || (preference.value == mind.gift_idle && mind.gift_on_tie)))
+                            .then_some(GiftOpportunity {
+                                giver: event.observer,
+                                recipient: event.actor,
+                                good: preference.good,
+                                quantity: preference.quantity,
+                                value: preference.value,
+                            })
+                    })
                 })
             })
             .collect()

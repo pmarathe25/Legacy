@@ -856,6 +856,18 @@ struct SignalsConfig {
     catalog: String,
     #[serde(default)]
     minds: Vec<game_signals::Mind>,
+    #[serde(default)]
+    gifts: Vec<SignalGift>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SignalGift {
+    person: u64,
+    meaning: String,
+    good: String,
+    quantity: u64,
+    value: i64,
 }
 
 fn default_food_preference_domain() -> u32 {
@@ -999,6 +1011,34 @@ pub fn core_scenario_with_options(
         catalog.forms.sort_unstable_by_key(|row| row.id);
         catalog.meanings.sort_unstable_by_key(|row| row.id);
         signals.minds.sort_unstable_by_key(|mind| mind.person);
+        for gift in signals.gifts {
+            let meaning = catalog
+                .meanings
+                .iter()
+                .find(|row| row.name == gift.meaning)
+                .ok_or_else(|| format!("unknown signal meaning {}", gift.meaning))?
+                .id;
+            let good = snapshot
+                .core
+                .physical
+                .goods
+                .iter()
+                .find(|row| row.name == gift.good)
+                .ok_or_else(|| format!("unknown signal gift good {}", gift.good))?
+                .id;
+            let index = signals
+                .minds
+                .binary_search_by_key(&gift.person, |mind| mind.person)
+                .map_err(|_| "signal gift requires a personal signal mind")?;
+            signals.minds[index]
+                .gift_preferences
+                .push(game_signals::GiftPreference {
+                    meaning,
+                    good,
+                    quantity: gift.quantity,
+                    value: gift.value,
+                });
+        }
         for mind in &mut signals.minds {
             mind.expressions
                 .sort_unstable_by_key(|row| (row.form, row.recipient));

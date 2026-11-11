@@ -5120,6 +5120,7 @@ impl Economy {
             busy: giving_busy.as_deref().unwrap_or(giving_base),
             communication: &communication,
             manual: manual_give,
+            signal_gifts: &[],
             tick,
             seed: self.seed,
             locations: &locations,

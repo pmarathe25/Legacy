@@ -155,6 +155,115 @@ fn directed_nonverbal_signals_are_personal_and_need_no_meeting() {
 }
 
 #[test]
+fn perceived_signals_can_motivate_voluntary_physical_gifts() {
+    use game_economy::core_interval::CoreHost;
+    use game_lots::{Container, Lot, Place};
+    fn run(workers: usize, value: i64, attention: u16, stock: u64) -> serde_json::Value {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let root = root();
+                let mut snapshot = game_economy_cli::core_scenario(
+                    &root.join("content/scenarios/economy-core-signals.toml"),
+                    &root.join("content"),
+                )
+                .unwrap()
+                .snapshot();
+                let good = snapshot
+                    .core
+                    .physical
+                    .goods
+                    .iter()
+                    .find(|good| good.name == "bread")
+                    .unwrap()
+                    .id;
+                let holder = snapshot
+                    .core
+                    .physical
+                    .custody
+                    .containers
+                    .iter_mut()
+                    .find(|row| row.place == Place::Person(2))
+                    .unwrap();
+                *holder = Container::new(
+                    Place::Person(2),
+                    100,
+                    if stock == 0 {
+                        vec![]
+                    } else {
+                        vec![Lot {
+                            item: None,
+                            good,
+                            quantity: stock,
+                            expires_at: None,
+                        }]
+                    },
+                )
+                .unwrap();
+                snapshot.giving =
+                    Some(serde_json::from_value(serde_json::json!({"policies":[]})).unwrap());
+                let mind = &mut snapshot
+                    .social
+                    .as_mut()
+                    .unwrap()
+                    .signals
+                    .as_mut()
+                    .unwrap()
+                    .minds[1];
+                mind.attention = attention;
+                assert_eq!(
+                    (
+                        mind.gift_preferences[0].meaning,
+                        mind.gift_preferences[0].good
+                    ),
+                    (2, good)
+                );
+                mind.gift_preferences[0].value = value;
+                let mut host = CoreHost::resume(snapshot).unwrap();
+                assert_eq!(host.advance_continuous(900_001, &[]).unwrap().failure, None);
+                let midway = host.snapshot();
+                let mut restored = CoreHost::resume(
+                    serde_json::from_str(&serde_json::to_string(&midway).unwrap()).unwrap(),
+                )
+                .unwrap();
+                assert_eq!(host.advance_continuous(900_000, &[]).unwrap().failure, None);
+                assert_eq!(
+                    restored.advance_continuous(900_000, &[]).unwrap().failure,
+                    None
+                );
+                let result = host.snapshot();
+                assert_eq!(result, restored.snapshot());
+                let quantity = result
+                    .core
+                    .physical
+                    .custody
+                    .containers
+                    .iter()
+                    .find(|row| row.place == Place::Person(1))
+                    .unwrap()
+                    .lots
+                    .iter()
+                    .filter(|lot| lot.good == good)
+                    .map(|lot| lot.quantity)
+                    .sum::<u64>();
+                assert_eq!(
+                    quantity,
+                    u64::from(value > 0 && attention == 1000 && stock > 0)
+                );
+                serde_json::to_value(result).unwrap()
+            })
+    }
+    for (value, attention, stock) in [(1, 1000, 2), (0, 1000, 2), (1, 0, 2), (1, 1000, 0)] {
+        assert_eq!(
+            run(1, value, attention, stock),
+            run(4, value, attention, stock)
+        );
+    }
+}
+
+#[test]
 fn language_topics_arise_from_personally_chosen_physical_demonstrations() {
     use game_economy::core_interval::{CoreHost, CoreRunEvent};
     use game_language::Meaning;

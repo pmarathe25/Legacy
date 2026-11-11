@@ -1,5 +1,6 @@
 use game_signals::{
-    Catalog, Contact, Directed, Expression, Interpretation, Mind, Named, Reaction, Signals,
+    Catalog, Contact, Directed, Expression, GiftPreference, Interpretation, Mind, Named, Reaction,
+    Signals,
 };
 use std::collections::HashSet;
 
@@ -44,6 +45,9 @@ fn initial() -> Signals {
                 }],
                 interpretations: vec![],
                 reactions: vec![],
+                gift_preferences: vec![],
+                gift_idle: 0,
+                gift_on_tie: false,
                 remember: false,
                 capacity: 0,
                 observations: vec![],
@@ -59,6 +63,9 @@ fn initial() -> Signals {
                     meaning: 2,
                 }],
                 reactions: vec![],
+                gift_preferences: vec![],
+                gift_idle: 0,
+                gift_on_tie: false,
                 remember: true,
                 capacity: 2,
                 observations: vec![],
@@ -123,6 +130,58 @@ fn feelings_follow_the_observers_interpretation_and_personal_reaction() {
             .prepare(&contact, 7, 1)
             .unwrap()
             .feeling_changes()
+            .is_empty()
+    );
+}
+
+#[test]
+fn gift_opportunities_depend_on_noticing_interpretation_and_personal_value() {
+    let mut state = initial();
+    state.minds[1].gift_preferences = vec![GiftPreference {
+        meaning: 2,
+        good: 17,
+        quantity: 1,
+        value: 0,
+    }];
+    let contact = [Contact {
+        a: 1,
+        b: 2,
+        a_hunger: 0,
+        b_hunger: 0,
+    }];
+    assert!(
+        state
+            .prepare(&contact, 7, 1)
+            .unwrap()
+            .gift_opportunities()
+            .is_empty()
+    );
+    state.minds[1].gift_on_tie = true;
+    let opportunities = state.prepare(&contact, 7, 1).unwrap().gift_opportunities();
+    assert_eq!(opportunities.len(), 1);
+    assert_eq!(
+        (
+            opportunities[0].giver,
+            opportunities[0].recipient,
+            opportunities[0].good
+        ),
+        (2, 1, 17)
+    );
+    state.minds[1].interpretations[0].meaning = 1;
+    assert!(
+        state
+            .prepare(&contact, 7, 1)
+            .unwrap()
+            .gift_opportunities()
+            .is_empty()
+    );
+    state.minds[1].interpretations[0].meaning = 2;
+    state.minds[1].attention = 0;
+    assert!(
+        state
+            .prepare(&contact, 7, 1)
+            .unwrap()
+            .gift_opportunities()
             .is_empty()
     );
 }

@@ -93,3 +93,10 @@ remember = true
 capacity = 2
 interpretations = [{ form = 1, meaning = 2 }]
 reactions = [{ meaning = 1, affinity = 9 }, { meaning = 2, affinity = -3, obligation = 0 }]
+
+[[signals.gifts]]
+person = 2
+meaning = "comfort"
+good = "bread"
+quantity = 1
+value = 1

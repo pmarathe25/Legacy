@@ -153,6 +153,12 @@ impl CoreHost {
             .filter(|request| actors.binary_search(&request.requester).is_ok())
             .map(|request| (request.requester, request.target))
             .collect();
+        let signal_gifts = self
+            .social
+            .as_ref()
+            .filter(|social| social.last_tick == Some(tick - 1))
+            .and_then(|social| social.signals.as_ref())
+            .map_or_else(Vec::new, game_signals::Signals::gift_opportunities);
         busy.par_extend(actors.par_iter().copied());
         busy.par_sort_unstable();
         busy.dedup();
@@ -170,6 +176,7 @@ impl CoreHost {
             busy: &busy,
             communication: &communication,
             manual: None,
+            signal_gifts: &signal_gifts,
             tick,
             seed: self.core.seed,
             locations: &locations,

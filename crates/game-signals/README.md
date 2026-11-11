@@ -19,6 +19,17 @@ signals arrive at once, the most recent retained observations use deterministic
 actor order. Each observer can also assign signed relationship reactions to
 their own inferred meanings. These can change affinity, trust, fear, or
 obligation independently; no reaction is required, and the actor's private
-intention is never used. Learning new interpretations and choosing physical
-responses from these memories remain to be implemented. Only configured minds participate; newborns
+intention is never used. An observer can also personally value giving a good
+to the signaler after a particular interpretation; the interval host offers
+that choice during the following physical interval. The giving owner checks
+actual custody, capacity, reach and competing activities. No actual hunger,
+request or agreement is inferred, and the giver may prefer idleness. This
+currently uses the giving scheduler's fixed priority rather than the general
+cross-domain choice round. Learning new interpretations and additional physical
+responses remain to be implemented. Only configured minds participate; newborns
 are not yet enrolled through heredity or upbringing.
+
+Scenarios can author `[[signals.gifts]]` with a person, named catalog meaning,
+named good, quantity, and personal value. These resolve to runtime identifiers
+when the scenario is loaded; each preference belongs to that person's signal
+mind. A configured giving owner is required to execute gifts.

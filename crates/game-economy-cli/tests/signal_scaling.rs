@@ -12,6 +12,7 @@ fn hosted_concentrated_signals_benchmark() {
     assert!(count > 0 && count < u64::MAX);
     let observer = count + 1;
     let reactions = std::env::var_os("LEGACY_SIGNAL_REACTIONS").is_some();
+    let gifts = std::env::var_os("LEGACY_SIGNAL_GIFTS").is_some();
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let mut text = String::from(
         r#"seed = 7
@@ -45,6 +46,9 @@ familiarity_max = 10
     }
     for id in 1..=observer {
         writeln!(text, "[[people]]\nid = {id}\nregion = 1\nhealth = 100\nhunger = 0\nwilling_to_work = false\nseek_meals = false").unwrap();
+        if gifts && id == observer {
+            writeln!(text, "goods = {{ bread = 1 }}").unwrap();
+        }
         writeln!(
             text,
             "[[dynamics.social.participants]]\nperson = {id}\nwilling = false"
@@ -57,6 +61,9 @@ familiarity_max = 10
     writeln!(text, "[[signals.minds]]\nperson = {observer}\nidle = 0\nattention = 1000\nremember = true\ncapacity = 16\ninterpretations = [{{ form = 1, meaning = 2 }}]").unwrap();
     if reactions {
         writeln!(text, "reactions = [{{ meaning = 2, affinity = -3 }}]").unwrap();
+    }
+    if gifts {
+        writeln!(text, "[[signals.gifts]]\nperson = {observer}\nmeaning = \"comfort\"\ngood = \"bread\"\nquantity = 1\nvalue = 1\n[giving]\npolicies = []").unwrap();
     }
     let path = std::env::temp_dir().join(format!(
         "legacy-signals-{}-{}.toml",
@@ -85,6 +92,14 @@ familiarity_max = 10
             .events
             .is_empty()
     );
+    if gifts {
+        assert_eq!(initial.advance_continuous(1, &[]).unwrap().failure, None);
+        assert_eq!(
+            initial.advance_continuous(899_999, &[]).unwrap().failure,
+            None
+        );
+        snapshot = initial.snapshot();
+    }
     let baseline = std::env::var_os("LEGACY_SIGNAL_BASELINE").is_some();
     if baseline {
         snapshot.social.as_mut().unwrap().signals = None;
@@ -116,6 +131,17 @@ familiarity_max = 10
                 if reactions {
                     assert_eq!(state.opinions.as_ref().unwrap().records.len() as u64, count);
                 }
+                if gifts {
+                    let recipient = state
+                        .core
+                        .physical
+                        .custody
+                        .containers
+                        .iter()
+                        .find(|row| row.place == game_lots::Place::Person(1))
+                        .unwrap();
+                    assert_eq!(recipient.used, 1);
+                }
             }
             if let Some(expected) = &reference {
                 assert_eq!(&state, expected);
@@ -129,6 +155,8 @@ familiarity_max = 10
             times[1],
             if baseline {
                 "boundary only"
+            } else if gifts {
+                "directed signals and gift choice"
             } else if reactions {
                 "directed signals and relationship reactions"
             } else {
