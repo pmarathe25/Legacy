@@ -83,6 +83,7 @@ impl CoreHostSnapshot {
             claims: None,
         });
         Ok(Self {
+            mechanics: None,
             core: CoreSnapshot {
                 seed: state.seed,
                 physical: state.physical,

@@ -344,6 +344,10 @@ An optional domain 5 preference lets a person reconsider an ordinary active job 
 
 The ignored `concentrated_work_continuation_benchmark` measures a decision with half of 10,000 active workers stopping. On one development machine it measured 14.0, 8.74, 5.80 and 5.16 ms with one, two, four and six workers. The benchmark verifies complete saved-state equality across worker counts.
 
+`economy-core-mechanics.toml` loads an apparatus catalog from content and maps its components to identified carried goods. The interval host's explicit experiment API checks possession and effort limits and records the result. Numeric loads do not yet move real objects or spend fatigue; autonomous experiment and invention choices remain future work.
+
+The ignored `independent_physical_mechanics_benchmark` includes host-level item and capability checks. On one development machine, 100,000 experiments took 32.8, 19.5, 13.1 and 11.5 ms with one, two, four and six workers, and produced identical observations and saved state. Smaller runs varied substantially, so these are workload measurements rather than whole-simulation guarantees.
+
 The ignored `concentrated_personal_choice_benchmark` measures opportunity preparation, selection, revalidation, and physical arbitration over shared stock; it also compares complete saved state across worker counts. Set `LEGACY_CHOICE_PEOPLE` to choose the population. On one development machine, a 20,000-person run measured medians of 58.4, 38.1, 26.4, and 23.7 ms with one, two, four, and six workers respectively. These numbers describe this concentrated workload and machine, not a guarantee of linear scaling or whole-world performance.
 
 Set `LEGACY_CHOICE_MAINTENANCE=1` to add competing repair intentions for one shared worn site. A 20,000-person run on the same machine measured 61.6, 42.4, 34.3, and 27.1 ms with one, two, four, and six workers. This deliberately concentrated case includes decisions that lose contention for the site.

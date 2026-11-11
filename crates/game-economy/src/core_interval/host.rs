@@ -23,6 +23,7 @@ mod hauling_requests;
 mod hunting;
 mod local_transport;
 mod market;
+mod mechanics;
 mod medical;
 mod offers;
 mod personal_choice;
@@ -45,6 +46,7 @@ pub use giving::CorePracticeWorkEvidence;
 pub use hauling::CoreHaulingResults;
 pub use local_transport::CoreLocalTransportResults;
 pub use market::CoreMarketResults;
+pub use mechanics::{CoreMechanics, MechanicalCapability, MechanicalMaterial};
 pub use offers::CoreSocialResults;
 pub use personal_choice::{CoreChoiceEvent, CoreChoiceIntent, CoreChoiceOutcome, CoreWorkIntent};
 pub use purpose::CorePurpose;
@@ -62,6 +64,8 @@ pub use writing::{CoreWritingPracticeResults, CoreWritingResults};
 #[serde(deny_unknown_fields)]
 pub struct CoreHostSnapshot {
     pub core: CoreSnapshot,
+    #[serde(default)]
+    pub mechanics: Option<CoreMechanics>,
     #[serde(default)]
     pub autowork: Option<Autowork>,
     #[serde(default)]
@@ -159,6 +163,7 @@ pub struct CoreHostSnapshot {
 /// This host composes only the owners listed in `CoreHostSnapshot`.
 pub struct CoreHost {
     core: CoreInterval,
+    mechanics: Option<mechanics::Runtime>,
     autowork: Option<Autowork>,
     tool_wear: Option<ToolWear>,
     tool_requirements: Vec<game_economy_work::tools::Requirement>,
@@ -213,6 +218,7 @@ pub struct CoreHost {
     schedule: Option<CoreSchedule>,
 }
 struct CoreRuntimeOptions {
+    mechanics: Option<CoreMechanics>,
     sites: Option<CoreSites>,
     schedule: Option<CoreSchedule>,
     tool_requirements: Vec<game_economy_work::tools::Requirement>,
@@ -264,6 +270,7 @@ impl CoreHost {
     pub fn begin(snapshot: CoreHostSnapshot, rates: &[(u64, u64)]) -> Result<Self, String> {
         let CoreHostSnapshot {
             core,
+            mechanics,
             autowork,
             tool_wear,
             tool_requirements,
@@ -324,6 +331,7 @@ impl CoreHost {
             goals,
             agreements,
             CoreRuntimeOptions {
+                mechanics,
                 dreams,
                 shared_work,
                 market,
@@ -371,6 +379,7 @@ impl CoreHost {
     pub fn resume(snapshot: CoreHostSnapshot) -> Result<Self, String> {
         let CoreHostSnapshot {
             core,
+            mechanics,
             autowork,
             tool_wear,
             tool_requirements,
@@ -427,6 +436,7 @@ impl CoreHost {
             goals,
             agreements,
             CoreRuntimeOptions {
+                mechanics,
                 dreams,
                 shared_work,
                 market,
@@ -481,6 +491,7 @@ impl CoreHost {
         options: CoreRuntimeOptions,
     ) -> Result<Self, String> {
         let CoreRuntimeOptions {
+            mechanics,
             dreams,
             shared_work,
             market,
@@ -538,6 +549,7 @@ impl CoreHost {
             }
             knowledge = Some(legacy);
         }
+        let mechanics = mechanics.map(|owner| owner.compile(&core)).transpose()?;
         if let Some(owner) = &autowork {
             let people: Vec<_> = core
                 .people
@@ -1163,6 +1175,7 @@ impl CoreHost {
             .map_or_else(HashSet::new, CoreSkills::practice_recipes);
         Ok(Self {
             core,
+            mechanics,
             autowork,
             tool_wear,
             tool_requirements,
@@ -1228,6 +1241,7 @@ impl CoreHost {
     pub fn snapshot(&self) -> CoreHostSnapshot {
         CoreHostSnapshot {
             core: self.core.snapshot(),
+            mechanics: self.mechanics.as_ref().map(mechanics::Runtime::snapshot),
             autowork: self.autowork.clone(),
             tool_wear: self.tool_wear.clone(),
             tool_requirements: self.tool_requirements.clone(),

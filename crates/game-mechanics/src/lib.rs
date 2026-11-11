@@ -198,6 +198,10 @@ impl World {
         self.state.clone()
     }
 
+    pub fn apparatus(&self) -> &[Apparatus] {
+        &self.state.apparatus
+    }
+
     /// Prepare without changing the world. Callers provide chosen actions and
     /// validate personal access and physical effort before invoking this owner.
     pub fn prepare(&self, tick: u64, seed: u64, requests: &[Experiment]) -> Result<Draft, String> {

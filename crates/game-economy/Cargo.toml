@@ -8,6 +8,7 @@ license.workspace = true
 profile = ["dep:game-diagnostics", "game-families/profile", "game-lot-runtime/profile", "game-lot-projection/profile", "game-economy-taking/profile", "game-economy-work/profile", "game-economy-dynamics/profile", "game-opinions/profile", "game-economy-agriculture/profile"]
 
 [dependencies]
+game-mechanics = { path = "../game-mechanics" }
 game-language = { path = "../game-language" }
 game-personal-choice = { path = "../game-personal-choice" }
 game-economy-taking = { path = "../game-economy-taking" }

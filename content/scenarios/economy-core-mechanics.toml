@@ -1,0 +1,50 @@
+# A person owns two distinct physical parts and may choose an experiment.
+seed = 7
+tick_millis = 900000
+stock_capacity = 100
+food_relief_divisor = 20
+
+[rules]
+hunger_per_tick = 1
+meal_threshold = 5
+starvation_threshold = 50
+starvation_damage = 1
+max_health = 100
+carrying_capacity = 10
+max_work_hunger = 20
+
+[[regions]]
+id = 1
+stock = {}
+
+[[people]]
+id = 1
+region = 1
+health = 100
+hunger = 0
+willing_to_work = false
+seek_meals = false
+items = [{ id = 1001, good = "timber" }, { id = 1002, good = "tool" }]
+
+[mechanics]
+catalog = "mechanics/basic.toml"
+
+[[mechanics.apparatus]]
+id = 1
+parts = [
+  { id = 1001, component = 1, share_per_mille = 1000 },
+  { id = 1002, component = 2, parent = 1001, share_per_mille = 1000 },
+]
+
+[[mechanics.materials]]
+component = 1
+good = "timber"
+
+[[mechanics.materials]]
+component = 2
+good = "tool"
+
+[[mechanics.capabilities]]
+person = 1
+max_force = 200
+max_distance = 200

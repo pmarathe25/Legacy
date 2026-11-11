@@ -19,11 +19,11 @@ pub use host::{
     CoreAssistRecord, CoreAssistSession, CoreChoiceEvent, CoreChoiceIntent, CoreChoiceOutcome,
     CoreConstructionResults, CoreDeliveryResults, CoreDynamicsResults, CoreFoodProvision,
     CoreFoodSearch, CoreHaulingResults, CoreHealth, CoreHost, CoreHostSnapshot,
-    CoreLocalTransportResults, CoreMarketResults, CorePracticeWorkEvidence, CorePurpose,
-    CoreRepairResults, CoreRequestResults, CoreRun, CoreRunEvent, CoreSchedule, CoreSharedWork,
-    CoreSites, CoreSkillCredit, CoreSkills, CoreSocial, CoreSocialResults, CoreToolRepairResults,
-    CoreTreatmentResults, CoreWorkIntent, CoreWritingPracticeResults, CoreWritingResults,
-    DecisionPhase,
+    CoreLocalTransportResults, CoreMarketResults, CoreMechanics, CorePracticeWorkEvidence,
+    CorePurpose, CoreRepairResults, CoreRequestResults, CoreRun, CoreRunEvent, CoreSchedule,
+    CoreSharedWork, CoreSites, CoreSkillCredit, CoreSkills, CoreSocial, CoreSocialResults,
+    CoreToolRepairResults, CoreTreatmentResults, CoreWorkIntent, CoreWritingPracticeResults,
+    CoreWritingResults, DecisionPhase, MechanicalCapability, MechanicalMaterial,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

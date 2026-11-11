@@ -9,10 +9,10 @@ winner; the rest receive contention outcomes. Preparing a batch does not mutate
 state, and a stale draft cannot be published.
 
 The caller supplies actual chosen experiments and is responsible for verifying
-people's locations, effort, part custody and access. Part IDs are unique within
-this owner but have not yet been connected to physical item custody. This crate
-is not yet integrated into the interval simulation, and does not by itself
-provide character invention, skills or scientific discovery.
+people's locations, effort, part custody and access. The interval host offers an
+explicit experiment API that checks actors' carried identified items and effort
+limits. Its load is still a numeric test input: it does not yet move a physical
+load, spend fatigue, or provide autonomous invention and scientific discovery.
 
 The ignored benchmarks compare complete state and observations across worker
 counts. On one development machine, 50,000 independent apparatus took 14.4,

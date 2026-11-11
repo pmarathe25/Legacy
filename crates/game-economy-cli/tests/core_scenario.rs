@@ -5,6 +5,31 @@ fn root() -> PathBuf {
 }
 
 #[test]
+fn authored_mechanics_loads_content_and_uses_identified_parts() {
+    let root = root();
+    let path = root.join("content/scenarios/economy-core-mechanics.toml");
+    assert!(game_economy_cli::scenario(&path, &root.join("content")).is_err());
+    let mut host = game_economy_cli::core_scenario(&path, &root.join("content")).unwrap();
+    let request = game_mechanics::Experiment {
+        actor: 1,
+        apparatus: 1,
+        output_part: 1002,
+        input_force: 100,
+        input_distance: 100,
+        load_force: 20,
+    };
+    assert_eq!(
+        host.experiment_mechanics(&[request], &[]).unwrap()[0].outcome,
+        game_mechanics::Outcome::Moved
+    );
+    let saved = serde_json::to_string(&host.snapshot()).unwrap();
+    let restored =
+        game_economy::core_interval::CoreHost::resume(serde_json::from_str(&saved).unwrap())
+            .unwrap();
+    assert_eq!(host.snapshot(), restored.snapshot());
+}
+
+#[test]
 fn work_intentions_compete_with_carrying_and_share_scarce_inputs() {
     use game_economy::core_interval::{CoreChoiceOutcome, CoreHost, CoreRunEvent, DecisionPhase};
     use game_lots::{Container, Lot, Place};

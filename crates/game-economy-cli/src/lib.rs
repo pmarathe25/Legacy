@@ -90,6 +90,8 @@ struct Scenario {
     #[serde(default)]
     language: Option<game_language::Language>,
     #[serde(default)]
+    mechanics: Option<MechanicsConfig>,
+    #[serde(default)]
     personal_choices: Vec<game_personal_choice::Person>,
     #[serde(default)]
     remedies: Vec<game_economy_dynamics::treatment::Remedy>,
@@ -141,6 +143,25 @@ struct Scenario {
     hauling: Option<HaulingConfig>,
     #[serde(default)]
     local_transport: Option<LocalTransportConfig>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct MechanicsConfig {
+    catalog: String,
+    #[serde(default)]
+    apparatus: Vec<game_mechanics::Apparatus>,
+    #[serde(default)]
+    materials: Vec<MechanicsMaterialConfig>,
+    #[serde(default)]
+    capabilities: Vec<game_economy::core_interval::MechanicalCapability>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct MechanicsMaterialConfig {
+    component: u32,
+    good: String,
 }
 
 fn goal_retry_interval() -> u64 {
@@ -808,6 +829,7 @@ pub fn core_scenario_with_options(
     let text = std::fs::read_to_string(path).map_err(|error| error.to_string())?;
     let authored: Scenario = toml::from_str(&text).map_err(|error| error.to_string())?;
     let language = authored.language;
+    let mechanics = authored.mechanics;
     let personal_choices = authored.personal_choices;
     let scenario = scenario_with_options_inner(path, content, seed, population_path, true)?;
     let mut snapshot =
@@ -818,6 +840,57 @@ pub fn core_scenario_with_options(
             .as_mut()
             .ok_or("language requires social encounters")?
             .language = Some(language);
+    }
+    if let Some(mut mechanics) = mechanics {
+        use std::path::Component;
+        let path = Path::new(&mechanics.catalog);
+        if path.as_os_str().is_empty()
+            || path
+                .components()
+                .any(|part| !matches!(part, Component::Normal(_)))
+        {
+            return Err("mechanics catalog must be a relative content path".into());
+        }
+        let source =
+            std::fs::read_to_string(content.join(path)).map_err(|error| error.to_string())?;
+        let catalog: game_mechanics::Catalog =
+            toml::from_str(&source).map_err(|error| error.to_string())?;
+        let mut materials: Vec<_> = mechanics
+            .materials
+            .into_iter()
+            .map(|row| {
+                snapshot
+                    .core
+                    .physical
+                    .goods
+                    .iter()
+                    .find(|good| good.name == row.good)
+                    .map(|good| game_economy::core_interval::MechanicalMaterial {
+                        component: row.component,
+                        good: good.id,
+                    })
+                    .ok_or_else(|| format!("unknown mechanics good {}", row.good))
+            })
+            .collect::<Result<_, _>>()?;
+        materials.sort_unstable_by_key(|row| row.component);
+        mechanics
+            .capabilities
+            .sort_unstable_by_key(|row| row.person);
+        mechanics.apparatus.sort_unstable_by_key(|row| row.id);
+        for machine in &mut mechanics.apparatus {
+            std::sync::Arc::make_mut(&mut machine.parts).sort_unstable_by_key(|part| part.id);
+        }
+        snapshot.mechanics = Some(game_economy::core_interval::CoreMechanics {
+            world: game_mechanics::Snapshot {
+                catalog,
+                apparatus: mechanics.apparatus,
+                revision: 0,
+                last_tick: None,
+            },
+            materials,
+            capabilities: mechanics.capabilities,
+            observations: vec![],
+        });
     }
     let period = snapshot.core.physical.tick_millis;
     let mut host = game_economy::core_interval::CoreHost::begin(snapshot, &[])?;
@@ -858,6 +931,9 @@ fn scenario_with_options_inner(
     let mut scenario: Scenario = toml::from_str(&source).map_err(|error| error.to_string())?;
     if scenario.language.is_some() && !interval_features {
         return Err("language requires the interval simulation host".into());
+    }
+    if scenario.mechanics.is_some() && !interval_features {
+        return Err("mechanics requires the interval simulation host".into());
     }
     if !scenario.personal_choices.is_empty() && !interval_features {
         return Err("personal choices require the interval simulation host".into());
