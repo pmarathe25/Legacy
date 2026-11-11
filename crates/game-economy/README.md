@@ -472,8 +472,12 @@ People can independently choose to build physical work sites from kits they hold
 
 With `LEGACY_PEOPLE=50000`, `core_host_site_construction_benchmark` builds 49,999 sites from independent kits in 201.1, 132.9, 84.2, and 84.2 ms at one, two, four, and six workers. With `LEGACY_CONSTRUCTION_CONTEST=1`, the builders share one stock and take 141.8, 89.1, 66.8, and 59.6 ms. Fingerprints matched within each workload and setup was excluded; these single samples show sublinear scaling.
 
-A person may choose to haul goods between regions by first taking actual stock into personal custody, traveling along available routes, and later delivering the carried goods. Each leg is a separate personal action, and fear or obligation can motivate the choice. Hauling requests and request-driven commitments are not yet supported by the interval host.
+A person may choose to haul goods between regions by first taking actual stock into personal custody, traveling along available routes, and later delivering the carried goods. Each leg is a separate personal action, and fear or obligation can motivate the choice. People can ask a colocated carrier for help; requests expire, and a carrier independently decides whether willingness or personal pressure justifies acting. A carrier can change that choice before a later leg.
 
 With `LEGACY_PEOPLE=50000`, the ignored `core_host_hauling_pickup_benchmark` measures 49,999 pickups from independent stocks in 55.1, 34.7, 25.0, and 23.0 ms at one, two, four, and six workers. With `LEGACY_HAUL_CONTEST=1`, pickups share a single stock and take 48.6, 24.6, 18.2, and 16.5 ms. Fingerprints matched within each workload and setup was excluded; these single samples show sublinear scaling.
 
 With `LEGACY_HAUL_DEPARTURE=1 LEGACY_PEOPLE=50000`, the same benchmark measures 49,999 laden departures in 20.8, 11.4, 9.5, and 7.8 ms at one, two, four, and six workers. Fingerprints matched and setup was excluded; this single sample shows sublinear scaling.
+
+With `LEGACY_PEOPLE=50000`, the ignored `core_host_hauling_requests_benchmark` measures 24,999 requests and the carriers' chosen pickups in 24.9, 16.2, 11.3, and 10.7 ms at one, two, four, and six workers. Fingerprints matched and setup was excluded; this single sample shows sublinear scaling.
+
+With `LEGACY_HAUL_REQUEST_FEAR=1 LEGACY_PEOPLE=50000`, the same benchmark uses fear-motivated carriers and takes 26.2, 17.4, 11.3, and 9.8 ms at one, two, four, and six workers. Fingerprints matched and setup was excluded; this single sample shows sublinear scaling.

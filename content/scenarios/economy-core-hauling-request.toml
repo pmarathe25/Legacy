@@ -1,0 +1,62 @@
+# One person carries grain from regional stock to a local store in two choices.
+seed = 7
+tick_millis = 1000
+stock_capacity = 100
+food_relief_divisor = 20
+
+[rules]
+hunger_per_tick = 1
+meal_threshold = 5
+starvation_threshold = 50
+starvation_damage = 1
+max_health = 100
+carrying_capacity = 10
+max_work_hunger = 20
+
+[[regions]]
+id = 1
+stock = { grain = 10 }
+
+[[people]]
+id = 1
+region = 1
+health = 100
+hunger = 0
+willing_to_work = false
+seek_meals = false
+
+
+[[regions]]
+id = 2
+stock = { grain = 0 }
+
+[[routes]]
+source = 1
+destination = 2
+ticks = 1
+
+[[routes]]
+source = 2
+destination = 1
+ticks = 1
+
+[[people]]
+id = 2
+region = 1
+health = 100
+hunger = 0
+willing_to_work = false
+seek_meals = false
+
+[hauling]
+policies = [{ person = 1, source = 1, destination = 2, good = "grain", quantity = 2, willing = true, requires_request = true }]
+
+[[hauling.asking]]
+person = 2
+carrier = 1
+source = 1
+destination = 2
+good = "grain"
+enabled = true
+retry_ticks = 5
+request_lifetime = 4

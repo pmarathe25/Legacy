@@ -103,3 +103,5 @@ policies = [{ person = 2, blueprint = 1, target_sites = 1, willing = true }]
 `economy-core-construction.toml` demonstrates a personal building choice, a named kit, and recoverable material retained in the new site's physical custody.
 
 `economy-core-hauling.toml` demonstrates a personal choice to carry named goods between regions via physical pickup, travel, and delivery.
+
+`economy-core-hauling-request.toml` demonstrates a personal request and a carrier who chooses to act on it; the request does not compel the carrier.

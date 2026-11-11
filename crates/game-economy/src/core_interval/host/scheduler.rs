@@ -25,6 +25,7 @@ pub enum DecisionPhase {
     WritePages { meal_people: Vec<u64> },
     Construction { meal_people: Vec<u64> },
     LocalCarrying { meal_people: Vec<u64> },
+    HaulingRequests { meal_people: Vec<u64> },
     Hauling { meal_people: Vec<u64> },
     FoodSearch { meal_people: Vec<u64> },
     Travel { meal_people: Vec<u64> },
@@ -84,6 +85,7 @@ impl CoreSchedule {
         | DecisionPhase::WritePages { meal_people }
         | DecisionPhase::Construction { meal_people }
         | DecisionPhase::LocalCarrying { meal_people }
+        | DecisionPhase::HaulingRequests { meal_people }
         | DecisionPhase::Hauling { meal_people }
         | DecisionPhase::FoodSearch { meal_people }
         | DecisionPhase::Travel { meal_people } = &self.phase
@@ -126,6 +128,7 @@ pub enum CoreRunEvent {
     WrittenPages(Vec<u64>),
     Construction(Vec<game_economy_building::Event>),
     LocalCarries(Vec<game_economy_local_transport::Event>),
+    HaulingRequests(Vec<u64>),
     HaulingTransfers(Vec<game_lots::TransactionOutcome>),
     HaulingDepartures(Vec<travel::DepartureOutcome>),
     Departures(Vec<travel::DepartureOutcome>),
@@ -203,7 +206,7 @@ impl CoreHost {
     }
     fn after_local_carrying(&self, meal_people: Vec<u64>) -> DecisionPhase {
         if self.hauling.is_some() {
-            DecisionPhase::Hauling { meal_people }
+            DecisionPhase::HaulingRequests { meal_people }
         } else {
             DecisionPhase::FoodSearch { meal_people }
         }
@@ -788,6 +791,21 @@ impl CoreHost {
                         }
                         let next = self.after_local_carrying(meal_people);
                         self.schedule.as_mut().expect("active schedule").phase = next;
+                    }
+                    DecisionPhase::HaulingRequests { mut meal_people } => {
+                        let mut busy = blocked.to_vec();
+                        busy.extend(meal_people.iter().copied());
+                        busy.par_sort_unstable();
+                        busy.dedup();
+                        let actors = attempt!('run,self.request_hauling_autonomously(&busy));
+                        meal_people.par_extend(actors.par_iter().copied());
+                        meal_people.par_sort_unstable();
+                        meal_people.dedup();
+                        if !actors.is_empty() {
+                            run.events.push(CoreRunEvent::HaulingRequests(actors));
+                        }
+                        self.schedule.as_mut().expect("active schedule").phase =
+                            DecisionPhase::Hauling { meal_people };
                     }
                     DecisionPhase::Hauling { mut meal_people } => {
                         let mut busy = blocked.to_vec();

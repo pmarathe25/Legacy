@@ -19,6 +19,7 @@ mod gathering;
 mod giving;
 mod goals;
 mod hauling;
+mod hauling_requests;
 mod hunting;
 mod local_transport;
 mod market;
@@ -1012,14 +1013,6 @@ impl CoreHost {
                 .map_err(str::to_owned)?;
         }
         if let Some(owner) = &hauling {
-            if !owner.asking.is_empty()
-                || !owner.requests.is_empty()
-                || owner.policies.par_iter().any(|policy| {
-                    policy.requires_request || policy.request_pressure_threshold.is_some()
-                })
-            {
-                return Err("hauling requests are not yet supported".into());
-            }
             let people: HashSet<_> = core.people.par_iter().map(|p| p.id).collect();
             let goods: HashSet<_> = core.physical.goods().par_iter().map(|g| g.id).collect();
             let view = core.physical.view(core.physical.tick())?;

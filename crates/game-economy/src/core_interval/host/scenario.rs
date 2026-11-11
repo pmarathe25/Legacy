@@ -21,15 +21,6 @@ impl CoreHostSnapshot {
                 unsupported.push(name);
             }
         }
-        if state.hauling.as_ref().is_some_and(|owner| {
-            !owner.asking.is_empty()
-                || !owner.requests.is_empty()
-                || owner.policies.par_iter().any(|policy| {
-                    policy.requires_request || policy.request_pressure_threshold.is_some()
-                })
-        }) {
-            unsupported.push("hauling");
-        }
         if state.construction.as_ref().is_some_and(|owner| {
             !owner.demolition.is_empty()
                 || !owner.demolition_events.is_empty()

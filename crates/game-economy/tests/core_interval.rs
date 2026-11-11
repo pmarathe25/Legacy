@@ -15441,3 +15441,134 @@ fn competing_haulers_cannot_overdraw_a_shared_source() {
     }
     assert_eq!(run(1), run(6));
 }
+
+#[test]
+fn hauling_requests_do_not_bind_carriers_and_can_motivate_through_fear() {
+    fn run(workers: usize, willing: bool, fear: bool) -> serde_json::Value {
+        rayon::ThreadPoolBuilder::new().num_threads(workers).build().unwrap().install(||{
+            let mut core=fixture();core.people[1].region=Some(1);let mut requester=core.people[1].clone();requester.id=3;core.people.push(requester);core.nutrition=None;core.pending_food.clear();
+            let travel=core.travel.as_mut().unwrap();travel.journeys.clear();travel.routes.push(Route{source:2,destination:1,ticks:1});
+            let stock=core.physical.custody.containers.iter_mut().find(|row|row.place==Place::Stock{region:1,good:1}).unwrap();*stock=Container::new(stock.place,10,vec![Lot{item:None,good:1,quantity:3,expires_at:None}]).unwrap();
+            core.physical.custody.containers.push(Container::new(Place::Person(2),10,vec![]).unwrap());core.physical.custody.containers.sort_by_key(|row|row.place);
+            let mut snapshot:CoreHostSnapshot=serde_json::from_value(serde_json::json!({"core":core,"hauling":{
+                "policies":[{"person":2,"source":1,"destination":2,"good":1,"quantity":2,"willing":willing,"requires_request":true,"request_pressure_threshold":1}],
+                "asking":[{"person":3,"carrier":2,"source":1,"destination":2,"good":1,"enabled":true,"retry_ticks":5,"request_lifetime":1}]
+            }})).unwrap();
+            if fear {snapshot.opinions=Some(serde_json::from_value(serde_json::json!({"rules":{"minimum":-10,"maximum":10,"initial":0,"fulfilled_gain":1,"default_loss":1},"records":[{"observer":2,"target":3,"trust":0,"fear":2}]})).unwrap());}
+            let mut host=CoreHost::begin(snapshot,&[(1,1)]).unwrap();host.enable_schedule(250,1).unwrap();
+            let initial=host.advance_continuous(0,&[]).unwrap();assert_eq!(initial.failure,None);
+            assert!(initial.events.iter().any(|event|matches!(event,game_economy::core_interval::CoreRunEvent::HaulingRequests(rows) if rows==&[3])));
+            let moves=willing||fear;assert_eq!(initial.events.iter().any(|event|matches!(event,game_economy::core_interval::CoreRunEvent::HaulingTransfers(rows) if rows.iter().any(|row|row.accepted))),moves);
+            let state=host.snapshot();assert_eq!(state.hauling.as_ref().unwrap().requests.len(),1);
+            if willing && !fear {
+                let mut changed=state.clone(); let policy=&mut changed.hauling.as_mut().unwrap().policies[0]; policy.willing=false; policy.request_pressure_threshold=None;
+                let mut withdrawn=CoreHost::resume(changed).unwrap(); let result=withdrawn.advance_continuous(250,&[]).unwrap();
+                assert!(!result.events.iter().any(|event|matches!(event,game_economy::core_interval::CoreRunEvent::HaulingDepartures(_))));
+                let view=withdrawn.snapshot(); assert_eq!(view.core.people.iter().find(|person|person.id==2).unwrap().region,Some(1));
+            }
+
+            let mut restored=CoreHost::resume(serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap()).unwrap();
+            let a=host.advance_continuous(2100,&[]).unwrap();let b=restored.advance_continuous(2100,&[]).unwrap();assert_eq!(a,b);assert_eq!(a.failure,None);
+            let state=host.snapshot();assert_eq!(state,restored.snapshot());assert!(state.hauling.as_ref().unwrap().requests.is_empty());
+            serde_json::to_value(state).unwrap()
+        })
+    }
+    for (willing, fear) in [(true, false), (false, true), (false, false)] {
+        assert_eq!(run(1, willing, fear), run(6, willing, fear));
+    }
+}
+
+#[test]
+#[ignore = "manual personal hauling request scaling benchmark"]
+fn core_host_hauling_requests_benchmark() {
+    use std::hash::{Hash, Hasher};
+    let count = std::env::var("LEGACY_PEOPLE")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(50_000);
+    let workers = std::env::var("LEGACY_WORKERS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(1);
+    assert!(count >= 4 && count.is_multiple_of(2));
+    let fear = std::env::var_os("LEGACY_HAUL_REQUEST_FEAR").is_some();
+    let mut core = fixture();
+    let template = core.people[0].clone();
+    core.people = (1..=count)
+        .map(|id| {
+            let mut row = template.clone();
+            row.id = id;
+            row
+        })
+        .collect();
+    core.nutrition = None;
+    core.pending_food.clear();
+    let travel = core.travel.as_mut().unwrap();
+    travel.journeys.clear();
+    travel.routes.push(Route {
+        source: 2,
+        destination: 1,
+        ticks: 1,
+    });
+    let pairs = (count - 2) / 2;
+    let stock = core
+        .physical
+        .custody
+        .containers
+        .iter_mut()
+        .find(|row| row.place == Place::Stock { region: 1, good: 1 })
+        .unwrap();
+    *stock = Container::new(
+        stock.place,
+        count,
+        vec![Lot {
+            item: None,
+            good: 1,
+            quantity: pairs,
+            expires_at: None,
+        }],
+    )
+    .unwrap();
+    core.physical.custody.containers.extend(
+        (2..count)
+            .step_by(2)
+            .map(|person| Container::new(Place::Person(person), 10, vec![]).unwrap()),
+    );
+    core.physical
+        .custody
+        .containers
+        .sort_by_key(|row| row.place);
+    let policies:Vec<_>=(2..count).step_by(2).map(|person|serde_json::json!({"person":person,"source":1,"destination":2,"good":1,"quantity":1,"willing":!fear,"requires_request":true,"request_pressure_threshold":if fear {Some(1)} else {None}})).collect();
+    let asking:Vec<_>=(2..count).step_by(2).map(|person|serde_json::json!({"person":person+1,"carrier":person,"source":1,"destination":2,"good":1,"enabled":true,"retry_ticks":5,"request_lifetime":3})).collect();
+    let opinions = if fear {
+        serde_json::json!({"rules":{"minimum":-10,"maximum":10,"initial":0,"fulfilled_gain":1,"default_loss":1},"records":(2..count).step_by(2).map(|person|serde_json::json!({"observer":person,"target":person+1,"trust":0,"fear":2})).collect::<Vec<_>>()})
+    } else {
+        serde_json::Value::Null
+    };
+    let snapshot: CoreHostSnapshot = serde_json::from_value(
+        serde_json::json!({"core":core,"opinions":opinions,"hauling":{"policies":policies,"asking":asking}}),
+    )
+    .unwrap();
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(workers)
+        .build()
+        .unwrap()
+        .install(|| {
+            let mut host = CoreHost::begin(snapshot, &[(1, 1)]).unwrap();
+            let start = std::time::Instant::now();
+            let askers = host.request_hauling_autonomously(&[]).unwrap();
+            let result = host.haul_autonomously(&askers).unwrap();
+            let elapsed = start.elapsed();
+            assert_eq!(askers.len(), pairs as usize);
+            assert_eq!(result.transfers.len(), pairs as usize);
+            assert!(result.transfers.iter().all(|row| row.accepted));
+            let state = host.snapshot();
+            let mut hash = std::collections::hash_map::DefaultHasher::new();
+            serde_json::to_vec(&state).unwrap().hash(&mut hash);
+            println!(
+                "workers={workers} requests={pairs} elapsed={:.6} fingerprint={:016x}",
+                elapsed.as_secs_f64(),
+                hash.finish()
+            );
+        });
+}
