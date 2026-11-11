@@ -15,6 +15,34 @@ pub struct Rules {
     pub capacity: usize,
 }
 
+impl Rules {
+    /// Render a sound sequence for an external observer without defining a
+    /// writing system or giving the translation to any simulated character.
+    pub fn render(&self, sounds: &[u8]) -> Result<String, &'static str> {
+        if sounds.is_empty() {
+            return Err("empty sound sequence");
+        }
+        if self
+            .sounds
+            .iter()
+            .any(|sound| sound.is_empty() || sound.contains('·'))
+            || self.sounds.iter().collect::<HashSet<_>>().len() != self.sounds.len()
+        {
+            return Err("ambiguous sound inventory");
+        }
+        sounds
+            .iter()
+            .map(|id| {
+                self.sounds
+                    .get(usize::from(*id))
+                    .map(String::as_str)
+                    .ok_or("unknown phoneme")
+            })
+            .collect::<Result<Vec<_>, _>>()
+            .map(|parts| parts.join("·"))
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Word {
@@ -146,7 +174,10 @@ impl Language {
         let r = &self.rules;
         if r.sounds.is_empty()
             || r.sounds.len() > 256
-            || r.sounds.iter().any(|s| s.is_empty() || s.len() > 16)
+            || r.sounds
+                .iter()
+                .any(|s| s.is_empty() || s.len() > 16 || s.contains('·'))
+            || r.sounds.iter().collect::<HashSet<_>>().len() != r.sounds.len()
             || r.word_length == 0
             || r.word_length > 16
             || r.capacity == 0

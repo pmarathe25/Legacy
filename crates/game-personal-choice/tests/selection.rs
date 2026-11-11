@@ -4,6 +4,7 @@ fn profile(id: u64, construction: i64, carrying: i64) -> Person {
     Person {
         id,
         idle: 0,
+        act_on_tie: false,
         preferences: vec![
             Preference {
                 domain: 1,
@@ -124,6 +125,21 @@ fn people_can_value_the_same_consequence_in_opposite_ways() {
         })
     );
     assert_eq!(outcomes[1].action, None);
+}
+
+#[test]
+fn whether_to_act_when_indifferent_is_personal() {
+    let mut people = vec![profile(1, 0, 0), profile(2, 0, 0)];
+    people[1].act_on_tie = true;
+    let selected = select(&people, &[proposal(1, 1, 1, 0), proposal(2, 1, 1, 0)], 1, 1).unwrap();
+    assert_eq!(selected[0].action, None);
+    assert_eq!(
+        selected[1].action,
+        Some(Key {
+            domain: 1,
+            action: 1
+        })
+    );
 }
 
 #[test]

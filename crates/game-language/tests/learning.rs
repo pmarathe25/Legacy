@@ -163,6 +163,14 @@ fn grounded_meanings_are_not_limited_to_places() {
 }
 
 #[test]
+fn observer_transcription_preserves_phoneme_boundaries() {
+    let state = language();
+    assert_eq!(state.rules.render(&[1, 0, 2]).unwrap(), "k·a·m");
+    assert!(state.rules.render(&[]).is_err());
+    assert!(state.rules.render(&[255]).is_err());
+}
+
+#[test]
 fn sparse_person_ids_do_not_require_a_dense_allocation() {
     let state = language();
     let meeting = [Meeting {

@@ -1,34 +1,96 @@
 //! Bounded event-driven advancement of the saved, limited core host.
 use super::*;
+use std::sync::Arc;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "phase", rename_all = "snake_case")]
 pub enum DecisionPhase {
     Meals,
-    Treatment { meal_people: Vec<u64> },
-    Provision { meal_people: Vec<u64> },
-    Social { meal_people: Vec<u64> },
-    Maintenance { meal_people: Vec<u64> },
-    ToolMaintenance { meal_people: Vec<u64> },
-    Delivery { meal_people: Vec<u64> },
-    Offers { meal_people: Vec<u64> },
-    Acceptance { meal_people: Vec<u64> },
-    Asking { meal_people: Vec<u64> },
-    Requests { meal_people: Vec<u64> },
-    Work { meal_people: Vec<u64> },
-    Assisting { meal_people: Vec<u64> },
-    Exchange { meal_people: Vec<u64> },
-    ExchangeProposals { meal_people: Vec<u64> },
-    ReadPages { meal_people: Vec<u64> },
-    PracticeWriting { meal_people: Vec<u64> },
-    WriteClaims { meal_people: Vec<u64> },
-    WritePages { meal_people: Vec<u64> },
-    Construction { meal_people: Vec<u64> },
-    LocalCarrying { meal_people: Vec<u64> },
-    HaulingRequests { meal_people: Vec<u64> },
-    Hauling { meal_people: Vec<u64> },
-    FoodSearch { meal_people: Vec<u64> },
-    Travel { meal_people: Vec<u64> },
+    Treatment {
+        meal_people: Vec<u64>,
+    },
+    Provision {
+        meal_people: Vec<u64>,
+    },
+    Social {
+        meal_people: Vec<u64>,
+    },
+    Maintenance {
+        meal_people: Vec<u64>,
+    },
+    ToolMaintenance {
+        meal_people: Vec<u64>,
+    },
+    Delivery {
+        meal_people: Vec<u64>,
+    },
+    Offers {
+        meal_people: Vec<u64>,
+    },
+    Acceptance {
+        meal_people: Vec<u64>,
+    },
+    Asking {
+        meal_people: Vec<u64>,
+    },
+    Requests {
+        meal_people: Vec<u64>,
+    },
+    Work {
+        meal_people: Vec<u64>,
+    },
+    Assisting {
+        meal_people: Vec<u64>,
+    },
+    Exchange {
+        meal_people: Vec<u64>,
+    },
+    ExchangeProposals {
+        meal_people: Vec<u64>,
+    },
+    ReadPages {
+        meal_people: Vec<u64>,
+    },
+    PracticeWriting {
+        meal_people: Vec<u64>,
+    },
+    WriteClaims {
+        meal_people: Vec<u64>,
+    },
+    WritePages {
+        meal_people: Vec<u64>,
+    },
+    ChooseLocal {
+        meal_people: Vec<u64>,
+    },
+    ChosenConstruction {
+        meal_people: Vec<u64>,
+        intents: Arc<Vec<CoreChoiceIntent>>,
+        carrying_after: bool,
+    },
+    ChosenCarrying {
+        meal_people: Vec<u64>,
+        intents: Arc<Vec<CoreChoiceIntent>>,
+        construction_after: bool,
+    },
+    Construction {
+        meal_people: Vec<u64>,
+    },
+    LocalCarrying {
+        meal_people: Vec<u64>,
+    },
+    HaulingRequests {
+        meal_people: Vec<u64>,
+    },
+    Hauling {
+        meal_people: Vec<u64>,
+    },
+    FoodSearch {
+        meal_people: Vec<u64>,
+    },
+    Travel {
+        meal_people: Vec<u64>,
+    },
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -41,6 +103,9 @@ pub struct CoreSchedule {
     /// Rates retained across boundaries, including temporarily paused work.
     #[serde(default)]
     pub carried_rates: Vec<(u64, u64)>,
+    /// Opt-in personal choice for construction and local carrying.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub personal_choices: Option<Arc<Vec<game_personal_choice::Person>>>,
 }
 impl CoreSchedule {
     pub(super) fn validate(&self, core: &CoreInterval) -> Result<(), String> {
@@ -65,6 +130,50 @@ impl CoreSchedule {
         {
             return Err("invalid core decision schedule".into());
         }
+        if let Some(people) = &self.personal_choices {
+            game_personal_choice::validate_people(people).map_err(str::to_owned)?;
+            if people.par_iter().any(|person| {
+                core.people
+                    .binary_search_by_key(&person.id, |row| row.id)
+                    .is_err()
+            }) {
+                return Err("invalid personal choice people".into());
+            }
+        }
+        if matches!(self.phase, DecisionPhase::ChooseLocal { .. })
+            && self.personal_choices.is_none()
+        {
+            return Err("local choice phase requires personal choices".into());
+        }
+        if let DecisionPhase::ChosenConstruction { intents, .. }
+        | DecisionPhase::ChosenCarrying { intents, .. } = &self.phase
+        {
+            let Some(people) = &self.personal_choices else {
+                return Err("selected actions require personal choices".into());
+            };
+            if intents
+                .par_windows(2)
+                .any(|rows| rows[0].actor >= rows[1].actor)
+                || intents.par_iter().any(|intent| {
+                    intent.actor == 0
+                        || !matches!(intent.key.domain, 1 | 2)
+                        || intent.key.action == 0
+                        || intent.movement.id != 0
+                        || intent.movement.quantity == 0
+                        || intent
+                            .second_movement
+                            .is_some_and(|movement| movement.id != 0 || movement.quantity == 0)
+                        || people
+                            .binary_search_by_key(&intent.actor, |person| person.id)
+                            .ok()
+                            .is_none_or(|index| {
+                                !personal_choice::intention_permitted(&people[index], intent)
+                            })
+                })
+            {
+                return Err("invalid selected personal actions".into());
+            }
+        }
         if let DecisionPhase::Treatment { meal_people }
         | DecisionPhase::Provision { meal_people }
         | DecisionPhase::Social { meal_people }
@@ -83,6 +192,9 @@ impl CoreSchedule {
         | DecisionPhase::PracticeWriting { meal_people }
         | DecisionPhase::WriteClaims { meal_people }
         | DecisionPhase::WritePages { meal_people }
+        | DecisionPhase::ChooseLocal { meal_people }
+        | DecisionPhase::ChosenConstruction { meal_people, .. }
+        | DecisionPhase::ChosenCarrying { meal_people, .. }
         | DecisionPhase::Construction { meal_people }
         | DecisionPhase::LocalCarrying { meal_people }
         | DecisionPhase::HaulingRequests { meal_people }
@@ -128,6 +240,7 @@ pub enum CoreRunEvent {
     WrittenPages(Vec<u64>),
     Construction(Vec<game_economy_building::Event>),
     LocalCarries(Vec<game_economy_local_transport::Event>),
+    PersonalChoices(Vec<CoreChoiceEvent>),
     HaulingRequests(Vec<u64>),
     HaulingTransfers(Vec<game_lots::TransactionOutcome>),
     HaulingDepartures(Vec<travel::DepartureOutcome>),
@@ -191,7 +304,14 @@ impl CoreHost {
         }
     }
     fn after_assisting(&self, meal_people: Vec<u64>) -> DecisionPhase {
-        if self.construction.is_some() {
+        if self
+            .schedule
+            .as_ref()
+            .is_some_and(|schedule| schedule.personal_choices.is_some())
+            && (self.construction.is_some() || self.local_transport.is_some())
+        {
+            DecisionPhase::ChooseLocal { meal_people }
+        } else if self.construction.is_some() {
             DecisionPhase::Construction { meal_people }
         } else {
             self.after_construction(meal_people)
@@ -232,6 +352,7 @@ impl CoreHost {
             next_decision_millis: Some(u128::from(offset)),
             phase: DecisionPhase::Meals,
             carried_rates,
+            personal_choices: None,
         };
         schedule.validate(&self.core)?;
         self.schedule = Some(schedule);
@@ -760,6 +881,169 @@ impl CoreHost {
                             run.events.push(CoreRunEvent::Assists(helpers));
                         }
                         let next = self.after_assisting(meal_people);
+                        self.schedule.as_mut().expect("active schedule").phase = next;
+                    }
+                    DecisionPhase::ChooseLocal { meal_people } => {
+                        let mut busy = blocked.to_vec();
+                        busy.extend(meal_people.iter().copied());
+                        busy.par_sort_unstable();
+                        busy.dedup();
+                        let people = schedule.personal_choices.as_ref().expect("choice profile");
+                        let (intents, idle) =
+                            attempt!('run, self.choose_local_actions(&busy, people));
+                        let intents = Arc::new(intents);
+                        if !idle.is_empty() {
+                            run.events.push(CoreRunEvent::PersonalChoices(idle));
+                        }
+                        let round = self.core.physical.tick().rotate_left(21) ^ offset;
+                        let first_construction =
+                            game_genetics::random(self.core.seed, 0x63686f696365, round) & 1 == 0;
+                        self.schedule.as_mut().expect("active schedule").phase =
+                            if first_construction {
+                                DecisionPhase::ChosenConstruction {
+                                    meal_people,
+                                    intents,
+                                    carrying_after: true,
+                                }
+                            } else {
+                                DecisionPhase::ChosenCarrying {
+                                    meal_people,
+                                    intents,
+                                    construction_after: true,
+                                }
+                            };
+                    }
+                    DecisionPhase::ChosenConstruction {
+                        mut meal_people,
+                        intents,
+                        carrying_after,
+                    } => {
+                        let mut busy = blocked.to_vec();
+                        busy.extend(meal_people.iter().copied());
+                        busy.par_sort_unstable();
+                        busy.dedup();
+                        let people = schedule.personal_choices.as_ref().expect("choice profile");
+                        let (blocked_choice, mut choices) = attempt!('run, self.choice_blocked(&busy, people, &intents, personal_choice::CONSTRUCTION));
+                        #[cfg(feature = "profile")]
+                        let commit_span = game_diagnostics::span("choice.commit.construction");
+                        let result = attempt!('run, self.build_sites_autonomously(&blocked_choice));
+                        #[cfg(feature = "profile")]
+                        drop(commit_span);
+                        choices.par_extend(
+                            intents
+                                .par_iter()
+                                .filter(|intent| {
+                                    intent.key.domain == personal_choice::CONSTRUCTION
+                                        && blocked_choice.binary_search(&intent.actor).is_err()
+                                })
+                                .map(|intent| {
+                                    let outcome = result
+                                        .events
+                                        .binary_search_by_key(&intent.actor, |event| event.person)
+                                        .ok()
+                                        .map(|i| &result.events[i])
+                                        .map_or(CoreChoiceOutcome::Stale, |event| {
+                                            if event.site.is_some() {
+                                                CoreChoiceOutcome::Accepted
+                                            } else {
+                                                CoreChoiceOutcome::Denied
+                                            }
+                                        });
+                                    CoreChoiceEvent {
+                                        tick: self.core.physical.tick(),
+                                        offset_millis: offset,
+                                        actor: intent.actor,
+                                        key: Some(intent.key),
+                                        outcome,
+                                    }
+                                }),
+                        );
+                        meal_people.par_extend(result.actors);
+                        meal_people.par_sort_unstable();
+                        meal_people.dedup();
+                        if !result.events.is_empty() {
+                            run.events.push(CoreRunEvent::Construction(result.events));
+                        }
+                        if !choices.is_empty() {
+                            choices.par_sort_unstable_by_key(|event| event.actor);
+                            run.events.push(CoreRunEvent::PersonalChoices(choices));
+                        }
+                        let next = if carrying_after {
+                            DecisionPhase::ChosenCarrying {
+                                meal_people,
+                                intents,
+                                construction_after: false,
+                            }
+                        } else {
+                            self.after_local_carrying(meal_people)
+                        };
+                        self.schedule.as_mut().expect("active schedule").phase = next;
+                    }
+                    DecisionPhase::ChosenCarrying {
+                        mut meal_people,
+                        intents,
+                        construction_after,
+                    } => {
+                        let mut busy = blocked.to_vec();
+                        busy.extend(meal_people.iter().copied());
+                        busy.par_sort_unstable();
+                        busy.dedup();
+                        let people = schedule.personal_choices.as_ref().expect("choice profile");
+                        let (blocked_choice, mut choices) = attempt!('run, self.choice_blocked(&busy, people, &intents, personal_choice::CARRYING));
+                        #[cfg(feature = "profile")]
+                        let commit_span = game_diagnostics::span("choice.commit.carrying");
+                        let result =
+                            attempt!('run, self.carry_locally_autonomously(&blocked_choice));
+                        #[cfg(feature = "profile")]
+                        drop(commit_span);
+                        choices.par_extend(
+                            intents
+                                .par_iter()
+                                .filter(|intent| {
+                                    intent.key.domain == personal_choice::CARRYING
+                                        && blocked_choice.binary_search(&intent.actor).is_err()
+                                })
+                                .map(|intent| {
+                                    let outcome = result
+                                        .events
+                                        .binary_search_by_key(&intent.actor, |event| event.person)
+                                        .ok()
+                                        .map(|i| &result.events[i])
+                                        .map_or(CoreChoiceOutcome::Stale, |event| {
+                                            if event.moved {
+                                                CoreChoiceOutcome::Accepted
+                                            } else {
+                                                CoreChoiceOutcome::Denied
+                                            }
+                                        });
+                                    CoreChoiceEvent {
+                                        tick: self.core.physical.tick(),
+                                        offset_millis: offset,
+                                        actor: intent.actor,
+                                        key: Some(intent.key),
+                                        outcome,
+                                    }
+                                }),
+                        );
+                        meal_people.par_extend(result.actors);
+                        meal_people.par_sort_unstable();
+                        meal_people.dedup();
+                        if !result.events.is_empty() {
+                            run.events.push(CoreRunEvent::LocalCarries(result.events));
+                        }
+                        if !choices.is_empty() {
+                            choices.par_sort_unstable_by_key(|event| event.actor);
+                            run.events.push(CoreRunEvent::PersonalChoices(choices));
+                        }
+                        let next = if construction_after {
+                            DecisionPhase::ChosenConstruction {
+                                meal_people,
+                                intents,
+                                carrying_after: false,
+                            }
+                        } else {
+                            self.after_local_carrying(meal_people)
+                        };
                         self.schedule.as_mut().expect("active schedule").phase = next;
                     }
                     DecisionPhase::Construction { mut meal_people } => {

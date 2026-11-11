@@ -195,6 +195,15 @@ pub struct Manual {
     pub quantity: u64,
     pub deposit: bool,
 }
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Opportunity {
+    pub person: u64,
+    pub from: Place,
+    pub to: Place,
+    pub good: u32,
+    pub quantity: u64,
+}
+
 struct Choice {
     person: u64,
     from: Place,
@@ -328,6 +337,37 @@ impl Context<'_> {
             .collect()
     }
 
+    fn direct_choices(&self) -> Vec<Choice> {
+        let opinions = self
+            .owner
+            .policies
+            .par_iter()
+            .any(|policy| policy.pressure_threshold.is_some())
+            .then(|| self.opinions.map(Opinions::index))
+            .flatten();
+        let rows: Vec<_> = self
+            .owner
+            .policies
+            .par_iter()
+            .filter_map(|p| self.personal_choice(p, opinions.as_ref()))
+            .collect();
+        rows
+    }
+
+    /// Direct policy opportunities without physical transactions; excludes manual requests.
+    pub fn direct_opportunities(&self) -> Vec<Opportunity> {
+        self.direct_choices()
+            .into_par_iter()
+            .map(|row| Opportunity {
+                person: row.person,
+                from: row.from,
+                to: row.to,
+                good: row.good,
+                quantity: row.quantity,
+            })
+            .collect()
+    }
+
     pub fn prepare(&self, base: u64) -> Result<Plan, String> {
         if self.manual.is_none()
             && self
@@ -343,19 +383,7 @@ impl Context<'_> {
                 rows: vec![],
             });
         }
-        let opinions = self
-            .owner
-            .policies
-            .par_iter()
-            .any(|policy| policy.pressure_threshold.is_some())
-            .then(|| self.opinions.map(Opinions::index))
-            .flatten();
-        let mut rows: Vec<_> = self
-            .owner
-            .policies
-            .par_iter()
-            .filter_map(|p| self.personal_choice(p, opinions.as_ref()))
-            .collect();
+        let mut rows = self.direct_choices();
         if let Some(manual) = self.manual {
             let person = self
                 .people

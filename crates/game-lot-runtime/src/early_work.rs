@@ -217,7 +217,7 @@ impl Runtime {
             .epoch
             .checked_add(1)
             .ok_or("physical work revision overflow")?;
-        let transactions = draft.custody.transactions().to_vec();
+        let transactions = draft.custody.transactions().par_iter().copied().collect();
         let (movements, spoiled) = self.store.commit(draft.custody)?;
         self.work_interval
             .as_mut()
@@ -296,7 +296,24 @@ impl Runtime {
         self.epoch
             .checked_add(1)
             .ok_or("physical work revision overflow")?;
-        let custody = self.store.prepare_transactions_now(seed, actions)?;
+        let flat: Option<Vec<_>> = actions
+            .par_iter()
+            .map(|action| {
+                (action.movements.len() == 1).then(|| game_lots::SimpleTransfer {
+                    action: action.id,
+                    movement: action.movements[0],
+                })
+            })
+            .collect();
+        let fast = if let Some(flat) = flat {
+            self.store.prepare_partitioned_flat(seed, &flat, false)?
+        } else {
+            None
+        };
+        let custody = match fast {
+            Some(custody) => custody,
+            None => self.store.prepare_transactions_now(seed, actions)?,
+        };
         if !custody.spoiled().is_empty() {
             return Err("interval transfers cannot publish pending spoilage".into());
         }
@@ -328,7 +345,9 @@ impl Runtime {
             .par_iter()
             .map(|(action, container)| (*action, container.place))
             .collect();
-        sites.par_sort_unstable_by_key(|row| row.0);
+        if sites.par_windows(2).any(|rows| rows[0].0 > rows[1].0) {
+            sites.par_sort_unstable_by_key(|row| row.0);
+        }
         if sites.par_windows(2).any(|pair| pair[0].0 == pair[1].0)
             || sites
                 .par_iter()
@@ -352,7 +371,9 @@ impl Runtime {
             .checked_add(1)
             .ok_or("physical work revision overflow")?;
         let mut actions: Vec<_> = actions.par_iter().cloned().collect();
-        actions.par_sort_unstable_by_key(|action| action.id);
+        if actions.par_windows(2).any(|rows| rows[0].id > rows[1].id) {
+            actions.par_sort_unstable_by_key(|action| action.id);
+        }
         renumber_operations(&mut actions)?;
         game_lot_work::validate_actions(&self.catalog, &actions)?;
         if sites.par_iter().any(|(id, place)| {
@@ -368,15 +389,46 @@ impl Runtime {
         }) {
             return Err("construction custody has no matching movement".into());
         }
-        let new_containers = containers
-            .par_iter()
-            .map(|(_, container)| container.clone())
-            .collect();
-        let mut custody = self
-            .store
-            .prepare_with_empty(seed, &actions, new_containers, false)?;
+        let flat: Option<Vec<_>> = if !actions.is_empty() && actions.len() == containers.len() {
+            actions
+                .par_iter()
+                .map(|action| {
+                    (action.movements.len() == 1 && action.movements[0].to.is_some()).then(|| {
+                        game_lots::SimpleTransfer {
+                            action: action.id,
+                            movement: action.movements[0],
+                        }
+                    })
+                })
+                .collect()
+        } else {
+            None
+        };
+        let fast = if let Some(flat) = flat {
+            let additions = containers
+                .par_iter()
+                .map(|(_, container)| container.clone())
+                .collect();
+            self.store
+                .prepare_fan_out_flat_with_empty(seed, &flat, additions, false)?
+        } else {
+            None
+        };
+        let mut custody = match fast {
+            Some(custody) => custody,
+            None => {
+                let additions = containers
+                    .par_iter()
+                    .map(|(_, container)| container.clone())
+                    .collect();
+                self.store
+                    .prepare_with_empty(seed, &actions, additions, false)?
+            }
+        };
         let mut outcomes: Vec<_> = custody.transactions().par_iter().copied().collect();
-        outcomes.par_sort_unstable_by_key(|row| row.id);
+        if outcomes.par_windows(2).any(|rows| rows[0].id > rows[1].id) {
+            outcomes.par_sort_unstable_by_key(|row| row.id);
+        }
         let retire: Vec<_> = sites
             .par_iter()
             .filter(|(id, _)| {

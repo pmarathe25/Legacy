@@ -1,0 +1,115 @@
+# Independent preferences over two opportunities and an idle alternative.
+seed = 7
+tick_millis = 900000
+stock_capacity = 100
+food_relief_divisor = 20
+
+[rules]
+hunger_per_tick = 1
+meal_threshold = 5
+starvation_threshold = 50
+starvation_damage = 1
+max_health = 100
+carrying_capacity = 10
+max_work_hunger = 20
+
+[[regions]]
+id = 1
+stock = { grain = 20 }
+
+[[people]]
+id = 1
+region = 1
+health = 100
+hunger = 0
+willing_to_work = false
+seek_meals = false
+
+[[people]]
+id = 2
+region = 1
+health = 100
+hunger = 0
+willing_to_work = false
+seek_meals = false
+
+[[people]]
+id = 3
+region = 1
+health = 100
+hunger = 0
+willing_to_work = false
+seek_meals = false
+
+[work_sites]
+sites = []
+
+[construction]
+[[construction.blueprints]]
+id = 1
+name = "Grain shelter"
+kind = "shelter"
+capacity = 2
+kit = "grain"
+quantity = 2
+salvage = 1
+
+[[construction.policies]]
+person = 1
+blueprint = 1
+target_sites = 1
+willing = true
+[[construction.policies]]
+person = 2
+blueprint = 1
+target_sites = 1
+willing = true
+[[construction.policies]]
+person = 3
+blueprint = 1
+target_sites = 1
+willing = true
+
+[local_transport]
+[[local_transport.stores]]
+id = 1
+region = 1
+name = "Granary"
+capacity = 10
+[[local_transport.policies]]
+person = 1
+region = 1
+source = { kind = "stock" }
+destination = { kind = "store", id = 1 }
+good = "grain"
+quantity = 2
+willing = true
+[[local_transport.policies]]
+person = 2
+region = 1
+source = { kind = "stock" }
+destination = { kind = "store", id = 1 }
+good = "grain"
+quantity = 2
+willing = true
+[[local_transport.policies]]
+person = 3
+region = 1
+source = { kind = "stock" }
+destination = { kind = "store", id = 1 }
+good = "grain"
+quantity = 2
+willing = true
+
+[[personal_choices]]
+id = 1
+idle = 0
+preferences = [{ domain = 1, enabled = true, bias = 10 }, { domain = 2, enabled = true, bias = 0 }]
+[[personal_choices]]
+id = 2
+idle = 0
+preferences = [{ domain = 1, enabled = true, bias = 0 }, { domain = 2, enabled = true, bias = 10 }]
+[[personal_choices]]
+id = 3
+idle = 100
+preferences = [{ domain = 1, enabled = true, bias = 0 }, { domain = 2, enabled = true, bias = 0 }]

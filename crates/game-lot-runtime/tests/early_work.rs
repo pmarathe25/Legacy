@@ -3,6 +3,139 @@ use game_lots::{Container, Lot, Place, State};
 use game_production_model::{Amount, FoodProfile, Good, Recipe, Start};
 use std::collections::BTreeMap;
 
+#[test]
+fn interval_construction_is_identical_for_ordered_and_reversed_batches() {
+    fn run(reverse: bool) -> Snapshot {
+        let mut runtime = fixture(false, 1);
+        runtime.begin_work_interval(&[(1, 1)]).unwrap();
+        let mut actions: Vec<_> = (1..=2)
+            .map(|id| game_lots::Transaction {
+                id,
+                movements: vec![game_lots::Movement {
+                    id,
+                    from: Place::Stock { region: 1, good: 1 },
+                    to: Some(Place::Site(id + 10)),
+                    good: 1,
+                    quantity: 1,
+                    item: None,
+                }],
+                creations: vec![],
+            })
+            .collect();
+        let mut containers: Vec<_> = (1..=2)
+            .map(|id| (id, Container::new(Place::Site(id + 10), 1, vec![]).unwrap()))
+            .collect();
+        if reverse {
+            actions.reverse();
+            containers.reverse();
+        }
+        let draft = runtime
+            .prepare_interval_construction(&actions, &containers, 7)
+            .unwrap();
+        let result = runtime.commit_interval_consumption(draft).unwrap();
+        assert!(result.transactions.iter().all(|row| row.accepted));
+        runtime.snapshot()
+    }
+    assert_eq!(run(false), run(true));
+}
+
+#[test]
+fn interval_fan_out_matches_ordinary_transactions_under_shared_stock_contention() {
+    let mut initial = fixture(false, 1).snapshot();
+    for id in 1..=300 {
+        initial
+            .custody
+            .containers
+            .push(Container::new(Place::Person(id), 1, vec![]).unwrap());
+    }
+    initial
+        .custody
+        .containers
+        .sort_unstable_by_key(|container| container.place);
+    let mut runtime = Runtime::compile(initial).unwrap();
+    runtime.begin_work_interval(&[(1, 1)]).unwrap();
+    let mut reference = game_lots::Store::compile(runtime.snapshot().custody).unwrap();
+    let actions: Vec<_> = (1..=300)
+        .map(|id| game_lots::Transaction {
+            id,
+            movements: vec![game_lots::Movement {
+                id,
+                from: Place::Stock { region: 1, good: 1 },
+                to: Some(Place::Person(id)),
+                good: 1,
+                quantity: 1,
+                item: None,
+            }],
+            creations: vec![],
+        })
+        .collect();
+    let ordinary = reference.prepare_transactions_now(7, &actions).unwrap();
+    let draft = runtime.prepare_interval_transfer(&actions, 7).unwrap();
+    assert_eq!(draft.transactions(), ordinary.transactions());
+    let expected = reference.commit(ordinary).unwrap();
+    let actual = runtime.commit_interval_consumption(draft).unwrap();
+    assert_eq!(actual.movements, expected.0);
+    assert_eq!(actual.spoiled, expected.1);
+    assert_eq!(
+        runtime.snapshot().custody.containers,
+        reference.containers()
+    );
+}
+
+#[test]
+fn interval_construction_fan_out_matches_general_custody_staging() {
+    let mut runtime = fixture(false, 1);
+    runtime.begin_work_interval(&[(1, 1)]).unwrap();
+    let mut reference = game_lots::Store::compile(runtime.snapshot().custody).unwrap();
+    let actions: Vec<_> = (1..=300)
+        .map(|id| game_lots::Transaction {
+            id,
+            movements: vec![game_lots::Movement {
+                id,
+                from: Place::Stock { region: 1, good: 1 },
+                to: Some(Place::Site(id + 10)),
+                good: 1,
+                quantity: 1,
+                item: None,
+            }],
+            creations: vec![],
+        })
+        .collect();
+    let containers: Vec<_> = (1..=300)
+        .map(|id| (id, Container::new(Place::Site(id + 10), 1, vec![]).unwrap()))
+        .collect();
+    let mut ordinary = reference
+        .prepare_with_empty(
+            7,
+            &actions,
+            containers
+                .iter()
+                .map(|(_, container)| container.clone())
+                .collect(),
+            false,
+        )
+        .unwrap();
+    let draft = runtime
+        .prepare_interval_construction(&actions, &containers, 7)
+        .unwrap();
+    assert_eq!(draft.transactions(), ordinary.transactions());
+    let rejected: Vec<_> = ordinary
+        .transactions()
+        .iter()
+        .filter(|row| !row.accepted)
+        .map(|row| Place::Site(row.id + 10))
+        .collect();
+    reference.retire_in(&mut ordinary, rejected).unwrap();
+    let expected = reference.commit(ordinary).unwrap();
+    let actual = runtime.commit_interval_consumption(draft).unwrap();
+    assert_eq!(actual.movements, expected.0);
+    assert_eq!(actual.spoiled, expected.1);
+    assert_eq!(
+        runtime.snapshot().custody.containers,
+        reference.containers()
+    );
+}
+
 fn fixture(perishable: bool, output_quantity: u64) -> Runtime {
     let stock = |good, quantity| {
         Container::new(

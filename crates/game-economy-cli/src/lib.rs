@@ -90,6 +90,8 @@ struct Scenario {
     #[serde(default)]
     language: Option<game_language::Language>,
     #[serde(default)]
+    personal_choices: Vec<game_personal_choice::Person>,
+    #[serde(default)]
     remedies: Vec<game_economy_dynamics::treatment::Remedy>,
     #[serde(default)]
     missions: Option<game_economy::Missions>,
@@ -806,6 +808,7 @@ pub fn core_scenario_with_options(
     let text = std::fs::read_to_string(path).map_err(|error| error.to_string())?;
     let authored: Scenario = toml::from_str(&text).map_err(|error| error.to_string())?;
     let language = authored.language;
+    let personal_choices = authored.personal_choices;
     let scenario = scenario_with_options_inner(path, content, seed, population_path, true)?;
     let mut snapshot =
         game_economy::core_interval::CoreHostSnapshot::from_scenario(scenario.snapshot())?;
@@ -819,6 +822,9 @@ pub fn core_scenario_with_options(
     let period = snapshot.core.physical.tick_millis;
     let mut host = game_economy::core_interval::CoreHost::begin(snapshot, &[])?;
     host.enable_schedule(period, 1)?;
+    if !personal_choices.is_empty() {
+        host.enable_personal_choices(personal_choices)?;
+    }
     Ok(host)
 }
 
@@ -846,12 +852,15 @@ fn scenario_with_options_inner(
     content: &Path,
     seed: Option<u64>,
     population_path: Option<&Path>,
-    allow_language: bool,
+    interval_features: bool,
 ) -> Result<Economy, String> {
     let source = std::fs::read_to_string(path).map_err(|error| error.to_string())?;
     let mut scenario: Scenario = toml::from_str(&source).map_err(|error| error.to_string())?;
-    if scenario.language.is_some() && !allow_language {
+    if scenario.language.is_some() && !interval_features {
         return Err("language requires the interval simulation host".into());
+    }
+    if !scenario.personal_choices.is_empty() && !interval_features {
+        return Err("personal choices require the interval simulation host".into());
     }
     if let Some(path) = population_path {
         let source = std::fs::read_to_string(path).map_err(|error| error.to_string())?;

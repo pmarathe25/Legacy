@@ -209,6 +209,258 @@ fn authored_language_runs_in_meetings_and_survives_resume() {
 }
 
 #[test]
+fn people_choose_between_competing_physical_actions_or_idleness() {
+    use game_economy::core_interval::{CoreChoiceOutcome, CoreRunEvent};
+    fn run(workers: usize) -> serde_json::Value {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let root = root();
+                let path = root.join("content/scenarios/economy-core-personal-choices.toml");
+                assert!(game_economy_cli::scenario(&path, &root.join("content")).is_err());
+                let mut host =
+                    game_economy_cli::core_scenario(&path, &root.join("content")).unwrap();
+                let (selected, _) = host.preview_personal_choices(&[]).unwrap();
+                let carrying = selected.iter().find(|intent| intent.actor == 2).unwrap().movement;
+                let result = host.advance_continuous(900_000, &[]).unwrap();
+                assert_eq!(result.failure, None);
+                assert!(result.events.iter().any(|event| matches!(event, CoreRunEvent::LocalCarries(rows) if rows.iter().any(|row| row.tick == 0 && row.person == 2 && row.from == carrying.from && Some(row.to) == carrying.to && row.good == carrying.good && row.quantity == carrying.quantity && row.moved))));
+                assert!(!result.events.iter().any(|event| matches!(event, CoreRunEvent::Construction(rows) if rows.iter().any(|row| row.tick == 0 && row.person == 3))));
+                let choices: Vec<_> = result
+                    .events
+                    .iter()
+                    .filter_map(|event| match event {
+                        CoreRunEvent::PersonalChoices(rows) => Some(rows.as_slice()),
+                        _ => None,
+                    })
+                    .flatten()
+                    .collect();
+                assert!(choices.iter().any(|event| event.actor == 1
+                    && event.key.is_some_and(|key| key.domain == 1)
+                    && event.outcome == CoreChoiceOutcome::Accepted));
+                assert!(choices.iter().any(|event| event.actor == 2
+                    && event.key.is_some_and(|key| key.domain == 2)
+                    && event.outcome == CoreChoiceOutcome::Accepted));
+                assert!(choices.iter().any(|event| event.actor == 3
+                    && event.key.is_none()
+                    && event.outcome == CoreChoiceOutcome::NoLocalAction));
+                let snapshot = host.snapshot();
+                assert_eq!(snapshot.sites.as_ref().unwrap().facilities.sites.len(), 1);
+                assert!(
+                    snapshot
+                        .schedule
+                        .as_ref()
+                        .unwrap()
+                        .personal_choices
+                        .is_some()
+                );
+                let mut resumed = game_economy::core_interval::CoreHost::resume(
+                    serde_json::from_str(&serde_json::to_string(&snapshot).unwrap()).unwrap(),
+                )
+                .unwrap();
+                assert_eq!(host.advance_continuous(900_000, &[]).unwrap().failure, None);
+                assert_eq!(
+                    resumed.advance_continuous(900_000, &[]).unwrap().failure,
+                    None
+                );
+                assert_eq!(host.snapshot(), resumed.snapshot());
+                serde_json::to_value(host.snapshot()).unwrap()
+            })
+    }
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
+fn stale_saved_carrying_intention_is_reported_without_substituting_an_action() {
+    use game_economy::core_interval::{
+        CoreChoiceIntent, CoreChoiceOutcome, CoreRunEvent, DecisionPhase,
+    };
+    let root = root();
+    let host = game_economy_cli::core_scenario(
+        &root.join("content/scenarios/economy-core-personal-choices.toml"),
+        &root.join("content"),
+    )
+    .unwrap();
+    let mut snapshot = host.snapshot();
+    let grain = snapshot
+        .core
+        .physical
+        .goods
+        .iter()
+        .find(|good| good.name == "grain")
+        .unwrap()
+        .id;
+    snapshot.schedule.as_mut().unwrap().phase = DecisionPhase::ChosenCarrying {
+        construction_after: false,
+        meal_people: vec![],
+        intents: std::sync::Arc::new(vec![CoreChoiceIntent {
+            actor: 2,
+            key: game_personal_choice::Key {
+                domain: 2,
+                action: u64::from(grain),
+            },
+            movement: game_lots::Movement {
+                id: 0,
+                from: game_lots::Place::Stock {
+                    region: 1,
+                    good: grain,
+                },
+                to: Some(game_lots::Place::Person(2)),
+                good: grain,
+                quantity: 3,
+                item: None,
+            },
+            second_movement: None,
+        }]),
+    };
+    let mut forbidden = snapshot.clone();
+    if let DecisionPhase::ChosenCarrying { intents, .. } =
+        &mut forbidden.schedule.as_mut().unwrap().phase
+    {
+        let intents = std::sync::Arc::make_mut(intents);
+        intents[0].actor = 3;
+        intents[0].movement.to = Some(game_lots::Place::Person(3));
+    }
+    assert!(game_economy::core_interval::CoreHost::resume(forbidden).is_err());
+    let mut host = game_economy::core_interval::CoreHost::resume(
+        serde_json::from_str(&serde_json::to_string(&snapshot).unwrap()).unwrap(),
+    )
+    .unwrap();
+    let result = host.advance_scheduled(1, &[]).unwrap();
+    assert_eq!(result.failure, None);
+    assert!(result.events.iter().any(|event| matches!(event, CoreRunEvent::PersonalChoices(rows) if rows.iter().any(|row| row.actor == 2 && row.outcome == CoreChoiceOutcome::Stale))));
+    assert!(!result.events.iter().any(|event| matches!(event, CoreRunEvent::LocalCarries(rows) if rows.iter().any(|row| row.person == 2))));
+}
+
+#[test]
+fn saved_choice_round_keeps_exact_intentions_across_workers() {
+    use game_economy::core_interval::DecisionPhase;
+    let root = root();
+    let mut host = game_economy_cli::core_scenario(
+        &root.join("content/scenarios/economy-core-personal-choices.toml"),
+        &root.join("content"),
+    )
+    .unwrap();
+    let mut profiles = host
+        .snapshot()
+        .schedule
+        .unwrap()
+        .personal_choices
+        .unwrap()
+        .as_ref()
+        .clone();
+    profiles[2].idle = 2;
+    profiles[2].act_on_tie = true;
+    host.enable_personal_choices(profiles).unwrap();
+    let (intents, _) = host.preview_personal_choices(&[]).unwrap();
+    assert_eq!(intents.len(), 3);
+    let mut snapshot = host.snapshot();
+    snapshot.schedule.as_mut().unwrap().phase = DecisionPhase::ChosenConstruction {
+        meal_people: vec![],
+        intents: std::sync::Arc::new(intents),
+        carrying_after: true,
+    };
+    let saved = serde_json::to_string(&snapshot).unwrap();
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut host = game_economy::core_interval::CoreHost::resume(
+                    serde_json::from_str(&saved).unwrap(),
+                )
+                .unwrap();
+                let result = host.advance_continuous(900_000, &[]).unwrap();
+                assert_eq!(result.failure, None);
+                serde_json::to_value(host.snapshot()).unwrap()
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
+fn contested_resources_make_later_intentions_stale_without_substitution() {
+    use game_economy::core_interval::{CoreChoiceOutcome, CoreRunEvent};
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(1)
+        .build()
+        .unwrap()
+        .install(|| {
+            let root = root();
+            let source = std::fs::read_to_string(
+                root.join("content/scenarios/economy-core-personal-choices.toml"),
+            )
+            .unwrap();
+            let token = format!(
+                "legacy-choice-contest-{}-{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            );
+            let path = std::env::temp_dir().join(format!("{token}.toml"));
+            let mut winners = std::collections::BTreeSet::new();
+            for seed in 1..=20 {
+                std::fs::write(
+                    &path,
+                    source
+                        .replace("seed = 7", &format!("seed = {seed}"))
+                        .replace("stock = { grain = 20 }", "stock = { grain = 3 }"),
+                )
+                .unwrap();
+                let mut host =
+                    game_economy_cli::core_scenario(&path, &root.join("content")).unwrap();
+                let result = host.advance_continuous(900_000, &[]).unwrap();
+                assert_eq!(result.failure, None);
+                let choices: Vec<_> = result
+                    .events
+                    .iter()
+                    .filter_map(|event| match event {
+                        CoreRunEvent::PersonalChoices(rows) => Some(rows.as_slice()),
+                        _ => None,
+                    })
+                    .flatten()
+                    .filter(|event| event.tick == 0 && (event.actor == 1 || event.actor == 2))
+                    .collect();
+                assert_eq!(
+                    choices
+                        .iter()
+                        .filter(|event| event.outcome == CoreChoiceOutcome::Accepted)
+                        .count(),
+                    1,
+                    "seed {seed}: {choices:?}"
+                );
+                assert_eq!(
+                    choices
+                        .iter()
+                        .filter(|event| event.outcome == CoreChoiceOutcome::Stale)
+                        .count(),
+                    1,
+                    "seed {seed}: {choices:?}"
+                );
+                winners.insert(
+                    choices
+                        .iter()
+                        .find(|event| event.outcome == CoreChoiceOutcome::Accepted)
+                        .unwrap()
+                        .key
+                        .unwrap()
+                        .domain,
+                );
+                if winners.len() == 2 {
+                    break;
+                }
+            }
+            std::fs::remove_file(path).unwrap();
+            assert_eq!(winners.len(), 2);
+        });
+}
+
+#[test]
 fn unsupported_scenario_owners_are_reported() {
     let root = root();
     let state = game_economy_cli::scenario(

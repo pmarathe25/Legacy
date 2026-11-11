@@ -45,6 +45,9 @@ pub struct Person {
     pub id: u64,
     /// The person's value for remaining idle at this decision opportunity.
     pub idle: i64,
+    /// Whether an equally valued opportunity may win over idleness.
+    #[serde(default)]
+    pub act_on_tie: bool,
     /// Sorted by domain; unlisted domains are not accepted automatically.
     pub preferences: Vec<Preference>,
 }
@@ -63,15 +66,8 @@ fn random(mut x: u64) -> u64 {
     x ^ (x >> 31)
 }
 
-/// Select at most one intention per person without touching any feature state.
-/// A value equal to idle leaves the actor idle. Stable semantic identifiers,
-/// not proposal input order, break ties among equally valued actions.
-pub fn select(
-    people: &[Person],
-    proposals: &[Proposal],
-    seed: u64,
-    round: u64,
-) -> Result<Vec<Selection>, &'static str> {
+/// Validate saved profiles without manufacturing a decision round.
+pub fn validate_people(people: &[Person]) -> Result<(), &'static str> {
     if people.par_windows(2).any(|w| w[0].id >= w[1].id)
         || people.par_iter().any(|p| {
             p.id == 0
@@ -82,6 +78,19 @@ pub fn select(
     {
         return Err("invalid personal choice profiles");
     }
+    Ok(())
+}
+
+/// Select at most one intention per person without touching any feature state.
+/// Each person's tie policy governs whether an opportunity equal to idle may
+/// win. Stable semantic identifiers, not input order, break action ties.
+pub fn select(
+    people: &[Person],
+    proposals: &[Proposal],
+    seed: u64,
+    round: u64,
+) -> Result<Vec<Selection>, &'static str> {
+    validate_people(people)?;
     let mut sorted: Vec<_> = proposals.par_iter().copied().collect();
     if sorted
         .par_windows(2)
@@ -124,7 +133,9 @@ pub fn select(
                 };
                 let value = i128::from(proposal.value) * i128::from(pref.weight) / 1000
                     + i128::from(pref.bias);
-                if value <= i128::from(person.idle) {
+                if value < i128::from(person.idle)
+                    || (value == i128::from(person.idle) && !person.act_on_tie)
+                {
                     continue;
                 }
                 let tie = random(

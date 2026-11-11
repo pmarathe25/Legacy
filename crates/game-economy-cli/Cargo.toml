@@ -9,6 +9,7 @@ profile = ["game-economy/profile", "game-families/profile"]
 
 [dependencies]
 game-language = { path = "../game-language" }
+game-personal-choice = { path = "../game-personal-choice" }
 game-economy-taking = { path = "../game-economy-taking" }
 game-fauna = { path = "../game-fauna" }
 game-economy-combat = { path = "../game-economy-combat" }

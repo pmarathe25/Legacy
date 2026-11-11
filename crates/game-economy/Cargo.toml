@@ -9,6 +9,7 @@ profile = ["dep:game-diagnostics", "game-families/profile", "game-lot-runtime/pr
 
 [dependencies]
 game-language = { path = "../game-language" }
+game-personal-choice = { path = "../game-personal-choice" }
 game-economy-taking = { path = "../game-economy-taking" }
 game-animal-restraint = { path = "../game-animal-restraint" }
 game-economy-confinement = { path = "../game-economy-confinement" }

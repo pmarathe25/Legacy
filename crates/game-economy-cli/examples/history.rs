@@ -56,6 +56,7 @@ fn observations(events: &[CoreRunEvent]) -> Vec<Value> {
         CoreRunEvent::Work(row) => Some(json!({"kind":"early_work","tick":row.tick,"finished":row.finished,"interrupted":row.interrupted})),
         CoreRunEvent::Construction(rows) if !rows.is_empty() => Some(json!({"kind":"construction","events":rows})),
         CoreRunEvent::LocalCarries(rows) if !rows.is_empty() => Some(json!({"kind":"local_carrying","events":rows})),
+        CoreRunEvent::PersonalChoices(rows) if !rows.is_empty() => Some(json!({"kind":"personal_choices","events":rows})),
         CoreRunEvent::HaulingRequests(rows) if !rows.is_empty() => Some(json!({"kind":"hauling_requests","people":rows})),
         CoreRunEvent::HaulingTransfers(rows) if !rows.is_empty() => Some(json!({"kind":"hauling_transfers","outcomes":rows})),
         CoreRunEvent::WrittenPages(rows) if !rows.is_empty() => Some(json!({"kind":"written_pages","items":rows})),
@@ -396,6 +397,43 @@ mod tests {
         fs::remove_file(scenario).unwrap();
         fs::remove_file(&output).unwrap();
         fs::remove_file(output.with_extension("year-2.json")).unwrap();
+    }
+
+    #[test]
+    fn personal_choice_outcomes_are_archived() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let original = root.join("content/scenarios/economy-core-personal-choices.toml");
+        let token = format!(
+            "legacy-choice-history-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+        let scenario = std::env::temp_dir().join(format!("{token}.toml"));
+        let output = std::env::temp_dir().join(format!("{token}.ndjson"));
+        let text = fs::read_to_string(original)
+            .unwrap()
+            .replace("tick_millis = 900000", "tick_millis = 31536000000");
+        fs::write(&scenario, text).unwrap();
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(1)
+            .build()
+            .unwrap()
+            .install(|| run(&root, &scenario, &output, 1, 1, false))
+            .unwrap();
+        let rows = records(&output);
+        assert!(rows.iter().filter(|row| row["kind"] == "year").any(|row| {
+            row["observations"].as_array().is_some_and(|events| {
+                events
+                    .iter()
+                    .any(|event| event["kind"] == "personal_choices")
+            })
+        }));
+        fs::remove_file(scenario).unwrap();
+        fs::remove_file(&output).unwrap();
+        fs::remove_file(output.with_extension("year-1.json")).unwrap();
     }
 
     #[test]

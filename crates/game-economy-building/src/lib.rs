@@ -246,6 +246,16 @@ pub struct Manual {
     pub person: u64,
     pub blueprint: u32,
 }
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Opportunity {
+    pub person: u64,
+    pub blueprint: u32,
+    pub source: Place,
+    pub good: u32,
+    pub quantity: u64,
+    pub salvage: u64,
+}
+
 struct Choice<'a> {
     person: u64,
     region: u64,
@@ -410,25 +420,7 @@ impl Context<'_> {
             .filter(|c| c.quantity(blueprint.kit) >= blueprint.quantity)
             .map(|_| stock)
     }
-    pub fn prepare(&self, base: u64) -> Result<Plan, String> {
-        if self.manual.is_none()
-            && !self
-                .owner
-                .policies
-                .par_iter()
-                .any(|p| p.willing || p.pressure_threshold.is_some())
-            && (self.goal_needs.is_empty()
-                || !self.owner.goal_builders.par_iter().any(|p| p.enabled))
-        {
-            return Ok(Plan {
-                actions: Vec::new(),
-                custody: Vec::new(),
-                actors: Vec::new(),
-                uses: Vec::new(),
-                rows: Vec::new(),
-                next_id: self.sites.next_id,
-            });
-        }
+    fn direct_choices(&self) -> Vec<Choice<'_>> {
         let mut counts: Vec<_> = self
             .sites
             .sites
@@ -439,7 +431,7 @@ impl Context<'_> {
             counts.par_sort_unstable();
         }
         let opinions = self.opinions.map(Opinions::index);
-        let mut choices: Vec<_> = self
+        let choices: Vec<_> = self
             .owner
             .policies
             .par_iter()
@@ -486,6 +478,44 @@ impl Context<'_> {
                 })
             })
             .collect();
+        choices
+    }
+
+    /// Direct policy opportunities without custody or site IDs; excludes goals and manual requests.
+    pub fn direct_opportunities(&self) -> Vec<Opportunity> {
+        self.direct_choices()
+            .into_par_iter()
+            .map(|choice| Opportunity {
+                person: choice.person,
+                blueprint: choice.blueprint.id,
+                source: choice.source,
+                good: choice.blueprint.kit,
+                quantity: choice.blueprint.quantity,
+                salvage: choice.blueprint.salvage,
+            })
+            .collect()
+    }
+
+    pub fn prepare(&self, base: u64) -> Result<Plan, String> {
+        if self.manual.is_none()
+            && !self
+                .owner
+                .policies
+                .par_iter()
+                .any(|p| p.willing || p.pressure_threshold.is_some())
+            && (self.goal_needs.is_empty()
+                || !self.owner.goal_builders.par_iter().any(|p| p.enabled))
+        {
+            return Ok(Plan {
+                actions: Vec::new(),
+                custody: Vec::new(),
+                actors: Vec::new(),
+                uses: Vec::new(),
+                rows: Vec::new(),
+                next_id: self.sites.next_id,
+            });
+        }
+        let mut choices = self.direct_choices();
         if !self.goal_needs.is_empty() && !self.owner.goal_builders.is_empty() {
             let chosen: HashSet<_> = choices.par_iter().map(|choice| choice.person).collect();
             let sites = site_access::Index::new(self.sites, self.claims);
