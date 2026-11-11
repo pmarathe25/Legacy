@@ -319,6 +319,7 @@ dependencies = [
  "game-economy-player",
  "game-economy-skills",
  "game-economy-taking",
+ "game-economy-treatment",
  "game-economy-work",
  "game-families",
  "game-fatigue",

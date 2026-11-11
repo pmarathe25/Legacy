@@ -18,6 +18,67 @@ pub struct Policy {
     #[serde(default)]
     pub health_at_most: Option<u32>,
 }
+
+/// A possible personal medicine use before the person compares activities.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Opportunity {
+    pub person: u64,
+    pub medicine: u32,
+    pub quantity: u64,
+    pub health: u32,
+}
+
+/// Respect explicit personal thresholds without imposing one on people who
+/// have not specified it. The physical owner decides actual consumption later.
+pub fn opportunities_now(
+    policies: &[Policy],
+    people: &[Person],
+    physical: &game_lot_runtime::Runtime,
+    busy: &[u64],
+) -> Result<Vec<Opportunity>, String> {
+    if people.par_windows(2).any(|rows| rows[0].id >= rows[1].id)
+        || busy.par_windows(2).any(|rows| rows[0] >= rows[1])
+    {
+        return Err("treatment people and exclusions must be ordered and unique".into());
+    }
+    Ok(policies
+        .par_iter()
+        .filter_map(|policy| {
+            let person = people
+                .binary_search_by_key(&policy.person, |person| person.id)
+                .ok()
+                .map(|index| &people[index])?;
+            if !policy.willing
+                || person.controlled
+                || person.health == 0
+                || busy.binary_search(&person.id).is_ok()
+                || policy
+                    .health_at_most
+                    .is_some_and(|threshold| person.health > threshold)
+            {
+                return None;
+            }
+            let holding = physical.custody(Place::Person(person.id))?;
+            let available: u128 = holding
+                .lots
+                .iter()
+                .filter(|lot| {
+                    lot.good == policy.medicine
+                        && lot.expires_at.is_none_or(|at| at > physical.tick())
+                })
+                .map(|lot| u128::from(lot.quantity))
+                .sum();
+            (policy.quantity > 0 && available >= u128::from(policy.quantity)).then_some(
+                Opportunity {
+                    person: person.id,
+                    medicine: policy.medicine,
+                    quantity: policy.quantity,
+                    health: person.health,
+                },
+            )
+        })
+        .collect())
+}
 /// Names are resolved through the authored goods catalog when creating a world.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]

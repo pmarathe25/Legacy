@@ -1,0 +1,90 @@
+seed = 7
+tick_millis = 900000
+stock_capacity = 100
+food_relief_divisor = 20
+
+[rules]
+hunger_per_tick = 1
+meal_threshold = 5
+starvation_threshold = 50
+starvation_damage = 1
+max_health = 100
+carrying_capacity = 10
+max_work_hunger = 20
+
+[[regions]]
+id = 1
+stock = { timber = 10 }
+
+[[people]]
+id = 1
+region = 1
+health = 100
+hunger = 0
+willing_to_work = false
+seek_meals = false
+goods = { medicine = 1 }
+[[people]]
+id = 2
+region = 1
+health = 80
+hunger = 0
+willing_to_work = false
+seek_meals = false
+goods = { medicine = 1 }
+[[people]]
+id = 3
+region = 1
+health = 80
+hunger = 0
+willing_to_work = false
+seek_meals = false
+goods = { medicine = 1 }
+
+[[dynamics.disease.strains]]
+id = 1
+name = "fever"
+incubation = 0
+infectious_ticks = 5
+immunity_ticks = 3
+damage_per_tick = 2
+transmission_per_million = 0
+[[dynamics.disease.cases]]
+person = 1
+strain = 1
+infected_at = 0
+[[dynamics.disease.cases]]
+person = 3
+strain = 1
+infected_at = 0
+
+[[remedies]]
+strain = 1
+medicine = "medicine"
+quantity = 1
+people = [1, 2, 3]
+willing = true
+
+[local_transport]
+[[local_transport.stores]]
+id = 1
+region = 1
+name = "Store"
+capacity = 10
+[[local_transport.policies]]
+person = 1
+region = 1
+source = { kind = "stock" }
+destination = { kind = "store", id = 1 }
+good = "timber"
+quantity = 1
+willing = true
+
+[[personal_choices]]
+id = 1
+idle = 0
+preferences = [{ domain = 2, enabled = true, bias = 0 }, { domain = 10, enabled = true, bias = 10 }]
+[[personal_choices]]
+id = 2
+idle = 0
+preferences = [{ domain = 10, enabled = false, bias = 10 }]

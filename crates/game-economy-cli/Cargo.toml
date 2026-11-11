@@ -43,6 +43,7 @@ game-economy-skills = { path = "../game-economy-skills" }
 game-diagnostics = { path = "../game-diagnostics" }
 game-economy-player = { path = "../game-economy-player" }
 game-economy-knowledge = { path = "../game-economy-knowledge" }
+game-economy-treatment = { path = "../game-economy-treatment" }
 game-agreements = { path = "../game-agreements" }
 game-disease = { path = "../game-disease" }
 game-fatigue = { path = "../game-fatigue" }

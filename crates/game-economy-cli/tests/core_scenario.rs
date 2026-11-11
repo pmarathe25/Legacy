@@ -5,6 +5,61 @@ fn root() -> PathBuf {
 }
 
 #[test]
+fn self_treatment_is_chosen_and_revalidated_individually() {
+    use game_economy::core_interval::{CoreChoiceOutcome, CoreHost, CoreRunEvent, DecisionPhase};
+    fn run(workers: usize) -> serde_json::Value {
+        rayon::ThreadPoolBuilder::new().num_threads(workers).build().unwrap().install(|| {
+            let root = root();
+            let mut host = game_economy_cli::core_scenario(&root.join("content/scenarios/economy-core-treatment-choice.toml"), &root.join("content")).unwrap();
+            let (intents, idle) = host.preview_personal_choices(&[]).unwrap();
+            assert!(intents.iter().any(|row| row.actor == 1 && row.key.domain == 10));
+            assert!(idle.iter().any(|row| row.actor == 2));
+            let mut alternative = host.snapshot();
+            std::sync::Arc::make_mut(alternative.schedule.as_mut().unwrap().personal_choices.as_mut().unwrap())[0].preferences[0].bias = 100;
+            assert_eq!(CoreHost::resume(alternative).unwrap().preview_personal_choices(&[]).unwrap().0[0].key.domain, 2);
+            let mut healthy = host.snapshot();
+            healthy.health.as_mut().unwrap().owner.cases.retain(|case| case.person != 1);
+            let mut healthy = CoreHost::resume(healthy).unwrap();
+            assert!(healthy.preview_personal_choices(&[]).unwrap().0.iter().any(|row| row.actor == 1 && row.key.domain == 10));
+            assert_eq!(healthy.advance_continuous(1, &[]).unwrap().failure, None);
+            assert_eq!(healthy.snapshot().core.physical.custody.containers.iter().find(|row| row.place == game_lots::Place::Person(1)).unwrap().used, 0);
+            let mut limited = host.snapshot();
+            limited.health.as_mut().unwrap().treatment.iter_mut().find(|policy| policy.person == 1).unwrap().health_at_most = Some(90);
+            assert!(!CoreHost::resume(limited).unwrap().preview_personal_choices(&[]).unwrap().0.iter().any(|row| row.actor == 1 && row.key.domain == 10));
+            let mut pending = host.snapshot();
+            pending.schedule.as_mut().unwrap().phase = DecisionPhase::ChosenSelfTreatment { meal_people: vec![], intents: std::sync::Arc::new(intents), remaining: 0 };
+            let mut restored = CoreHost::resume(serde_json::from_str(&serde_json::to_string(&pending).unwrap()).unwrap()).unwrap();
+            let mut stale = pending.clone();
+            let person = stale.core.physical.custody.containers.iter_mut().find(|row| row.place == game_lots::Place::Person(1)).unwrap();
+            *person = game_lots::Container::new(person.place, person.capacity, vec![]).unwrap();
+            let mut stale = CoreHost::resume(stale).unwrap();
+            let stale_run = stale.advance_continuous(1, &[]).unwrap();
+            assert_eq!(stale_run.failure, None);
+            assert!(stale_run.events.iter().any(|event| matches!(event, CoreRunEvent::PersonalChoices(rows) if rows.iter().any(|row| row.actor == 1 && row.outcome == CoreChoiceOutcome::Stale))));
+            let mut no_owner = pending.clone();
+            no_owner.health = None;
+            let mut no_owner = CoreHost::resume(no_owner).unwrap();
+            let missing = no_owner.advance_continuous(1, &[]).unwrap();
+            assert_eq!(missing.failure, None);
+            assert!(missing.events.iter().any(|event| matches!(event, CoreRunEvent::PersonalChoices(rows) if rows.iter().any(|row| row.actor == 1 && row.outcome == CoreChoiceOutcome::Stale))));
+            let mut original = CoreHost::resume(pending).unwrap();
+            assert_eq!(original.advance_continuous(1, &[]).unwrap().failure, None);
+            assert_eq!(restored.advance_continuous(1, &[]).unwrap().failure, None);
+            assert_eq!(original.snapshot(), restored.snapshot());
+            let result = host.advance_continuous(1, &[]).unwrap();
+            assert_eq!(result.failure, None);
+            assert!(result.events.iter().any(|event| matches!(event, CoreRunEvent::PersonalChoices(rows) if rows.iter().any(|row| row.actor == 1 && row.outcome == CoreChoiceOutcome::Accepted))));
+            let state = host.snapshot();
+            let amounts: Vec<_> = (1..=3).map(|id| state.core.physical.custody.containers.iter().find(|row| row.place == game_lots::Place::Person(id)).unwrap().used).collect();
+            assert_eq!(amounts, vec![0, 1, 0]);
+            assert!(state.health.as_ref().unwrap().owner.cases.is_empty());
+            serde_json::to_value(state).unwrap()
+        })
+    }
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
 fn chosen_food_pickup_stages_identified_item_metadata_and_rolls_back() {
     use game_economy::core_interval::CoreHost;
     use game_economy_work::tool_wear::{Condition, Rule, ToolWear};
@@ -1179,6 +1234,7 @@ fn stale_saved_carrying_intention_is_reported_without_substituting_an_action() {
             experiment_value: None,
             meal_value: None,
             tool_damage: None,
+            health_value: None,
         }]),
     };
     let mut forbidden = snapshot.clone();

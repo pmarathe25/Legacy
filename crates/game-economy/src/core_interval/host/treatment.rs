@@ -72,9 +72,19 @@ impl CoreHost {
                 tick,
             ),
         )?;
+        self.commit_self_treatment(plan)
+    }
+
+    /// Commit an already selected treatment plan with all affected owners.
+    pub(super) fn commit_self_treatment(
+        &mut self,
+        plan: game_economy_treatment::Plan,
+    ) -> Result<CoreTreatmentResults, String> {
         if plan.actions.is_empty() {
             return Ok(CoreTreatmentResults::default());
         }
+        let tick = self.core.physical.tick();
+        let health = self.health.as_ref().ok_or("treatment is disabled")?;
         let physical = self
             .core
             .physical

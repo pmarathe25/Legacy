@@ -98,15 +98,94 @@ capacity = 10000
     let work = std::env::var_os("LEGACY_CHOICE_WORK").is_some();
     let meals = std::env::var_os("LEGACY_CHOICE_MEALS").is_some();
     let tool_repairs = std::env::var_os("LEGACY_CHOICE_TOOL_REPAIRS").is_some();
+    let treatments = std::env::var_os("LEGACY_CHOICE_SELF_TREATMENTS").is_some();
     assert!(
         usize::from(maintenance)
             + usize::from(work)
             + usize::from(meals)
             + usize::from(tool_repairs)
             + usize::from(food_pickups)
+            + usize::from(treatments)
             <= 1,
         "choose one additional workload"
     );
+    if treatments {
+        use game_lots::{Container, Lot, Place};
+        let medicine = snapshot
+            .core
+            .physical
+            .goods
+            .iter()
+            .find(|good| good.name == "medicine")
+            .unwrap()
+            .id;
+        for container in &mut snapshot.core.physical.custody.containers {
+            if let Place::Person(id) = container.place
+                && id % 3 == 0
+            {
+                *container = Container::new(
+                    Place::Person(id),
+                    10,
+                    vec![Lot {
+                        item: None,
+                        good: medicine,
+                        quantity: 1,
+                        expires_at: None,
+                    }],
+                )
+                .unwrap();
+            }
+        }
+        snapshot.health = Some(game_economy::core_interval::CoreHealth {
+            owner: game_disease::Disease {
+                strains: vec![game_disease::Strain {
+                    id: 1,
+                    name: "fever".into(),
+                    incubation: 0,
+                    infectious_ticks: 5,
+                    immunity_ticks: 1,
+                    damage_per_tick: 1,
+                    transmission_per_million: 0,
+                    combat_transmission_per_million: 0,
+                    birth_transmission_per_million: 0,
+                }],
+                treatments: vec![game_disease::Treatment {
+                    strain: 1,
+                    medicine,
+                }],
+                cases: vec![],
+                events: vec![],
+            },
+            treatment: (1..=count)
+                .filter(|id| id % 3 == 0)
+                .map(|person| game_economy_treatment::Policy {
+                    person,
+                    medicine,
+                    quantity: 1,
+                    willing: true,
+                    health_at_most: None,
+                })
+                .collect(),
+            last_tick: None,
+        });
+        let profiles = std::sync::Arc::make_mut(
+            snapshot
+                .schedule
+                .as_mut()
+                .unwrap()
+                .personal_choices
+                .as_mut()
+                .unwrap(),
+        );
+        for person in profiles.iter_mut().filter(|person| person.id % 3 == 0) {
+            person.preferences.push(game_personal_choice::Preference {
+                domain: 10,
+                enabled: true,
+                bias: 30,
+                weight: 1000,
+            });
+        }
+    }
     if food_pickups {
         for person in snapshot
             .core
@@ -533,6 +612,19 @@ capacity = 10000
                     .iter()
                     .filter_map(|event| match event {
                         game_economy::core_interval::CoreRunEvent::Provisions(rows) => {
+                            Some(rows.iter().filter(|row| row.accepted).count())
+                        }
+                        _ => None,
+                    })
+                    .sum::<usize>();
+                assert_eq!(decisions as u64, count / 3);
+            }
+            if treatments && count >= 3 {
+                let decisions = result
+                    .events
+                    .iter()
+                    .filter_map(|event| match event {
+                        game_economy::core_interval::CoreRunEvent::Treatments(rows) => {
                             Some(rows.iter().filter(|row| row.accepted).count())
                         }
                         _ => None,

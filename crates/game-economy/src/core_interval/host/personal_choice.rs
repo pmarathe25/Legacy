@@ -12,6 +12,7 @@ pub(super) const EXPERIMENT: u32 = 6;
 pub(super) const MEAL: u32 = 7;
 pub(super) const TOOL_REPAIR: u32 = 8;
 pub(super) const FOOD_PICKUP: u32 = 9;
+pub(super) const SELF_TREATMENT: u32 = 10;
 
 fn index_by_person<T>(rows: &[T], id: u64, key: impl Fn(&T) -> u64) -> Option<usize> {
     rows.first()
@@ -65,11 +66,17 @@ pub struct CoreChoiceIntent {
     pub meal_value: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_damage: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub health_value: Option<i64>,
 }
 
 impl CoreChoiceIntent {
     pub(super) fn magnitude(&self) -> i64 {
-        if let Some(value) = self.experiment_value.or(self.meal_value) {
+        if let Some(value) = self
+            .experiment_value
+            .or(self.meal_value)
+            .or(self.health_value)
+        {
             return value;
         }
         if let Some(damage) = self.tool_damage {
@@ -469,6 +476,7 @@ impl CoreHost {
                             experiment_value: None,
                             meal_value: None,
                             tool_damage: None,
+                            health_value: None,
                         }
                     })
                     .collect();
@@ -518,6 +526,7 @@ impl CoreHost {
                         experiment_value: None,
                         meal_value: None,
                         tool_damage: None,
+                        health_value: None,
                     })
                     .collect();
                 rows
@@ -565,6 +574,7 @@ impl CoreHost {
                     experiment_value: None,
                     meal_value: None,
                     tool_damage: None,
+                    health_value: None,
                 })
                 .collect()
             } else {
@@ -604,6 +614,7 @@ impl CoreHost {
                         experiment_value: None,
                         meal_value: None,
                         tool_damage: None,
+                        health_value: None,
                     })
                     .collect())
             } else {
@@ -638,6 +649,7 @@ impl CoreHost {
                         experiment_value: Some(policy.value),
                         meal_value: None,
                         tool_damage: None,
+                        health_value: None,
                     })
                     .collect())
             } else {
@@ -689,6 +701,7 @@ impl CoreHost {
                         experiment_value: None,
                         meal_value: Some(i64::from(self.core.people[person].hunger)),
                         tool_damage: None,
+                        health_value: None,
                     }
                 })
                 .collect())
@@ -745,6 +758,7 @@ impl CoreHost {
                         experiment_value: None,
                         meal_value: None,
                         tool_damage: Some(owner.conditions[index].damage),
+                        health_value: None,
                     }
                 })
                 .collect())
@@ -791,20 +805,82 @@ impl CoreHost {
                     experiment_value: None,
                     meal_value: Some(i64::from(self.core.people[person].hunger)),
                     tool_damage: None,
+                    health_value: None,
                 }
+            })
+            .collect())
+        };
+        let treatments = || -> Result<Vec<CoreChoiceIntent>, String> {
+            if !domain.is_none_or(|domain| domain == SELF_TREATMENT)
+                || !self
+                    .schedule
+                    .as_ref()
+                    .and_then(|s| s.personal_choices.as_ref())
+                    .is_some_and(|people| {
+                        people.par_iter().any(|person| {
+                            person
+                                .preferences
+                                .binary_search_by_key(&SELF_TREATMENT, |p| p.domain)
+                                .is_ok()
+                        })
+                    })
+            {
+                return Ok(Vec::new());
+            }
+            let Some(health) = &self.health else {
+                return Ok(Vec::new());
+            };
+            Ok(game_economy_treatment::opportunities_now(
+                &health.treatment,
+                &self.core.people,
+                &self.core.physical,
+                &busy,
+            )?
+            .into_par_iter()
+            .map(|opportunity| CoreChoiceIntent {
+                actor: opportunity.person,
+                key: Key {
+                    domain: SELF_TREATMENT,
+                    action: u64::from(opportunity.medicine),
+                },
+                movement: Some(game_lots::Movement {
+                    id: 0,
+                    from: game_lots::Place::Person(opportunity.person),
+                    to: None,
+                    good: opportunity.medicine,
+                    quantity: opportunity.quantity,
+                    item: None,
+                }),
+                second_movement: None,
+                work: None,
+                experiment: None,
+                experiment_value: None,
+                meal_value: None,
+                tool_damage: None,
+                health_value: Some(i64::from(
+                    self.core
+                        .rules
+                        .max_health
+                        .saturating_sub(opportunity.health),
+                )),
             })
             .collect())
         };
         let (
             (construction, carrying),
-            (maintenance, (work, (experiments, (meals, (tool_repairs, food_pickups))))),
+            (
+                maintenance,
+                (work, (experiments, (meals, (tool_repairs, (food_pickups, treatments))))),
+            ),
         ) = rayon::join(
             || rayon::join(construction, carrying),
             || {
                 rayon::join(maintenance, || {
                     rayon::join(work, || {
                         rayon::join(experiments, || {
-                            rayon::join(meals, || rayon::join(tool_repairs, food_pickups))
+                            rayon::join(meals, || {
+                                rayon::join(tool_repairs, || rayon::join(food_pickups, treatments))
+                            })
                         })
                     })
                 })
@@ -818,6 +894,7 @@ impl CoreHost {
         intents.par_extend(meals?);
         intents.par_extend(tool_repairs?);
         intents.par_extend(food_pickups?);
+        intents.par_extend(treatments?);
         if intents
             .par_windows(2)
             .any(|rows| (rows[0].actor, rows[0].key) > (rows[1].actor, rows[1].key))
@@ -910,6 +987,7 @@ impl CoreHost {
                         && current[i].experiment_value == intent.experiment_value
                         && current[i].meal_value == intent.meal_value
                         && current[i].tool_damage == intent.tool_damage
+                        && current[i].health_value == intent.health_value
                 });
                 (intent, found)
             })
