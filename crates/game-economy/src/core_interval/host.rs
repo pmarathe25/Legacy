@@ -18,6 +18,7 @@ mod food_search;
 mod gathering;
 mod giving;
 mod goals;
+mod hauling;
 mod hunting;
 mod local_transport;
 mod market;
@@ -39,6 +40,7 @@ mod writing;
 pub use construction::CoreConstructionResults;
 pub use food_search::{CoreFoodProvision, CoreFoodSearch};
 pub use giving::CorePracticeWorkEvidence;
+pub use hauling::CoreHaulingResults;
 pub use local_transport::CoreLocalTransportResults;
 pub use market::CoreMarketResults;
 pub use offers::CoreSocialResults;
@@ -140,6 +142,8 @@ pub struct CoreHostSnapshot {
     #[serde(default)]
     pub construction: Option<game_economy_building::Construction>,
     #[serde(default)]
+    pub hauling: Option<crate::Hauling>,
+    #[serde(default)]
     pub goal_setbacks: Vec<(u64, u32)>,
     #[serde(default)]
     pub agreements: Option<game_agreements::Agreements>,
@@ -200,6 +204,7 @@ pub struct CoreHost {
     writing: Option<crate::Writing>,
     local_transport: Option<game_economy_local_transport::LocalTransport>,
     construction: Option<game_economy_building::Construction>,
+    hauling: Option<crate::Hauling>,
     agreements: Option<game_agreements::Agreements>,
     sites: Option<CoreSites>,
     schedule: Option<CoreSchedule>,
@@ -245,6 +250,7 @@ struct CoreRuntimeOptions {
     writing: Option<crate::Writing>,
     local_transport: Option<game_economy_local_transport::LocalTransport>,
     construction: Option<game_economy_building::Construction>,
+    hauling: Option<crate::Hauling>,
 }
 impl CoreHost {
     pub fn begin(snapshot: CoreHostSnapshot, rates: &[(u64, u64)]) -> Result<Self, String> {
@@ -292,6 +298,7 @@ impl CoreHost {
             writing,
             local_transport,
             construction,
+            hauling,
             agreements,
             sites,
             schedule,
@@ -315,6 +322,7 @@ impl CoreHost {
                 writing,
                 local_transport,
                 construction,
+                hauling,
                 sites,
                 schedule,
                 tool_requirements,
@@ -397,6 +405,7 @@ impl CoreHost {
             writing,
             local_transport,
             construction,
+            hauling,
             agreements,
             sites,
             schedule,
@@ -416,6 +425,7 @@ impl CoreHost {
                 writing,
                 local_transport,
                 construction,
+                hauling,
                 sites,
                 schedule,
                 tool_requirements,
@@ -469,6 +479,7 @@ impl CoreHost {
             mut writing,
             mut local_transport,
             mut construction,
+            hauling,
             mut sites,
             schedule,
             tool_requirements,
@@ -1000,6 +1011,20 @@ impl CoreHost {
                 .validate(&people, &recipes, core.physical.tick())
                 .map_err(str::to_owned)?;
         }
+        if let Some(owner) = &hauling {
+            if !owner.asking.is_empty()
+                || !owner.requests.is_empty()
+                || owner.policies.par_iter().any(|policy| {
+                    policy.requires_request || policy.request_pressure_threshold.is_some()
+                })
+            {
+                return Err("hauling requests are not yet supported".into());
+            }
+            let people: HashSet<_> = core.people.par_iter().map(|p| p.id).collect();
+            let goods: HashSet<_> = core.physical.goods().par_iter().map(|g| g.id).collect();
+            let view = core.physical.view(core.physical.tick())?;
+            owner.validate(&people, &goods, &view, core.travel.as_ref())?;
+        }
         if let Some(owner) = &mut local_transport {
             if owner.walking.is_some() || !owner.goal_fetchers.is_empty() {
                 return Err(
@@ -1181,6 +1206,7 @@ impl CoreHost {
             writing,
             local_transport,
             construction,
+            hauling,
             agreements,
             sites,
             schedule,
@@ -1231,6 +1257,7 @@ impl CoreHost {
             writing: self.writing.clone(),
             local_transport: self.local_transport.clone(),
             construction: self.construction.clone(),
+            hauling: self.hauling.clone(),
             agreements: self.agreements.clone(),
             sites: self.sites.clone(),
             schedule: self.schedule.clone(),

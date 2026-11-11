@@ -471,3 +471,9 @@ With `LEGACY_PEOPLE=50000`, the ignored `core_host_local_carrying_benchmark` mea
 People can independently choose to build physical work sites from kits they hold or can access, including choices motivated by fear or obligation. Each accepted build consumes the required kit, creates a usable site, and places any recoverable material in site custody; failed competitors create neither a site nor a material container. Demolition, later salvage, and goal-directed building are not yet supported in the interval host.
 
 With `LEGACY_PEOPLE=50000`, `core_host_site_construction_benchmark` builds 49,999 sites from independent kits in 201.1, 132.9, 84.2, and 84.2 ms at one, two, four, and six workers. With `LEGACY_CONSTRUCTION_CONTEST=1`, the builders share one stock and take 141.8, 89.1, 66.8, and 59.6 ms. Fingerprints matched within each workload and setup was excluded; these single samples show sublinear scaling.
+
+A person may choose to haul goods between regions by first taking actual stock into personal custody, traveling along available routes, and later delivering the carried goods. Each leg is a separate personal action, and fear or obligation can motivate the choice. Hauling requests and request-driven commitments are not yet supported by the interval host.
+
+With `LEGACY_PEOPLE=50000`, the ignored `core_host_hauling_pickup_benchmark` measures 49,999 pickups from independent stocks in 55.1, 34.7, 25.0, and 23.0 ms at one, two, four, and six workers. With `LEGACY_HAUL_CONTEST=1`, pickups share a single stock and take 48.6, 24.6, 18.2, and 16.5 ms. Fingerprints matched within each workload and setup was excluded; these single samples show sublinear scaling.
+
+With `LEGACY_HAUL_DEPARTURE=1 LEGACY_PEOPLE=50000`, the same benchmark measures 49,999 laden departures in 20.8, 11.4, 9.5, and 7.8 ms at one, two, four, and six workers. Fingerprints matched and setup was excluded; this single sample shows sublinear scaling.

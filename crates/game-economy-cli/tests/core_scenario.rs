@@ -1141,3 +1141,20 @@ fn authored_builder_creates_a_site_from_physical_materials() {
     }
     assert_eq!(run(1), run(6));
 }
+
+#[test]
+fn authored_hauler_picks_up_travels_and_delivers() {
+    fn run(workers: usize) -> serde_json::Value {
+        rayon::ThreadPoolBuilder::new().num_threads(workers).build().unwrap().install(||{
+            let root=root();let mut host=game_economy_cli::core_scenario(&root.join("content/scenarios/economy-core-hauling.toml"),&root.join("content")).unwrap();
+            let first=host.advance_continuous(0,&[]).unwrap();assert_eq!(first.failure,None);
+            assert!(first.events.iter().any(|event|matches!(event,game_economy::core_interval::CoreRunEvent::HaulingTransfers(rows) if rows.iter().any(|row|row.accepted))));
+            let state=host.snapshot();let mut restored=game_economy::core_interval::CoreHost::resume(serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap()).unwrap();
+            let result=host.advance_continuous(3000,&[]).unwrap();let resumed=restored.advance_continuous(3000,&[]).unwrap();assert_eq!(result,resumed);assert_eq!(result.failure,None);
+            let state=host.snapshot();assert_eq!(state,restored.snapshot());let grain=state.core.physical.goods.iter().find(|good|good.name=="grain").unwrap().id;
+            let destination=state.core.physical.custody.containers.iter().find(|row|row.place==game_lots::Place::Stock{region:2,good:grain}).unwrap();assert_eq!(destination.lots.iter().map(|lot|lot.quantity).sum::<u64>(),2);
+            serde_json::to_value(state).unwrap()
+        })
+    }
+    assert_eq!(run(1), run(6));
+}

@@ -25,6 +25,7 @@ pub enum DecisionPhase {
     WritePages { meal_people: Vec<u64> },
     Construction { meal_people: Vec<u64> },
     LocalCarrying { meal_people: Vec<u64> },
+    Hauling { meal_people: Vec<u64> },
     FoodSearch { meal_people: Vec<u64> },
     Travel { meal_people: Vec<u64> },
 }
@@ -83,6 +84,7 @@ impl CoreSchedule {
         | DecisionPhase::WritePages { meal_people }
         | DecisionPhase::Construction { meal_people }
         | DecisionPhase::LocalCarrying { meal_people }
+        | DecisionPhase::Hauling { meal_people }
         | DecisionPhase::FoodSearch { meal_people }
         | DecisionPhase::Travel { meal_people } = &self.phase
             && (self.next_decision_millis != Some(u128::from(offset))
@@ -124,6 +126,8 @@ pub enum CoreRunEvent {
     WrittenPages(Vec<u64>),
     Construction(Vec<game_economy_building::Event>),
     LocalCarries(Vec<game_economy_local_transport::Event>),
+    HaulingTransfers(Vec<game_lots::TransactionOutcome>),
+    HaulingDepartures(Vec<travel::DepartureOutcome>),
     Departures(Vec<travel::DepartureOutcome>),
     FoodSearch(Vec<travel::DepartureOutcome>),
     Boundary(Box<Events>),
@@ -193,6 +197,13 @@ impl CoreHost {
     fn after_construction(&self, meal_people: Vec<u64>) -> DecisionPhase {
         if self.local_transport.is_some() {
             DecisionPhase::LocalCarrying { meal_people }
+        } else {
+            self.after_local_carrying(meal_people)
+        }
+    }
+    fn after_local_carrying(&self, meal_people: Vec<u64>) -> DecisionPhase {
+        if self.hauling.is_some() {
+            DecisionPhase::Hauling { meal_people }
         } else {
             DecisionPhase::FoodSearch { meal_people }
         }
@@ -774,6 +785,26 @@ impl CoreHost {
                         meal_people.dedup();
                         if !result.events.is_empty() {
                             run.events.push(CoreRunEvent::LocalCarries(result.events));
+                        }
+                        let next = self.after_local_carrying(meal_people);
+                        self.schedule.as_mut().expect("active schedule").phase = next;
+                    }
+                    DecisionPhase::Hauling { mut meal_people } => {
+                        let mut busy = blocked.to_vec();
+                        busy.extend(meal_people.iter().copied());
+                        busy.par_sort_unstable();
+                        busy.dedup();
+                        let result = attempt!('run,self.haul_autonomously(&busy));
+                        meal_people.par_extend(result.actors);
+                        meal_people.par_sort_unstable();
+                        meal_people.dedup();
+                        if !result.transfers.is_empty() {
+                            run.events
+                                .push(CoreRunEvent::HaulingTransfers(result.transfers));
+                        }
+                        if !result.departures.is_empty() {
+                            run.events
+                                .push(CoreRunEvent::HaulingDepartures(result.departures));
                         }
                         self.schedule.as_mut().expect("active schedule").phase =
                             DecisionPhase::FoodSearch { meal_people };

@@ -17,11 +17,12 @@ use std::collections::HashSet;
 mod host;
 pub use host::{
     CoreAssistRecord, CoreAssistSession, CoreConstructionResults, CoreDeliveryResults,
-    CoreDynamicsResults, CoreFoodProvision, CoreFoodSearch, CoreHealth, CoreHost, CoreHostSnapshot,
-    CoreLocalTransportResults, CoreMarketResults, CorePracticeWorkEvidence, CorePurpose,
-    CoreRepairResults, CoreRequestResults, CoreRun, CoreRunEvent, CoreSchedule, CoreSharedWork,
-    CoreSites, CoreSkillCredit, CoreSkills, CoreSocial, CoreSocialResults, CoreToolRepairResults,
-    CoreTreatmentResults, CoreWritingPracticeResults, CoreWritingResults, DecisionPhase,
+    CoreDynamicsResults, CoreFoodProvision, CoreFoodSearch, CoreHaulingResults, CoreHealth,
+    CoreHost, CoreHostSnapshot, CoreLocalTransportResults, CoreMarketResults,
+    CorePracticeWorkEvidence, CorePurpose, CoreRepairResults, CoreRequestResults, CoreRun,
+    CoreRunEvent, CoreSchedule, CoreSharedWork, CoreSites, CoreSkillCredit, CoreSkills, CoreSocial,
+    CoreSocialResults, CoreToolRepairResults, CoreTreatmentResults, CoreWritingPracticeResults,
+    CoreWritingResults, DecisionPhase,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
