@@ -5,6 +5,50 @@ fn root() -> PathBuf {
 }
 
 #[test]
+fn tool_repairs_compete_with_other_choices_and_revalidate() {
+    use game_economy::core_interval::{CoreChoiceOutcome, CoreHost, CoreRunEvent, DecisionPhase};
+    fn run(workers: usize) -> serde_json::Value {
+        rayon::ThreadPoolBuilder::new().num_threads(workers).build().unwrap().install(|| {
+            let root = root();
+            let mut host = game_economy_cli::core_scenario(&root.join("content/scenarios/economy-core-tool-choice.toml"), &root.join("content")).unwrap();
+            let (intents, idle) = host.preview_personal_choices(&[]).unwrap();
+            assert!(intents.iter().any(|row| row.actor == 1 && row.key.domain == 8 && row.key.action == 1001));
+            assert!(intents.iter().any(|row| row.actor == 2 && row.key.domain == 8 && row.key.action == 1002));
+            assert!(idle.iter().any(|row| row.actor == 3));
+            let mut alternative = host.snapshot();
+            let profiles = std::sync::Arc::make_mut(alternative.schedule.as_mut().unwrap().personal_choices.as_mut().unwrap());
+            profiles[0].preferences[0].bias = 100;
+            let alternative = CoreHost::resume(alternative).unwrap();
+            assert_eq!(alternative.preview_personal_choices(&[]).unwrap().0.iter().find(|row| row.actor == 1).unwrap().key.domain, 2);
+            let mut pending = host.snapshot();
+            pending.schedule.as_mut().unwrap().phase = DecisionPhase::ChosenToolRepair {
+                meal_people: vec![], intents: std::sync::Arc::new(intents), remaining: 0,
+            };
+            let saved = serde_json::to_string(&pending).unwrap();
+            let mut restored = CoreHost::resume(serde_json::from_str(&saved).unwrap()).unwrap();
+            let mut stale = pending.clone();
+            stale.tool_wear.as_mut().unwrap().conditions[0].damage = 0;
+            let mut stale = CoreHost::resume(stale).unwrap();
+            let stale_run = stale.advance_continuous(1, &[]).unwrap();
+            assert_eq!(stale_run.failure, None);
+            assert!(stale_run.events.iter().any(|event| matches!(event, CoreRunEvent::PersonalChoices(rows) if rows.iter().any(|row| row.actor == 1 && row.outcome == CoreChoiceOutcome::Stale))));
+            let mut original = CoreHost::resume(pending).unwrap();
+            assert_eq!(original.advance_continuous(1, &[]).unwrap().failure, None);
+            assert_eq!(restored.advance_continuous(1, &[]).unwrap().failure, None);
+            assert_eq!(original.snapshot(), restored.snapshot());
+            let result = host.advance_continuous(1, &[]).unwrap();
+            assert_eq!(result.failure, None);
+            assert!(result.events.iter().any(|event| matches!(event, CoreRunEvent::ToolRepairs(rows) if rows.iter().any(|row| row.person == 1 && row.accepted) && rows.iter().any(|row| row.person == 2 && !row.accepted))));
+            assert!(result.events.iter().any(|event| matches!(event, CoreRunEvent::PersonalChoices(rows) if rows.iter().any(|row| row.actor == 2 && row.outcome == CoreChoiceOutcome::Denied))));
+            let conditions = &host.snapshot().tool_wear.unwrap().conditions;
+            assert_eq!(conditions.iter().map(|row| row.damage).collect::<Vec<_>>(), vec![0, 5, 5]);
+            serde_json::to_value(host.snapshot()).unwrap()
+        })
+    }
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
 fn meals_compete_with_other_choices_and_survive_resume() {
     use game_economy::core_interval::{CoreChoiceOutcome, CoreHost, CoreRunEvent, DecisionPhase};
     fn run(workers: usize) -> serde_json::Value {
@@ -984,6 +1028,7 @@ fn stale_saved_carrying_intention_is_reported_without_substituting_an_action() {
             experiment: None,
             experiment_value: None,
             meal_value: None,
+            tool_damage: None,
         }]),
     };
     let mut forbidden = snapshot.clone();

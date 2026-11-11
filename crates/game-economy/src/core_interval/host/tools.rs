@@ -166,7 +166,6 @@ impl CoreHost {
         else {
             return Ok(CoreToolRepairResults::default());
         };
-        let tick = self.core.physical.tick();
         let offset = self.core.elapsed_millis().ok_or("no physical interval")?;
         if offset >= self.core.physical.tick_millis()
             || self.core.next_deadline(None)?.after_millis == 0
@@ -184,7 +183,7 @@ impl CoreHost {
         );
         busy.par_sort_unstable();
         busy.dedup();
-        let mut repairs = owner.prepare_repairs(
+        let repairs = owner.prepare_repairs(
             &self.core.physical,
             &self.core.people,
             &busy,
@@ -192,9 +191,22 @@ impl CoreHost {
             self.core.rules.max_work_hunger,
             1,
         )?;
+        self.commit_tool_repairs(repairs)
+    }
+
+    /// Commit only requests already selected and revalidated by the caller.
+    pub(super) fn commit_tool_repairs(
+        &mut self,
+        mut repairs: Vec<(u64, u64, game_lots::Transaction)>,
+    ) -> Result<CoreToolRepairResults, String> {
         if repairs.is_empty() {
             return Ok(CoreToolRepairResults::default());
         }
+        let tick = self.core.physical.tick();
+        let owner = self
+            .tool_wear
+            .as_ref()
+            .ok_or("tool repair requires an owner")?;
         repairs
             .par_iter_mut()
             .for_each(|(_, _, action)| action.movements[0].id = action.id);

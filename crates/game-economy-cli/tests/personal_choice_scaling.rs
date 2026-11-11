@@ -93,10 +93,100 @@ capacity = 10000
     let maintenance = std::env::var_os("LEGACY_CHOICE_MAINTENANCE").is_some();
     let work = std::env::var_os("LEGACY_CHOICE_WORK").is_some();
     let meals = std::env::var_os("LEGACY_CHOICE_MEALS").is_some();
+    let tool_repairs = std::env::var_os("LEGACY_CHOICE_TOOL_REPAIRS").is_some();
     assert!(
-        usize::from(maintenance) + usize::from(work) + usize::from(meals) <= 1,
+        usize::from(maintenance)
+            + usize::from(work)
+            + usize::from(meals)
+            + usize::from(tool_repairs)
+            <= 1,
         "choose one additional workload"
     );
+    if tool_repairs {
+        use game_economy_work::tool_wear::{Condition, RepairChoice, Rule, ToolWear};
+        use game_lots::{Container, Lot, Place};
+        let good = |name: &str| {
+            snapshot
+                .core
+                .physical
+                .goods
+                .iter()
+                .find(|good| good.name == name)
+                .unwrap()
+                .id
+        };
+        let grain = good("grain");
+        let tool = good("tool");
+        for container in &mut snapshot.core.physical.custody.containers {
+            if let Place::Person(id) = container.place
+                && id % 3 == 0
+            {
+                *container = Container::new(
+                    Place::Person(id),
+                    10,
+                    vec![
+                        Lot {
+                            item: None,
+                            good: grain,
+                            quantity: 1,
+                            expires_at: None,
+                        },
+                        Lot {
+                            item: Some(1_000_000 + id),
+                            good: tool,
+                            quantity: 1,
+                            expires_at: None,
+                        },
+                    ],
+                )
+                .unwrap();
+            }
+        }
+        snapshot.tool_wear = Some(ToolWear {
+            next_item: 1_000_001 + count,
+            rules: vec![Rule {
+                good: tool,
+                durability: 5,
+                wear: 1,
+                repair_good: grain,
+                repair_quantity: 1,
+            }],
+            conditions: (1..=count)
+                .filter(|id| id % 3 == 0)
+                .map(|id| Condition {
+                    item: 1_000_000 + id,
+                    good: tool,
+                    damage: 5,
+                })
+                .collect(),
+            repairs: (1..=count)
+                .filter(|id| id % 3 == 0)
+                .map(|person| RepairChoice {
+                    person,
+                    item: 1_000_000 + person,
+                    willing: true,
+                })
+                .collect(),
+            events: vec![],
+        });
+        let profiles = std::sync::Arc::make_mut(
+            snapshot
+                .schedule
+                .as_mut()
+                .unwrap()
+                .personal_choices
+                .as_mut()
+                .unwrap(),
+        );
+        for person in profiles.iter_mut().filter(|person| person.id % 3 == 0) {
+            person.preferences.push(game_personal_choice::Preference {
+                domain: 8,
+                enabled: true,
+                bias: 30,
+                weight: 1000,
+            });
+        }
+    }
     if meals {
         use game_lots::{Container, Lot, Place};
         let good = snapshot
@@ -387,6 +477,19 @@ capacity = 10000
                     .iter()
                     .filter_map(|event| match event {
                         game_economy::core_interval::CoreRunEvent::Meals(rows) => Some(rows.len()),
+                        _ => None,
+                    })
+                    .sum::<usize>();
+                assert_eq!(decisions as u64, count / 3);
+            }
+            if tool_repairs && count >= 3 {
+                let decisions = result
+                    .events
+                    .iter()
+                    .filter_map(|event| match event {
+                        game_economy::core_interval::CoreRunEvent::ToolRepairs(rows) => {
+                            Some(rows.iter().filter(|row| row.accepted).count())
+                        }
                         _ => None,
                     })
                     .sum::<usize>();

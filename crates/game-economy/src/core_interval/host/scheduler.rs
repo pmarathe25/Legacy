@@ -2,7 +2,8 @@
 use super::*;
 use std::sync::Arc;
 
-const SELECTED_DOMAINS: u64 = (1 << 1) | (1 << 2) | (1 << 3) | (1 << 4) | (1 << 6) | (1 << 7);
+const SELECTED_DOMAINS: u64 =
+    (1 << 1) | (1 << 2) | (1 << 3) | (1 << 4) | (1 << 6) | (1 << 7) | (1 << 8);
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "phase", rename_all = "snake_case")]
@@ -76,6 +77,11 @@ pub enum DecisionPhase {
         remaining: u64,
     },
     ChosenMeal {
+        meal_people: Vec<u64>,
+        intents: Arc<Vec<CoreChoiceIntent>>,
+        remaining: u64,
+    },
+    ChosenToolRepair {
         meal_people: Vec<u64>,
         intents: Arc<Vec<CoreChoiceIntent>>,
         remaining: u64,
@@ -199,7 +205,8 @@ impl CoreSchedule {
             }
             DecisionPhase::ChosenBatch { remaining, .. }
             | DecisionPhase::ChosenExperiment { remaining, .. }
-            | DecisionPhase::ChosenMeal { remaining, .. } => Some(*remaining),
+            | DecisionPhase::ChosenMeal { remaining, .. }
+            | DecisionPhase::ChosenToolRepair { remaining, .. } => Some(*remaining),
             DecisionPhase::ChosenConstruction { remaining, .. }
             | DecisionPhase::ChosenCarrying { remaining, .. }
             | DecisionPhase::ChosenMaintenance { remaining, .. }
@@ -224,6 +231,7 @@ impl CoreSchedule {
             } => Some(4),
             DecisionPhase::ChosenExperiment { .. } => Some(6),
             DecisionPhase::ChosenMeal { .. } => Some(7),
+            DecisionPhase::ChosenToolRepair { .. } => Some(8),
             _ => None,
         };
         if current_domain
@@ -238,7 +246,8 @@ impl CoreSchedule {
         | DecisionPhase::ChosenWork { intents, .. }
         | DecisionPhase::ChosenBatch { intents, .. }
         | DecisionPhase::ChosenExperiment { intents, .. }
-        | DecisionPhase::ChosenMeal { intents, .. } = &self.phase
+        | DecisionPhase::ChosenMeal { intents, .. }
+        | DecisionPhase::ChosenToolRepair { intents, .. } = &self.phase
         {
             let Some(people) = &self.personal_choices else {
                 return Err("selected actions require personal choices".into());
@@ -256,7 +265,8 @@ impl CoreSchedule {
                             intent.experiment,
                         ) {
                             (1..=3, Some(movement), None, None) => {
-                                intent.meal_value.is_some()
+                                intent.tool_damage.is_some()
+                                    || intent.meal_value.is_some()
                                     || intent.experiment_value.is_some()
                                     || movement.id != 0
                                     || movement.quantity == 0
@@ -265,7 +275,8 @@ impl CoreSchedule {
                                         .is_some_and(|row| row.id != 0 || row.quantity == 0)
                             }
                             (4, None, Some(work), None) => {
-                                intent.meal_value.is_some()
+                                intent.tool_damage.is_some()
+                                    || intent.meal_value.is_some()
                                     || intent.experiment_value.is_some()
                                     || intent.second_movement.is_some()
                                     || work.region == 0
@@ -275,7 +286,8 @@ impl CoreSchedule {
                                     || intent.key.action != u64::from(work.recipe)
                             }
                             (6, None, None, Some(experiment)) => {
-                                intent.meal_value.is_some()
+                                intent.tool_damage.is_some()
+                                    || intent.meal_value.is_some()
                                     || intent.experiment_value.is_none()
                                     || intent.second_movement.is_some()
                                     || experiment.actor != intent.actor
@@ -285,7 +297,8 @@ impl CoreSchedule {
                                     || experiment.input_distance == 0
                             }
                             (7, Some(movement), None, None) => {
-                                intent.meal_value.is_none()
+                                intent.tool_damage.is_some()
+                                    || intent.meal_value.is_none()
                                     || intent.experiment_value.is_some()
                                     || intent.second_movement.is_some()
                                     || movement.id != 0
@@ -294,6 +307,17 @@ impl CoreSchedule {
                                     || movement.to.is_some()
                                     || movement.item.is_some()
                                     || intent.key.action != u64::from(movement.good)
+                            }
+                            (8, Some(movement), None, None) => {
+                                intent.tool_damage.is_none_or(|damage| damage == 0)
+                                    || intent.meal_value.is_some()
+                                    || intent.experiment_value.is_some()
+                                    || intent.second_movement.is_some()
+                                    || movement.id != 0
+                                    || movement.quantity == 0
+                                    || movement.from != game_lots::Place::Person(intent.actor)
+                                    || movement.to.is_some()
+                                    || movement.item.is_some()
                             }
                             _ => true,
                         }
@@ -330,6 +354,7 @@ impl CoreSchedule {
         | DecisionPhase::ChosenBatch { meal_people, .. }
         | DecisionPhase::ChosenExperiment { meal_people, .. }
         | DecisionPhase::ChosenMeal { meal_people, .. }
+        | DecisionPhase::ChosenToolRepair { meal_people, .. }
         | DecisionPhase::ChosenConstruction { meal_people, .. }
         | DecisionPhase::ChosenCarrying { meal_people, .. }
         | DecisionPhase::ChosenMaintenance { meal_people, .. }
@@ -469,6 +494,7 @@ impl CoreHost {
                 || self.sites.is_some()
                 || self.autowork.is_some()
                 || self.mechanics.is_some()
+                || self.tool_wear.is_some()
                 || self
                     .schedule
                     .as_ref()
@@ -837,6 +863,22 @@ impl CoreHost {
                     DecisionPhase::ToolMaintenance { mut meal_people } => {
                         let mut busy = blocked.to_vec();
                         busy.extend(meal_people.iter().copied());
+                        if let Some(people) = &schedule.personal_choices {
+                            busy.par_extend(
+                                people
+                                    .par_iter()
+                                    .filter(|person| {
+                                        person
+                                            .preferences
+                                            .binary_search_by_key(
+                                                &personal_choice::TOOL_REPAIR,
+                                                |p| p.domain,
+                                            )
+                                            .is_ok()
+                                    })
+                                    .map(|person| person.id),
+                            );
+                        }
                         busy.par_sort_unstable();
                         busy.dedup();
                         let result = attempt!('run, self.repair_tools_autonomously(&busy));
@@ -1159,6 +1201,9 @@ impl CoreHost {
                         let has_meals = intents
                             .par_iter()
                             .any(|intent| intent.key.domain == personal_choice::MEAL);
+                        let has_tool_repairs = intents
+                            .par_iter()
+                            .any(|intent| intent.key.domain == personal_choice::TOOL_REPAIR);
                         let random = game_genetics::random(self.core.seed, 0x63686f696365, round);
                         let first = if has_work {
                             random % 4
@@ -1168,13 +1213,16 @@ impl CoreHost {
                             random & 1
                         };
                         self.schedule.as_mut().expect("active schedule").phase =
-                            if has_experiments || has_meals {
+                            if has_experiments || has_meals || has_tool_repairs {
                                 let mut remaining = 0;
                                 if has_experiments {
                                     remaining |= 1 << 6;
                                 }
                                 if has_meals {
                                     remaining |= 1 << 7;
+                                }
+                                if has_tool_repairs {
+                                    remaining |= 1 << 8;
                                 }
                                 if self.construction.is_some() {
                                     remaining |= 1 << 1;
@@ -1237,7 +1285,7 @@ impl CoreHost {
                         remaining,
                     } => {
                         let round = self.core.physical.tick().rotate_left(21) ^ offset;
-                        let domain = [1u32, 2, 3, 4, 6, 7]
+                        let domain = [1u32, 2, 3, 4, 6, 7, 8]
                             .into_iter()
                             .filter(|domain| remaining & (1u64 << domain) != 0)
                             .min_by_key(|domain| {
@@ -1292,8 +1340,64 @@ impl CoreHost {
                                 intents,
                                 remaining,
                             },
+                            8 => DecisionPhase::ChosenToolRepair {
+                                meal_people,
+                                intents,
+                                remaining,
+                            },
                             _ => unreachable!("validated domain"),
                         };
+                    }
+                    DecisionPhase::ChosenToolRepair {
+                        mut meal_people,
+                        intents,
+                        remaining,
+                    } => {
+                        let mut busy = blocked.to_vec();
+                        busy.extend(meal_people.iter().copied());
+                        busy.par_sort_unstable();
+                        busy.dedup();
+                        let people = schedule.personal_choices.as_ref().expect("choice profile");
+                        let (blocked_choice, mut choices) = attempt!('run, self.choice_blocked(&busy, people, &intents, personal_choice::TOOL_REPAIR));
+                        let repairs = if let Some(owner) = &self.tool_wear {
+                            let rows = attempt!('run, owner.prepare_repairs(&self.core.physical, &self.core.people, &blocked_choice, &[], u32::MAX, 1));
+                            rows.into_par_iter()
+                                .filter(|(actor, item, _)| {
+                                    personal_choice::selected_key(&intents, *actor).is_some_and(
+                                        |key| {
+                                            key.domain == personal_choice::TOOL_REPAIR
+                                                && key.action == *item
+                                        },
+                                    )
+                                })
+                                .collect()
+                        } else {
+                            Vec::new()
+                        };
+                        let result = attempt!('run, self.commit_tool_repairs(repairs));
+                        choices.par_extend(result.events.par_iter().map(|event| CoreChoiceEvent {
+                            tick: self.core.physical.tick(),
+                            offset_millis: offset,
+                            actor: event.person,
+                            key: personal_choice::selected_key(&intents, event.person),
+                            outcome: if event.accepted {
+                                CoreChoiceOutcome::Accepted
+                            } else {
+                                CoreChoiceOutcome::Denied
+                            },
+                        }));
+                        meal_people.par_extend(result.actors);
+                        meal_people.par_sort_unstable();
+                        meal_people.dedup();
+                        if !result.events.is_empty() {
+                            run.events.push(CoreRunEvent::ToolRepairs(result.events));
+                        }
+                        if !choices.is_empty() {
+                            choices.par_sort_unstable_by_key(|event| event.actor);
+                            run.events.push(CoreRunEvent::PersonalChoices(choices));
+                        }
+                        self.schedule.as_mut().expect("active schedule").phase =
+                            self.after_selected_batch(meal_people, intents, remaining);
                     }
                     DecisionPhase::ChosenMeal {
                         mut meal_people,

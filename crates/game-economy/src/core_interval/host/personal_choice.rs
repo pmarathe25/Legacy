@@ -10,6 +10,7 @@ pub(super) const WORK: u32 = 4;
 pub(super) const CONTINUE_WORK: u32 = 5;
 pub(super) const EXPERIMENT: u32 = 6;
 pub(super) const MEAL: u32 = 7;
+pub(super) const TOOL_REPAIR: u32 = 8;
 
 fn index_by_person<T>(rows: &[T], id: u64, key: impl Fn(&T) -> u64) -> Option<usize> {
     rows.first()
@@ -61,12 +62,17 @@ pub struct CoreChoiceIntent {
     /// The person's observed hunger when choosing a meal.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub meal_value: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_damage: Option<u64>,
 }
 
 impl CoreChoiceIntent {
     pub(super) fn magnitude(&self) -> i64 {
         if let Some(value) = self.experiment_value.or(self.meal_value) {
             return value;
+        }
+        if let Some(damage) = self.tool_damage {
+            return damage.min(i64::MAX as u64) as i64;
         }
         (self.movement.map_or(0, |row| u128::from(row.quantity))
             + self.work.map_or(0, |row| u128::from(row.units))
@@ -446,6 +452,7 @@ impl CoreHost {
                             experiment: None,
                             experiment_value: None,
                             meal_value: None,
+                            tool_damage: None,
                         }
                     })
                     .collect();
@@ -494,6 +501,7 @@ impl CoreHost {
                         experiment: None,
                         experiment_value: None,
                         meal_value: None,
+                        tool_damage: None,
                     })
                     .collect();
                 rows
@@ -540,6 +548,7 @@ impl CoreHost {
                     experiment: None,
                     experiment_value: None,
                     meal_value: None,
+                    tool_damage: None,
                 })
                 .collect()
             } else {
@@ -578,6 +587,7 @@ impl CoreHost {
                         experiment: None,
                         experiment_value: None,
                         meal_value: None,
+                        tool_damage: None,
                     })
                     .collect())
             } else {
@@ -611,6 +621,7 @@ impl CoreHost {
                         experiment: Some(policy.experiment),
                         experiment_value: Some(policy.value),
                         meal_value: None,
+                        tool_damage: None,
                     })
                     .collect())
             } else {
@@ -661,6 +672,7 @@ impl CoreHost {
                         experiment: None,
                         experiment_value: None,
                         meal_value: Some(i64::from(self.core.people[person].hunger)),
+                        tool_damage: None,
                     }
                 })
                 .collect())
@@ -668,20 +680,77 @@ impl CoreHost {
                 Ok(Vec::new())
             }
         };
-        let ((construction, carrying), (maintenance, (work, (experiments, meals)))) = rayon::join(
-            || rayon::join(construction, carrying),
-            || {
-                rayon::join(maintenance, || {
-                    rayon::join(work, || rayon::join(experiments, meals))
+        let tool_repairs = || -> Result<Vec<CoreChoiceIntent>, String> {
+            let enabled = self
+                .schedule
+                .as_ref()
+                .and_then(|schedule| schedule.personal_choices.as_ref())
+                .is_some_and(|people| {
+                    people.par_iter().any(|person| {
+                        person
+                            .preferences
+                            .binary_search_by_key(&TOOL_REPAIR, |p| p.domain)
+                            .is_ok()
+                    })
+                });
+            if !domain.is_none_or(|domain| domain == TOOL_REPAIR) || !enabled {
+                return Ok(Vec::new());
+            }
+            let Some(owner) = &self.tool_wear else {
+                return Ok(Vec::new());
+            };
+            Ok(owner
+                .prepare_repairs(
+                    &self.core.physical,
+                    &self.core.people,
+                    &busy,
+                    &[],
+                    u32::MAX,
+                    1,
+                )?
+                .into_par_iter()
+                .map(|(actor, item, action)| {
+                    let index = owner
+                        .conditions
+                        .binary_search_by_key(&item, |row| row.item)
+                        .expect("known condition");
+                    let mut movement = action.movements[0];
+                    movement.id = 0;
+                    CoreChoiceIntent {
+                        actor,
+                        key: Key {
+                            domain: TOOL_REPAIR,
+                            action: item,
+                        },
+                        movement: Some(movement),
+                        second_movement: None,
+                        work: None,
+                        experiment: None,
+                        experiment_value: None,
+                        meal_value: None,
+                        tool_damage: Some(owner.conditions[index].damage),
+                    }
                 })
-            },
-        );
+                .collect())
+        };
+        let ((construction, carrying), (maintenance, (work, (experiments, (meals, tool_repairs))))) =
+            rayon::join(
+                || rayon::join(construction, carrying),
+                || {
+                    rayon::join(maintenance, || {
+                        rayon::join(work, || {
+                            rayon::join(experiments, || rayon::join(meals, tool_repairs))
+                        })
+                    })
+                },
+            );
         let mut intents = construction?;
         intents.par_extend(carrying);
         intents.par_extend(maintenance);
         intents.par_extend(work?);
         intents.par_extend(experiments?);
         intents.par_extend(meals?);
+        intents.par_extend(tool_repairs?);
         if intents
             .par_windows(2)
             .any(|rows| (rows[0].actor, rows[0].key) > (rows[1].actor, rows[1].key))
@@ -773,6 +842,7 @@ impl CoreHost {
                         && current[i].experiment == intent.experiment
                         && current[i].experiment_value == intent.experiment_value
                         && current[i].meal_value == intent.meal_value
+                        && current[i].tool_damage == intent.tool_damage
                 });
                 (intent, found)
             })

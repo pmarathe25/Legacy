@@ -1,0 +1,105 @@
+seed = 7
+tick_millis = 900000
+stock_capacity = 100
+food_relief_divisor = 20
+
+[rules]
+hunger_per_tick = 1
+meal_threshold = 5
+starvation_threshold = 50
+starvation_damage = 1
+max_health = 100
+carrying_capacity = 10
+max_work_hunger = 20
+
+[[regions]]
+id = 1
+stock = { timber = 10 }
+
+[[people]]
+id = 1
+region = 1
+health = 100
+hunger = 0
+willing_to_work = false
+seek_meals = false
+goods = { timber = 2 }
+items = [{ id = 1001, good = "tool" }]
+
+[[people]]
+id = 2
+region = 1
+health = 100
+hunger = 30
+willing_to_work = false
+seek_meals = false
+items = [{ id = 1002, good = "tool" }]
+
+[[people]]
+id = 3
+region = 1
+health = 100
+hunger = 0
+willing_to_work = false
+seek_meals = false
+goods = { timber = 2 }
+items = [{ id = 1003, good = "tool" }]
+
+[[tool_wear.rules]]
+good = "tool"
+durability = 5
+wear = 1
+repair_good = "timber"
+repair_quantity = 1
+[[tool_wear.conditions]]
+item = 1001
+good = "tool"
+damage = 5
+[[tool_wear.conditions]]
+item = 1002
+good = "tool"
+damage = 5
+[[tool_wear.conditions]]
+item = 1003
+good = "tool"
+damage = 5
+[[tool_wear.repairs]]
+person = 1
+item = 1001
+willing = true
+[[tool_wear.repairs]]
+person = 2
+item = 1002
+willing = true
+[[tool_wear.repairs]]
+person = 3
+item = 1003
+willing = true
+
+[local_transport]
+[[local_transport.stores]]
+id = 1
+region = 1
+name = "Store"
+capacity = 10
+[[local_transport.policies]]
+person = 1
+region = 1
+source = { kind = "stock" }
+destination = { kind = "store", id = 1 }
+good = "timber"
+quantity = 1
+willing = true
+
+[[personal_choices]]
+id = 1
+idle = 0
+preferences = [{ domain = 2, enabled = true, bias = 0 }, { domain = 8, enabled = true, bias = 10 }]
+[[personal_choices]]
+id = 2
+idle = 0
+preferences = [{ domain = 8, enabled = true, bias = 10 }]
+[[personal_choices]]
+id = 3
+idle = 0
+preferences = [{ domain = 8, enabled = false, bias = 10 }]
