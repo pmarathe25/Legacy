@@ -38,6 +38,7 @@ fn genome_means<'a>(genomes: impl Iterator<Item = &'a Value>) -> Option<Vec<f64>
 fn inspect(path: &Path, focus: Focus) -> Result<Value, String> {
     let input = BufReader::new(File::open(path).map_err(|e| e.to_string())?);
     let mut metadata = Value::Null;
+    let mut metadata_corrections = Vec::new();
     let mut complete = false;
     let mut expected_years = None;
     let mut completed_years = None;
@@ -73,6 +74,14 @@ fn inspect(path: &Path, focus: Focus) -> Result<Value, String> {
             Some("metadata") => {
                 if !metadata.is_null() {
                     return Err("history has duplicate metadata".into());
+                }
+                if row["limitations"].as_array().is_some_and(|items| {
+                    items.iter().any(|item| {
+                        item.as_str()
+                            == Some("animal parentage is not recorded by the current fauna owner")
+                    })
+                }) {
+                    metadata_corrections.push("The source metadata incorrectly says animal parentage is absent. Animals born in these runs have recorded parent IDs; founders may not.");
                 }
                 expected_years = row["years_requested"].as_u64();
                 metadata = json!({"calendar":row["calendar"],"seed":row["seed"],"git_revision":row["git_revision"],"source_kind":row["source_kind"],"limitations":row["limitations"]});
@@ -239,7 +248,7 @@ fn inspect(path: &Path, focus: Focus) -> Result<Value, String> {
     let mut ranking: Vec<_> = meetings.into_iter().collect();
     ranking.sort_unstable_by_key(|&(person, count)| (std::cmp::Reverse(count), person));
     ranking.truncate(10);
-    let scope = json!({"source":path,"complete":complete,"first_year":first_year,"last_year":last_year,"annual_records":years,"metadata":metadata});
+    let scope = json!({"source":path,"complete":complete,"first_year":first_year,"last_year":last_year,"annual_records":years,"metadata":metadata,"metadata_corrections":metadata_corrections});
     match focus {
         Focus::Summary => Ok(
             json!({"scope":scope,"peak_people":{"year":peak_people.0,"count":peak_people.1},"peak_animals":{"year":peak_animals.0,"count":peak_animals.1},"first_zero_people":human_zero,"first_zero_animals":animal_zero,"family_totals":totals,"recorded_meetings":meeting_count,"most_recorded_meetings":ranking.iter().map(|(person,count)|json!({"person":person,"count":count})).collect::<Vec<_>>(),"genome_samples":samples,"interpretation":"Meeting counts do not establish leadership; changes in allele means do not establish selection or causation."}),
@@ -257,7 +266,7 @@ fn inspect(path: &Path, focus: Focus) -> Result<Value, String> {
                 return Err(format!("animal {animal} was not found in this history"));
             }
             Ok(
-                json!({"scope":scope,"animal":animal,"first_observed_year":focal_first,"last_year_alive":focal_last_alive,"last_recorded_animal_state":focal_last,"interpretation":"The current fauna owner does not retain animal parentage."}),
+                json!({"scope":scope,"animal":animal,"first_observed_year":focal_first,"last_year_alive":focal_last_alive,"last_recorded_animal_state":focal_last,"interpretation":"Animals born in the simulation retain parent IDs; founders may lack recorded parents."}),
             )
         }
     }
@@ -319,7 +328,7 @@ mod tests {
         let genome = json!({"sex":"Female","alleles":[[100,200],[200,400],[300,500],[400,600]]});
         let snapshot = |alive: bool| json!({"core":{"people":[{"id":1,"health":if alive {100} else {0}}]},"family":{"members":[{"id":1,"alive":alive,"genome":genome}],"events":if alive {vec![json!({"kind":"partnership","people":[1,2],"tick":1})]} else {vec![]},"totals":{"births":0,"deaths":if alive {0} else {1}}},"fauna":{"animals":[{"id":1,"health":if alive {100} else {0},"genome":genome}]}});
         for row in [
-            json!({"kind":"metadata","calendar":"annual","seed":1,"limitations":[]}),
+            json!({"kind":"metadata","calendar":"annual","seed":1,"limitations":["animal parentage is not recorded by the current fauna owner"]}),
             json!({"kind":"initial","year":0,"snapshot":snapshot(true)}),
             json!({"kind":"year","year":1,"snapshot":snapshot(true),"observations":[{"kind":"meetings","events":[{"a":1,"b":2,"tick":1}]}]}),
             json!({"kind":"year","year":2,"snapshot":snapshot(false),"observations":[]}),
@@ -330,6 +339,13 @@ mod tests {
         drop(file);
         let summary = inspect(&path, Focus::Summary).unwrap();
         assert_eq!(summary["scope"]["complete"], true);
+        assert_eq!(
+            summary["scope"]["metadata_corrections"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
         assert_eq!(summary["first_zero_people"], 2);
         assert_eq!(summary["first_zero_animals"], 2);
         assert_eq!(summary["recorded_meetings"], 1);

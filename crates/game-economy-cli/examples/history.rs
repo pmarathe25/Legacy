@@ -96,7 +96,6 @@ fn run(
     let mut limitations = vec![
         "one tick per year; production and decisions are quantized to years",
         "scientific invention, political and organizational history, artificial selection, and several other features are not implemented",
-        "animal parentage is not recorded by the current fauna owner",
         "observations include only selected event types; snapshots are retained annually",
     ];
     if !resume
