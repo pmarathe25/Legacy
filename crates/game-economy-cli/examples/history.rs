@@ -1,5 +1,5 @@
 //! Stream an explicitly annual exploratory interval-host simulation.
-use game_economy::core_interval::{CoreHost, CoreRunEvent};
+use game_economy::core_interval::{CoreHost, CoreHostSnapshot, CoreRunEvent};
 use serde::Serialize;
 use serde_json::{Value, json};
 use std::collections::BTreeSet;
@@ -55,17 +55,35 @@ fn animals(host: &CoreHost) -> BTreeSet<u64> {
 
 fn run(
     root: &Path,
-    scenario: &Path,
+    source: &Path,
     output: &Path,
     years: u64,
     workers: usize,
+    resume: bool,
 ) -> Result<(), String> {
-    let scenario_text = fs::read_to_string(scenario).map_err(|e| e.to_string())?;
-    let mut host = game_economy_cli::core_scenario(scenario, &root.join("content"))?;
+    let (mut host, scenario_text) = if resume {
+        let file = File::open(source).map_err(|e| e.to_string())?;
+        let snapshot: CoreHostSnapshot =
+            serde_json::from_reader(file).map_err(|e| e.to_string())?;
+        (CoreHost::resume(snapshot)?, None)
+    } else {
+        let text = fs::read_to_string(source).map_err(|e| e.to_string())?;
+        (
+            game_economy_cli::core_scenario(source, &root.join("content"))?,
+            Some(text),
+        )
+    };
     let initial = host.snapshot();
     if initial.core.physical.tick_millis != YEAR_MILLIS {
         return Err("the annual history runner requires a 365-day tick in the scenario".into());
     }
+    if years == 0 {
+        return Err("years must be positive".into());
+    }
+    let start_year = initial.core.physical.custody.tick;
+    let end_year = start_year
+        .checked_add(years)
+        .ok_or("history year overflow")?;
     if let Some(parent) = output.parent().filter(|path| !path.as_os_str().is_empty()) {
         fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
@@ -75,17 +93,46 @@ fn run(
         .open(output)
         .map_err(|e| e.to_string())?;
     let mut writer = BufWriter::new(file);
+    let mut limitations = vec![
+        "one tick per year; production and decisions are quantized to years",
+        "scientific invention, political and organizational history, artificial selection, and several other features are not implemented",
+        "animal parentage is not recorded by the current fauna owner",
+        "observations include only selected event types; snapshots are retained annually",
+    ];
+    if !resume
+        && source
+            .file_name()
+            .is_some_and(|name| name == "economy-history-pilot.toml")
+    {
+        limitations.extend([
+            "exploratory annual pilot, not a calibrated civilization",
+            "hunger and animal food scarcity are disabled in this scenario",
+            "newborn social participation is not automatically inherited",
+        ]);
+    }
+    if resume {
+        limitations.push("consult the source history metadata for scenario-specific limitations");
+    }
     line(
         &mut writer,
-        &json!({"kind":"metadata","schema":1,"years_requested":years,"tick_millis":YEAR_MILLIS,"calendar":"365-day years; one simulation tick per year","seed":initial.core.seed,"workers":workers,"git_revision":revision(root),"scenario":scenario_text,"limitations":["exploratory annual pilot, not a calibrated civilization","hunger and animal food scarcity are disabled in this scenario","production and decisions are quantized to years","scientific invention, political and organizational history, artificial selection, and several other features are not implemented","newborn social participation is not automatically inherited","animal parentage is not recorded by the current fauna owner","observations include only selected event types; snapshots are retained annually"]}),
+        &json!({"kind":"metadata","schema":1,"years_requested":years,"start_year":start_year,"tick_millis":YEAR_MILLIS,"calendar":"365-day years; one simulation tick per year","seed":initial.core.seed,"workers":workers,"git_revision":revision(root),"source":source,"source_kind":if resume {"checkpoint"} else {"scenario"},"scenario":scenario_text,"limitations":limitations}),
     )?;
     line(
         &mut writer,
-        &json!({"kind":"initial","year":0,"snapshot":initial}),
+        &json!({"kind":"initial","year":start_year,"snapshot":initial}),
     )?;
     let mut previous_animals = animals(&host);
-    for year in 1..=years {
-        let result = host.advance_continuous(YEAR_MILLIS, &[])?;
+    for year in start_year + 1..=end_year {
+        let result = match host.advance_continuous(YEAR_MILLIS, &[]) {
+            Ok(result) => result,
+            Err(error) => {
+                line(
+                    &mut writer,
+                    &json!({"kind":"failure","year":year,"message":error}),
+                )?;
+                return Err(format!("year {year}: {error}"));
+            }
+        };
         if let Some(error) = &result.failure {
             line(
                 &mut writer,
@@ -104,6 +151,10 @@ fn run(
         }
         let snapshot = host.snapshot();
         if snapshot.core.physical.custody.tick != year {
+            line(
+                &mut writer,
+                &json!({"kind":"failure","year":year,"message":"unexpected simulation tick"}),
+            )?;
             return Err(format!("year {year}: unexpected simulation tick"));
         }
         let current_animals: BTreeSet<_> =
@@ -135,7 +186,7 @@ fn run(
             &json!({"kind":"year","year":year,"living_people":living,"living_animals":animal_count,"animal_ids_appeared":appeared,"animal_ids_no_longer_alive":inactive,"observations":observations(&result.events),"snapshot":snapshot}),
         )?;
         previous_animals = current_animals;
-        if year % 50 == 0 || year == years {
+        if year % 50 == 0 || year == end_year {
             let checkpoint = output.with_extension(format!("year-{year}.json"));
             let file = OpenOptions::new()
                 .write(true)
@@ -147,26 +198,34 @@ fn run(
                 .map_err(|e| e.to_string())?;
             checkpoint_writer.flush().map_err(|e| e.to_string())?;
             println!(
-                "year {year}/{years}: {living} living people, {animal_count} living animals; checkpoint {}",
+                "year {year}/{end_year}: {living} living people, {animal_count} living animals; checkpoint {}",
                 checkpoint.display()
             );
         }
     }
-    line(&mut writer, &json!({"kind":"complete","years":years}))?;
+    line(
+        &mut writer,
+        &json!({"kind":"complete","years":years,"last_year":end_year}),
+    )?;
     Ok(())
 }
 
 fn main() -> Result<(), String> {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let mut args = std::env::args_os().skip(1);
-    let scenario = args
+    let first = args
         .next()
-        .map(PathBuf::from)
-        .unwrap_or_else(|| root.join("content/scenarios/economy-history-pilot.toml"));
+        .ok_or("usage: history [--resume] SCENARIO_OR_CHECKPOINT OUTPUT [YEARS] [WORKERS]")?;
+    let resume = first == "--resume";
+    let source = if resume {
+        PathBuf::from(args.next().ok_or("missing checkpoint path")?)
+    } else {
+        PathBuf::from(first)
+    };
     let output = args
         .next()
         .map(PathBuf::from)
-        .ok_or("usage: history SCENARIO OUTPUT [YEARS] [WORKERS]")?;
+        .ok_or("missing history output path")?;
     let years = args
         .next()
         .map(|arg| {
@@ -192,5 +251,91 @@ fn main() -> Result<(), String> {
         .num_threads(workers)
         .build()
         .map_err(|e| e.to_string())?
-        .install(|| run(&root, &scenario, &output, years, workers))
+        .install(|| run(&root, &source, &output, years, workers, resume))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use game_economy::core_interval::CoreHostSnapshot;
+
+    fn records(path: &Path) -> Vec<Value> {
+        fs::read_to_string(path)
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect()
+    }
+
+    #[test]
+    fn annual_history_is_deterministic_and_checkpoint_resumes() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let scenario = root.join("content/scenarios/economy-history-pilot.toml");
+        let token = format!(
+            "legacy-history-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+        let one = std::env::temp_dir().join(format!("{token}-one.ndjson"));
+        let six = std::env::temp_dir().join(format!("{token}-six.ndjson"));
+        let four = std::env::temp_dir().join(format!("{token}-four.ndjson"));
+        let restart = std::env::temp_dir().join(format!("{token}-restart.ndjson"));
+        for (path, years, workers) in [(&one, 3, 1), (&six, 3, 6), (&four, 4, 1)] {
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(workers)
+                .build()
+                .unwrap()
+                .install(|| run(&root, &scenario, path, years, workers, false))
+                .unwrap();
+        }
+        let first = records(&one);
+        let parallel = records(&six);
+        let continued = records(&four);
+        assert_eq!(first.len(), 6);
+        assert_eq!(first[0]["tick_millis"], YEAR_MILLIS);
+        assert_eq!(first.last().unwrap()["kind"], "complete");
+        assert_eq!(&first[1..], &parallel[1..]);
+        assert_eq!(first[4]["year"], 3);
+        assert!(
+            first[4]["snapshot"]["family"]["totals"]["births"]
+                .as_u64()
+                .unwrap()
+                > 0
+        );
+        let checkpoint: CoreHostSnapshot =
+            serde_json::from_reader(File::open(one.with_extension("year-3.json")).unwrap())
+                .unwrap();
+        let mut resumed = CoreHost::resume(checkpoint).unwrap();
+        let result = resumed.advance_continuous(YEAR_MILLIS, &[]).unwrap();
+        assert_eq!(result.failure, None);
+        assert_eq!(
+            serde_json::to_value(resumed.snapshot()).unwrap(),
+            continued[5]["snapshot"]
+        );
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(6)
+            .build()
+            .unwrap()
+            .install(|| {
+                run(
+                    &root,
+                    &one.with_extension("year-3.json"),
+                    &restart,
+                    1,
+                    6,
+                    true,
+                )
+            })
+            .unwrap();
+        let restarted = records(&restart);
+        assert_eq!(restarted[0]["start_year"], 3);
+        assert_eq!(restarted[2]["snapshot"], continued[5]["snapshot"]);
+        for (path, year) in [(&one, 3), (&six, 3), (&four, 4), (&restart, 4)] {
+            fs::remove_file(path).unwrap();
+            fs::remove_file(path.with_extension(format!("year-{year}.json"))).unwrap();
+        }
+    }
 }
