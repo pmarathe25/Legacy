@@ -9,8 +9,12 @@ vocabulary is inherited, and a listener can misunderstand an unfamiliar form.
 Updates are prepared from an immutable opening view in parallel and committed
 as a sorted, deterministic batch. Events preserve the heard and adopted forms.
 
-The interval host currently supplies shared locations as referents. The owner
-also accepts object and need referents from a host able to establish that they
-were actually observed. Grammar, names, nonverbal signals, richer personal
-motives, and transmission of general factual claims remain to be implemented;
-this is not a complete language model.
+The interval host supplies the shared location and objects each participant
+personally carries. An optional personal topic policy lets each participant
+propose a preferred topic or remain silent; choosing a carried object models
+the speaker voluntarily demonstrating it to the listener. One speaker is
+admitted per disjoint encounter, and the listener's hearing and learning
+remain independent. Without a topic policy the earlier place-only behavior is
+retained. Need referents require a host able to establish an actual signal;
+private hunger is not automatically shared. Grammar, names, richer nonverbal
+communication and transmission of general factual claims remain incomplete.

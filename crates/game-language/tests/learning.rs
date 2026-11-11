@@ -1,4 +1,6 @@
-use game_language::{Language, Meaning, Meeting, Mind, Rules, Word};
+use game_language::{
+    GroundedMeeting, Language, Meaning, Meeting, Mind, Rules, TopicPolicy, TopicPreference, Word,
+};
 use std::collections::HashSet;
 
 fn language() -> Language {
@@ -10,6 +12,253 @@ fn language() -> Language {
         },
         minds: vec![],
         events: vec![],
+    }
+}
+
+#[test]
+fn grounded_topic_choices_preserve_the_actual_speakers_preferences() {
+    let mut state = language();
+    let policy = |meaning| TopicPolicy {
+        idle: 0,
+        act_on_tie: false,
+        preferences: vec![TopicPreference {
+            meaning,
+            enabled: true,
+            value: 10,
+        }],
+    };
+    state
+        .configure_topics(&[
+            (1, policy(Meaning::Object(10))),
+            (2, policy(Meaning::Object(20))),
+        ])
+        .unwrap();
+    for mind in &mut state.minds {
+        mind.initiative = 1000;
+        mind.adoption = 0;
+    }
+    let meeting = GroundedMeeting {
+        a: 1,
+        b: 2,
+        a_topics: vec![Meaning::Place(7), Meaning::Object(10)],
+        b_topics: vec![Meaning::Place(7), Meaning::Object(20)],
+    };
+    for seed in 0..20 {
+        let next = state
+            .prepare_grounded(std::slice::from_ref(&meeting), seed, 1)
+            .unwrap();
+        let event = &next.events[0];
+        assert_eq!(
+            event.meaning,
+            if event.speaker == 1 {
+                Meaning::Object(10)
+            } else {
+                Meaning::Object(20)
+            }
+        );
+        assert!(!event.learned);
+        assert_eq!(
+            next.minds
+                .iter()
+                .find(|mind| mind.person == event.listener)
+                .unwrap()
+                .words
+                .len(),
+            0
+        );
+    }
+    let saved = serde_json::to_string(&state).unwrap();
+    assert_eq!(serde_json::from_str::<Language>(&saved).unwrap(), state);
+}
+
+#[test]
+fn grounded_silence_missing_objects_and_legacy_behavior_are_personal() {
+    let initial = language();
+    let original = Meeting {
+        a: 1,
+        b: 2,
+        meaning: Meaning::Place(7),
+    };
+    let grounded = GroundedMeeting {
+        a: 1,
+        b: 2,
+        a_topics: vec![Meaning::Place(7), Meaning::Object(10)],
+        b_topics: vec![Meaning::Place(7)],
+    };
+    for seed in 0..30 {
+        assert_eq!(
+            initial.prepare(&[original], seed, 1).unwrap(),
+            initial
+                .prepare_grounded(std::slice::from_ref(&grounded), seed, 1)
+                .unwrap()
+        );
+    }
+    let mut state = initial;
+    let silent = TopicPolicy {
+        idle: 0,
+        act_on_tie: false,
+        preferences: vec![],
+    };
+    state
+        .configure_topics(&[
+            (1, silent.clone()),
+            (
+                2,
+                TopicPolicy {
+                    idle: 0,
+                    act_on_tie: false,
+                    preferences: vec![TopicPreference {
+                        meaning: Meaning::Object(10),
+                        enabled: true,
+                        value: 10,
+                    }],
+                },
+            ),
+        ])
+        .unwrap();
+    for mind in &mut state.minds {
+        mind.initiative = 1000;
+    }
+    assert!(state.prepare(&[original], 1, 1).unwrap().events.is_empty());
+    assert!(
+        state
+            .prepare_grounded(std::slice::from_ref(&grounded), 1, 1)
+            .unwrap()
+            .events
+            .is_empty()
+    );
+    let before = state.clone();
+    assert!(
+        state
+            .configure_topics(&[(1, silent.clone()), (1, silent)])
+            .is_err()
+    );
+    assert_eq!(state, before);
+    let invalid = GroundedMeeting {
+        a: 1,
+        b: 2,
+        a_topics: vec![Meaning::Place(7), Meaning::Object(10), Meaning::Object(10)],
+        b_topics: vec![Meaning::Place(7)],
+    };
+    assert!(state.prepare_grounded(&[invalid], 1, 1).is_err());
+}
+
+#[test]
+fn grounded_topics_respect_coining_and_are_worker_invariant() {
+    let mut state = language();
+    let entries: Vec<_> = (1..=2_000)
+        .map(|person| {
+            (
+                person,
+                TopicPolicy {
+                    idle: 0,
+                    act_on_tie: false,
+                    preferences: vec![TopicPreference {
+                        meaning: Meaning::Object(10),
+                        enabled: true,
+                        value: 5,
+                    }],
+                },
+            )
+        })
+        .collect();
+    state.configure_topics(&entries).unwrap();
+    for mind in &mut state.minds {
+        mind.initiative = 1000;
+        mind.adoption = 1000;
+    }
+    let meetings: Vec<_> = (0..1_000)
+        .map(|index| GroundedMeeting {
+            a: index * 2 + 1,
+            b: index * 2 + 2,
+            a_topics: vec![Meaning::Place(7), Meaning::Object(10)],
+            b_topics: vec![Meaning::Place(7), Meaning::Object(10)],
+        })
+        .collect();
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| state.prepare_grounded(&meetings, 7, 1).unwrap())
+    };
+    let one = run(1);
+    assert_eq!(one, run(4));
+    assert_eq!(one.events.len(), 1_000);
+    let mut unwilling_to_coin = state;
+    for mind in &mut unwilling_to_coin.minds {
+        mind.coin = false;
+    }
+    assert!(
+        unwilling_to_coin
+            .prepare_grounded(&meetings, 7, 1)
+            .unwrap()
+            .events
+            .is_empty()
+    );
+}
+
+#[test]
+#[ignore = "personal topic scaling benchmark"]
+fn parallel_personally_chosen_topics_benchmark() {
+    let people: u64 = std::env::var("LEGACY_LANGUAGE_PEOPLE")
+        .ok()
+        .map(|value| value.parse().expect("invalid population"))
+        .unwrap_or(50_000);
+    assert!(people > 0 && people.is_multiple_of(2));
+    let mut state = language();
+    let policies: Vec<_> = (1..=people)
+        .map(|person| {
+            (
+                person,
+                TopicPolicy {
+                    idle: 0,
+                    act_on_tie: false,
+                    preferences: vec![TopicPreference {
+                        meaning: Meaning::Object(10),
+                        enabled: true,
+                        value: 10,
+                    }],
+                },
+            )
+        })
+        .collect();
+    state.configure_topics(&policies).unwrap();
+    for mind in &mut state.minds {
+        mind.initiative = 1000;
+        mind.adoption = 1000;
+    }
+    let meetings: Vec<_> = (0..people / 2)
+        .map(|index| GroundedMeeting {
+            a: index * 2 + 1,
+            b: index * 2 + 2,
+            a_topics: vec![Meaning::Place(1), Meaning::Object(10)],
+            b_topics: vec![Meaning::Place(1), Meaning::Object(10)],
+        })
+        .collect();
+    let mut reference = None;
+    for workers in [1, 2, 4, 6] {
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap();
+        let mut times = Vec::new();
+        for _ in 0..3 {
+            let start = std::time::Instant::now();
+            let next = pool.install(|| state.prepare_grounded(&meetings, 7, 1).unwrap());
+            times.push(start.elapsed());
+            assert_eq!(next.events.len() as u64, people / 2);
+            if let Some(expected) = &reference {
+                assert_eq!(&next, expected);
+            } else {
+                reference = Some(next);
+            }
+        }
+        times.sort_unstable();
+        eprintln!(
+            "{workers} workers: {:?} median for {people} people",
+            times[1]
+        );
     }
 }
 
@@ -55,6 +304,7 @@ fn a_listener_can_have_a_different_interpretation_and_decline_learning() {
             learn: false,
             coin: false,
             initiative: 1000,
+            topic_policy: None,
             adoption: 0,
             modify: false,
             phonemes: vec![],
@@ -70,6 +320,7 @@ fn a_listener_can_have_a_different_interpretation_and_decline_learning() {
             learn: false,
             coin: false,
             initiative: 1000,
+            topic_policy: None,
             adoption: 0,
             modify: false,
             phonemes: vec![],
@@ -113,6 +364,7 @@ fn people_can_decline_to_speak_or_choose_to_change_a_form() {
             learn: true,
             coin: true,
             initiative: 0,
+            topic_policy: None,
             adoption: 1000,
             modify: true,
             phonemes: vec![0, 1],
@@ -197,6 +449,7 @@ fn a_person_can_speak_even_when_the_other_person_cannot_hear() {
             learn: true,
             coin: true,
             initiative: 1000,
+            topic_policy: None,
             adoption: 1000,
             modify: false,
             phonemes: vec![],
@@ -237,6 +490,7 @@ fn a_chosen_form_can_spread_through_separate_grounded_encounters() {
             learn: true,
             coin: true,
             initiative: 1000,
+            topic_policy: None,
             adoption: 1000,
             modify: false,
             phonemes: vec![],

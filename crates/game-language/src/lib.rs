@@ -76,6 +76,24 @@ impl Meaning {
     }
 }
 
+/// A person's inclination to discuss one referent when it is observable.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TopicPreference {
+    pub meaning: Meaning,
+    pub enabled: bool,
+    pub value: i64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TopicPolicy {
+    pub idle: i64,
+    #[serde(default)]
+    pub act_on_tie: bool,
+    pub preferences: Vec<TopicPreference>,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Mind {
@@ -101,6 +119,9 @@ pub struct Mind {
     pub phonemes: Vec<u8>,
     #[serde(default)]
     pub words: Vec<Word>,
+    /// None retains the earlier place-only behavior; an empty policy can refuse all topics.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub topic_policy: Option<TopicPolicy>,
 }
 
 fn enabled() -> bool {
@@ -124,6 +145,7 @@ impl Mind {
             modify: false,
             phonemes: Vec::new(),
             words: Vec::new(),
+            topic_policy: None,
         }
     }
 }
@@ -163,6 +185,15 @@ pub struct Meeting {
     pub meaning: Meaning,
 }
 
+/// The shared place and things each participant could choose to demonstrate.
+#[derive(Clone, Debug)]
+pub struct GroundedMeeting {
+    pub a: u64,
+    pub b: u64,
+    pub a_topics: Vec<Meaning>,
+    pub b_topics: Vec<Meaning>,
+}
+
 fn random(mut x: u64) -> u64 {
     x = (x ^ (x >> 30)).wrapping_mul(0xbf58476d1ce4e5b9);
     x = (x ^ (x >> 27)).wrapping_mul(0x94d049bb133111eb);
@@ -170,6 +201,159 @@ fn random(mut x: u64) -> u64 {
 }
 
 impl Language {
+    /// Set personal topic policies without creating or sharing vocabulary.
+    pub fn configure_topics(&mut self, entries: &[(u64, TopicPolicy)]) -> Result<(), &'static str> {
+        let mut entries = entries.to_vec();
+        entries.sort_unstable_by_key(|row| row.0);
+        if self
+            .minds
+            .windows(2)
+            .any(|rows| rows[0].person >= rows[1].person)
+            || entries.windows(2).any(|rows| rows[0].0 == rows[1].0)
+            || entries.iter().any(|(person, policy)| {
+                *person == 0
+                    || policy
+                        .preferences
+                        .windows(2)
+                        .any(|rows| rows[0].meaning >= rows[1].meaning)
+                    || policy.preferences.iter().any(|row| !row.meaning.valid())
+            })
+        {
+            return Err("invalid personal topic policies");
+        }
+        let mut minds: Vec<_> = self.minds.par_iter().cloned().collect();
+        minds.par_extend(entries.par_iter().filter_map(|(person, _)| {
+            self.minds
+                .binary_search_by_key(person, |mind| mind.person)
+                .is_err()
+                .then(|| Mind::fresh(*person))
+        }));
+        if minds
+            .par_windows(2)
+            .any(|rows| rows[0].person > rows[1].person)
+        {
+            minds.par_sort_unstable_by_key(|mind| mind.person);
+        }
+        minds.par_iter_mut().for_each(|mind| {
+            if let Ok(index) = entries.binary_search_by_key(&mind.person, |row| row.0) {
+                mind.topic_policy = Some(entries[index].1.clone());
+            }
+        });
+        self.minds = minds;
+        Ok(())
+    }
+
+    /// Each participant proposes a personally chosen observable topic; one
+    /// speaker is admitted per disjoint encounter before sound is produced.
+    pub fn prepare_grounded(
+        &self,
+        meetings: &[GroundedMeeting],
+        seed: u64,
+        tick: u64,
+    ) -> Result<Self, &'static str> {
+        if meetings.par_iter().any(|meeting| {
+            let valid = |topics: &[Meaning]| {
+                !topics.is_empty()
+                    && !topics.iter().any(|meaning| !meaning.valid())
+                    && !topics.windows(2).any(|rows| rows[0] >= rows[1])
+                    && topics
+                        .iter()
+                        .filter(|meaning| matches!(meaning, Meaning::Place(_)))
+                        .count()
+                        == 1
+            };
+            !valid(&meeting.a_topics)
+                || !valid(&meeting.b_topics)
+                || meeting
+                    .a_topics
+                    .iter()
+                    .find(|meaning| matches!(meaning, Meaning::Place(_)))
+                    != meeting
+                        .b_topics
+                        .iter()
+                        .find(|meaning| matches!(meaning, Meaning::Place(_)))
+        }) {
+            return Err("invalid grounded meeting topics");
+        }
+        let selected: Vec<_> = meetings
+            .par_iter()
+            .map(|meeting| {
+                let offer = |person: u64, observed: &[Meaning]| {
+                    let fresh = Mind::fresh(person);
+                    let mind = self
+                        .minds
+                        .binary_search_by_key(&person, |mind| mind.person)
+                        .ok()
+                        .map_or(&fresh, |index| &self.minds[index]);
+                    let eligible = |meaning: Meaning| {
+                        mind.speak
+                            && random(seed ^ tick.rotate_left(11) ^ person ^ meaning.key()) % 1000
+                                < u64::from(mind.initiative)
+                            && (mind
+                                .words
+                                .binary_search_by_key(&meaning, |word| word.meaning)
+                                .is_ok()
+                                || (mind.coin && mind.words.len() < self.rules.capacity))
+                    };
+                    match &mind.topic_policy {
+                        None => observed.iter().copied().find(|meaning| {
+                            matches!(meaning, Meaning::Place(_)) && eligible(*meaning)
+                        }),
+                        Some(policy) => policy
+                            .preferences
+                            .iter()
+                            .filter(|topic| {
+                                topic.enabled
+                                    && (topic.value > policy.idle
+                                        || (topic.value == policy.idle && policy.act_on_tie))
+                                    && observed.binary_search(&topic.meaning).is_ok()
+                                    && eligible(topic.meaning)
+                            })
+                            .max_by_key(|topic| {
+                                (
+                                    topic.value,
+                                    random(
+                                        seed ^ tick.rotate_left(19) ^ person ^ topic.meaning.key(),
+                                    ),
+                                    topic.meaning,
+                                )
+                            })
+                            .map(|topic| topic.meaning),
+                    }
+                };
+                let a = offer(meeting.a, &meeting.a_topics);
+                let b = offer(meeting.b, &meeting.b_topics);
+                let selected = match (a, b) {
+                    (None, None) => None,
+                    (Some(meaning), None) => Some((meeting.a, meaning)),
+                    (None, Some(meaning)) => Some((meeting.b, meaning)),
+                    (Some(_a), Some(b))
+                        if random(seed ^ tick ^ meeting.a ^ meeting.b.rotate_left(17)) & 1 != 0 =>
+                    {
+                        Some((meeting.b, b))
+                    }
+                    (Some(a), Some(_)) => Some((meeting.a, a)),
+                };
+                let place = meeting
+                    .a_topics
+                    .iter()
+                    .copied()
+                    .find(|meaning| matches!(meaning, Meaning::Place(_)))
+                    .expect("validated place");
+                (
+                    Meeting {
+                        a: meeting.a,
+                        b: meeting.b,
+                        meaning: selected.map_or(place, |row| row.1),
+                    },
+                    selected.map(|row| row.0),
+                )
+            })
+            .collect();
+        let (meetings, speakers): (Vec<_>, Vec<_>) = selected.into_par_iter().unzip();
+        self.prepare_internal(&meetings, Some(&speakers), seed, tick)
+    }
+
     pub fn validate(&self, people: &HashSet<u64>, now: u64) -> Result<(), &'static str> {
         let r = &self.rules;
         if r.sounds.is_empty()
@@ -192,6 +376,16 @@ impl Language {
                         .any(|sound| usize::from(*sound) >= r.sounds.len())
                     || m.phonemes.windows(2).any(|sounds| sounds[0] >= sounds[1])
                     || m.words.len() > r.capacity
+                    || m.topic_policy.as_ref().is_some_and(|policy| {
+                        policy
+                            .preferences
+                            .windows(2)
+                            .any(|w| w[0].meaning >= w[1].meaning)
+                            || policy
+                                .preferences
+                                .iter()
+                                .any(|topic| !topic.meaning.valid())
+                    })
                     || m.words.windows(2).any(|w| w[0].meaning >= w[1].meaning)
                     || m.words.iter().any(|w| {
                         !w.meaning.valid()
@@ -228,6 +422,16 @@ impl Language {
         seed: u64,
         tick: u64,
     ) -> Result<Self, &'static str> {
+        self.prepare_internal(meetings, None, seed, tick)
+    }
+
+    fn prepare_internal(
+        &self,
+        meetings: &[Meeting],
+        speakers: Option<&[Option<u64>]>,
+        seed: u64,
+        tick: u64,
+    ) -> Result<Self, &'static str> {
         if self.rules.sounds.is_empty()
             || self.rules.sounds.len() > 256
             || self.rules.word_length == 0
@@ -247,6 +451,16 @@ impl Language {
                         .iter()
                         .any(|sound| usize::from(*sound) >= self.rules.sounds.len())
                     || m.words.len() > self.rules.capacity
+                    || m.topic_policy.as_ref().is_some_and(|policy| {
+                        policy
+                            .preferences
+                            .windows(2)
+                            .any(|w| w[0].meaning >= w[1].meaning)
+                            || policy
+                                .preferences
+                                .iter()
+                                .any(|topic| !topic.meaning.valid())
+                    })
                     || m.words.windows(2).any(|w| w[0].meaning >= w[1].meaning)
                     || m.words.iter().any(|w| {
                         !w.meaning.valid()
@@ -265,6 +479,12 @@ impl Language {
             participants.par_sort_unstable();
         }
         if tick == 0
+            || speakers.is_some_and(|rows| {
+                rows.len() != meetings.len()
+                    || rows.iter().zip(meetings).any(|(speaker, meeting)| {
+                        speaker.is_some_and(|speaker| speaker != meeting.a && speaker != meeting.b)
+                    })
+            })
             || meetings
                 .par_iter()
                 .any(|m| m.a == 0 || m.b == 0 || m.a == m.b || !m.meaning.valid())
@@ -292,11 +512,24 @@ impl Language {
         }
         let events: Vec<_> = meetings
             .par_iter()
-            .filter_map(|meeting| {
+            .enumerate()
+            .filter_map(|(meeting_index, meeting)| {
                 let candidate = |id| {
                     let mind =
                         &next.minds[next.minds.binary_search_by_key(&id, |m| m.person).unwrap()];
                     mind.speak
+                        && mind.topic_policy.as_ref().is_none_or(|policy| {
+                            policy
+                                .preferences
+                                .binary_search_by_key(&meeting.meaning, |topic| topic.meaning)
+                                .ok()
+                                .is_some_and(|index| {
+                                    let topic = policy.preferences[index];
+                                    topic.enabled
+                                        && (topic.value > policy.idle
+                                            || (topic.value == policy.idle && policy.act_on_tie))
+                                })
+                        })
                         && random(seed ^ tick.rotate_left(11) ^ id ^ meeting.meaning.key()) % 1000
                             < u64::from(mind.initiative)
                         && (mind
@@ -305,16 +538,32 @@ impl Language {
                             .is_ok()
                             || (mind.coin && mind.words.len() < next.rules.capacity))
                 };
-                let (speaker, listener) = match (candidate(meeting.a), candidate(meeting.b)) {
-                    (false, false) => return None,
-                    (true, false) => (meeting.a, meeting.b),
-                    (false, true) => (meeting.b, meeting.a),
-                    (true, true)
-                        if random(seed ^ tick ^ meeting.a ^ meeting.b.rotate_left(17)) & 1 != 0 =>
-                    {
-                        (meeting.b, meeting.a)
+                let (speaker, listener) = if let Some(speakers) = speakers {
+                    let speaker = speakers[meeting_index]?;
+                    if !candidate(speaker) {
+                        return None;
                     }
-                    (true, true) => (meeting.a, meeting.b),
+                    (
+                        speaker,
+                        if speaker == meeting.a {
+                            meeting.b
+                        } else {
+                            meeting.a
+                        },
+                    )
+                } else {
+                    match (candidate(meeting.a), candidate(meeting.b)) {
+                        (false, false) => return None,
+                        (true, false) => (meeting.a, meeting.b),
+                        (false, true) => (meeting.b, meeting.a),
+                        (true, true)
+                            if random(seed ^ tick ^ meeting.a ^ meeting.b.rotate_left(17)) & 1
+                                != 0 =>
+                        {
+                            (meeting.b, meeting.a)
+                        }
+                        (true, true) => (meeting.a, meeting.b),
+                    }
                 };
                 let source = &next.minds[next
                     .minds

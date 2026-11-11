@@ -150,16 +150,67 @@ impl CoreHost {
         let language = social
             .and_then(|social| social.language.as_ref())
             .map(|language| {
+                if language
+                    .minds
+                    .par_iter()
+                    .all(|mind| mind.topic_policy.is_none())
+                {
+                    let rows: Vec<_> = meetings
+                        .par_iter()
+                        .map(|meeting| game_language::Meeting {
+                            a: meeting.a,
+                            b: meeting.b,
+                            meaning: game_language::Meaning::Place(meeting.region),
+                        })
+                        .collect();
+                    return language
+                        .prepare(&rows, self.core.seed, tick)
+                        .map_err(str::to_owned);
+                }
+                let topics = |person: u64, region: u64| {
+                    let mut topics = vec![game_language::Meaning::Place(region)];
+                    let policy = language
+                        .minds
+                        .binary_search_by_key(&person, |mind| mind.person)
+                        .ok()
+                        .and_then(|index| language.minds[index].topic_policy.as_ref());
+                    if let Some(policy) = policy
+                        && policy.preferences.iter().any(|row| {
+                            row.enabled && matches!(row.meaning, game_language::Meaning::Object(_))
+                        })
+                        && let Some(holder) =
+                            self.core.physical.custody(game_lots::Place::Person(person))
+                    {
+                        for preference in &policy.preferences {
+                            let game_language::Meaning::Object(good) = preference.meaning else {
+                                continue;
+                            };
+                            if !preference.enabled {
+                                continue;
+                            }
+                            let start = holder.lots.partition_point(|lot| lot.good < good);
+                            if holder.lots[start..]
+                                .iter()
+                                .take_while(|lot| lot.good == good)
+                                .any(|lot| lot.expires_at.is_none_or(|expires| expires > tick))
+                            {
+                                topics.push(preference.meaning);
+                            }
+                        }
+                    }
+                    topics
+                };
                 let rows: Vec<_> = meetings
                     .par_iter()
-                    .map(|meeting| game_language::Meeting {
+                    .map(|meeting| game_language::GroundedMeeting {
                         a: meeting.a,
                         b: meeting.b,
-                        meaning: game_language::Meaning::Place(meeting.region),
+                        a_topics: topics(meeting.a, meeting.region),
+                        b_topics: topics(meeting.b, meeting.region),
                     })
                     .collect();
                 language
-                    .prepare(&rows, self.core.seed, tick)
+                    .prepare_grounded(&rows, self.core.seed, tick)
                     .map_err(str::to_owned)
             })
             .transpose()?;

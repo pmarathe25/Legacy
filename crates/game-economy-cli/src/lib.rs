@@ -90,6 +90,8 @@ struct Scenario {
     #[serde(default)]
     language: Option<game_language::Language>,
     #[serde(default)]
+    language_topic_profiles: Vec<LanguageTopicProfile>,
+    #[serde(default)]
     mechanics: Option<MechanicsConfig>,
     #[serde(default)]
     personal_choices: Vec<game_personal_choice::Person>,
@@ -823,6 +825,29 @@ struct MealPreference {
     bias: i64,
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LanguageTopicProfile {
+    person: u64,
+    #[serde(default)]
+    idle: i64,
+    #[serde(default)]
+    act_on_tie: bool,
+    #[serde(default)]
+    preferences: Vec<LanguageTopic>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LanguageTopic {
+    #[serde(default)]
+    object: Option<String>,
+    #[serde(default)]
+    place: Option<u64>,
+    enabled: bool,
+    value: i64,
+}
+
 fn default_food_preference_domain() -> u32 {
     7
 }
@@ -850,6 +875,8 @@ pub fn core_scenario_with_options(
     let text = std::fs::read_to_string(path).map_err(|error| error.to_string())?;
     let authored: Scenario = toml::from_str(&text).map_err(|error| error.to_string())?;
     let language = authored.language;
+    let language_topic_profiles = authored.language_topic_profiles;
+    let regions: HashSet<_> = authored.regions.iter().map(|region| region.id).collect();
     let mechanics = authored.mechanics;
     let mut personal_choices = authored.personal_choices;
     let meal_preferences = authored.meal_preferences;
@@ -896,6 +923,53 @@ pub fn core_scenario_with_options(
             .as_mut()
             .ok_or("language requires social encounters")?
             .language = Some(language);
+    }
+    if !language_topic_profiles.is_empty() {
+        let goods: std::collections::HashMap<_, _> = snapshot
+            .core
+            .physical
+            .goods
+            .iter()
+            .map(|good| (good.name.as_str(), good.id))
+            .collect();
+        let mut profiles = Vec::with_capacity(language_topic_profiles.len());
+        for profile in language_topic_profiles {
+            let mut preferences = Vec::with_capacity(profile.preferences.len());
+            for topic in profile.preferences {
+                let meaning = match (topic.object.as_deref(), topic.place) {
+                    (Some(name), None) => game_language::Meaning::Object(
+                        *goods
+                            .get(name)
+                            .ok_or_else(|| format!("unknown language topic object {name}"))?,
+                    ),
+                    (None, Some(region)) if regions.contains(&region) => {
+                        game_language::Meaning::Place(region)
+                    }
+                    _ => return Err("language topic requires one known object or place".into()),
+                };
+                preferences.push(game_language::TopicPreference {
+                    meaning,
+                    enabled: topic.enabled,
+                    value: topic.value,
+                });
+            }
+            preferences.sort_unstable_by_key(|row| row.meaning);
+            profiles.push((
+                profile.person,
+                game_language::TopicPolicy {
+                    idle: profile.idle,
+                    act_on_tie: profile.act_on_tie,
+                    preferences,
+                },
+            ));
+        }
+        snapshot
+            .social
+            .as_mut()
+            .and_then(|social| social.language.as_mut())
+            .ok_or("language topic profiles require language and social encounters")?
+            .configure_topics(&profiles)
+            .map_err(str::to_owned)?;
     }
     if let Some(mut mechanics) = mechanics {
         use std::path::Component;
@@ -991,7 +1065,9 @@ fn scenario_with_options_inner(
 ) -> Result<Economy, String> {
     let source = std::fs::read_to_string(path).map_err(|error| error.to_string())?;
     let mut scenario: Scenario = toml::from_str(&source).map_err(|error| error.to_string())?;
-    if scenario.language.is_some() && !interval_features {
+    if (scenario.language.is_some() || !scenario.language_topic_profiles.is_empty())
+        && !interval_features
+    {
         return Err("language requires the interval simulation host".into());
     }
     if scenario.mechanics.is_some() && !interval_features {
