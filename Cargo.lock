@@ -993,6 +993,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "game-mechanics"
+version = "0.2.0"
+dependencies = [
+ "rayon",
+ "serde",
+ "serde_json",
+ "smallvec",
+ "toml",
+]
+
+[[package]]
 name = "game-mission-objectives"
 version = "0.2.0"
 dependencies = [

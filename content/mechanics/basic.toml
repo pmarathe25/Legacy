@@ -1,0 +1,23 @@
+[[components]]
+id = 1
+name = "lever"
+force_ratio_numerator = 3
+force_ratio_denominator = 1
+efficiency_per_mille = 900
+max_input_force = 1000
+
+[[components]]
+id = 2
+name = "wheel and axle"
+force_ratio_numerator = 2
+force_ratio_denominator = 1
+efficiency_per_mille = 850
+max_input_force = 800
+
+[[components]]
+id = 3
+name = "pulley"
+force_ratio_numerator = 1
+force_ratio_denominator = 1
+efficiency_per_mille = 950
+max_input_force = 700
