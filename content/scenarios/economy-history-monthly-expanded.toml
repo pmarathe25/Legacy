@@ -917,7 +917,7 @@ newborn_handling_response = { willing = true, on_accept = 0, on_refuse = 0 }
 newborn_restraint_response = { resistance = 1, escape_willing = true, escape_effort = 1 }
 hunting = { good = "raw-meat", quantity = 10, success_per_thousand = 600 }
 food_good = "barley"
-intake = 1
+intake = 2
 hunger_per_tick = 1
 relief_per_unit = 1
 starvation_threshold = 100
@@ -937,7 +937,7 @@ mutation_step = 15
 id = 2
 name = "berry browser"
 food_good = "wild-berries"
-intake = 1
+intake = 2
 hunger_per_tick = 1
 relief_per_unit = 1
 starvation_threshold = 20

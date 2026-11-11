@@ -522,6 +522,18 @@ mod tests {
             3
         );
         assert_eq!(state.fauna.as_ref().unwrap().species.len(), 2);
+        assert!(
+            state
+                .fauna
+                .as_ref()
+                .unwrap()
+                .species
+                .iter()
+                .all(
+                    |species| u128::from(species.intake) * u128::from(species.relief_per_unit)
+                        > u128::from(species.hunger_per_tick)
+                )
+        );
         assert_eq!(state.health.as_ref().unwrap().owner.cases.len(), 1);
         assert!(state.fauna.is_some() && state.social.is_some() && state.opinions.is_some());
         assert!(

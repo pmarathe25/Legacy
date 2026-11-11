@@ -66,6 +66,28 @@ fn initial() -> Fauna {
 }
 
 #[test]
+fn animals_recover_from_scarcity_and_can_breed_after_food_returns() {
+    let mut state = initial();
+    for animal in &mut state.animals {
+        animal.hunger = 8;
+    }
+    let patches = [Patch {
+        id: 1,
+        region: 1,
+        good: 1,
+        available: 100,
+    }];
+    for tick in 1..=3 {
+        state = state
+            .advance_with_hunts(&patches, &[], &[], &[], 7, tick)
+            .unwrap()
+            .fauna;
+    }
+    assert!(state.animals.iter().all(|animal| animal.hunger == 5));
+    assert!(state.animals[0].pregnancy.is_some());
+}
+
+#[test]
 fn quiet_generations_match_complete_lifecycle_and_preserve_snapshots() {
     let mut state = initial();
     state.animals[0].pregnancy = Some(Pregnancy {
