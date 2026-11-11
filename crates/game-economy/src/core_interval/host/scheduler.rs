@@ -23,6 +23,7 @@ pub enum DecisionPhase {
     PracticeWriting { meal_people: Vec<u64> },
     WriteClaims { meal_people: Vec<u64> },
     WritePages { meal_people: Vec<u64> },
+    Construction { meal_people: Vec<u64> },
     LocalCarrying { meal_people: Vec<u64> },
     FoodSearch { meal_people: Vec<u64> },
     Travel { meal_people: Vec<u64> },
@@ -80,6 +81,7 @@ impl CoreSchedule {
         | DecisionPhase::PracticeWriting { meal_people }
         | DecisionPhase::WriteClaims { meal_people }
         | DecisionPhase::WritePages { meal_people }
+        | DecisionPhase::Construction { meal_people }
         | DecisionPhase::LocalCarrying { meal_people }
         | DecisionPhase::FoodSearch { meal_people }
         | DecisionPhase::Travel { meal_people } = &self.phase
@@ -120,6 +122,7 @@ pub enum CoreRunEvent {
     ReadPages(Vec<u64>),
     PracticedWriting(Vec<u64>),
     WrittenPages(Vec<u64>),
+    Construction(Vec<game_economy_building::Event>),
     LocalCarries(Vec<game_economy_local_transport::Event>),
     Departures(Vec<travel::DepartureOutcome>),
     FoodSearch(Vec<travel::DepartureOutcome>),
@@ -181,6 +184,13 @@ impl CoreHost {
         }
     }
     fn after_assisting(&self, meal_people: Vec<u64>) -> DecisionPhase {
+        if self.construction.is_some() {
+            DecisionPhase::Construction { meal_people }
+        } else {
+            self.after_construction(meal_people)
+        }
+    }
+    fn after_construction(&self, meal_people: Vec<u64>) -> DecisionPhase {
         if self.local_transport.is_some() {
             DecisionPhase::LocalCarrying { meal_people }
         } else {
@@ -736,6 +746,21 @@ impl CoreHost {
                             run.events.push(CoreRunEvent::Assists(helpers));
                         }
                         let next = self.after_assisting(meal_people);
+                        self.schedule.as_mut().expect("active schedule").phase = next;
+                    }
+                    DecisionPhase::Construction { mut meal_people } => {
+                        let mut busy = blocked.to_vec();
+                        busy.extend(meal_people.iter().copied());
+                        busy.par_sort_unstable();
+                        busy.dedup();
+                        let result = attempt!('run,self.build_sites_autonomously(&busy));
+                        meal_people.par_extend(result.actors);
+                        meal_people.par_sort_unstable();
+                        meal_people.dedup();
+                        if !result.events.is_empty() {
+                            run.events.push(CoreRunEvent::Construction(result.events));
+                        }
+                        let next = self.after_construction(meal_people);
                         self.schedule.as_mut().expect("active schedule").phase = next;
                     }
                     DecisionPhase::LocalCarrying { mut meal_people } => {

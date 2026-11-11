@@ -23,17 +23,20 @@ impl CoreHostSnapshot {
             }
         }
         if state.construction.as_ref().is_some_and(|owner| {
-            !owner.blueprints.is_empty()
-                || !owner.policies.is_empty()
-                || !owner.events.is_empty()
-                || !owner.demolition.is_empty()
+            !owner.demolition.is_empty()
                 || !owner.demolition_events.is_empty()
                 || !owner.goal_builders.is_empty()
-                || !owner.materials.is_empty()
                 || !owner.salvaging.is_empty()
                 || !owner.salvage_events.is_empty()
         }) {
             unsupported.push("construction");
+        }
+        if state
+            .local_transport
+            .as_ref()
+            .is_some_and(|owner| owner.walking.is_some() || !owner.goal_fetchers.is_empty())
+        {
+            unsupported.push("local_transport");
         }
         if state
             .dynamics
@@ -48,10 +51,10 @@ impl CoreHostSnapshot {
                 unsupported.join(", ")
             ));
         }
-        let maintenance = state
-            .construction
-            .take()
-            .and_then(|owner| owner.maintenance);
+        let mut construction = state.construction.take();
+        let maintenance = construction
+            .as_mut()
+            .and_then(|owner| owner.maintenance.take());
         let sites = match (state.work_sites.take(), maintenance) {
             (Some(facilities), maintenance) => Some(CoreSites {
                 facilities,
@@ -140,6 +143,7 @@ impl CoreHostSnapshot {
             market: state.market,
             writing: state.writing,
             local_transport: state.local_transport,
+            construction,
             shared_work: state.shared_work.map(|owner| CoreSharedWork {
                 owner,
                 sessions: vec![],

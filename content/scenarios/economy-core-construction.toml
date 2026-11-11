@@ -1,0 +1,45 @@
+# One person carries grain from regional stock to a local store in two choices.
+seed = 7
+tick_millis = 900000
+stock_capacity = 100
+food_relief_divisor = 20
+
+[rules]
+hunger_per_tick = 1
+meal_threshold = 5
+starvation_threshold = 50
+starvation_damage = 1
+max_health = 100
+carrying_capacity = 10
+max_work_hunger = 20
+
+[[regions]]
+id = 1
+stock = { grain = 10 }
+
+[[people]]
+id = 1
+region = 1
+health = 100
+hunger = 0
+willing_to_work = false
+seek_meals = false
+
+[work_sites]
+sites = []
+
+[construction]
+[[construction.blueprints]]
+id = 1
+name = "Grain shelter"
+kind = "shelter"
+capacity = 2
+kit = "grain"
+quantity = 2
+salvage = 1
+
+[[construction.policies]]
+person = 1
+blueprint = 1
+target_sites = 1
+willing = true

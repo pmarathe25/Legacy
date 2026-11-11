@@ -307,6 +307,98 @@ impl Runtime {
             custody,
         })
     }
+    /// Stage construction, including conditional custody for retained site material.
+    pub fn prepare_interval_construction(
+        &self,
+        actions: &[Transaction],
+        containers: &[(u64, game_lots::Container)],
+        seed: u64,
+    ) -> Result<IntervalConsumptionDraft, String> {
+        let interval = self
+            .work_interval
+            .as_ref()
+            .ok_or("no physical work interval")?;
+        if interval.tick != self.tick()
+            || interval.custody_revision != self.store.revision()
+            || interval.elapsed_millis >= self.tick_millis
+        {
+            return Err("construction requires a valid partial interval".into());
+        }
+        let mut sites: Vec<_> = containers
+            .par_iter()
+            .map(|(action, container)| (*action, container.place))
+            .collect();
+        sites.par_sort_unstable_by_key(|row| row.0);
+        if sites.par_windows(2).any(|pair| pair[0].0 == pair[1].0)
+            || sites
+                .par_iter()
+                .any(|(_, place)| !matches!(place, Place::Site(_)))
+            || actions.par_iter().any(|action| {
+                !action.creations.is_empty()
+                    || action.movements.iter().any(|movement| {
+                        !matches!(movement.from, Place::Person(_) | Place::Stock { .. })
+                            || movement.to.is_some_and(|place| {
+                                sites
+                                    .binary_search_by_key(&action.id, |row| row.0)
+                                    .ok()
+                                    .is_none_or(|index| sites[index].1 != place)
+                            })
+                    })
+            })
+        {
+            return Err("invalid construction custody".into());
+        }
+        self.epoch
+            .checked_add(1)
+            .ok_or("physical work revision overflow")?;
+        let mut actions: Vec<_> = actions.par_iter().cloned().collect();
+        actions.par_sort_unstable_by_key(|action| action.id);
+        renumber_operations(&mut actions)?;
+        game_lot_work::validate_actions(&self.catalog, &actions)?;
+        if sites.par_iter().any(|(id, place)| {
+            actions
+                .binary_search_by_key(id, |action| action.id)
+                .ok()
+                .is_none_or(|index| {
+                    !actions[index]
+                        .movements
+                        .iter()
+                        .any(|movement| movement.to == Some(*place))
+                })
+        }) {
+            return Err("construction custody has no matching movement".into());
+        }
+        let new_containers = containers
+            .par_iter()
+            .map(|(_, container)| container.clone())
+            .collect();
+        let mut custody = self
+            .store
+            .prepare_with_empty(seed, &actions, new_containers, false)?;
+        let mut outcomes: Vec<_> = custody.transactions().par_iter().copied().collect();
+        outcomes.par_sort_unstable_by_key(|row| row.id);
+        let retire: Vec<_> = sites
+            .par_iter()
+            .filter(|(id, _)| {
+                outcomes
+                    .binary_search_by_key(id, |row| row.id)
+                    .ok()
+                    .is_none_or(|index| !outcomes[index].accepted)
+            })
+            .map(|(_, place)| *place)
+            .collect();
+        self.store.retire_in(&mut custody, retire)?;
+        if !custody.spoiled().is_empty() {
+            return Err("interval construction cannot publish pending spoilage".into());
+        }
+        Ok(IntervalConsumptionDraft {
+            epoch: self.epoch,
+            tick: interval.tick,
+            offset_millis: interval.elapsed_millis,
+            custody,
+        })
+    }
+
     /// Stage identified pages and consume the writer's actual paper and ink atomically.
     pub fn prepare_interval_writing(
         &self,

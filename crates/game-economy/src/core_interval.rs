@@ -16,8 +16,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 mod host;
 pub use host::{
-    CoreAssistRecord, CoreAssistSession, CoreDeliveryResults, CoreDynamicsResults,
-    CoreFoodProvision, CoreFoodSearch, CoreHealth, CoreHost, CoreHostSnapshot,
+    CoreAssistRecord, CoreAssistSession, CoreConstructionResults, CoreDeliveryResults,
+    CoreDynamicsResults, CoreFoodProvision, CoreFoodSearch, CoreHealth, CoreHost, CoreHostSnapshot,
     CoreLocalTransportResults, CoreMarketResults, CorePracticeWorkEvidence, CorePurpose,
     CoreRepairResults, CoreRequestResults, CoreRun, CoreRunEvent, CoreSchedule, CoreSharedWork,
     CoreSites, CoreSkillCredit, CoreSkills, CoreSocial, CoreSocialResults, CoreToolRepairResults,

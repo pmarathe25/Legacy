@@ -99,3 +99,5 @@ policies = [{ person = 2, blueprint = 1, target_sites = 1, willing = true }]
 `economy-core-written-claim.toml` demonstrates an author writing a deliberately altered food report while retaining the original personal memory.
 
 `economy-core-local-carry.toml` demonstrates a person carrying named goods from regional stock to a local store, with pickup into personal custody before the later delivery.
+
+`economy-core-construction.toml` demonstrates a personal building choice, a named kit, and recoverable material retained in the new site's physical custody.

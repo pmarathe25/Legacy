@@ -8,6 +8,7 @@ mod animal_handling;
 mod animal_products;
 mod animal_restraints;
 mod claims;
+mod construction;
 mod dependent_care;
 mod dreams;
 mod family;
@@ -35,6 +36,7 @@ mod taking;
 mod tools;
 mod treatment;
 mod writing;
+pub use construction::CoreConstructionResults;
 pub use food_search::{CoreFoodProvision, CoreFoodSearch};
 pub use giving::CorePracticeWorkEvidence;
 pub use local_transport::CoreLocalTransportResults;
@@ -136,6 +138,8 @@ pub struct CoreHostSnapshot {
     #[serde(default)]
     pub local_transport: Option<game_economy_local_transport::LocalTransport>,
     #[serde(default)]
+    pub construction: Option<game_economy_building::Construction>,
+    #[serde(default)]
     pub goal_setbacks: Vec<(u64, u32)>,
     #[serde(default)]
     pub agreements: Option<game_agreements::Agreements>,
@@ -195,6 +199,7 @@ pub struct CoreHost {
     market: Option<game_market::Market>,
     writing: Option<crate::Writing>,
     local_transport: Option<game_economy_local_transport::LocalTransport>,
+    construction: Option<game_economy_building::Construction>,
     agreements: Option<game_agreements::Agreements>,
     sites: Option<CoreSites>,
     schedule: Option<CoreSchedule>,
@@ -239,6 +244,7 @@ struct CoreRuntimeOptions {
     market: Option<game_market::Market>,
     writing: Option<crate::Writing>,
     local_transport: Option<game_economy_local_transport::LocalTransport>,
+    construction: Option<game_economy_building::Construction>,
 }
 impl CoreHost {
     pub fn begin(snapshot: CoreHostSnapshot, rates: &[(u64, u64)]) -> Result<Self, String> {
@@ -285,6 +291,7 @@ impl CoreHost {
             market,
             writing,
             local_transport,
+            construction,
             agreements,
             sites,
             schedule,
@@ -307,6 +314,7 @@ impl CoreHost {
                 market,
                 writing,
                 local_transport,
+                construction,
                 sites,
                 schedule,
                 tool_requirements,
@@ -388,6 +396,7 @@ impl CoreHost {
             market,
             writing,
             local_transport,
+            construction,
             agreements,
             sites,
             schedule,
@@ -406,6 +415,7 @@ impl CoreHost {
                 market,
                 writing,
                 local_transport,
+                construction,
                 sites,
                 schedule,
                 tool_requirements,
@@ -458,6 +468,7 @@ impl CoreHost {
             market,
             mut writing,
             mut local_transport,
+            mut construction,
             mut sites,
             schedule,
             tool_requirements,
@@ -1090,6 +1101,29 @@ impl CoreHost {
                 maintenance.enroll(&owner.facilities);
             }
         }
+        if let Some(owner) = &mut construction {
+            if owner.maintenance.is_some()
+                || !owner.demolition.is_empty()
+                || !owner.demolition_events.is_empty()
+                || !owner.goal_builders.is_empty()
+                || !owner.salvaging.is_empty()
+                || !owner.salvage_events.is_empty()
+            {
+                return Err(
+                    "demolition, salvage and goal-directed construction are not yet supported"
+                        .into(),
+                );
+            }
+            owner.normalize();
+            let facilities = &sites
+                .as_ref()
+                .ok_or("construction requires work sites")?
+                .facilities;
+            let people: HashSet<_> = core.people.par_iter().map(|p| p.id).collect();
+            let goods: HashSet<_> = core.physical.goods().par_iter().map(|g| g.id).collect();
+            let view = core.physical.view(core.physical.tick())?;
+            owner.validate(&people, &goods, facilities, &view, core.physical.tick())?;
+        }
         if let Some(schedule) = &schedule {
             schedule.validate(&core)?;
         }
@@ -1146,6 +1180,7 @@ impl CoreHost {
             market,
             writing,
             local_transport,
+            construction,
             agreements,
             sites,
             schedule,
@@ -1195,6 +1230,7 @@ impl CoreHost {
             market: self.market.clone(),
             writing: self.writing.clone(),
             local_transport: self.local_transport.clone(),
+            construction: self.construction.clone(),
             agreements: self.agreements.clone(),
             sites: self.sites.clone(),
             schedule: self.schedule.clone(),
@@ -2227,6 +2263,9 @@ impl CoreHost {
         self.core.validate_settlement(&draft)?;
         let events = self.core.commit_settlement(draft)?;
         if let Some(owner) = &mut self.local_transport {
+            owner.events.clear();
+        }
+        if let Some(owner) = &mut self.construction {
             owner.events.clear();
         }
         self.goal_setbacks.clear();

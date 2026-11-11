@@ -1124,3 +1124,20 @@ fn authored_local_carrying_moves_goods_through_personal_custody() {
     }
     assert_eq!(run(1), run(6));
 }
+
+#[test]
+fn authored_builder_creates_a_site_from_physical_materials() {
+    fn run(workers: usize) -> serde_json::Value {
+        rayon::ThreadPoolBuilder::new().num_threads(workers).build().unwrap().install(||{
+            let root=root();let mut host=game_economy_cli::core_scenario(&root.join("content/scenarios/economy-core-construction.toml"),&root.join("content")).unwrap();
+            let result=host.advance_scheduled(0,&[]).unwrap();assert_eq!(result.failure,None);
+            assert!(result.events.iter().any(|event|matches!(event,game_economy::core_interval::CoreRunEvent::Construction(rows) if rows.iter().any(|row|row.person==1 && row.site==Some(1)))));
+            let state=host.snapshot();assert_eq!(state.sites.as_ref().unwrap().facilities.sites.len(),1);
+            let site=state.core.physical.custody.containers.iter().find(|row|row.place==game_lots::Place::Site(1)).unwrap();assert_eq!(site.lots.iter().map(|lot|lot.quantity).sum::<u64>(),1);
+            assert_eq!(state.construction.as_ref().unwrap().materials.len(),1);
+            assert_eq!(game_economy::core_interval::CoreHost::resume(serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap()).unwrap().snapshot(),state);
+            serde_json::to_value(state).unwrap()
+        })
+    }
+    assert_eq!(run(1), run(6));
+}
