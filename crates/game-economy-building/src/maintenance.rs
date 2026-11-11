@@ -333,6 +333,14 @@ struct Choice {
     quantity: u64,
     priority: u64,
 }
+/// A person's repair opportunity before contention for a site is resolved.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Opportunity {
+    pub person: u64,
+    pub site: u64,
+    pub good: u32,
+    pub quantity: u64,
+}
 pub struct Plan {
     pub actions: Vec<Transaction>,
     pub actors: Vec<u64>,
@@ -353,15 +361,21 @@ pub struct Context<'a> {
     pub tick: u64,
 }
 impl Context<'_> {
-    pub fn prepare(&self, base: u64) -> Result<Plan, String> {
-        if self.owner.policies.is_empty() && self.manual.is_none() {
-            return Ok(Plan {
-                actions: Vec::new(),
-                actors: Vec::new(),
-                sites: Vec::new(),
-                rows: Vec::new(),
-            });
-        }
+    /// Inspect each person's opportunity without reserving a site or materials.
+    pub fn direct_opportunities(&self) -> Vec<Opportunity> {
+        self.choices()
+            .0
+            .into_par_iter()
+            .map(|choice| Opportunity {
+                person: choice.person,
+                site: choice.site,
+                good: choice.good,
+                quantity: choice.quantity,
+            })
+            .collect()
+    }
+
+    fn choices(&self) -> (Vec<Choice>, Option<Choice>) {
         let occupied: HashSet<_> = self.sites.bindings.par_iter().map(|b| b.site).collect();
         let opinions = self
             .opinions
@@ -408,7 +422,7 @@ impl Context<'_> {
                 priority,
             })
         };
-        let mut choices: Vec<_> =
+        let choices: Vec<_> =
             self.owner
                 .policies
                 .par_iter()
@@ -426,9 +440,23 @@ impl Context<'_> {
                         .flatten()
                 })
                 .collect();
-        if let Some(m) = self.manual {
+        let manual = self.manual.and_then(|m| make(m.person, m.site, true, true));
+        (choices, manual)
+    }
+
+    pub fn prepare(&self, base: u64) -> Result<Plan, String> {
+        if self.owner.policies.is_empty() && self.manual.is_none() {
+            return Ok(Plan {
+                actions: Vec::new(),
+                actors: Vec::new(),
+                sites: Vec::new(),
+                rows: Vec::new(),
+            });
+        }
+        let (mut choices, manual) = self.choices();
+        if self.manual.is_some() {
             choices.push(
-                make(m.person, m.site, true, true).ok_or(
+                manual.ok_or(
                     "repair requires a living available person and a worn, idle local site",
                 )?,
             );
@@ -542,6 +570,92 @@ impl Plan {
 mod tests {
     use super::*;
     use game_lots::TransactionOutcome;
+
+    #[test]
+    fn repair_opportunities_preserve_independent_people_before_site_contention() {
+        let people: Vec<_> = (1..=3)
+            .map(|id| Person {
+                id,
+                region: Some(1),
+                health: 10,
+                hunger: 0,
+                hunger_remainder: 0,
+                immortal: None,
+                willing_to_work: true,
+                seek_meals: false,
+                controlled: id == 3,
+            })
+            .collect();
+        let facilities = Facilities {
+            next_id: 2,
+            sites: vec![game_work_sites::Site {
+                id: 1,
+                region: 1,
+                kind: "mill".into(),
+                capacity: 1,
+            }],
+            requirements: vec![],
+            bindings: vec![],
+        };
+        let maintenance = Maintenance {
+            rules: vec![Rule {
+                kind: "mill".into(),
+                wear_limit: 10,
+                wear_per_slot: 1,
+                repair_good: 4,
+                repair_quantity: 2,
+            }],
+            conditions: vec![Condition { site: 1, wear: 5 }],
+            policies: (1..=2)
+                .map(|person| Policy {
+                    person,
+                    site: 1,
+                    willing: true,
+                    pressured_by: None,
+                    pressure_threshold: None,
+                    disregard_claims: false,
+                })
+                .collect(),
+            events: vec![],
+        };
+        let mut context = Context {
+            owner: &maintenance,
+            sites: &facilities,
+            people: &people,
+            opinions: None,
+            claims: None,
+            busy: &[],
+            max_hunger: 5,
+            manual: None,
+            manual_destroy: None,
+            seed: 7,
+            tick: 3,
+        };
+        assert_eq!(
+            context.direct_opportunities(),
+            vec![
+                Opportunity {
+                    person: 1,
+                    site: 1,
+                    good: 4,
+                    quantity: 2
+                },
+                Opportunity {
+                    person: 2,
+                    site: 1,
+                    good: 4,
+                    quantity: 2
+                },
+            ]
+        );
+        assert_eq!(context.prepare(1).unwrap().actions.len(), 1);
+        context.busy = &[1];
+        assert_eq!(context.direct_opportunities()[0].person, 2);
+        context.manual = Some(Manual { person: 3, site: 1 });
+        assert_eq!(context.prepare(1).unwrap().actors, vec![3]);
+        context.manual = Some(Manual { person: 3, site: 2 });
+        assert!(context.prepare(1).is_err());
+    }
 
     #[test]
     fn ordered_index_checks_dense_and_sparse_ids() {

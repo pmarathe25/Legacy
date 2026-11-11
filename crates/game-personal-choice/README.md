@@ -9,6 +9,6 @@ stable semantic tie-breaking, and parallel per-person batches.
 Inputs exceeding 64 personal domains or 64 opportunities per person are
 rejected rather than silently truncated.
 
-The interval host can opt in to using this selection for construction versus
-local carrying. This is not yet a common chooser for the other activities;
+The interval host can opt in to using this selection for construction,
+local carrying and site maintenance. This is not yet a common chooser for the other activities;
 their existing fixed-order scheduling remains in effect.

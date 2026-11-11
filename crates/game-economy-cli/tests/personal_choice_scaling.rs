@@ -86,10 +86,88 @@ capacity = 10000
     );
     let path = std::env::temp_dir().join(format!("{token}.toml"));
     std::fs::write(&path, text).unwrap();
-    let snapshot = game_economy_cli::core_scenario(&path, &root.join("content"))
+    let mut snapshot = game_economy_cli::core_scenario(&path, &root.join("content"))
         .unwrap()
         .snapshot();
     std::fs::remove_file(path).unwrap();
+    let maintenance = std::env::var_os("LEGACY_CHOICE_MAINTENANCE").is_some();
+    if maintenance {
+        use game_economy_building::maintenance::{Condition, Maintenance, Policy, Rule};
+        use game_economy_work::sites::Site;
+        use game_lots::{Container, Lot, Place};
+        let good = snapshot
+            .core
+            .physical
+            .goods
+            .iter()
+            .find(|good| good.name == "grain")
+            .unwrap()
+            .id;
+        for container in &mut snapshot.core.physical.custody.containers {
+            if let Place::Person(id) = container.place
+                && id % 3 == 0
+            {
+                *container = Container::new(
+                    Place::Person(id),
+                    10,
+                    vec![Lot {
+                        item: None,
+                        good,
+                        quantity: 1,
+                        expires_at: None,
+                    }],
+                )
+                .unwrap();
+            }
+        }
+        let sites = snapshot.sites.as_mut().unwrap();
+        sites.facilities.next_id = 2;
+        sites.facilities.sites.push(Site {
+            id: 1,
+            region: 1,
+            kind: "mill".into(),
+            capacity: 1,
+        });
+        sites.maintenance = Some(Maintenance {
+            rules: vec![Rule {
+                kind: "mill".into(),
+                wear_limit: 10,
+                wear_per_slot: 1,
+                repair_good: good,
+                repair_quantity: 1,
+            }],
+            conditions: vec![Condition { site: 1, wear: 5 }],
+            policies: (1..=count)
+                .filter(|id| id % 3 == 0)
+                .map(|person| Policy {
+                    person,
+                    site: 1,
+                    willing: true,
+                    pressured_by: None,
+                    pressure_threshold: None,
+                    disregard_claims: false,
+                })
+                .collect(),
+            events: vec![],
+        });
+        let profiles = std::sync::Arc::make_mut(
+            snapshot
+                .schedule
+                .as_mut()
+                .unwrap()
+                .personal_choices
+                .as_mut()
+                .unwrap(),
+        );
+        for person in profiles.iter_mut().filter(|person| person.id % 3 == 0) {
+            person.preferences.push(game_personal_choice::Preference {
+                domain: 3,
+                enabled: true,
+                bias: 30,
+                weight: 1000,
+            });
+        }
+    }
     let mut reference = None;
     for workers in [1, 2, 4, 6] {
         #[cfg(feature = "profile")]
@@ -107,6 +185,21 @@ capacity = 10000
             let result = pool.install(|| host.advance_continuous(1, &[]).unwrap());
             times.push(start.elapsed());
             assert_eq!(result.failure, None);
+            if maintenance && count >= 3 {
+                let decisions = result
+                    .events
+                    .iter()
+                    .filter_map(|event| match event {
+                        game_economy::core_interval::CoreRunEvent::PersonalChoices(rows) => {
+                            Some(rows)
+                        }
+                        _ => None,
+                    })
+                    .flatten()
+                    .filter(|event| event.key.is_some_and(|key| key.domain == 3))
+                    .count();
+                assert_eq!(decisions as u64, count / 3);
+            }
             let state = pool.install(|| host.snapshot());
             if let Some(expected) = &reference {
                 assert_eq!(&state, expected);

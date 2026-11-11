@@ -67,11 +67,21 @@ pub enum DecisionPhase {
         meal_people: Vec<u64>,
         intents: Arc<Vec<CoreChoiceIntent>>,
         carrying_after: bool,
+        #[serde(default)]
+        maintenance_after: bool,
     },
     ChosenCarrying {
         meal_people: Vec<u64>,
         intents: Arc<Vec<CoreChoiceIntent>>,
         construction_after: bool,
+        #[serde(default)]
+        maintenance_after: bool,
+    },
+    ChosenMaintenance {
+        meal_people: Vec<u64>,
+        intents: Arc<Vec<CoreChoiceIntent>>,
+        construction_after: bool,
+        carrying_after: bool,
     },
     Construction {
         meal_people: Vec<u64>,
@@ -103,7 +113,7 @@ pub struct CoreSchedule {
     /// Rates retained across boundaries, including temporarily paused work.
     #[serde(default)]
     pub carried_rates: Vec<(u64, u64)>,
-    /// Opt-in personal choice for construction and local carrying.
+    /// Opt-in personal choice for construction, local carrying and maintenance.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub personal_choices: Option<Arc<Vec<game_personal_choice::Person>>>,
 }
@@ -146,7 +156,8 @@ impl CoreSchedule {
             return Err("local choice phase requires personal choices".into());
         }
         if let DecisionPhase::ChosenConstruction { intents, .. }
-        | DecisionPhase::ChosenCarrying { intents, .. } = &self.phase
+        | DecisionPhase::ChosenCarrying { intents, .. }
+        | DecisionPhase::ChosenMaintenance { intents, .. } = &self.phase
         {
             let Some(people) = &self.personal_choices else {
                 return Err("selected actions require personal choices".into());
@@ -156,7 +167,7 @@ impl CoreSchedule {
                 .any(|rows| rows[0].actor >= rows[1].actor)
                 || intents.par_iter().any(|intent| {
                     intent.actor == 0
-                        || !matches!(intent.key.domain, 1 | 2)
+                        || !matches!(intent.key.domain, 1..=3)
                         || intent.key.action == 0
                         || intent.movement.id != 0
                         || intent.movement.quantity == 0
@@ -195,6 +206,7 @@ impl CoreSchedule {
         | DecisionPhase::ChooseLocal { meal_people }
         | DecisionPhase::ChosenConstruction { meal_people, .. }
         | DecisionPhase::ChosenCarrying { meal_people, .. }
+        | DecisionPhase::ChosenMaintenance { meal_people, .. }
         | DecisionPhase::Construction { meal_people }
         | DecisionPhase::LocalCarrying { meal_people }
         | DecisionPhase::HaulingRequests { meal_people }
@@ -308,7 +320,9 @@ impl CoreHost {
             .schedule
             .as_ref()
             .is_some_and(|schedule| schedule.personal_choices.is_some())
-            && (self.construction.is_some() || self.local_transport.is_some())
+            && (self.construction.is_some()
+                || self.local_transport.is_some()
+                || self.sites.is_some())
         {
             DecisionPhase::ChooseLocal { meal_people }
         } else if self.construction.is_some() {
@@ -584,6 +598,22 @@ impl CoreHost {
                     DecisionPhase::Maintenance { mut meal_people } => {
                         let mut busy = blocked.to_vec();
                         busy.extend(meal_people.iter().copied());
+                        if let Some(people) = &schedule.personal_choices {
+                            busy.par_extend(
+                                people
+                                    .par_iter()
+                                    .filter(|person| {
+                                        person
+                                            .preferences
+                                            .binary_search_by_key(
+                                                &personal_choice::MAINTENANCE,
+                                                |preference| preference.domain,
+                                            )
+                                            .is_ok()
+                                    })
+                                    .map(|person| person.id),
+                            );
+                        }
                         busy.par_sort_unstable();
                         busy.dedup();
                         let result = attempt!('run, self.repair_sites_autonomously(&busy));
@@ -896,27 +926,48 @@ impl CoreHost {
                             run.events.push(CoreRunEvent::PersonalChoices(idle));
                         }
                         let round = self.core.physical.tick().rotate_left(21) ^ offset;
-                        let first_construction =
-                            game_genetics::random(self.core.seed, 0x63686f696365, round) & 1 == 0;
-                        self.schedule.as_mut().expect("active schedule").phase =
-                            if first_construction {
-                                DecisionPhase::ChosenConstruction {
-                                    meal_people,
-                                    intents,
-                                    carrying_after: true,
-                                }
-                            } else {
-                                DecisionPhase::ChosenCarrying {
-                                    meal_people,
-                                    intents,
-                                    construction_after: true,
-                                }
-                            };
+                        let has_maintenance = people.par_iter().any(|person| {
+                            person
+                                .preferences
+                                .binary_search_by_key(&personal_choice::MAINTENANCE, |preference| {
+                                    preference.domain
+                                })
+                                .is_ok()
+                        });
+                        let random = game_genetics::random(self.core.seed, 0x63686f696365, round);
+                        let first = if has_maintenance {
+                            random % 3
+                        } else {
+                            random & 1
+                        };
+                        self.schedule.as_mut().expect("active schedule").phase = if first == 0 {
+                            DecisionPhase::ChosenConstruction {
+                                meal_people,
+                                intents,
+                                carrying_after: true,
+                                maintenance_after: has_maintenance,
+                            }
+                        } else if first == 1 {
+                            DecisionPhase::ChosenCarrying {
+                                meal_people,
+                                intents,
+                                construction_after: true,
+                                maintenance_after: has_maintenance,
+                            }
+                        } else {
+                            DecisionPhase::ChosenMaintenance {
+                                meal_people,
+                                intents,
+                                construction_after: true,
+                                carrying_after: true,
+                            }
+                        };
                     }
                     DecisionPhase::ChosenConstruction {
                         mut meal_people,
                         intents,
                         carrying_after,
+                        maintenance_after,
                     } => {
                         let mut busy = blocked.to_vec();
                         busy.extend(meal_people.iter().copied());
@@ -973,6 +1024,14 @@ impl CoreHost {
                                 meal_people,
                                 intents,
                                 construction_after: false,
+                                maintenance_after,
+                            }
+                        } else if maintenance_after {
+                            DecisionPhase::ChosenMaintenance {
+                                meal_people,
+                                intents,
+                                construction_after: false,
+                                carrying_after: false,
                             }
                         } else {
                             self.after_local_carrying(meal_people)
@@ -983,6 +1042,7 @@ impl CoreHost {
                         mut meal_people,
                         intents,
                         construction_after,
+                        maintenance_after,
                     } => {
                         let mut busy = blocked.to_vec();
                         busy.extend(meal_people.iter().copied());
@@ -1040,6 +1100,95 @@ impl CoreHost {
                                 meal_people,
                                 intents,
                                 carrying_after: false,
+                                maintenance_after,
+                            }
+                        } else if maintenance_after {
+                            DecisionPhase::ChosenMaintenance {
+                                meal_people,
+                                intents,
+                                construction_after: false,
+                                carrying_after: false,
+                            }
+                        } else {
+                            self.after_local_carrying(meal_people)
+                        };
+                        self.schedule.as_mut().expect("active schedule").phase = next;
+                    }
+                    DecisionPhase::ChosenMaintenance {
+                        mut meal_people,
+                        intents,
+                        construction_after,
+                        carrying_after,
+                    } => {
+                        let mut busy = blocked.to_vec();
+                        busy.extend(meal_people.iter().copied());
+                        let people = schedule.personal_choices.as_ref().expect("choice profile");
+                        // Unprofiled people already had their ordinary maintenance phase.
+                        busy.par_extend(
+                            self.core
+                                .people
+                                .par_iter()
+                                .filter(|person| {
+                                    people
+                                        .binary_search_by_key(&person.id, |row| row.id)
+                                        .is_err()
+                                })
+                                .map(|person| person.id),
+                        );
+                        busy.par_sort_unstable();
+                        busy.dedup();
+                        let (blocked_choice, mut choices) = attempt!('run, self.choice_blocked(
+                            &busy, people, &intents, personal_choice::MAINTENANCE
+                        ));
+                        let result =
+                            attempt!('run, self.repair_sites_autonomously(&blocked_choice));
+                        let outcomes: std::collections::HashMap<_, _> = result
+                            .events
+                            .iter()
+                            .map(|event| (event.person, event.repaired))
+                            .collect();
+                        choices.par_extend(
+                            intents
+                                .par_iter()
+                                .filter(|intent| {
+                                    intent.key.domain == personal_choice::MAINTENANCE
+                                        && blocked_choice.binary_search(&intent.actor).is_err()
+                                })
+                                .map(|intent| CoreChoiceEvent {
+                                    tick: self.core.physical.tick(),
+                                    offset_millis: offset,
+                                    actor: intent.actor,
+                                    key: Some(intent.key),
+                                    outcome: if outcomes.get(&intent.actor) == Some(&true) {
+                                        CoreChoiceOutcome::Accepted
+                                    } else {
+                                        CoreChoiceOutcome::Denied
+                                    },
+                                }),
+                        );
+                        meal_people.par_extend(result.actors);
+                        meal_people.par_sort_unstable();
+                        meal_people.dedup();
+                        if !result.events.is_empty() {
+                            run.events.push(CoreRunEvent::Repairs(result.events));
+                        }
+                        if !choices.is_empty() {
+                            choices.par_sort_unstable_by_key(|event| event.actor);
+                            run.events.push(CoreRunEvent::PersonalChoices(choices));
+                        }
+                        let next = if construction_after {
+                            DecisionPhase::ChosenConstruction {
+                                meal_people,
+                                intents,
+                                carrying_after,
+                                maintenance_after: false,
+                            }
+                        } else if carrying_after {
+                            DecisionPhase::ChosenCarrying {
+                                meal_people,
+                                intents,
+                                construction_after: false,
+                                maintenance_after: false,
                             }
                         } else {
                             self.after_local_carrying(meal_people)

@@ -1,10 +1,11 @@
-//! An opt-in competition between physical construction and local carrying.
+//! Opt-in competition between construction, local carrying, and maintenance.
 //! Other scheduler domains keep their existing behavior until separately migrated.
 use super::*;
 use game_personal_choice::{Key, Person, Proposal};
 
 pub(super) const CONSTRUCTION: u32 = 1;
 pub(super) const CARRYING: u32 = 2;
+pub(super) const MAINTENANCE: u32 = 3;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -236,9 +237,52 @@ impl CoreHost {
                 Vec::new()
             }
         };
-        let (construction, carrying) = rayon::join(construction, carrying);
+        let maintenance = || -> Vec<CoreChoiceIntent> {
+            if domain.is_none_or(|domain| domain == MAINTENANCE)
+                && let Some(sites) = &self.sites
+                && let Some(owner) = &sites.maintenance
+            {
+                game_economy_building::maintenance::Context {
+                    owner,
+                    sites: &sites.facilities,
+                    people: &self.core.people,
+                    opinions: self.opinions.as_ref(),
+                    claims: None,
+                    busy: &busy,
+                    max_hunger: self.core.rules.max_work_hunger,
+                    manual: None,
+                    manual_destroy: None,
+                    seed: self.core.seed,
+                    tick,
+                }
+                .direct_opportunities()
+                .into_par_iter()
+                .map(|opportunity| CoreChoiceIntent {
+                    actor: opportunity.person,
+                    key: Key {
+                        domain: MAINTENANCE,
+                        action: opportunity.site,
+                    },
+                    movement: game_lots::Movement {
+                        id: 0,
+                        from: game_lots::Place::Person(opportunity.person),
+                        to: None,
+                        good: opportunity.good,
+                        quantity: opportunity.quantity,
+                        item: None,
+                    },
+                    second_movement: None,
+                })
+                .collect()
+            } else {
+                Vec::new()
+            }
+        };
+        let ((construction, carrying), maintenance) =
+            rayon::join(|| rayon::join(construction, carrying), maintenance);
         let mut intents = construction?;
         intents.par_extend(carrying);
+        intents.par_extend(maintenance);
         intents.par_sort_unstable_by_key(|intent| (intent.actor, intent.key));
         Ok(intents)
     }
