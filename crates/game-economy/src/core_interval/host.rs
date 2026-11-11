@@ -1663,6 +1663,25 @@ impl CoreHost {
         }
         Ok(meals)
     }
+    /// Commit only the meals already selected by individuals.
+    fn eat_selected(&mut self, meals: &[game_lot_diet::Meal]) -> Result<(), String> {
+        let tick = self.core.physical.tick();
+        let offset = self.core.elapsed_millis().ok_or("no physical interval")?;
+        let Some(draft) = self.core.prepare_meals(tick, offset, meals)? else {
+            return Ok(());
+        };
+        let tools = self.stage_tools(&[], None, draft.item_updates())?;
+        let writing = self.stage_written_page_removals(draft.item_updates());
+        self.core.validate_meals(&draft)?;
+        self.core.commit_meals(draft)?;
+        if let Some(tools) = tools {
+            self.tool_wear = Some(tools);
+        }
+        if let Some(writing) = writing {
+            self.writing = Some(writing);
+        }
+        Ok(())
+    }
     /// Inspect individual work opportunities before shared-stock admission.
     /// Site, tool and physical resource admission can still deny an attempt.
     pub fn preview_autonomous_work(

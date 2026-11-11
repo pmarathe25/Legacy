@@ -12,6 +12,62 @@ pub struct Choice {
     pub good: u32,
 }
 
+/// A physically available portion, before the person decides whether to eat it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Opportunity {
+    pub person: u64,
+    pub good: u32,
+    pub portion: u64,
+}
+
+/// Enumerate all carried foods without deciding that hunger, nourishment, or
+/// a particular food is desirable. The caller applies personal preferences.
+pub fn opportunities_now(
+    people: &[Person],
+    goods: &[Good],
+    physical: &game_lot_runtime::Runtime,
+    blocked: &[u64],
+) -> Result<Vec<Opportunity>, String> {
+    if people.par_windows(2).any(|rows| rows[0].id >= rows[1].id)
+        || blocked.par_windows(2).any(|rows| rows[0] >= rows[1])
+    {
+        return Err("meal people and exclusions must be ordered and unique".into());
+    }
+    let edible: HashMap<_, _> = goods
+        .iter()
+        .filter_map(|good| good.food.as_ref().map(|food| (good.id, food.portion)))
+        .collect();
+    Ok(people
+        .par_iter()
+        .flat_map_iter(|person| {
+            let holder = (!person.controlled
+                && person.seek_meals
+                && person.health > 0
+                && blocked.binary_search(&person.id).is_err())
+            .then(|| physical.custody(Place::Person(person.id)))
+            .flatten();
+            holder.into_iter().flat_map(|holder| {
+                holder
+                    .lots
+                    .chunk_by(|a, b| a.good == b.good)
+                    .filter_map(|lots| {
+                        let portion = *edible.get(&lots[0].good)?;
+                        let available: u128 = lots
+                            .iter()
+                            .filter(|lot| lot.expires_at.is_none_or(|at| at > physical.tick()))
+                            .map(|lot| u128::from(lot.quantity))
+                            .sum();
+                        (portion > 0 && available >= u128::from(portion)).then_some(Opportunity {
+                            person: person.id,
+                            good: lots[0].good,
+                            portion,
+                        })
+                    })
+            })
+        })
+        .collect())
+}
+
 /// Select one carried meal per hungry, autonomous person at the current
 /// instant. The host supplies people unavailable for another activity.
 pub fn choose_now(

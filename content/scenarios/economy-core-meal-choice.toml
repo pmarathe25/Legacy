@@ -1,0 +1,102 @@
+seed = 7
+tick_millis = 900000
+stock_capacity = 100
+food_relief_divisor = 20
+
+[rules]
+hunger_per_tick = 1
+meal_threshold = 5
+starvation_threshold = 50
+starvation_damage = 1
+max_health = 100
+carrying_capacity = 10
+max_work_hunger = 20
+
+[[regions]]
+id = 1
+stock = { grain = 50 }
+
+[[people]]
+id = 1
+region = 1
+health = 100
+hunger = 0
+willing_to_work = false
+seek_meals = true
+goods = { grain = 10 }
+
+[[people]]
+id = 2
+region = 1
+health = 100
+hunger = 6
+willing_to_work = false
+seek_meals = true
+goods = { grain = 10 }
+
+[[people]]
+id = 3
+region = 1
+health = 100
+hunger = 6
+willing_to_work = false
+seek_meals = true
+goods = { grain = 10 }
+
+[[people]]
+id = 4
+region = 1
+health = 100
+hunger = 6
+willing_to_work = false
+seek_meals = true
+goods = { grain = 10 }
+
+[[people]]
+id = 5
+region = 1
+health = 100
+hunger = 6
+willing_to_work = false
+seek_meals = true
+goods = { grain = 10 }
+
+[local_transport]
+[[local_transport.stores]]
+id = 1
+region = 1
+name = "Granary"
+capacity = 20
+[[local_transport.policies]]
+person = 1
+region = 1
+source = { kind = "stock" }
+destination = { kind = "store", id = 1 }
+good = "grain"
+quantity = 1
+willing = true
+[[local_transport.policies]]
+person = 5
+region = 1
+source = { kind = "stock" }
+destination = { kind = "store", id = 1 }
+good = "grain"
+quantity = 1
+willing = true
+
+[[personal_choices]]
+id = 1
+idle = 0
+preferences = [{ domain = 2, enabled = true, bias = 0 }, { domain = 7, enabled = true, bias = 20 }]
+[[personal_choices]]
+id = 2
+idle = 0
+preferences = [{ domain = 7, enabled = true, bias = -20 }]
+[[personal_choices]]
+id = 3
+idle = 0
+preferences = [{ domain = 7, enabled = false, bias = 20 }]
+[[personal_choices]]
+id = 5
+idle = 0
+preferences = [{ domain = 2, enabled = true, bias = 20 }, { domain = 7, enabled = true, bias = 0 }]

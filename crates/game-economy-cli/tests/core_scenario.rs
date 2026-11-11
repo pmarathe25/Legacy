@@ -5,6 +5,63 @@ fn root() -> PathBuf {
 }
 
 #[test]
+fn meals_compete_with_other_choices_and_survive_resume() {
+    use game_economy::core_interval::{CoreChoiceOutcome, CoreHost, CoreRunEvent, DecisionPhase};
+    fn run(workers: usize) -> serde_json::Value {
+        rayon::ThreadPoolBuilder::new().num_threads(workers).build().unwrap().install(|| {
+            let root = root();
+            let mut host = game_economy_cli::core_scenario(
+                &root.join("content/scenarios/economy-core-meal-choice.toml"), &root.join("content"),
+            ).unwrap();
+            let mut meal_only = host.snapshot();
+            meal_only.local_transport = None;
+            let mut meal_only = CoreHost::resume(meal_only).unwrap();
+            let meal_result = meal_only.advance_continuous(1, &[]).unwrap();
+            assert_eq!(meal_result.failure, None);
+            assert!(meal_result.events.iter().any(|event| matches!(event,
+                CoreRunEvent::Meals(rows) if rows.iter().any(|row| row.0 == 1))));
+            let (intents, idle) = host.preview_personal_choices(&[]).unwrap();
+            assert!(intents.iter().any(|row| row.actor == 1 && row.key.domain == 7));
+            assert!(intents.iter().any(|row| row.actor == 5 && row.key.domain == 2));
+            assert!(idle.iter().any(|row| row.actor == 2));
+            assert!(idle.iter().any(|row| row.actor == 3));
+            let selected = intents.iter().find(|row| row.actor == 1).unwrap().clone();
+            let mut pending = host.snapshot();
+            pending.schedule.as_mut().unwrap().phase = DecisionPhase::ChosenMeal {
+                meal_people: vec![], intents: std::sync::Arc::new(vec![selected]), remaining: 0,
+            };
+            let mut replay = pending.clone();
+            if let DecisionPhase::ChosenMeal { remaining, .. } = &mut replay.schedule.as_mut().unwrap().phase { *remaining = 1 << 7; }
+            assert!(CoreHost::resume(replay).is_err());
+            let mut resumed = CoreHost::resume(serde_json::from_str(&serde_json::to_string(&pending).unwrap()).unwrap()).unwrap();
+            let mut stale = pending.clone();
+            let food = stale.core.physical.custody.containers.iter_mut().find(|row| row.place == game_lots::Place::Person(1)).unwrap();
+            *food = game_lots::Container::new(game_lots::Place::Person(1), food.capacity, vec![]).unwrap();
+            let mut stale = CoreHost::resume(stale).unwrap();
+            let result = stale.advance_continuous(1, &[]).unwrap();
+            assert_eq!(result.failure, None);
+            assert!(result.events.iter().any(|event| matches!(event, CoreRunEvent::PersonalChoices(rows) if rows.iter().any(|row| row.actor == 1 && row.outcome == CoreChoiceOutcome::Stale))));
+            assert!(!result.events.iter().any(|event| matches!(event, CoreRunEvent::Meals(rows) if rows.iter().any(|row| row.0 == 1))));
+            let mut pending_host = CoreHost::resume(pending).unwrap();
+            assert_eq!(pending_host.advance_continuous(1, &[]).unwrap().failure, None);
+            assert_eq!(resumed.advance_continuous(1, &[]).unwrap().failure, None);
+            assert_eq!(pending_host.snapshot(), resumed.snapshot());
+            let result = host.advance_continuous(1, &[]).unwrap();
+            assert_eq!(result.failure, None);
+            let meals: Vec<_> = result.events.iter().filter_map(|event| match event { CoreRunEvent::Meals(rows) => Some(rows.as_slice()), _ => None }).flatten().map(|row| row.0).collect();
+            assert!(meals.contains(&1)); // Choosing to eat need not require hunger.
+            assert!(meals.contains(&4)); // A profile without meal preferences retains its prior behavior.
+            assert!(!meals.contains(&2));
+            assert!(!meals.contains(&3));
+            assert!(!meals.contains(&5));
+            assert!(result.events.iter().any(|event| matches!(event, CoreRunEvent::LocalCarries(rows) if rows.iter().any(|row| row.person == 5 && row.moved))));
+            serde_json::to_value(host.snapshot()).unwrap()
+        })
+    }
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
 fn authored_mechanics_loads_content_and_uses_identified_parts() {
     let root = root();
     let path = root.join("content/scenarios/economy-core-mechanics.toml");
@@ -920,6 +977,7 @@ fn stale_saved_carrying_intention_is_reported_without_substituting_an_action() {
             work: None,
             experiment: None,
             experiment_value: None,
+            meal_value: None,
         }]),
     };
     let mut forbidden = snapshot.clone();

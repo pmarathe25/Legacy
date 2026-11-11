@@ -9,6 +9,7 @@ pub(super) const MAINTENANCE: u32 = 3;
 pub(super) const WORK: u32 = 4;
 pub(super) const CONTINUE_WORK: u32 = 5;
 pub(super) const EXPERIMENT: u32 = 6;
+pub(super) const MEAL: u32 = 7;
 
 fn index_by_person<T>(rows: &[T], id: u64, key: impl Fn(&T) -> u64) -> Option<usize> {
     rows.first()
@@ -57,11 +58,14 @@ pub struct CoreChoiceIntent {
     pub experiment: Option<game_mechanics::Experiment>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub experiment_value: Option<i64>,
+    /// The person's observed hunger when choosing a meal.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub meal_value: Option<i64>,
 }
 
 impl CoreChoiceIntent {
     pub(super) fn magnitude(&self) -> i64 {
-        if let Some(value) = self.experiment_value {
+        if let Some(value) = self.experiment_value.or(self.meal_value) {
             return value;
         }
         (self.movement.map_or(0, |row| u128::from(row.quantity))
@@ -450,6 +454,7 @@ impl CoreHost {
                             work: None,
                             experiment: None,
                             experiment_value: None,
+                            meal_value: None,
                         }
                     })
                     .collect();
@@ -497,6 +502,7 @@ impl CoreHost {
                         work: None,
                         experiment: None,
                         experiment_value: None,
+                        meal_value: None,
                     })
                     .collect();
                 rows
@@ -542,6 +548,7 @@ impl CoreHost {
                     work: None,
                     experiment: None,
                     experiment_value: None,
+                    meal_value: None,
                 })
                 .collect()
             } else {
@@ -579,6 +586,7 @@ impl CoreHost {
                         }),
                         experiment: None,
                         experiment_value: None,
+                        meal_value: None,
                     })
                     .collect())
             } else {
@@ -611,21 +619,78 @@ impl CoreHost {
                         work: None,
                         experiment: Some(policy.experiment),
                         experiment_value: Some(policy.value),
+                        meal_value: None,
                     })
                     .collect())
             } else {
                 Ok(Vec::new())
             }
         };
-        let ((construction, carrying), (maintenance, (work, experiments))) = rayon::join(
+        let meals = || -> Result<Vec<CoreChoiceIntent>, String> {
+            if domain.is_none_or(|domain| domain == MEAL)
+                && self
+                    .schedule
+                    .as_ref()
+                    .and_then(|s| s.personal_choices.as_ref())
+                    .is_some_and(|people| {
+                        people.par_iter().any(|person| {
+                            person
+                                .preferences
+                                .binary_search_by_key(&MEAL, |p| p.domain)
+                                .is_ok()
+                        })
+                    })
+            {
+                Ok(game_economy_person::meal::opportunities_now(
+                    &self.core.people,
+                    self.core.physical.goods(),
+                    &self.core.physical,
+                    &busy,
+                )?
+                .into_par_iter()
+                .map(|opportunity| {
+                    let person = index_by_person(&self.core.people, opportunity.person, |p| p.id)
+                        .expect("known person");
+                    CoreChoiceIntent {
+                        actor: opportunity.person,
+                        key: Key {
+                            domain: MEAL,
+                            action: u64::from(opportunity.good),
+                        },
+                        movement: Some(game_lots::Movement {
+                            id: 0,
+                            from: game_lots::Place::Person(opportunity.person),
+                            to: None,
+                            good: opportunity.good,
+                            quantity: opportunity.portion,
+                            item: None,
+                        }),
+                        second_movement: None,
+                        work: None,
+                        experiment: None,
+                        experiment_value: None,
+                        meal_value: Some(i64::from(self.core.people[person].hunger)),
+                    }
+                })
+                .collect())
+            } else {
+                Ok(Vec::new())
+            }
+        };
+        let ((construction, carrying), (maintenance, (work, (experiments, meals)))) = rayon::join(
             || rayon::join(construction, carrying),
-            || rayon::join(maintenance, || rayon::join(work, experiments)),
+            || {
+                rayon::join(maintenance, || {
+                    rayon::join(work, || rayon::join(experiments, meals))
+                })
+            },
         );
         let mut intents = construction?;
         intents.par_extend(carrying);
         intents.par_extend(maintenance);
         intents.par_extend(work?);
         intents.par_extend(experiments?);
+        intents.par_extend(meals?);
         if intents
             .par_windows(2)
             .any(|rows| (rows[0].actor, rows[0].key) > (rows[1].actor, rows[1].key))
@@ -716,6 +781,7 @@ impl CoreHost {
                         && current[i].work == intent.work
                         && current[i].experiment == intent.experiment
                         && current[i].experiment_value == intent.experiment_value
+                        && current[i].meal_value == intent.meal_value
                 });
                 (intent, found)
             })

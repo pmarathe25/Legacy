@@ -92,7 +92,64 @@ capacity = 10000
     std::fs::remove_file(path).unwrap();
     let maintenance = std::env::var_os("LEGACY_CHOICE_MAINTENANCE").is_some();
     let work = std::env::var_os("LEGACY_CHOICE_WORK").is_some();
-    assert!(!(maintenance && work), "choose one additional workload");
+    let meals = std::env::var_os("LEGACY_CHOICE_MEALS").is_some();
+    assert!(
+        usize::from(maintenance) + usize::from(work) + usize::from(meals) <= 1,
+        "choose one additional workload"
+    );
+    if meals {
+        use game_lots::{Container, Lot, Place};
+        let good = snapshot
+            .core
+            .physical
+            .goods
+            .iter()
+            .find(|good| good.name == "grain")
+            .unwrap()
+            .id;
+        for person in snapshot
+            .core
+            .people
+            .iter_mut()
+            .filter(|person| person.id % 3 == 0)
+        {
+            person.seek_meals = true;
+        }
+        for container in &mut snapshot.core.physical.custody.containers {
+            if let Place::Person(id) = container.place
+                && id % 3 == 0
+            {
+                *container = Container::new(
+                    Place::Person(id),
+                    10,
+                    vec![Lot {
+                        item: None,
+                        good,
+                        quantity: 10,
+                        expires_at: None,
+                    }],
+                )
+                .unwrap();
+            }
+        }
+        let profiles = std::sync::Arc::make_mut(
+            snapshot
+                .schedule
+                .as_mut()
+                .unwrap()
+                .personal_choices
+                .as_mut()
+                .unwrap(),
+        );
+        for person in profiles.iter_mut().filter(|person| person.id % 3 == 0) {
+            person.preferences.push(game_personal_choice::Preference {
+                domain: 7,
+                enabled: true,
+                bias: 30,
+                weight: 1000,
+            });
+        }
+    }
     if maintenance {
         use game_economy_building::maintenance::{Condition, Maintenance, Policy, Rule};
         use game_economy_work::sites::Site;
@@ -322,6 +379,17 @@ capacity = 10000
                     .flatten()
                     .filter(|event| event.key.is_some_and(|key| key.domain == 4))
                     .count();
+                assert_eq!(decisions as u64, count / 3);
+            }
+            if meals && count >= 3 {
+                let decisions = result
+                    .events
+                    .iter()
+                    .filter_map(|event| match event {
+                        game_economy::core_interval::CoreRunEvent::Meals(rows) => Some(rows.len()),
+                        _ => None,
+                    })
+                    .sum::<usize>();
                 assert_eq!(decisions as u64, count / 3);
             }
             let state = pool.install(|| host.snapshot());
