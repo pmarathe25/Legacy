@@ -22,7 +22,8 @@ pub use host::{
     CoreLocalTransportResults, CoreMarketResults, CorePracticeWorkEvidence, CorePurpose,
     CoreRepairResults, CoreRequestResults, CoreRun, CoreRunEvent, CoreSchedule, CoreSharedWork,
     CoreSites, CoreSkillCredit, CoreSkills, CoreSocial, CoreSocialResults, CoreToolRepairResults,
-    CoreTreatmentResults, CoreWritingPracticeResults, CoreWritingResults, DecisionPhase,
+    CoreTreatmentResults, CoreWorkIntent, CoreWritingPracticeResults, CoreWritingResults,
+    DecisionPhase,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

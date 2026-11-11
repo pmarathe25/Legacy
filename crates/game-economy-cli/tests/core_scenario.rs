@@ -5,6 +5,305 @@ fn root() -> PathBuf {
 }
 
 #[test]
+fn work_intentions_compete_with_carrying_and_share_scarce_inputs() {
+    use game_economy::core_interval::{CoreChoiceOutcome, CoreHost, CoreRunEvent, DecisionPhase};
+    use game_lots::{Container, Lot, Place};
+    let root = root();
+    let host = game_economy_cli::core_scenario(
+        &root.join("content/scenarios/economy-core-personal-choices.toml"),
+        &root.join("content"),
+    )
+    .unwrap();
+    let mut snapshot = host.snapshot();
+    let grain = snapshot
+        .core
+        .physical
+        .goods
+        .iter()
+        .find(|good| good.name == "grain")
+        .unwrap()
+        .id;
+    let output = snapshot
+        .core
+        .physical
+        .goods
+        .iter()
+        .find(|good| good.id != grain)
+        .unwrap()
+        .id;
+    let recipe = snapshot
+        .core
+        .physical
+        .recipes
+        .iter()
+        .map(|recipe| recipe.id)
+        .max()
+        .unwrap_or(0)
+        + 1;
+    snapshot
+        .core
+        .physical
+        .recipes
+        .push(game_production::Recipe {
+            id: recipe,
+            name: "choice work".into(),
+            ticks: 2,
+            inputs: vec![game_production::Amount {
+                good: grain,
+                quantity: 2,
+            }],
+            outputs: vec![game_production::Amount {
+                good: output,
+                quantity: 1,
+            }],
+        });
+    for person in &mut snapshot.core.people {
+        person.willing_to_work = true;
+    }
+    snapshot.autowork = Some(game_autowork::Autowork {
+        next_id: 1,
+        policies: (1..=3)
+            .map(|person| game_autowork::Policy {
+                person,
+                recipe,
+                enabled: true,
+                disregard_claims: false,
+            })
+            .collect(),
+        requests: None,
+    });
+    let profiles = std::sync::Arc::make_mut(
+        snapshot
+            .schedule
+            .as_mut()
+            .unwrap()
+            .personal_choices
+            .as_mut()
+            .unwrap(),
+    );
+    for person in profiles.iter_mut() {
+        person.preferences.push(game_personal_choice::Preference {
+            domain: 4,
+            enabled: true,
+            bias: 100,
+            weight: 1000,
+        });
+    }
+    profiles[2].idle = 1000;
+    let stock = snapshot
+        .core
+        .physical
+        .custody
+        .containers
+        .iter_mut()
+        .find(|container| {
+            container.place
+                == Place::Stock {
+                    region: 1,
+                    good: grain,
+                }
+        })
+        .unwrap();
+    *stock = Container::new(
+        stock.place,
+        100,
+        vec![Lot {
+            item: None,
+            good: grain,
+            quantity: 2,
+            expires_at: None,
+        }],
+    )
+    .unwrap();
+    let output_place = Place::Stock {
+        region: 1,
+        good: output,
+    };
+    if !snapshot
+        .core
+        .physical
+        .custody
+        .containers
+        .iter()
+        .any(|container| container.place == output_place)
+    {
+        snapshot
+            .core
+            .physical
+            .custody
+            .containers
+            .push(Container::new(output_place, 100, vec![]).unwrap());
+        snapshot
+            .core
+            .physical
+            .custody
+            .containers
+            .sort_by_key(|container| container.place);
+    }
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut host = CoreHost::resume(snapshot.clone()).unwrap();
+                let (intentions, _) = host.preview_personal_choices(&[]).unwrap();
+                assert_eq!(
+                    intentions
+                        .iter()
+                        .filter(|intent| intent.key.domain == 4)
+                        .count(),
+                    2
+                );
+                let mut pending = snapshot.clone();
+                pending.schedule.as_mut().unwrap().phase = DecisionPhase::ChosenWork {
+                    meal_people: vec![],
+                    intents: std::sync::Arc::new(intentions),
+                    construction_after: true,
+                    carrying_after: true,
+                    maintenance_after: false,
+                };
+                let mut stale = pending.clone();
+                stale.autowork.as_mut().unwrap().policies[0].enabled = false;
+                let mut stale = CoreHost::resume(stale).unwrap();
+                let stale_run = stale.advance_continuous(1, &[]).unwrap();
+                assert_eq!(stale_run.failure, None);
+                assert!(stale_run.events.iter().any(|event| matches!(event,
+                    CoreRunEvent::PersonalChoices(rows) if rows.iter().any(|row|
+                        row.actor == 1 && row.outcome == CoreChoiceOutcome::Stale))));
+                assert!(
+                    stale
+                        .snapshot()
+                        .core
+                        .physical
+                        .work
+                        .iter()
+                        .all(|job| job.job.worker != 1)
+                );
+                let saved = serde_json::to_string(&pending).unwrap();
+                let mut resumed = CoreHost::resume(serde_json::from_str(&saved).unwrap()).unwrap();
+                assert_eq!(resumed.advance_continuous(1, &[]).unwrap().failure, None);
+                let run = host.advance_continuous(1, &[]).unwrap();
+                assert_eq!(run.failure, None);
+                let decisions: Vec<_> = run
+                    .events
+                    .iter()
+                    .filter_map(|event| match event {
+                        CoreRunEvent::PersonalChoices(rows) => Some(rows),
+                        _ => None,
+                    })
+                    .flatten()
+                    .filter(|event| event.key.is_some_and(|key| key.domain == 4))
+                    .collect();
+                assert_eq!(decisions.len(), 2);
+                assert_eq!(
+                    decisions
+                        .iter()
+                        .filter(|event| event.outcome == CoreChoiceOutcome::Accepted)
+                        .count(),
+                    1
+                );
+                assert_eq!(
+                    decisions
+                        .iter()
+                        .filter(|event| event.outcome == CoreChoiceOutcome::Denied)
+                        .count(),
+                    1
+                );
+                assert_eq!(host.snapshot(), resumed.snapshot());
+                host.snapshot()
+            })
+    };
+    assert_eq!(run(1), run(4));
+    let mut alternative = snapshot;
+    let stock = alternative
+        .core
+        .physical
+        .custody
+        .containers
+        .iter_mut()
+        .find(|container| {
+            container.place
+                == Place::Stock {
+                    region: 1,
+                    good: grain,
+                }
+        })
+        .unwrap();
+    *stock = Container::new(
+        stock.place,
+        100,
+        vec![Lot {
+            item: None,
+            good: grain,
+            quantity: 20,
+            expires_at: None,
+        }],
+    )
+    .unwrap();
+    let people = std::sync::Arc::make_mut(
+        alternative
+            .schedule
+            .as_mut()
+            .unwrap()
+            .personal_choices
+            .as_mut()
+            .unwrap(),
+    );
+    people[1]
+        .preferences
+        .iter_mut()
+        .find(|preference| preference.domain == 2)
+        .unwrap()
+        .bias = 200;
+    let mut host = CoreHost::resume(alternative).unwrap();
+    let (intentions, _) = host.preview_personal_choices(&[]).unwrap();
+    assert_eq!(
+        intentions
+            .iter()
+            .find(|intent| intent.actor == 1)
+            .unwrap()
+            .key
+            .domain,
+        4
+    );
+    assert_eq!(
+        intentions
+            .iter()
+            .find(|intent| intent.actor == 2)
+            .unwrap()
+            .key
+            .domain,
+        2
+    );
+    let result = host.advance_continuous(1, &[]).unwrap();
+    assert_eq!(result.failure, None);
+    assert!(
+        result
+            .events
+            .iter()
+            .any(|event| matches!(event, CoreRunEvent::LocalCarries(rows)
+        if rows.iter().any(|row| row.person == 2 && row.moved)))
+    );
+    assert!(
+        host.snapshot()
+            .core
+            .physical
+            .work
+            .iter()
+            .any(|job| job.job.worker == 1)
+    );
+    assert!(
+        host.snapshot()
+            .core
+            .physical
+            .work
+            .iter()
+            .all(|job| job.job.worker != 2)
+    );
+}
+
+#[test]
 fn people_independently_choose_repairs_before_site_contention() {
     use game_economy::core_interval::{CoreChoiceOutcome, CoreHost, CoreRunEvent, DecisionPhase};
     use game_economy_building::maintenance::{Condition, Maintenance, Policy, Rule};
@@ -114,6 +413,7 @@ fn people_independently_choose_repairs_before_site_contention() {
                     intents: std::sync::Arc::new(intentions),
                     construction_after: true,
                     carrying_after: true,
+                    work_after: false,
                 };
                 let saved = serde_json::to_string(&pending).unwrap();
                 let mut resumed = CoreHost::resume(serde_json::from_str(&saved).unwrap()).unwrap();
@@ -408,7 +708,7 @@ fn people_choose_between_competing_physical_actions_or_idleness() {
                 let mut host =
                     game_economy_cli::core_scenario(&path, &root.join("content")).unwrap();
                 let (selected, _) = host.preview_personal_choices(&[]).unwrap();
-                let carrying = selected.iter().find(|intent| intent.actor == 2).unwrap().movement;
+                let carrying = selected.iter().find(|intent| intent.actor == 2).unwrap().movement.unwrap();
                 let result = host.advance_continuous(900_000, &[]).unwrap();
                 assert_eq!(result.failure, None);
                 assert!(result.events.iter().any(|event| matches!(event, CoreRunEvent::LocalCarries(rows) if rows.iter().any(|row| row.tick == 0 && row.person == 2 && row.from == carrying.from && Some(row.to) == carrying.to && row.good == carrying.good && row.quantity == carrying.quantity && row.moved))));
@@ -480,6 +780,7 @@ fn stale_saved_carrying_intention_is_reported_without_substituting_an_action() {
     snapshot.schedule.as_mut().unwrap().phase = DecisionPhase::ChosenCarrying {
         construction_after: false,
         maintenance_after: false,
+        work_after: false,
         meal_people: vec![],
         intents: std::sync::Arc::new(vec![CoreChoiceIntent {
             actor: 2,
@@ -487,7 +788,7 @@ fn stale_saved_carrying_intention_is_reported_without_substituting_an_action() {
                 domain: 2,
                 action: u64::from(grain),
             },
-            movement: game_lots::Movement {
+            movement: Some(game_lots::Movement {
                 id: 0,
                 from: game_lots::Place::Stock {
                     region: 1,
@@ -497,8 +798,9 @@ fn stale_saved_carrying_intention_is_reported_without_substituting_an_action() {
                 good: grain,
                 quantity: 3,
                 item: None,
-            },
+            }),
             second_movement: None,
+            work: None,
         }]),
     };
     let mut forbidden = snapshot.clone();
@@ -507,7 +809,7 @@ fn stale_saved_carrying_intention_is_reported_without_substituting_an_action() {
     {
         let intents = std::sync::Arc::make_mut(intents);
         intents[0].actor = 3;
-        intents[0].movement.to = Some(game_lots::Place::Person(3));
+        intents[0].movement.as_mut().unwrap().to = Some(game_lots::Place::Person(3));
     }
     assert!(game_economy::core_interval::CoreHost::resume(forbidden).is_err());
     let mut host = game_economy::core_interval::CoreHost::resume(
@@ -548,6 +850,7 @@ fn saved_choice_round_keeps_exact_intentions_across_workers() {
         intents: std::sync::Arc::new(intents),
         carrying_after: true,
         maintenance_after: false,
+        work_after: false,
     };
     let saved = serde_json::to_string(&snapshot).unwrap();
     let run = |workers| {

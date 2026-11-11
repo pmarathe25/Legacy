@@ -1,4 +1,4 @@
-//! Opt-in competition between construction, local carrying, and maintenance.
+//! Opt-in competition between construction, carrying, maintenance, and work starts.
 //! Other scheduler domains keep their existing behavior until separately migrated.
 use super::*;
 use game_personal_choice::{Key, Person, Proposal};
@@ -6,6 +6,17 @@ use game_personal_choice::{Key, Person, Proposal};
 pub(super) const CONSTRUCTION: u32 = 1;
 pub(super) const CARRYING: u32 = 2;
 pub(super) const MAINTENANCE: u32 = 3;
+pub(super) const WORK: u32 = 4;
+
+/// A selected work start; job identity is assigned only during admission.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CoreWorkIntent {
+    pub region: u64,
+    pub recipe: u32,
+    pub units: u32,
+    pub base_rate: u64,
+}
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -13,14 +24,18 @@ pub struct CoreChoiceIntent {
     pub actor: u64,
     pub key: Key,
     /// Exact physical movements except transient action and new-site identities.
-    pub movement: game_lots::Movement,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub movement: Option<game_lots::Movement>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub second_movement: Option<game_lots::Movement>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub work: Option<CoreWorkIntent>,
 }
 
 impl CoreChoiceIntent {
     pub(super) fn magnitude(&self) -> i64 {
-        (u128::from(self.movement.quantity)
+        (self.movement.map_or(0, |row| u128::from(row.quantity))
+            + self.work.map_or(0, |row| u128::from(row.units))
             + self
                 .second_movement
                 .map_or(0, |row| u128::from(row.quantity)))
@@ -64,6 +79,84 @@ pub(super) fn intention_permitted(person: &Person, intent: &CoreChoiceIntent) ->
 }
 
 impl CoreHost {
+    /// Admit already chosen work without choosing a replacement policy.
+    pub(super) fn start_selected_work(
+        &mut self,
+        intents: &[CoreChoiceIntent],
+        blocked: &[u64],
+    ) -> Result<Vec<(u64, u64, bool)>, String> {
+        if intents.is_empty() {
+            return Ok(Vec::new());
+        }
+        let owner = self
+            .autowork
+            .as_ref()
+            .ok_or("work choice requires an owner")?;
+        let after_live = self
+            .core
+            .physical
+            .work()
+            .last()
+            .map_or(Some(0), |row| row.job.id.checked_add(1))
+            .ok_or("job id overflow")?;
+        let first = owner.next_id.max(after_live);
+        let next_id = first
+            .checked_add(u64::try_from(intents.len()).map_err(|_| "job count overflow")?)
+            .ok_or("job id overflow")?;
+        let starts: Vec<_> = intents
+            .par_iter()
+            .enumerate()
+            .map(|(index, intent)| {
+                let work = intent.work.expect("validated selected work");
+                (
+                    game_production_model::Start {
+                        id: first + index as u64,
+                        worker: intent.actor,
+                        region: work.region,
+                        recipe: work.recipe,
+                        units: work.units,
+                    },
+                    work.base_rate,
+                )
+            })
+            .collect();
+        let raw: Vec<_> = starts.par_iter().map(|row| row.0).collect();
+        let uses = if self
+            .claims
+            .as_ref()
+            .is_some_and(|claims| !claims.claims.is_empty())
+        {
+            game_economy_claims::work(&raw, self.core.physical.recipes())?
+        } else {
+            Vec::new()
+        };
+        let effective = self.effective_autonomous_work(blocked)?;
+        let selected: std::collections::HashSet<_> = intents
+            .par_iter()
+            .map(|row| (row.actor, row.key.action as u32))
+            .collect();
+        let candidates: Vec<_> = effective
+            .goal_candidates
+            .into_par_iter()
+            .filter(|row| selected.contains(row))
+            .collect();
+        let outcomes = self.start_with_sites(&starts)?;
+        self.autowork.as_mut().expect("owner checked").next_id = next_id;
+        self.publish_claim_work(&uses, &outcomes, self.core.physical.tick());
+        self.record_goal_setbacks(&candidates, &outcomes);
+        let accepted: std::collections::HashMap<_, _> = outcomes.into_iter().collect();
+        Ok(starts
+            .into_par_iter()
+            .map(|(start, _)| {
+                (
+                    start.worker,
+                    start.id,
+                    accepted.get(&start.id).copied().unwrap_or(false),
+                )
+            })
+            .collect())
+    }
+
     /// Inspect an uncommitted choice round from the current opening state.
     /// No result is a physical action or an instruction to another person.
     pub fn preview_personal_choices(
@@ -182,10 +275,13 @@ impl CoreHost {
                                 domain: CONSTRUCTION,
                                 action: u64::from(opportunity.blueprint),
                             },
-                            movement: retained
-                                .or(consumed)
-                                .expect("positive construction quantity"),
+                            movement: Some(
+                                retained
+                                    .or(consumed)
+                                    .expect("positive construction quantity"),
+                            ),
                             second_movement: retained.and(consumed),
+                            work: None,
                         }
                     })
                     .collect();
@@ -221,15 +317,16 @@ impl CoreHost {
                             domain: CARRYING,
                             action: u64::from(opportunity.good),
                         },
-                        movement: game_lots::Movement {
+                        movement: Some(game_lots::Movement {
                             id: 0,
                             from: opportunity.from,
                             to: Some(opportunity.to),
                             good: opportunity.good,
                             quantity: opportunity.quantity,
                             item: None,
-                        },
+                        }),
                         second_movement: None,
+                        work: None,
                     })
                     .collect();
                 rows
@@ -263,26 +360,65 @@ impl CoreHost {
                         domain: MAINTENANCE,
                         action: opportunity.site,
                     },
-                    movement: game_lots::Movement {
+                    movement: Some(game_lots::Movement {
                         id: 0,
                         from: game_lots::Place::Person(opportunity.person),
                         to: None,
                         good: opportunity.good,
                         quantity: opportunity.quantity,
                         item: None,
-                    },
+                    }),
                     second_movement: None,
+                    work: None,
                 })
                 .collect()
             } else {
                 Vec::new()
             }
         };
-        let ((construction, carrying), maintenance) =
-            rayon::join(|| rayon::join(construction, carrying), maintenance);
+        let work = || -> Result<Vec<CoreChoiceIntent>, String> {
+            let schedule = self.schedule.as_ref().ok_or("no core schedule")?;
+            if domain.is_none_or(|domain| domain == WORK)
+                && schedule.personal_choices.as_ref().is_some_and(|people| {
+                    people.par_iter().any(|person| {
+                        person
+                            .preferences
+                            .binary_search_by_key(&WORK, |preference| preference.domain)
+                            .is_ok()
+                    })
+                })
+            {
+                Ok(self
+                    .preview_autonomous_work(&busy, schedule.work_rate)?
+                    .into_par_iter()
+                    .map(|opportunity| CoreChoiceIntent {
+                        actor: opportunity.person,
+                        key: Key {
+                            domain: WORK,
+                            action: u64::from(opportunity.recipe),
+                        },
+                        movement: None,
+                        second_movement: None,
+                        work: Some(CoreWorkIntent {
+                            region: opportunity.region,
+                            recipe: opportunity.recipe,
+                            units: 1,
+                            base_rate: schedule.work_rate,
+                        }),
+                    })
+                    .collect())
+            } else {
+                Ok(Vec::new())
+            }
+        };
+        let ((construction, carrying), (maintenance, work)) = rayon::join(
+            || rayon::join(construction, carrying),
+            || rayon::join(maintenance, work),
+        );
         let mut intents = construction?;
         intents.par_extend(carrying);
         intents.par_extend(maintenance);
+        intents.par_extend(work?);
         intents.par_sort_unstable_by_key(|intent| (intent.actor, intent.key));
         Ok(intents)
     }
@@ -373,6 +509,7 @@ impl CoreHost {
                     .is_some_and(|i| {
                         current[i].movement == intent.movement
                             && current[i].second_movement == intent.second_movement
+                            && current[i].work == intent.work
                     });
                 (intent, found)
             })

@@ -69,6 +69,8 @@ pub enum DecisionPhase {
         carrying_after: bool,
         #[serde(default)]
         maintenance_after: bool,
+        #[serde(default)]
+        work_after: bool,
     },
     ChosenCarrying {
         meal_people: Vec<u64>,
@@ -76,12 +78,23 @@ pub enum DecisionPhase {
         construction_after: bool,
         #[serde(default)]
         maintenance_after: bool,
+        #[serde(default)]
+        work_after: bool,
     },
     ChosenMaintenance {
         meal_people: Vec<u64>,
         intents: Arc<Vec<CoreChoiceIntent>>,
         construction_after: bool,
         carrying_after: bool,
+        #[serde(default)]
+        work_after: bool,
+    },
+    ChosenWork {
+        meal_people: Vec<u64>,
+        intents: Arc<Vec<CoreChoiceIntent>>,
+        construction_after: bool,
+        carrying_after: bool,
+        maintenance_after: bool,
     },
     Construction {
         meal_people: Vec<u64>,
@@ -113,7 +126,7 @@ pub struct CoreSchedule {
     /// Rates retained across boundaries, including temporarily paused work.
     #[serde(default)]
     pub carried_rates: Vec<(u64, u64)>,
-    /// Opt-in personal choice for construction, local carrying and maintenance.
+    /// Opt-in personal choice for construction, carrying, maintenance and work starts.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub personal_choices: Option<Arc<Vec<game_personal_choice::Person>>>,
 }
@@ -157,7 +170,8 @@ impl CoreSchedule {
         }
         if let DecisionPhase::ChosenConstruction { intents, .. }
         | DecisionPhase::ChosenCarrying { intents, .. }
-        | DecisionPhase::ChosenMaintenance { intents, .. } = &self.phase
+        | DecisionPhase::ChosenMaintenance { intents, .. }
+        | DecisionPhase::ChosenWork { intents, .. } = &self.phase
         {
             let Some(people) = &self.personal_choices else {
                 return Err("selected actions require personal choices".into());
@@ -167,13 +181,25 @@ impl CoreSchedule {
                 .any(|rows| rows[0].actor >= rows[1].actor)
                 || intents.par_iter().any(|intent| {
                     intent.actor == 0
-                        || !matches!(intent.key.domain, 1..=3)
                         || intent.key.action == 0
-                        || intent.movement.id != 0
-                        || intent.movement.quantity == 0
-                        || intent
-                            .second_movement
-                            .is_some_and(|movement| movement.id != 0 || movement.quantity == 0)
+                        || match (intent.key.domain, intent.movement, intent.work) {
+                            (1..=3, Some(movement), None) => {
+                                movement.id != 0
+                                    || movement.quantity == 0
+                                    || intent
+                                        .second_movement
+                                        .is_some_and(|row| row.id != 0 || row.quantity == 0)
+                            }
+                            (4, None, Some(work)) => {
+                                intent.second_movement.is_some()
+                                    || work.region == 0
+                                    || work.recipe == 0
+                                    || work.units == 0
+                                    || work.base_rate == 0
+                                    || intent.key.action != u64::from(work.recipe)
+                            }
+                            _ => true,
+                        }
                         || people
                             .binary_search_by_key(&intent.actor, |person| person.id)
                             .ok()
@@ -207,6 +233,7 @@ impl CoreSchedule {
         | DecisionPhase::ChosenConstruction { meal_people, .. }
         | DecisionPhase::ChosenCarrying { meal_people, .. }
         | DecisionPhase::ChosenMaintenance { meal_people, .. }
+        | DecisionPhase::ChosenWork { meal_people, .. }
         | DecisionPhase::Construction { meal_people }
         | DecisionPhase::LocalCarrying { meal_people }
         | DecisionPhase::HaulingRequests { meal_people }
@@ -322,7 +349,8 @@ impl CoreHost {
             .is_some_and(|schedule| schedule.personal_choices.is_some())
             && (self.construction.is_some()
                 || self.local_transport.is_some()
-                || self.sites.is_some())
+                || self.sites.is_some()
+                || self.autowork.is_some())
         {
             DecisionPhase::ChooseLocal { meal_people }
         } else if self.construction.is_some() {
@@ -790,8 +818,26 @@ impl CoreHost {
                             meal_people.dedup();
                             run.events.push(CoreRunEvent::Adoptions(adoptions));
                         }
-                        let starts =
-                            attempt!('run, self.start_autonomous_work(&busy, schedule.work_rate));
+                        let mut work_busy = busy;
+                        if let Some(people) = &schedule.personal_choices {
+                            work_busy.par_extend(
+                                people
+                                    .par_iter()
+                                    .filter(|person| {
+                                        person
+                                            .preferences
+                                            .binary_search_by_key(
+                                                &personal_choice::WORK,
+                                                |preference| preference.domain,
+                                            )
+                                            .is_ok()
+                                    })
+                                    .map(|person| person.id),
+                            );
+                            work_busy.par_sort_unstable();
+                            work_busy.dedup();
+                        }
+                        let starts = attempt!('run, self.start_autonomous_work(&work_busy, schedule.work_rate));
                         if !starts.is_empty() {
                             run.events.push(CoreRunEvent::Starts(starts));
                         }
@@ -934,8 +980,18 @@ impl CoreHost {
                                 })
                                 .is_ok()
                         });
+                        let has_work = people.par_iter().any(|person| {
+                            person
+                                .preferences
+                                .binary_search_by_key(&personal_choice::WORK, |preference| {
+                                    preference.domain
+                                })
+                                .is_ok()
+                        });
                         let random = game_genetics::random(self.core.seed, 0x63686f696365, round);
-                        let first = if has_maintenance {
+                        let first = if has_work {
+                            random % 4
+                        } else if has_maintenance {
                             random % 3
                         } else {
                             random & 1
@@ -946,6 +1002,7 @@ impl CoreHost {
                                 intents,
                                 carrying_after: true,
                                 maintenance_after: has_maintenance,
+                                work_after: has_work,
                             }
                         } else if first == 1 {
                             DecisionPhase::ChosenCarrying {
@@ -953,13 +1010,23 @@ impl CoreHost {
                                 intents,
                                 construction_after: true,
                                 maintenance_after: has_maintenance,
+                                work_after: has_work,
                             }
-                        } else {
+                        } else if first == 2 {
                             DecisionPhase::ChosenMaintenance {
                                 meal_people,
                                 intents,
                                 construction_after: true,
                                 carrying_after: true,
+                                work_after: has_work,
+                            }
+                        } else {
+                            DecisionPhase::ChosenWork {
+                                meal_people,
+                                intents,
+                                construction_after: true,
+                                carrying_after: true,
+                                maintenance_after: has_maintenance,
                             }
                         };
                     }
@@ -968,6 +1035,7 @@ impl CoreHost {
                         intents,
                         carrying_after,
                         maintenance_after,
+                        work_after,
                     } => {
                         let mut busy = blocked.to_vec();
                         busy.extend(meal_people.iter().copied());
@@ -1025,6 +1093,7 @@ impl CoreHost {
                                 intents,
                                 construction_after: false,
                                 maintenance_after,
+                                work_after,
                             }
                         } else if maintenance_after {
                             DecisionPhase::ChosenMaintenance {
@@ -1032,6 +1101,15 @@ impl CoreHost {
                                 intents,
                                 construction_after: false,
                                 carrying_after: false,
+                                work_after,
+                            }
+                        } else if work_after {
+                            DecisionPhase::ChosenWork {
+                                meal_people,
+                                intents,
+                                construction_after: false,
+                                carrying_after: false,
+                                maintenance_after: false,
                             }
                         } else {
                             self.after_local_carrying(meal_people)
@@ -1043,6 +1121,7 @@ impl CoreHost {
                         intents,
                         construction_after,
                         maintenance_after,
+                        work_after,
                     } => {
                         let mut busy = blocked.to_vec();
                         busy.extend(meal_people.iter().copied());
@@ -1101,6 +1180,7 @@ impl CoreHost {
                                 intents,
                                 carrying_after: false,
                                 maintenance_after,
+                                work_after,
                             }
                         } else if maintenance_after {
                             DecisionPhase::ChosenMaintenance {
@@ -1108,6 +1188,15 @@ impl CoreHost {
                                 intents,
                                 construction_after: false,
                                 carrying_after: false,
+                                work_after,
+                            }
+                        } else if work_after {
+                            DecisionPhase::ChosenWork {
+                                meal_people,
+                                intents,
+                                construction_after: false,
+                                carrying_after: false,
+                                maintenance_after: false,
                             }
                         } else {
                             self.after_local_carrying(meal_people)
@@ -1119,6 +1208,7 @@ impl CoreHost {
                         intents,
                         construction_after,
                         carrying_after,
+                        work_after,
                     } => {
                         let mut busy = blocked.to_vec();
                         busy.extend(meal_people.iter().copied());
@@ -1182,6 +1272,7 @@ impl CoreHost {
                                 intents,
                                 carrying_after,
                                 maintenance_after: false,
+                                work_after,
                             }
                         } else if carrying_after {
                             DecisionPhase::ChosenCarrying {
@@ -1189,6 +1280,96 @@ impl CoreHost {
                                 intents,
                                 construction_after: false,
                                 maintenance_after: false,
+                                work_after,
+                            }
+                        } else if work_after {
+                            DecisionPhase::ChosenWork {
+                                meal_people,
+                                intents,
+                                construction_after: false,
+                                carrying_after: false,
+                                maintenance_after: false,
+                            }
+                        } else {
+                            self.after_local_carrying(meal_people)
+                        };
+                        self.schedule.as_mut().expect("active schedule").phase = next;
+                    }
+                    DecisionPhase::ChosenWork {
+                        mut meal_people,
+                        intents,
+                        construction_after,
+                        carrying_after,
+                        maintenance_after,
+                    } => {
+                        let mut busy = blocked.to_vec();
+                        busy.extend(meal_people.iter().copied());
+                        busy.par_sort_unstable();
+                        busy.dedup();
+                        let people = schedule.personal_choices.as_ref().expect("choice profile");
+                        let (blocked_choice, mut choices) = attempt!('run, self.choice_blocked(
+                            &busy, people, &intents, personal_choice::WORK
+                        ));
+                        let selected: Vec<_> = intents
+                            .par_iter()
+                            .filter(|intent| {
+                                intent.key.domain == personal_choice::WORK
+                                    && blocked_choice.binary_search(&intent.actor).is_err()
+                            })
+                            .cloned()
+                            .collect();
+                        let starts = attempt!('run, self.start_selected_work(&selected, &busy));
+                        choices.par_extend(starts.par_iter().map(|&(actor, _, accepted)| {
+                            CoreChoiceEvent {
+                                tick: self.core.physical.tick(),
+                                offset_millis: offset,
+                                actor,
+                                key: selected
+                                    .binary_search_by_key(&actor, |intent| intent.actor)
+                                    .ok()
+                                    .map(|i| selected[i].key),
+                                outcome: if accepted {
+                                    CoreChoiceOutcome::Accepted
+                                } else {
+                                    CoreChoiceOutcome::Denied
+                                },
+                            }
+                        }));
+                        meal_people.par_extend(starts.par_iter().map(|row| row.0));
+                        meal_people.par_sort_unstable();
+                        meal_people.dedup();
+                        if !starts.is_empty() {
+                            run.events.push(CoreRunEvent::Starts(
+                                starts.par_iter().map(|row| (row.1, row.2)).collect(),
+                            ));
+                        }
+                        if !choices.is_empty() {
+                            choices.par_sort_unstable_by_key(|event| event.actor);
+                            run.events.push(CoreRunEvent::PersonalChoices(choices));
+                        }
+                        let next = if construction_after {
+                            DecisionPhase::ChosenConstruction {
+                                meal_people,
+                                intents,
+                                carrying_after,
+                                maintenance_after,
+                                work_after: false,
+                            }
+                        } else if carrying_after {
+                            DecisionPhase::ChosenCarrying {
+                                meal_people,
+                                intents,
+                                construction_after: false,
+                                maintenance_after,
+                                work_after: false,
+                            }
+                        } else if maintenance_after {
+                            DecisionPhase::ChosenMaintenance {
+                                meal_people,
+                                intents,
+                                construction_after: false,
+                                carrying_after: false,
+                                work_after: false,
                             }
                         } else {
                             self.after_local_carrying(meal_people)

@@ -91,6 +91,8 @@ capacity = 10000
         .snapshot();
     std::fs::remove_file(path).unwrap();
     let maintenance = std::env::var_os("LEGACY_CHOICE_MAINTENANCE").is_some();
+    let work = std::env::var_os("LEGACY_CHOICE_WORK").is_some();
+    assert!(!(maintenance && work), "choose one additional workload");
     if maintenance {
         use game_economy_building::maintenance::{Condition, Maintenance, Policy, Rule};
         use game_economy_work::sites::Site;
@@ -168,6 +170,113 @@ capacity = 10000
             });
         }
     }
+    if work {
+        let grain = snapshot
+            .core
+            .physical
+            .goods
+            .iter()
+            .find(|good| good.name == "grain")
+            .unwrap()
+            .id;
+        let output = snapshot
+            .core
+            .physical
+            .goods
+            .iter()
+            .find(|good| good.id != grain)
+            .unwrap()
+            .id;
+        let recipe = snapshot
+            .core
+            .physical
+            .recipes
+            .iter()
+            .map(|recipe| recipe.id)
+            .max()
+            .unwrap_or(0)
+            + 1;
+        snapshot
+            .core
+            .physical
+            .recipes
+            .push(game_production::Recipe {
+                id: recipe,
+                name: "choice benchmark work".into(),
+                ticks: 2,
+                inputs: vec![game_production::Amount {
+                    good: grain,
+                    quantity: 1,
+                }],
+                outputs: vec![game_production::Amount {
+                    good: output,
+                    quantity: 1,
+                }],
+            });
+        let output_place = game_lots::Place::Stock {
+            region: 1,
+            good: output,
+        };
+        if !snapshot
+            .core
+            .physical
+            .custody
+            .containers
+            .iter()
+            .any(|container| container.place == output_place)
+        {
+            snapshot
+                .core
+                .physical
+                .custody
+                .containers
+                .push(game_lots::Container::new(output_place, count * 20, vec![]).unwrap());
+            snapshot
+                .core
+                .physical
+                .custody
+                .containers
+                .sort_by_key(|container| container.place);
+        }
+        for person in snapshot
+            .core
+            .people
+            .iter_mut()
+            .filter(|person| person.id % 3 == 0)
+        {
+            person.willing_to_work = true;
+        }
+        snapshot.autowork = Some(game_autowork::Autowork {
+            next_id: 1,
+            policies: (1..=count)
+                .filter(|id| id % 3 == 0)
+                .map(|person| game_autowork::Policy {
+                    person,
+                    recipe,
+                    enabled: true,
+                    disregard_claims: false,
+                })
+                .collect(),
+            requests: None,
+        });
+        let profiles = std::sync::Arc::make_mut(
+            snapshot
+                .schedule
+                .as_mut()
+                .unwrap()
+                .personal_choices
+                .as_mut()
+                .unwrap(),
+        );
+        for person in profiles.iter_mut().filter(|person| person.id % 3 == 0) {
+            person.preferences.push(game_personal_choice::Preference {
+                domain: 4,
+                enabled: true,
+                bias: 30,
+                weight: 1000,
+            });
+        }
+    }
     let mut reference = None;
     for workers in [1, 2, 4, 6] {
         #[cfg(feature = "profile")]
@@ -197,6 +306,21 @@ capacity = 10000
                     })
                     .flatten()
                     .filter(|event| event.key.is_some_and(|key| key.domain == 3))
+                    .count();
+                assert_eq!(decisions as u64, count / 3);
+            }
+            if work && count >= 3 {
+                let decisions = result
+                    .events
+                    .iter()
+                    .filter_map(|event| match event {
+                        game_economy::core_interval::CoreRunEvent::PersonalChoices(rows) => {
+                            Some(rows)
+                        }
+                        _ => None,
+                    })
+                    .flatten()
+                    .filter(|event| event.key.is_some_and(|key| key.domain == 4))
                     .count();
                 assert_eq!(decisions as u64, count / 3);
             }
