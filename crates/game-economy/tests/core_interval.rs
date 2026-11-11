@@ -149,6 +149,206 @@ fn fixture() -> CoreSnapshot {
     }
 }
 
+#[test]
+fn people_can_choose_to_continue_or_stop_existing_ordinary_work() {
+    use game_economy::core_interval::{CoreChoiceOutcome, CoreRunEvent};
+    fn run(workers: usize, continue_work: bool) -> CoreHostSnapshot {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut initial = fixture();
+                initial.travel = None;
+                initial.people[1].region = Some(1);
+                initial.nutrition = None;
+                initial.pending_food.clear();
+                let snapshot: CoreHostSnapshot =
+                    serde_json::from_value(serde_json::json!({ "core": initial })).unwrap();
+                let mut host = CoreHost::begin(snapshot, &[(1, 1)]).unwrap();
+                host.enable_schedule(1000, 1).unwrap();
+                host.enable_personal_choices(vec![game_personal_choice::Person {
+                    id: 1,
+                    idle: 0,
+                    act_on_tie: false,
+                    preferences: vec![game_personal_choice::Preference {
+                        domain: 5,
+                        enabled: continue_work,
+                        bias: 0,
+                        weight: 1000,
+                    }],
+                }])
+                .unwrap();
+                if !continue_work {
+                    let mut blocked = CoreHost::resume(host.snapshot()).unwrap();
+                    let result = blocked.advance_continuous(1, &[1]).unwrap();
+                    assert_eq!(result.failure, None);
+                    assert!(!result.events.iter().any(|event| matches!(event,
+                    CoreRunEvent::PersonalChoices(rows) if rows.iter().any(|row|
+                        row.outcome == CoreChoiceOutcome::Stopped))));
+                    assert_eq!(
+                        blocked.snapshot().core.physical.work[0].phase,
+                        game_lot_runtime::Phase::Working
+                    );
+                }
+                let run = host.advance_continuous(1, &[]).unwrap();
+                assert_eq!(run.failure, None);
+                let stopped = run.events.iter().any(|event| {
+                    matches!(event,
+                CoreRunEvent::PersonalChoices(rows) if rows.iter().any(|row|
+                    row.actor == 1 && row.outcome == CoreChoiceOutcome::Stopped))
+                });
+                assert_eq!(stopped, !continue_work);
+                let state = host.snapshot();
+                assert_eq!(
+                    state.core.physical.work[0].phase,
+                    if continue_work {
+                        game_lot_runtime::Phase::Working
+                    } else {
+                        game_lot_runtime::Phase::Returning
+                    }
+                );
+                assert_eq!(
+                    state
+                        .core
+                        .physical
+                        .custody
+                        .containers
+                        .iter()
+                        .find(|container| container.place == Place::JobInput(1))
+                        .unwrap()
+                        .used,
+                    2
+                );
+                let saved = serde_json::to_string(&state).unwrap();
+                let mut restored = CoreHost::resume(serde_json::from_str(&saved).unwrap()).unwrap();
+                assert_eq!(host.advance_continuous(999, &[]).unwrap().failure, None);
+                assert_eq!(restored.advance_continuous(999, &[]).unwrap().failure, None);
+                assert_eq!(host.snapshot(), restored.snapshot());
+                host.snapshot()
+            })
+    }
+    for willing in [false, true] {
+        assert_eq!(run(1, willing), run(4, willing));
+    }
+}
+
+#[test]
+#[ignore = "manual continuation choice scaling benchmark"]
+fn concentrated_work_continuation_benchmark() {
+    let count = std::env::var("LEGACY_PEOPLE")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(10_000);
+    assert!(count > 1);
+    let mut initial = fixture();
+    let person = initial.people[0].clone();
+    initial.people = (1..=count)
+        .map(|id| {
+            let mut person = person.clone();
+            person.id = id;
+            person.willing_to_work = true;
+            person
+        })
+        .collect();
+    initial.travel = None;
+    initial.nutrition = None;
+    initial.pending_food.clear();
+    let stock = initial
+        .physical
+        .custody
+        .containers
+        .iter_mut()
+        .find(|container| container.place == Place::Stock { region: 1, good: 1 })
+        .unwrap();
+    *stock = Container::new(
+        stock.place,
+        count * 2,
+        vec![Lot {
+            item: None,
+            good: 1,
+            quantity: (count - 1) * 2,
+            expires_at: None,
+        }],
+    )
+    .unwrap();
+    let owner = game_autowork::Autowork {
+        next_id: 2,
+        policies: (2..=count)
+            .map(|person| game_autowork::Policy {
+                person,
+                recipe: 1,
+                enabled: true,
+                disregard_claims: false,
+            })
+            .collect(),
+        requests: None,
+    };
+    let snapshot: CoreHostSnapshot = serde_json::from_value(serde_json::json!({
+        "core": initial, "autowork": owner,
+    }))
+    .unwrap();
+    let mut host = CoreHost::begin(snapshot, &[(1, 1)]).unwrap();
+    assert_eq!(
+        host.start_autonomous_work(&[], 1).unwrap().len(),
+        (count - 1) as usize
+    );
+    host.enable_schedule(1000, 1).unwrap();
+    host.enable_personal_choices(
+        (1..=count)
+            .map(|id| game_personal_choice::Person {
+                id,
+                idle: 0,
+                act_on_tie: false,
+                preferences: vec![game_personal_choice::Preference {
+                    domain: 5,
+                    enabled: id % 2 == 0,
+                    bias: 0,
+                    weight: 1000,
+                }],
+            })
+            .collect(),
+    )
+    .unwrap();
+    let snapshot = host.snapshot();
+    let mut reference = None;
+    for workers in [1, 2, 4, 6] {
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap();
+        let mut times = Vec::new();
+        for _ in 0..3 {
+            let mut host = pool.install(|| CoreHost::resume(snapshot.clone()).unwrap());
+            let start = std::time::Instant::now();
+            let result = pool.install(|| host.advance_continuous(1, &[]).unwrap());
+            times.push(start.elapsed());
+            assert_eq!(result.failure, None);
+            let state = pool.install(|| host.snapshot());
+            assert_eq!(
+                state
+                    .core
+                    .physical
+                    .work
+                    .iter()
+                    .filter(|work| work.phase == game_lot_runtime::Phase::Returning)
+                    .count(),
+                count.div_ceil(2) as usize
+            );
+            if let Some(expected) = &reference {
+                assert_eq!(&state, expected);
+            } else {
+                reference = Some(state);
+            }
+        }
+        times.sort_unstable();
+        eprintln!(
+            "{workers} workers: {:?} median for {count} active jobs",
+            times[1]
+        );
+    }
+}
+
 fn timed_fatigue() -> game_economy_fatigue::TimedFatigue {
     game_economy_fatigue::TimedFatigue {
         fatigue: game_economy_fatigue::Fatigue {

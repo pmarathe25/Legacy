@@ -7,6 +7,7 @@ pub(super) const CONSTRUCTION: u32 = 1;
 pub(super) const CARRYING: u32 = 2;
 pub(super) const MAINTENANCE: u32 = 3;
 pub(super) const WORK: u32 = 4;
+pub(super) const CONTINUE_WORK: u32 = 5;
 
 /// A selected work start; job identity is assigned only during admission.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -50,6 +51,7 @@ pub enum CoreChoiceOutcome {
     Stale,
     Accepted,
     Denied,
+    Stopped,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -79,6 +81,127 @@ pub(super) fn intention_permitted(person: &Person, intent: &CoreChoiceIntent) ->
 }
 
 impl CoreHost {
+    /// People with an explicit continuation preference may leave an ordinary
+    /// active job. Shared sessions and succession are reviewed by their owners.
+    pub(super) fn reconsider_ordinary_work(
+        &mut self,
+        people: &[Person],
+        blocked: &[u64],
+    ) -> Result<(Vec<u64>, Vec<CoreChoiceEvent>), String> {
+        if !people.par_iter().any(|person| {
+            person
+                .preferences
+                .binary_search_by_key(&CONTINUE_WORK, |preference| preference.domain)
+                .is_ok()
+        }) {
+            return Ok((Vec::new(), Vec::new()));
+        }
+        let rest = self.blocked_with_rest(blocked);
+        let blocked = rest.as_deref().unwrap_or(blocked);
+        let mut shared: std::collections::HashSet<u64> = self
+            .shared_work
+            .as_ref()
+            .map_or_else(std::collections::HashSet::new, |owner| {
+                owner.sessions.par_iter().map(|row| row.event.job).collect()
+            });
+        if let Some(succession) = self
+            .shared_work
+            .as_ref()
+            .and_then(|owner| owner.owner.succession.as_ref())
+        {
+            shared.par_extend(succession.engagements.par_iter().map(|row| row.job));
+        }
+        let mut jobs: Vec<_> = self
+            .core
+            .physical
+            .work()
+            .par_iter()
+            .filter(|row| {
+                row.phase == game_lot_runtime::Phase::Working
+                    && !shared.contains(&row.job.id)
+                    && blocked.binary_search(&row.job.worker).is_err()
+                    && self
+                        .core
+                        .people
+                        .binary_search_by_key(&row.job.worker, |person| person.id)
+                        .ok()
+                        .is_some_and(|i| {
+                            self.core.people[i].health > 0 && !self.core.people[i].controlled
+                        })
+                    && people
+                        .binary_search_by_key(&row.job.worker, |person| person.id)
+                        .ok()
+                        .is_some_and(|i| {
+                            people[i]
+                                .preferences
+                                .binary_search_by_key(&CONTINUE_WORK, |preference| {
+                                    preference.domain
+                                })
+                                .is_ok()
+                        })
+            })
+            .map(|row| (row.job.worker, row.job.id, row.job.remaining))
+            .collect();
+        jobs.par_sort_unstable_by_key(|row| row.0);
+        if jobs.is_empty() {
+            return Ok((Vec::new(), Vec::new()));
+        }
+        let decision_makers: Vec<_> = people
+            .par_iter()
+            .filter(|person| jobs.binary_search_by_key(&person.id, |row| row.0).is_ok())
+            .cloned()
+            .collect();
+        let proposals: Vec<_> = jobs
+            .par_iter()
+            .map(|&(actor, job, remaining)| Proposal {
+                actor,
+                key: Key {
+                    domain: CONTINUE_WORK,
+                    action: job,
+                },
+                value: remaining.min(i64::MAX as u64) as i64,
+            })
+            .collect();
+        let tick = self.core.physical.tick();
+        let offset_millis = self.core.elapsed_millis().ok_or("no physical interval")?;
+        let round = tick.rotate_left(21) ^ offset_millis;
+        let decisions =
+            game_personal_choice::select(&decision_makers, &proposals, self.core.seed, round)
+                .map_err(str::to_owned)?;
+        let mut stops: Vec<_> = decisions
+            .par_iter()
+            .filter(|decision| decision.action.is_none())
+            .map(|decision| {
+                let i = jobs
+                    .binary_search_by_key(&decision.actor, |row| row.0)
+                    .expect("known job");
+                (jobs[i].1, decision.actor)
+            })
+            .collect();
+        if stops.is_empty() {
+            return Ok((Vec::new(), Vec::new()));
+        }
+        stops.par_sort_unstable_by_key(|row| row.0);
+        self.abandon_work(&stops)?;
+        let mut actors: Vec<_> = stops.par_iter().map(|row| row.1).collect();
+        actors.par_sort_unstable();
+        let mut events: Vec<_> = stops
+            .into_par_iter()
+            .map(|(job, actor)| CoreChoiceEvent {
+                tick,
+                offset_millis,
+                actor,
+                key: Some(Key {
+                    domain: CONTINUE_WORK,
+                    action: job,
+                }),
+                outcome: CoreChoiceOutcome::Stopped,
+            })
+            .collect();
+        events.par_sort_unstable_by_key(|event| event.actor);
+        Ok((actors, events))
+    }
+
     /// Admit already chosen work without choosing a replacement policy.
     pub(super) fn start_selected_work(
         &mut self,

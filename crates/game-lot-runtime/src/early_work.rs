@@ -493,7 +493,6 @@ impl Runtime {
             .ok_or("no physical work interval")?;
         if interval.tick != self.tick()
             || interval.custody_revision != self.store.revision()
-            || interval.elapsed_millis == 0
             || interval.elapsed_millis >= self.tick_millis
         {
             return Err("work abandonment requires a valid partial interval".into());

@@ -210,6 +210,31 @@ fn fixture(perishable: bool, output_quantity: u64) -> Runtime {
         .unwrap();
     runtime
 }
+
+#[test]
+fn stopping_at_interval_opening_keeps_inputs_until_boundary() {
+    let mut runtime = fixture(false, 1);
+    runtime.begin_work_interval(&[(1, 1)]).unwrap();
+    let before = runtime.snapshot();
+    assert!(runtime.abandon_interval_work(&[(1, 2)]).is_err());
+    assert_eq!(runtime.snapshot(), before);
+    runtime.abandon_interval_work(&[(1, 1)]).unwrap();
+    assert_eq!(runtime.work()[0].phase, Phase::Returning);
+    assert_eq!(runtime.custody(Place::JobInput(1)).unwrap().used, 2);
+    assert!(runtime.work_interval().unwrap().rates.is_empty());
+    let saved = serde_json::to_string(&runtime.snapshot()).unwrap();
+    let mut resumed = Runtime::compile(serde_json::from_str(&saved).unwrap()).unwrap();
+    resumed.progress_work_interval(1000).unwrap();
+    resumed.settle_work_interval(7).unwrap();
+    assert!(resumed.custody(Place::JobInput(1)).is_none());
+    assert_eq!(
+        resumed
+            .custody(Place::Stock { region: 1, good: 1 })
+            .unwrap()
+            .used,
+        4
+    );
+}
 #[test]
 fn early_completion_is_atomic_timed_and_resumable() {
     let run = |workers, chunks: &[u64]| {

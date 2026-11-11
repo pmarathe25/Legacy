@@ -548,9 +548,27 @@ impl CoreHost {
             if schedule.next_decision_millis == Some(u128::from(offset)) {
                 match schedule.phase {
                     DecisionPhase::Meals => {
+                        let (stopped, choices) = if let Some(people) = &schedule.personal_choices {
+                            attempt!('run, self.reconsider_ordinary_work(people, external_blocked))
+                        } else {
+                            (Vec::new(), Vec::new())
+                        };
+                        if !choices.is_empty() {
+                            run.events.push(CoreRunEvent::PersonalChoices(choices));
+                        }
                         attempt!('run, self.release_shared_helpers());
-                        let meals = attempt!('run, self.eat_autonomously(external_blocked));
-                        let people: Vec<_> = meals.iter().map(|meal| meal.person).collect();
+                        let occupied = (!stopped.is_empty()).then(|| {
+                            let mut occupied = external_blocked.to_vec();
+                            occupied.extend(stopped.iter().copied());
+                            occupied.par_sort_unstable();
+                            occupied.dedup();
+                            occupied
+                        });
+                        let meals = attempt!('run, self.eat_autonomously(occupied.as_deref().unwrap_or(external_blocked)));
+                        let mut people = stopped;
+                        people.extend(meals.iter().map(|meal| meal.person));
+                        people.par_sort_unstable();
+                        people.dedup();
                         if !meals.is_empty() {
                             run.events.push(CoreRunEvent::Meals(
                                 meals.iter().map(|meal| (meal.person, meal.good)).collect(),

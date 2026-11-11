@@ -605,7 +605,6 @@ impl CoreInterval {
     ) -> Result<(), String> {
         if self.physical.tick() != tick
             || self.elapsed_millis() != Some(offset_millis)
-            || offset_millis == 0
             || offset_millis >= self.physical.tick_millis()
         {
             return Err("work abandonment has a stale or invalid interval time".into());
