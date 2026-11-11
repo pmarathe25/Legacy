@@ -67,6 +67,7 @@ impl CoreHostSnapshot {
                 owner,
                 last_tick: None,
                 language: None,
+                signals: None,
             });
             let health = dynamics.disease.map(|owner| CoreHealth {
                 owner,

@@ -216,6 +216,7 @@ dependencies = [
  "game-production",
  "game-production-model",
  "game-purpose",
+ "game-signals",
  "game-social",
  "game-tactics",
  "game-work-asking",
@@ -335,6 +336,7 @@ dependencies = [
  "game-persistence",
  "game-personal-choice",
  "game-production",
+ "game-signals",
  "game-skill-catalog",
  "game-social",
  "rayon",
@@ -1161,6 +1163,15 @@ version = "0.2.0"
 dependencies = [
  "rayon",
  "serde",
+]
+
+[[package]]
+name = "game-signals"
+version = "0.2.0"
+dependencies = [
+ "rayon",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

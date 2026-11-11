@@ -92,6 +92,8 @@ struct Scenario {
     #[serde(default)]
     language_topic_profiles: Vec<LanguageTopicProfile>,
     #[serde(default)]
+    signals: Option<SignalsConfig>,
+    #[serde(default)]
     mechanics: Option<MechanicsConfig>,
     #[serde(default)]
     personal_choices: Vec<game_personal_choice::Person>,
@@ -848,6 +850,14 @@ struct LanguageTopic {
     value: i64,
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SignalsConfig {
+    catalog: String,
+    #[serde(default)]
+    minds: Vec<game_signals::Mind>,
+}
+
 fn default_food_preference_domain() -> u32 {
     7
 }
@@ -876,6 +886,7 @@ pub fn core_scenario_with_options(
     let authored: Scenario = toml::from_str(&text).map_err(|error| error.to_string())?;
     let language = authored.language;
     let language_topic_profiles = authored.language_topic_profiles;
+    let signals = authored.signals;
     let regions: HashSet<_> = authored.regions.iter().map(|region| region.id).collect();
     let mechanics = authored.mechanics;
     let mut personal_choices = authored.personal_choices;
@@ -970,6 +981,38 @@ pub fn core_scenario_with_options(
             .ok_or("language topic profiles require language and social encounters")?
             .configure_topics(&profiles)
             .map_err(str::to_owned)?;
+    }
+    if let Some(mut signals) = signals {
+        use std::path::Component;
+        let path = Path::new(&signals.catalog);
+        if path.as_os_str().is_empty()
+            || path
+                .components()
+                .any(|part| !matches!(part, Component::Normal(_)))
+        {
+            return Err("signals catalog must be a relative content path".into());
+        }
+        let source =
+            std::fs::read_to_string(content.join(path)).map_err(|error| error.to_string())?;
+        let mut catalog: game_signals::Catalog =
+            toml::from_str(&source).map_err(|error| error.to_string())?;
+        catalog.forms.sort_unstable_by_key(|row| row.id);
+        catalog.meanings.sort_unstable_by_key(|row| row.id);
+        signals.minds.sort_unstable_by_key(|mind| mind.person);
+        for mind in &mut signals.minds {
+            mind.expressions
+                .sort_unstable_by_key(|row| (row.form, row.recipient));
+            mind.interpretations.sort_unstable_by_key(|row| row.form);
+        }
+        snapshot
+            .social
+            .as_mut()
+            .ok_or("signals require social encounters")?
+            .signals = Some(game_signals::Signals {
+            catalog,
+            minds: signals.minds,
+            events: vec![],
+        });
     }
     if let Some(mut mechanics) = mechanics {
         use std::path::Component;
@@ -1069,6 +1112,9 @@ fn scenario_with_options_inner(
         && !interval_features
     {
         return Err("language requires the interval simulation host".into());
+    }
+    if scenario.signals.is_some() && !interval_features {
+        return Err("signals require the interval simulation host".into());
     }
     if scenario.mechanics.is_some() && !interval_features {
         return Err("mechanics requires the interval simulation host".into());

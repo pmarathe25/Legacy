@@ -688,6 +688,18 @@ impl CoreHost {
                     .validate(&people, core.physical.tick())
                     .map_err(str::to_owned)?;
             }
+            if let Some(signals) = &social.signals {
+                signals
+                    .validate(&people, core.physical.tick())
+                    .map_err(str::to_owned)?;
+                if signals
+                    .events
+                    .par_iter()
+                    .any(|event| Some(event.tick) != social.last_tick)
+                {
+                    return Err("invalid signal event time".into());
+                }
+            }
             if social
                 .last_tick
                 .is_some_and(|tick| tick == 0 || tick > core.physical.tick())

@@ -206,6 +206,14 @@ fn run(
                 yearly_observations
                     .push(json!({"kind":"language_events", "events":language.events}));
             }
+            if let Some(signals) = tick_snapshot
+                .social
+                .as_ref()
+                .and_then(|social| social.signals.as_ref())
+                && !signals.events.is_empty()
+            {
+                yearly_observations.push(json!({"kind":"signal_events", "events":signals.events}));
+            }
             if ticks_per_year > 1 {
                 if let Some(family) = &tick_snapshot.family
                     && !family.events.is_empty()
@@ -398,6 +406,44 @@ mod tests {
         fs::remove_file(scenario).unwrap();
         fs::remove_file(&output).unwrap();
         fs::remove_file(output.with_extension("year-2.json")).unwrap();
+    }
+
+    #[test]
+    fn directed_signals_are_archived_without_private_intent() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let token = format!(
+            "legacy-signal-history-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+        let scenario = std::env::temp_dir().join(format!("{token}.toml"));
+        let output = std::env::temp_dir().join(format!("{token}.ndjson"));
+        let source = fs::read_to_string(root.join("content/scenarios/economy-core-signals.toml"))
+            .unwrap()
+            .replace("tick_millis = 900000", "tick_millis = 31536000000");
+        fs::write(&scenario, source).unwrap();
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(1)
+            .build()
+            .unwrap()
+            .install(|| run(&root, &scenario, &output, 1, 1, false))
+            .unwrap();
+        let rows = records(&output);
+        let event = rows
+            .iter()
+            .filter(|row| row["kind"] == "year")
+            .flat_map(|row| row["observations"].as_array().unwrap())
+            .find(|event| event["kind"] == "signal_events")
+            .unwrap();
+        assert_eq!(event["events"][0]["actor"], 1);
+        assert_eq!(event["events"][0]["interpreted"], 2);
+        assert!(event["events"][0].get("intended").is_none());
+        fs::remove_file(scenario).unwrap();
+        fs::remove_file(&output).unwrap();
+        fs::remove_file(output.with_extension("year-1.json")).unwrap();
     }
 
     #[test]

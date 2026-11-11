@@ -1,6 +1,16 @@
 //! Personal meetings, subjective relationships, and communicated observations.
 use super::*;
 
+fn person(people: &[game_economy_person::Person], id: u64) -> Option<&game_economy_person::Person> {
+    people
+        .first()
+        .and_then(|first| id.checked_sub(first.id))
+        .and_then(|offset| usize::try_from(offset).ok())
+        .filter(|&index| people.get(index).is_some_and(|person| person.id == id))
+        .or_else(|| people.binary_search_by_key(&id, |person| person.id).ok())
+        .map(|index| &people[index])
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CoreSocial {
@@ -9,6 +19,8 @@ pub struct CoreSocial {
     pub last_tick: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub language: Option<game_language::Language>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signals: Option<game_signals::Signals>,
 }
 
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -214,6 +226,50 @@ impl CoreHost {
                     .map_err(str::to_owned)
             })
             .transpose()?;
+        let signals = social
+            .and_then(|social| social.signals.as_ref())
+            .map(|signals| {
+                let contacts: Vec<_> = meetings
+                    .par_iter()
+                    .filter_map(|meeting| {
+                        let a = person(&self.core.people, meeting.a)
+                            .expect("known meeting participant");
+                        let b = person(&self.core.people, meeting.b)
+                            .expect("known meeting participant");
+                        (!a.controlled && !b.controlled).then_some(game_signals::Contact {
+                            a: meeting.a,
+                            b: meeting.b,
+                            a_hunger: a.hunger,
+                            b_hunger: b.hunger,
+                        })
+                    })
+                    .collect();
+                let locations =
+                    game_economy_person::travel::Colocation::new(self.core.travel.as_ref());
+                let directed: Vec<_> = signals
+                    .directed_targets()
+                    .into_par_iter()
+                    .filter_map(|(actor, observer)| {
+                        let a = person(&self.core.people, actor)?;
+                        let b = person(&self.core.people, observer)?;
+                        (!a.controlled
+                            && a.health > 0
+                            && b.health > 0
+                            && locations
+                                .region((a.id, a.region), (b.id, b.region))
+                                .is_some())
+                        .then_some(game_signals::Directed {
+                            actor,
+                            observer,
+                            hunger: a.hunger,
+                        })
+                    })
+                    .collect();
+                signals
+                    .prepare_with_directed(&contacts, &directed, self.core.seed, tick)
+                    .map_err(str::to_owned)
+            })
+            .transpose()?;
         let disease_events: Vec<_> = next
             .disease
             .as_ref()
@@ -321,6 +377,7 @@ impl CoreHost {
                 owner,
                 last_tick: Some(tick),
                 language,
+                signals,
             });
         }
         if let Some(owner) = next.disease {

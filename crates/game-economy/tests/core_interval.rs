@@ -4515,7 +4515,7 @@ fn pressured_meeting_can_share_a_false_personal_report_once_per_tick() {
         let opinions = game_opinions::Opinions {rules, sensitivities: Default::default(), records: vec![game_opinions::Opinion {
             observer: 2, target: 3, trust: 0, fear: 2, obligation: 0, affinity: 0,
         }], events: vec![]};
-        let social = game_economy::core_interval::CoreSocial { language: None,
+        let social = game_economy::core_interval::CoreSocial { language: None, signals: None,
             owner: game_social::Social {
                 inherit_births: false, rules: game_social::Rules {interval: 1, min_health: 1, max_hunger: 10, familiarity_gain: 1, familiarity_max: 10, relationship_retention: None},
                 participants: vec![game_social::Participant {person: 2, willing: false}, game_social::Participant {person: 3, willing: true}],
@@ -4585,7 +4585,7 @@ fn pressured_meeting_can_share_false_taking_testimony_once() {
         let opinions = game_opinions::Opinions {rules, sensitivities: Default::default(), records: vec![game_opinions::Opinion {
             observer: 2, target: 3, trust: 0, fear: 2, obligation: 0, affinity: 0,
         }], events: vec![]};
-        let social = game_economy::core_interval::CoreSocial { language: None,
+        let social = game_economy::core_interval::CoreSocial { language: None, signals: None,
             owner: game_social::Social {
                 inherit_births: false, rules: game_social::Rules {interval: 1, min_health: 1, max_hunger: 10, familiarity_gain: 1, familiarity_max: 10, relationship_retention: None},
                 participants: vec![game_social::Participant {person: 2, willing: false}, game_social::Participant {person: 3, willing: true}],
@@ -4664,7 +4664,7 @@ fn personal_inquiry_requires_later_meetings_and_subjective_assessment() {
         let opinions = game_opinions::Opinions {rules, sensitivities: Default::default(), records: vec![game_opinions::Opinion {
             observer: 2, target: 3, trust: 0, fear: 2, obligation: 0, affinity: 0,
         }], events: vec![]};
-        let social = game_economy::core_interval::CoreSocial { language: None,
+        let social = game_economy::core_interval::CoreSocial { language: None, signals: None,
             owner: game_social::Social {
                 inherit_births: false, rules: game_social::Rules {interval: 1, min_health: 1, max_hunger: 10, familiarity_gain: 1, familiarity_max: 10, relationship_retention: None},
                 participants: vec![game_social::Participant {person: 2, willing: false}, game_social::Participant {person: 3, willing: true}],
@@ -4747,7 +4747,7 @@ fn personal_inquiry_can_be_declined() {
         let opinions = game_opinions::Opinions {rules, sensitivities: Default::default(), records: vec![game_opinions::Opinion {
             observer: 2, target: 3, trust: 0, fear: 2, obligation: 0, affinity: 0,
         }], events: vec![]};
-        let social = game_economy::core_interval::CoreSocial { language: None,
+        let social = game_economy::core_interval::CoreSocial { language: None, signals: None,
             owner: game_social::Social {
                 inherit_births: false, rules: game_social::Rules {interval: 1, min_health: 1, max_hunger: 10, familiarity_gain: 1, familiarity_max: 10, relationship_retention: None},
                 participants: vec![game_social::Participant {person: 2, willing: false}, game_social::Participant {person: 3, willing: true}],
@@ -4817,7 +4817,7 @@ fn personal_inquiry_expires_without_a_later_decision() {
         let opinions = game_opinions::Opinions {rules, sensitivities: Default::default(), records: vec![game_opinions::Opinion {
             observer: 2, target: 3, trust: 0, fear: 2, obligation: 0, affinity: 0,
         }], events: vec![]};
-        let social = game_economy::core_interval::CoreSocial { language: None,
+        let social = game_economy::core_interval::CoreSocial { language: None, signals: None,
             owner: game_social::Social {
                 inherit_births: false, rules: game_social::Rules {interval: 1, min_health: 1, max_hunger: 10, familiarity_gain: 1, familiarity_max: 10, relationship_retention: None},
                 participants: vec![game_social::Participant {person: 2, willing: false}, game_social::Participant {person: 3, willing: true}],
@@ -4877,7 +4877,7 @@ fn disease_uses_actual_meetings_and_does_not_require_social_to_progress() {
                 combat_transmission_per_million: 0, birth_transmission_per_million: 0,
             }], treatments: vec![], cases: vec![game_disease::Case {person: 2, strain: 1, infected_at: 0, source: None}], events: vec![],
         };
-        let social = game_economy::core_interval::CoreSocial { language: None,
+        let social = game_economy::core_interval::CoreSocial { language: None, signals: None,
             owner: game_social::Social {
                 inherit_births: false, rules: game_social::Rules {interval: 1, min_health: 1, max_hunger: 10, familiarity_gain: 1, familiarity_max: 10, relationship_retention: None},
                 participants: vec![game_social::Participant {person: 2, willing: true}, game_social::Participant {person: 3, willing: true}],
@@ -6771,7 +6771,7 @@ fn core_host_cultivation_benchmark() {
                 }, events: vec![],
             }, treatment: vec![], last_tick: None,
         }) },
-        social: social_inheritance.then(|| game_economy::core_interval::CoreSocial { language: None, owner: game_social::Social { inherit_births: true, rules: game_social::Rules { interval: 1, min_health: 1, max_hunger: 100, familiarity_gain: 1, familiarity_max: 10, relationship_retention: None }, participants: (1..=count).map(|person| game_social::Participant { person, willing: true }).collect(), pressures: vec![], relationships: vec![], events: vec![], needs: None }, last_tick: None }), personality: personality_inheritance.then(|| game_economy_dynamics::personality::Personality {
+        social: social_inheritance.then(|| game_economy::core_interval::CoreSocial { language: None, signals: None, owner: game_social::Social { inherit_births: true, rules: game_social::Rules { interval: 1, min_health: 1, max_hunger: 100, familiarity_gain: 1, familiarity_max: 10, relationship_retention: None }, participants: (1..=count).map(|person| game_social::Participant { person, willing: true }).collect(), pressures: vec![], relationships: vec![], events: vec![], needs: None }, last_tick: None }), personality: personality_inheritance.then(|| game_economy_dynamics::personality::Personality {
             social_urgency_per_isolation: 0, inherit_births: true,
             people: (1..=count).map(|person| game_economy_dynamics::personality::Person { person, sociability: 500, diligence: 500 }).collect(),
         }),
@@ -7230,6 +7230,7 @@ fn core_host_social_benchmark() {
     }
     let social = game_economy::core_interval::CoreSocial {
         language: None,
+        signals: None,
         owner: game_social::Social {
             inherit_births: false,
             rules: game_social::Rules {
@@ -13634,7 +13635,7 @@ fn personal_teaching_follows_willingness_pressure_and_subjective_reactions() {
             initial.travel = None; initial.nutrition = None; initial.pending_food.clear();
             let stock = initial.physical.custody.containers.iter_mut().find(|row| row.place == Place::Stock { region: 1, good: 1 }).unwrap();
             *stock = Container::new(stock.place, 10, vec![Lot { item: None, good: 1, quantity: 2, expires_at: None }]).unwrap();
-            let social = game_economy::core_interval::CoreSocial { language: None,
+            let social = game_economy::core_interval::CoreSocial { language: None, signals: None,
                 owner: game_social::Social {
                     inherit_births: false, rules: game_social::Rules { interval: 1, min_health: 1, max_hunger: 10, familiarity_gain: 1, familiarity_max: 10, relationship_retention: None },
                     participants: vec![game_social::Participant { person: 2, willing: true }, game_social::Participant { person: 3, willing: true }],
@@ -15217,6 +15218,7 @@ fn literacy_study_depends_on_personal_choice_encounter_and_a_physical_page() {
                 }
                 snapshot.social = Some(game_economy::core_interval::CoreSocial {
                     language: None,
+                    signals: None,
                     owner: game_social::Social {
                         inherit_births: false,
                         rules: game_social::Rules {

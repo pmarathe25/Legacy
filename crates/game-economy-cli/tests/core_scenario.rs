@@ -5,6 +5,139 @@ fn root() -> PathBuf {
 }
 
 #[test]
+fn directed_nonverbal_signals_are_personal_and_need_no_meeting() {
+    use game_economy::core_interval::{CoreHost, CoreRunEvent};
+    fn run(workers: usize) -> serde_json::Value {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let root = root();
+                let path = root.join("content/scenarios/economy-core-signals.toml");
+                assert!(game_economy_cli::scenario(&path, &root.join("content")).is_err());
+                let mut host =
+                    game_economy_cli::core_scenario(&path, &root.join("content")).unwrap();
+                let initial = host.snapshot();
+                assert_eq!(initial.family.as_ref().unwrap().members[0].age, 0);
+                let mut silent = initial.clone();
+                silent
+                    .social
+                    .as_mut()
+                    .unwrap()
+                    .signals
+                    .as_mut()
+                    .unwrap()
+                    .minds[0]
+                    .expressions[0]
+                    .enabled = false;
+                let mut silent = CoreHost::resume(silent).unwrap();
+                assert_eq!(
+                    silent.advance_continuous(900_001, &[]).unwrap().failure,
+                    None
+                );
+                assert!(
+                    silent
+                        .snapshot()
+                        .social
+                        .unwrap()
+                        .signals
+                        .unwrap()
+                        .events
+                        .is_empty()
+                );
+                let mut distracted = initial.clone();
+                distracted
+                    .social
+                    .as_mut()
+                    .unwrap()
+                    .signals
+                    .as_mut()
+                    .unwrap()
+                    .minds[1]
+                    .attention = 0;
+                let mut distracted = CoreHost::resume(distracted).unwrap();
+                assert_eq!(
+                    distracted.advance_continuous(900_001, &[]).unwrap().failure,
+                    None
+                );
+                let ignored = distracted.snapshot().social.unwrap().signals.unwrap();
+                assert_eq!(ignored.events.len(), 1);
+                assert!(!ignored.events[0].noticed);
+                assert!(ignored.minds[1].observations.is_empty());
+                let mut distant = initial.clone();
+                distant.core.people[1].region = Some(2);
+                let mut distant = CoreHost::resume(distant).unwrap();
+                assert_eq!(
+                    distant.advance_continuous(900_001, &[]).unwrap().failure,
+                    None
+                );
+                assert!(
+                    distant
+                        .snapshot()
+                        .social
+                        .unwrap()
+                        .signals
+                        .unwrap()
+                        .events
+                        .is_empty()
+                );
+                let mut controlled = initial;
+                controlled.core.people[0].controlled = true;
+                let mut controlled = CoreHost::resume(controlled).unwrap();
+                assert_eq!(
+                    controlled.advance_continuous(900_001, &[]).unwrap().failure,
+                    None
+                );
+                assert!(
+                    controlled
+                        .snapshot()
+                        .social
+                        .unwrap()
+                        .signals
+                        .unwrap()
+                        .events
+                        .is_empty()
+                );
+                let run = host.advance_continuous(900_001, &[]).unwrap();
+                assert_eq!(run.failure, None);
+                assert!(!run.events.iter().any(
+                    |event| matches!(event, CoreRunEvent::Meetings(rows) if !rows.is_empty())
+                ));
+                let snapshot = host.snapshot();
+                let signals = snapshot.social.as_ref().unwrap().signals.as_ref().unwrap();
+                assert_eq!(signals.events.len(), 1);
+                let event = signals.events[0];
+                assert_eq!(
+                    (event.actor, event.observer, event.form, event.interpreted),
+                    (1, 2, 1, Some(2))
+                );
+                assert!(event.noticed);
+                assert_eq!(signals.minds[0].expressions[0].intended, Some(1));
+                assert_eq!(signals.minds[1].observations[0].interpreted, Some(2));
+                assert!(
+                    serde_json::to_value(signals.minds[1].observations[0])
+                        .unwrap()
+                        .get("intended")
+                        .is_none()
+                );
+                let mut restored = CoreHost::resume(
+                    serde_json::from_str(&serde_json::to_string(&snapshot).unwrap()).unwrap(),
+                )
+                .unwrap();
+                assert_eq!(host.advance_continuous(900_000, &[]).unwrap().failure, None);
+                assert_eq!(
+                    restored.advance_continuous(900_000, &[]).unwrap().failure,
+                    None
+                );
+                assert_eq!(host.snapshot(), restored.snapshot());
+                serde_json::to_value(host.snapshot()).unwrap()
+            })
+    }
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
 fn language_topics_arise_from_personally_chosen_physical_demonstrations() {
     use game_economy::core_interval::{CoreHost, CoreRunEvent};
     use game_language::Meaning;
@@ -1985,7 +2118,7 @@ fn personal_practice_can_report_false_readiness_without_creating_goods() {
             std::sync::Arc::make_mut(&mut minds[0].reports).clear();
             std::sync::Arc::make_mut(&mut minds[1].sent_reports).clear();
             moved.social = Some(game_economy::core_interval::CoreSocial {
-                language: None,
+                language: None, signals: None,
                 owner: game_social::Social {
                     inherit_births: false, rules: game_social::Rules { interval: 1, min_health: 1, max_hunger: 100,
                         familiarity_gain: 1, familiarity_max: 10, relationship_retention: None },

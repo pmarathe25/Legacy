@@ -1,0 +1,13 @@
+[[forms]]
+id = 1
+name = "cry"
+[[forms]]
+id = 2
+name = "gesture"
+
+[[meanings]]
+id = 1
+name = "food"
+[[meanings]]
+id = 2
+name = "comfort"
