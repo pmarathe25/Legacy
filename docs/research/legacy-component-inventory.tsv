@@ -1,0 +1,362 @@
+old_component	baseline_readme_section	baseline_stated_responsibility	current_directory_same_name
+game-affiliation	Society, institutions, conflict, lineage & guardians	Community recruitment, voluntary departure, and institutional leadership/procedure transitions	no: replacement may have a different name
+game-agreements	Society, institutions, conflict, lineage & guardians	Multi-party promises, acceptance/refusal, outstanding physical duties, fulfillment, and default	yes: parity not established
+game-agriculture	Ecology, botany, agriculture, food & production	Cultivated plots, sowing seed and labor, climate-dependent crop growth, and harvesting	no: replacement may have a different name
+game-animal-species	Composed autonomy and empirical learning	Resolved physical animal species profiles and validation	no: replacement may have a different name
+game-anticipation	Core, storage, host, content & application	Bounded advisory preparation across queued jobs; owner-validated results	no: replacement may have a different name
+game-api	Core, storage, host, content & application	Renderer-independent player `Command`s, `CommandResult`, and immutable `PlayerView` snapshots	no: replacement may have a different name
+game-armies	Society, institutions, conflict, lineage & guardians	Military unit recruitment, roster membership, ration consumption, and mission deployment	no: replacement may have a different name
+game-assembly	Core, storage, host, content & application	Plugin installation, ruler-bound command routing, `PlayerView` composition, and `Simulation` lifecycle	no: replacement may have a different name
+game-attachments	Composed autonomy and empirical learning	Voluntary recovery, gifts, remembrance, and animal-care opportunities	no: replacement may have a different name
+game-attention	Unclassified	Serializable stimulus rates and coalesced review deadlines; no world resource	no: replacement may have a different name
+game-attraction	Unclassified	Subjective tastes and perceived compatibility	no: replacement may have a different name
+game-autonomy-frames	Core, storage, host, content & application	Gather due review cohorts and refresh observations for decision frames	no: replacement may have a different name
+game-autonomy-policy	Ecology, botany, agriculture, food & production	Autonomous decision parameters, persistence scoring, and opt-in routine or considered-option reuse	no: replacement may have a different name
+game-body-effort	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-body	Biology, physiology, genetics & lifecycle	Pure bodily state values, physiological rule profiles, and constant-time projections	no: replacement may have a different name
+game-botany	Ecology, botany, agriculture, food & production	Representative wild plant stands, seed banks, natural reproduction, and genetic produce lots	no: replacement may have a different name
+game-campaign	Core, storage, host, content & application	Generated-world autonomy preset composing founder genotypes, cadences, and feature enable requests	no: replacement may have a different name
+game-care-perception	Unclassified	Personal food-care assessment and evidence comparison	no: replacement may have a different name
+game-care	Biology, physiology, genetics & lifecycle	Voluntary medical care for injured neighbors and coordination of dependent feeding	no: replacement may have a different name
+game-cargo-planning	Unclassified	Read-only provisional arbitration of physical stock claims	no: replacement may have a different name
+game-cargo	World, cargo, property, shelter & logistics	Physical inventories, capacity limits, atomic transfers, carried custody, and output reservations	yes: parity not established
+game-causality	Unclassified	Optional read-only causal telemetry re-exported by the runtime contracts	no: replacement may have a different name
+game-character-activities	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-character-attention	Unclassified	Character-owned attention configuration and frame compatibility	no: replacement may have a different name
+game-character-choices	Unclassified	Character-owned review selection and action execution	no: replacement may have a different name
+game-character-clock	Core, storage, host, content & application	Character-owned wake admission, scheduling and bounded frame recovery	no: replacement may have a different name
+game-character-pause	Unclassified	Transaction-local urgent invalidation for paused reviews	no: replacement may have a different name
+game-character-state	Ecology, botany, agriculture, food & production	Saved autonomous minds and their resource contract; game-characters owns registration and writes	no: replacement may have a different name
+game-characters	Mind, choice, knowledge, language & culture	Autonomous comparison of feature opportunities, current commitments, and personal motives	no: replacement may have a different name
+game-choice	Mind, choice, knowledge, language & culture	Bounded common proposals, actor-weighted arbitration interfaces, cancellable attention, and scheduling	no: replacement may have a different name
+game-cli	Core, storage, host, content & application	Interactive and scripted text interface over `game-api` and `game-assembly`	no: replacement may have a different name
+game-comfort	Composed autonomy and empirical learning	Competing clothing, shelter, and finite fuel intentions	no: replacement may have a different name
+game-communication	Mind, choice, knowledge, language & culture	Personally learned sound associations, grounded explanation, and usable instruction channels	no: replacement may have a different name
+game-communities	Society, institutions, conflict, lineage & guardians	Emergent group formation, shared supply compacts, personal allegiance, and community views	no: replacement may have a different name
+game-companionship	Composed autonomy and empirical learning	Initiator opportunities, bounded partner search, and personally observed refusals	no: replacement may have a different name
+game-confinement	Society, institutions, conflict, lineage & guardians	Custodial detention, movement restriction, explicit release, and periodic escape attempts	no: replacement may have a different name
+game-conflict	Society, institutions, conflict, lineage & guardians	Tactical encounters with 2D arena geometry, simultaneous round movement/attacks, and bodily wounds	yes: parity not established
+game-content	Core, storage, host, content & application	Versioned TOML discovery, overlay resolution, and normalized content fingerprints	no: replacement may have a different name
+game-contracts	Core, storage, host, content & application	Runtime resource/request/event contracts, wire messages, and resource registration codecs	no: replacement may have a different name
+game-core	Core, storage, host, content & application	Entity/resource IDs, millisecond `SimTime`/`SimDuration`, checked math, errors, and counter-based RNG	no: replacement may have a different name
+game-craft-planning	Ecology, botany, agriculture, food & production	Pure bounded search for multi-step gathering and workshop crafting plans	no: replacement may have a different name
+game-credit	Composed autonomy and empirical learning	Individually accepted loans, transferable claims, and personal exchange conventions	no: replacement may have a different name
+game-crop-cohorts	Composed autonomy and empirical learning	Mixed seed ancestry, constituent growth, and finite offspring allocation	no: replacement may have a different name
+game-crops	Ecology, botany, agriculture, food & production	Crop definitions, growth durations, yields, and seasonal climate suitability rules	no: replacement may have a different name
+game-cultivars	Ecology, botany, agriculture, food & production	Diploid plant strains, seed-lot provenance across cargo transfers, and plant trait expression	no: replacement may have a different name
+game-decision-clock	Core, storage, host, content & application	Periodic or demand-driven frame deadlines under the choice owner	no: replacement may have a different name
+game-decision-food	Core, storage, host, content & application	Optional parallel cohort food inputs; no world resource	no: replacement may have a different name
+game-decision-frames	Core, storage, host, content & application	Opt-in saved step snapshots and actor/provider batches	no: replacement may have a different name
+game-decision-intents	Core, storage, host, content & application	Whole-actor read-only preparation and shared survival/continuation scoring; ordered owner effects	no: replacement may have a different name
+game-deliberation	Society, institutions, conflict, lineage & guardians	Character-constructed influence arrangements, opinion aggregation, and personal evaluation of institutional proposals	no: replacement may have a different name
+game-demand	Mind, choice, knowledge, language & culture	Personal evidence of goods accepted in past agreements and swaps	no: replacement may have a different name
+game-diagnostics	Core, storage, host, content & application	Process-local feature timing spans and diagnostic counters	yes: parity not established
+game-diet	Biology, physiology, genetics & lifecycle	Pure nutrient state and batched personal food evaluation	no: replacement may have a different name
+game-digestion	Composed autonomy and empirical learning	Lazy bodily fullness and its discomfort during meal choices	no: replacement may have a different name
+game-discourse	Mind, choice, knowledge, language & culture	Conversational advocacy, cited testimony, credibility evaluation, and coerced public endorsements	no: replacement may have a different name
+game-drafting	Core, storage, host, content & application	Generic speculative batches, conservative dependencies and runtime counters	no: replacement may have a different name
+game-ecology	Ecology, botany, agriculture, food & production	Gatherable resource patches, finite stock reservations, seasonal renewal, and timed gathering	no: replacement may have a different name
+game-environment	World, cargo, property, shelter & logistics	Configurable calendar and seasonal area climate lookup	yes: parity not established
+game-equipment	World, cargo, property, shelter & logistics	Physical garments, time-based wear, and repair	no: replacement may have a different name
+game-exchange	Mind, choice, knowledge, language & culture	Consensual local barter and aid requests comparing practical, sentimental, and resale value	no: replacement may have a different name
+game-exposure	World, cargo, property, shelter & logistics	Body temperature regulation and cold/heat harm from climate, clothing, and shelter	no: replacement may have a different name
+game-expression	Core, storage, host, content & application	Pure developmental expression and bounded exact-input numerical reuse	no: replacement may have a different name
+game-facts	Core, storage, host, content & application	Shared immutable observation scenes, personal evidence, cold history, and borrowed fact views	no: replacement may have a different name
+game-family-life	Composed autonomy and empirical learning	Voluntary bonds, separation, shared care, gradual independence, and birth initialization	no: replacement may have a different name
+game-fauna	Composed autonomy and empirical learning	Individual animals, physical ancestry, feeding, development, and reproduction	yes: parity not established
+game-food-actions	Ecology, botany, agriculture, food & production	Physical execution of travel, container pickup, gathering, taking, and eating stages for food plans	no: replacement may have a different name
+game-food-care-execution	Unclassified	Care-owned delivery and refusal retry execution	no: replacement may have a different name
+game-food-inquiry	Composed autonomy and empirical learning	Personal food samples, rotating inspections, and finite storage experiments	no: replacement may have a different name
+game-food-memory	Ecology, botany, agriculture, food & production	Indexing and dietary appraisal of remembered edible stores and carried containers	no: replacement may have a different name
+game-food-storage	Ecology, botany, agriculture, food & production	Temperature-adjusted shelf life and built cellar/granary food storage	no: replacement may have a different name
+game-frame-arbitration	Unclassified	Choice-owned cohort arbitration participation counter	no: replacement may have a different name
+game-frame-tuning	Unclassified	Shared saved settings for decision-frame experiments	no: replacement may have a different name
+game-genetics	Biology, physiology, genetics & lifecycle	Pure functions for seeded diploid inheritance, bounded mutation, and trait expression	yes: parity not established
+game-grammar	Unclassified	Pure construction learning, role particles, and embedded clauses	no: replacement may have a different name
+game-grievances	Society, institutions, conflict, lineage & guardians	Witnessed contested-use complaints and autonomous confrontation or retaliation decisions	no: replacement may have a different name
+game-guardians	Society, institutions, conflict, lineage & guardians	Immortal guardian identities, innate successor sense, road-by-road search, and mentorship	yes: parity not established
+game-health	Biology, physiology, genetics & lifecycle	Medical treatment actions consuming medicine and caregiver time to heal wounds	no: replacement may have a different name
+game-heredity	Biology, physiology, genetics & lifecycle	Stored human genotypes and expression of inherited traits at birth	no: replacement may have a different name
+game-history-economy	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-history-import	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-history-kernel	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-history-population	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-history-society	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-horticulture	Ecology, botany, agriculture, food & production	Voluntary plot creation, crop selection, sowing, and harvesting decisions	no: replacement may have a different name
+game-household-state	Unclassified	Household-owned saved intentions and food-refusal bookkeeping	no: replacement may have a different name
+game-households	Mind, choice, knowledge, language & culture	Voluntary family partnerships, parent–child ties, shared household access, and dependent care intentions	no: replacement may have a different name
+game-identity	Unclassified	Acquired commitments and genetically influenced switching costs	no: replacement may have a different name
+game-information	Composed autonomy and empirical learning	Information interests, local questions, voluntary replies, and remembered-record consultation	no: replacement may have a different name
+game-inquiry	Composed autonomy and empirical learning	Personal empirical memory, intelligence-limited reflection, and voluntary explanations	no: replacement may have a different name
+game-inscription	Unclassified	Physical surfaces and compatible mark-making methods	no: replacement may have a different name
+game-institutions	Society, institutions, conflict, lineage & guardians	Founding, explicit influence arrangements, access-rule proposals and offices	no: replacement may have a different name
+game-invention	Core, storage, host, content & application	Voluntary prototypes and experiments motivated by experience and curiosity	no: replacement may have a different name
+game-invocation	Society, institutions, conflict, lineage & guardians	Temporary past-life memory borrowing, fatigue/control-loss risk, and consent steps	yes: parity not established
+game-items	World, cargo, property, shelter & logistics	Sparse individual identities for notable cargo units across transfers and destruction	no: replacement may have a different name
+game-justice	Society, institutions, conflict, lineage & guardians	Explicit complaints, evidence, precedent-based judicial rulings, and physical restitution/fines	no: replacement may have a different name
+game-knowledge	Mind, choice, knowledge, language & culture	Subjective facts, local stock and road observations, remembered routes, and conditional forecasts	yes: parity not established
+game-land	World, cargo, property, shelter & logistics	Named areas and positive-duration bidirectional roads	no: replacement may have a different name
+game-lexicon	Mind, choice, knowledge, language & culture	Personal sound associations and compact bounded reverse lookup	no: replacement may have a different name
+game-lifecycle	Biology, physiology, genetics & lifecycle	Conception, scheduled pregnancy, childbirth, inherited identity creation, and caregiver placement	no: replacement may have a different name
+game-lineage	Society, institutions, conflict, lineage & guardians	Past-life records, mortal ruler death, succession gaps, and post-death newborn ruler selection	yes: parity not established
+game-literacy	Composed autonomy and empirical learning	Invented scripts, proficiency, physical notes, and voluntary instruction	no: replacement may have a different name
+game-livelihoods	Ecology, botany, agriculture, food & production	Autonomous personal stock targets, bounded recipe/gathering planning, and work interest learning	no: replacement may have a different name
+game-local-interactions	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-logistics	World, cargo, property, shelter & logistics	Physical load–travel–unload hauling across multi-hop routes with pack capacity and retries	no: replacement may have a different name
+game-maturation	Ecology, botany, agriculture, food & production	Time- and temperature-dependent curing and fermentation of prepared batches	no: replacement may have a different name
+game-mechanics-sessions	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-mechanics-state	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-mechanics	Core, storage, host, content & application	Finite apparatus, bodily effort, physical trials, and labor resolution	no: replacement may have a different name
+game-memory-state	Unclassified	Saved personal-memory data contract, row journals, crowding ranks and ordered cue joins	no: replacement may have a different name
+game-memory	Unclassified	Single personal memory store, sleep consolidation, fading, hereditary potential and reconstructive recall	no: replacement may have a different name
+game-metabolism	Biology, physiology, genetics & lifecycle	Individual hunger and recovery rates derived from expressed vitality, traits, and environment	no: replacement may have a different name
+game-missions	Society, institutions, conflict, lineage & guardians	Consenting multi-person expeditions, supply preparation, coordinated travel, arrival, and return	yes: parity not established
+game-names	Mind, choice, knowledge, language & culture	Given and self-chosen personal names, heard name memories, and forms of address	no: replacement may have a different name
+game-naming	Mind, choice, knowledge, language & culture	Parental child naming, nicknames, earned epithets/titles, and voluntary self-renaming policies	no: replacement may have a different name
+game-nurture	Biology, physiology, genetics & lifecycle	Voluntary food acquisition and delivery plans for children and incapacitated dependents	no: replacement may have a different name
+game-nutrition	Biology, physiology, genetics & lifecycle	Nutrient balances, dietary history, food effects, and substance dependence	yes: parity not established
+game-objects	World, cargo, property, shelter & logistics	Runtime object catalog: stable keys, numeric IDs, mass, tags, and nutritional/edible properties	no: replacement may have a different name
+game-observations	Composed autonomy and empirical learning	Perceptual adapters and finite experiments across physical feature domains	no: replacement may have a different name
+game-offers	Core, storage, host, content & application	Proposal state and ordered bounded collection, registered by choice	no: replacement may have a different name
+game-openings	Core, storage, host, content & application	Scenario initialization, seeded world construction, and pre-control live history warmup	no: replacement may have a different name
+game-orthography	Unclassified	Pure finite symbol encoding	no: replacement may have a different name
+game-packed	Core, storage, host, content & application	Dense stable-ID rows, nested undo journals, numeric indexes, and parallel CPU batches	no: replacement may have a different name
+game-parallel-agreement-auto	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-agreement-bulk	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-agreement-host	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-agreements	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-agriculture	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-animal-restraint	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-autonomy-columns	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-autonomy	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-autowork	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-block-actions	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-block-cli-caregiving	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-block-cli-civic	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-block-cli-goals	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-block-cli-interface	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-block-cli-missions	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-block-cli	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-block-data	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-block-departure	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-block-export	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-block-family	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-block-food-cargo	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-block-goods	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-block-import	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-block-index	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-block-institutions	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-block-logistics	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-block-physical	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-block-production	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-block-property	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-blocks	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-care	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-cargo-actions	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-cargo	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-civic-auto	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-cli	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-conflict-overlay	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-conflict-packed	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-conflict-receipts	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-conflict	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-content-import	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-departure	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-dependent-care	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-disease	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-dreams	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-economy-agriculture	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-economy-building	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-economy-campaign	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-economy-claims-output	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-economy-claims	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-economy-cli-commands	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-economy-cli	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-economy-combat	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-economy-confinement	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-economy-dynamics	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-economy-exchange	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-economy-expeditions	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-economy-exposure	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-economy-family	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-economy-fatigue	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-economy-goals	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-economy-interaction	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-economy-knowledge	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-economy-local-transport	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-economy-person	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-economy-player	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-economy-promises	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-economy-read	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-economy-skills	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-economy-taking	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-economy-treatment	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-economy-work	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-economy	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-environment	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-families	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-family-columns	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-family-host	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-family-index	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-family-lifecycle	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-family-model	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-family-pairing	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-family-receipts	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-fatigue	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-fauna	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-food-select	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-fused-actions	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-fused-admission	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-fused-agriculture	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-fused-autonomy	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-fused-autowork	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-fused-care	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-fused-cargo	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-fused-civic	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-fused-conflict	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-fused-confrontation	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-fused-contended	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-fused-data	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-fused-decisions	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-fused-departure	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-fused-dependent-care	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-fused-diet	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-fused-disease	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-fused-family	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-fused-food-aid	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-fused-food-deposit	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-fused-food	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-fused-goods	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-fused-import	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-fused-index	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-fused-metadata	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-fused-missions	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-fused-needs	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-fused-nutrition	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-fused-output	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-fused-physical	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-fused-purpose	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-fused-social-pressure	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-fused-store-build	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-fused-tick	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-fused-trade	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-fused-work-experience	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-genetics	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-goal-host	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-goals	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-goods-actions	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-goods-cargo	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-goods-packed	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-guardians	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-index	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-institutions	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-invocation	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-knowledge-columns	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-knowledge	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-lineage	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-logistics	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-lot-allocation	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-lot-batches	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-lot-content	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-lot-diet	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-lot-model	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-lot-planning	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-lot-projection	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-lot-runtime	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-lot-work	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-lots	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-market-auto	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-market-proposals	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-market	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-matching	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-mission-objectives	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-missions-model	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-missions	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-nutrition	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-observation	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-opinions-model	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-opinions	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-packed-jobs-model	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-packing	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-people	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-persistence	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-personality	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-physical-host	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-practices	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-production-actions	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-production-admission	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-production-contended	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-production-model	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-production-output	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-production-packed	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-production-receipts	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-production	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-property	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-purpose	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-skill-catalog	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-skill-host	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-skill-model	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-skills	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-social-edges	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-social-pressure	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-social	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-store-witnesses	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-tactical-choices	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-tactical-map	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-tactics	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-transport	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-validation	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-work-asking	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-work-requests	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-work-sites	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-worldgen-food	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-worldgen-owners	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel-worldgen	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parallel	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-parenthood	Biology, physiology, genetics & lifecycle	Voluntary reproductive choices based on household bonds, condition, and caregiving load	no: replacement may have a different name
+game-pastimes	Mind, choice, knowledge, language & culture	Authored leisure and creative activities consuming time/inputs and building skills and interests	no: replacement may have a different name
+game-phonology	Unclassified	Numeric phonemes and reversible IAST-based display	no: replacement may have a different name
+game-physics	Core, storage, host, content & application	Pure force/travel graphs, material limits, friction, and load resolution	no: replacement may have a different name
+game-physiology-eating	Unclassified	Physiology-owned food serving and consumption	no: replacement may have a different name
+game-physiology	Biology, physiology, genetics & lifecycle	Eating, feeding, rest, periodic bodily ticks, and mortal death or immortal recovery	no: replacement may have a different name
+game-poetics	Composed autonomy and empirical learning	Pure literary genres and phrasing helpers	no: replacement may have a different name
+game-preservation	Ecology, botany, agriculture, food & production	Per-batch food age tracking across cargo splits/transfers and spoilage decay	no: replacement may have a different name
+game-pressure	Society, institutions, conflict, lineage & guardians	Coercive demands backed by actual combat, resistance, flight, and fear-driven compliance	no: replacement may have a different name
+game-projects	World, cargo, property, shelter & logistics	Construction proposals, material contributions, timed building labor, and operating sites	no: replacement may have a different name
+game-property	World, cargo, property, shelter & logistics	Ownership claims, recognition, revocable per-person permissions, and authorized/unauthorized taking	yes: parity not established
+game-provisioning	Ecology, botany, agriculture, food & production	Food source comparison and multi-step meal/foraging plan selection	no: replacement may have a different name
+game-realm	Society, institutions, conflict, lineage & guardians	Office mandates enforcing jurisdictional scope and treasury spending limits	no: replacement may have a different name
+game-reasoning	Composed autonomy and empirical learning	Pure bounded inference, conditional deduction, and prediction from supplied evidence	no: replacement may have a different name
+game-recollection	Unclassified	Experienced episode recording and personal creative inspiration	no: replacement may have a different name
+game-relationships	Mind, choice, knowledge, language & culture	Directed trust, affection, fear, grievance, social beliefs, learned concept values, and heard statements	no: replacement may have a different name
+game-rest-activities	Not listed in baseline crate index	See historical crate source and tests	no: replacement may have a different name
+game-save-compat	Core, storage, host, content & application	Historical save ownership normalization and lazy migration defaults	no: replacement may have a different name
+game-scenario-assets	Composed autonomy and empirical learning	Resolved opening content and validation before world mutation	no: replacement may have a different name
+game-scenarios	Core, storage, host, content & application	Declarative scenario schemas, symbolic key resolution, population groups, and scenario discovery	no: replacement may have a different name
+game-search	Composed autonomy and empirical learning	Finite remembered-route searches for displaced people and needed goods	no: replacement may have a different name
+game-sentiment	Mind, choice, knowledge, language & culture	Personal attachment and episodic memories tied to notable items, places, and people	no: replacement may have a different name
+game-session	Core, storage, host, content & application	Background host thread processing commands between bounded advances and coalescing progress	no: replacement may have a different name
+game-shelter	World, cargo, property, shelter & logistics	Constructed indoor shelters, insulation, and finite fuel-fed hearth heating	no: replacement may have a different name
+game-signals	Composed autonomy and empirical learning	Nonverbal need expression and personal interpretation of local cues	no: replacement may have a different name
+game-sim	Core, storage, host, content & application	Transactional simulation host: resources, due requests, batched phases, events, actions, and saves	no: replacement may have a different name
+game-simple-machines	Unclassified	Elementary geometry and work-port compatibility	no: replacement may have a different name
+game-skills	Biology, physiology, genetics & lifecycle	Per-person skill levels, diminishing-return practice, and unique work attribution	yes: parity not established
+game-snapshot	Core, storage, host, content & application	Streaming resource codecs and shared evidence snapshot dictionaries	no: replacement may have a different name
+game-social-life	Mind, choice, knowledge, language & culture	Physical conversation, recipient assent, contact records, and local residency	no: replacement may have a different name
+game-soma	Biology, physiology, genetics & lifecycle	Authoritative living/deceased body storage, damage/healing validation, and dead-row projection	no: replacement may have a different name
+game-spatial	World, cargo, property, shelter & logistics	Pure deterministic shortest-path routing over `game-land`	no: replacement may have a different name
+game-stockpiles	World, cargo, property, shelter & logistics	Finite personal ground caches composing cargo, permissions, and remembered inventory facts	no: replacement may have a different name
+game-storage	Core, storage, host, content & application	Copy-on-write dense leaves, shared sparse records, ordered scans, and bounded snapshots	no: replacement may have a different name
+game-syntax	Unclassified	Grounded relational speech and personal learning in actual encounters	no: replacement may have a different name
+game-testimony	Composed autonomy and empirical learning	Personally sourced reports, delayed delivery, and recipient comprehension	no: replacement may have a different name
+game-traits	Biology, physiology, genetics & lifecycle	Authored trait catalogs, bounds, defaults, utility weights, and per-person trait profiles	no: replacement may have a different name
+game-transport	World, cargo, property, shelter & logistics	Actor/inventory positions, timed road traversal, partial travel, cancellation, and carried movement	yes: parity not established
+game-utility	Mind, choice, knowledge, language & culture	Pure 64-bit utility scoring, trait-weight projection, hysteresis, and deterministic tie-breaking	no: replacement may have a different name
+game-violence	Unclassified	Dispositions and acquired moral responses to violence	no: replacement may have a different name
+game-vitality	Biology, physiology, genetics & lifecycle	Physical/cognitive maturation curves, aging, expressed abilities, and experienced condition	no: replacement may have a different name
+game-wayfaring	World, cargo, property, shelter & logistics	Voluntary exploration journeys along remembered roads and visit history tracking	no: replacement may have a different name
+game-wellbeing	Biology, physiology, genetics & lifecycle	Psychological effects of childhood care, distress, conversations, and pastimes on condition	no: replacement may have a different name
+game-work-planning	Ecology, botany, agriculture, food & production	Perceived stock goals, bounded work search and revision-keyed plan reuse	no: replacement may have a different name
+game-works	Mind, choice, knowledge, language & culture	Oral and physical creative works, authorship, performance/reading, and cultural transmission	no: replacement may have a different name
+game-workshop	Ecology, botany, agriculture, food & production	Recipe catalogs, input reservation, timed crafting labor, skill attribution, and interruption waste	no: replacement may have a different name
+game-worldgen	Core, storage, host, content & application	Seeded physical world and founder generation without prebuilt societies	no: replacement may have a different name
