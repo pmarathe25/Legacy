@@ -10053,6 +10053,7 @@ fn care_on_a_shared_journey_can_transmit_illness_and_feed_a_child() {
         rules: CareRules {
             dependent_until: 5,
             max_caregiver_hunger: 100,
+            care_interval: 1,
             neglect_damage: 0,
             feed_from_cargo: true,
             fetch_local_food: false,
@@ -13635,6 +13636,7 @@ fn caregiver_can_choose_to_use_claimed_food_for_a_dependent() {
         rules: CareRules {
             dependent_until: 5,
             max_caregiver_hunger: 100,
+            care_interval: 1,
             neglect_damage: 0,
             feed_from_cargo: true,
             fetch_local_food: true,
@@ -18141,6 +18143,7 @@ fn newborns_remain_inside_a_full_cell_with_their_mother() {
         rules: CareRules {
             dependent_until: 5,
             max_caregiver_hunger: 100,
+            care_interval: 1,
             neglect_damage: 0,
             feed_from_cargo: true,
             fetch_local_food: true,
@@ -18796,6 +18799,7 @@ fn a_barrier_prevents_in_person_dependent_care() {
         rules: CareRules {
             dependent_until: 5,
             max_caregiver_hunger: 100,
+            care_interval: 1,
             neglect_damage: 0,
             feed_from_cargo: true,
             fetch_local_food: false,
@@ -30368,6 +30372,7 @@ fn newborn_gets_custody_in_the_same_generation_as_contested_food() {
         rules: CareRules {
             dependent_until: 5,
             max_caregiver_hunger: 100,
+            care_interval: 1,
             neglect_damage: 0,
             feed_from_cargo: true,
             fetch_local_food: false,
@@ -40663,6 +40668,7 @@ fn mixed_settlement(count: u64) -> State {
         rules: CareRules {
             dependent_until: 5,
             max_caregiver_hunger: 100,
+            care_interval: 1,
             neglect_damage: 0,
             feed_from_cargo: true,
             fetch_local_food: false,
@@ -45260,6 +45266,7 @@ fn children_can_develop_different_obligation_dispositions_from_the_same_care() {
         rules: CareRules {
             dependent_until: 5,
             max_caregiver_hunger: 100,
+            care_interval: 1,
             neglect_damage: 0,
             feed_from_cargo: false,
             fetch_local_food: false,
@@ -45448,6 +45455,7 @@ fn concentrated_upbringing_workload(count: u64) -> State {
         rules: CareRules {
             dependent_until: 5,
             max_caregiver_hunger: 100,
+            care_interval: 1,
             neglect_damage: 0,
             feed_from_cargo: false,
             fetch_local_food: false,
@@ -46595,6 +46603,7 @@ fn actual_newborns_can_develop_personal_obligation_dispositions_without_inheriti
         rules: CareRules {
             dependent_until: 5,
             max_caregiver_hunger: 100,
+            care_interval: 1,
             neglect_damage: 0,
             feed_from_cargo: false,
             fetch_local_food: false,

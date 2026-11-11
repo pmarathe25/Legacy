@@ -50,6 +50,22 @@ fn mate_desire_mean<'a>(genomes: impl Iterator<Item = &'a Value>) -> Option<f64>
     }
     (count > 0).then_some(sum / count as f64)
 }
+fn animal_species_samples(animals: &[Value], species: &[Value]) -> Vec<Value> {
+    let mut groups: BTreeMap<u64, Vec<&Value>> = BTreeMap::new();
+    for animal in animals {
+        if animal["health"].as_u64().unwrap_or(0) > 0
+            && let Some(id) = animal["species"].as_u64()
+        {
+            groups.entry(id).or_default().push(animal);
+        }
+    }
+    groups.into_iter().map(|(id, members)| {
+        let name = species.iter().find(|row| row["id"].as_u64() == Some(id)).map_or(Value::Null, |row| row["name"].clone());
+        let means = genome_means(members.iter().map(|animal| &animal["genome"]));
+        let desire = mate_desire_mean(members.iter().map(|animal| &animal["genome"]));
+        json!({"species":id,"name":name,"living":members.len(),"locus_means":means,"mate_desire_mean":desire})
+    }).collect()
+}
 
 fn inspect(path: &Path, focus: Focus) -> Result<Value, String> {
     let input = BufReader::new(File::open(path).map_err(|e| e.to_string())?);
@@ -184,11 +200,36 @@ fn inspect(path: &Path, focus: Focus) -> Result<Value, String> {
                                 .map(|animal| &animal["genome"]),
                         )
                     });
-                    samples.push(json!({"year":year,"living_people":live_people,"living_animals":live_animals,"human_locus_means":human_means,"animal_locus_means":animal_means,"human_mate_desire_mean":human_desire,"animal_mate_desire_mean":animal_desire}));
+                    let animal_species = fauna.map(|items| {
+                        animal_species_samples(
+                            items,
+                            state
+                                .pointer("/fauna/species")
+                                .and_then(Value::as_array)
+                                .map_or(&[][..], Vec::as_slice),
+                        )
+                    });
+                    samples.push(json!({"year":year,"living_people":live_people,"living_animals":live_animals,"human_locus_means":human_means,"animal_locus_means":animal_means,"human_mate_desire_mean":human_desire,"animal_mate_desire_mean":animal_desire,"animal_species":animal_species}));
                 }
                 if row["kind"] == "year" {
                     if let Some(events) = row["observations"].as_array() {
                         for event in events {
+                            if event["kind"] == "animal_population" {
+                                if let Focus::Animal(animal) = focus {
+                                    let appeared =
+                                        event["appeared"].as_array().is_some_and(|rows| {
+                                            rows.iter().any(|row| id(row) == Some(animal))
+                                        });
+                                    let inactive =
+                                        event["inactive"].as_array().is_some_and(|rows| {
+                                            rows.iter().any(|row| row.as_u64() == Some(animal))
+                                        });
+                                    if appeared || inactive {
+                                        focal_events.push(event.clone());
+                                    }
+                                }
+                                continue;
+                            }
                             if event["kind"] == "family_events" {
                                 if let Focus::Person(person) = focus
                                     && let Some(rows) = event["events"].as_array()
@@ -318,7 +359,7 @@ fn inspect(path: &Path, focus: Focus) -> Result<Value, String> {
                 return Err(format!("animal {animal} was not found in this history"));
             }
             Ok(
-                json!({"scope":scope,"animal":animal,"first_observed_year":focal_first,"last_year_alive":focal_last_alive,"last_recorded_animal_state":focal_last,"interpretation":"Animals born in the simulation retain parent IDs; founders may lack recorded parents."}),
+                json!({"scope":scope,"animal":animal,"first_observed_year":focal_first,"last_year_alive":focal_last_alive,"last_recorded_animal_state":focal_last,"recorded_population_events":focal_events,"interpretation":"Animals born in the simulation retain parent IDs; founders may lack recorded parents."}),
             )
         }
     }
@@ -378,11 +419,11 @@ mod tests {
         let path = std::env::temp_dir().join(format!("{token}.ndjson"));
         let mut file = File::create(&path).unwrap();
         let genome = json!({"sex":"Female","alleles":[[100,200],[200,400],[300,500],[400,600]]});
-        let snapshot = |alive: bool| json!({"core":{"people":[{"id":1,"health":if alive {100} else {0}}]},"family":{"members":[{"id":1,"alive":alive,"genome":genome}],"events":if alive {vec![json!({"kind":"partnership","people":[1,2],"tick":1})]} else {vec![]},"totals":{"births":0,"deaths":if alive {0} else {1}}},"fauna":{"animals":[{"id":1,"health":if alive {100} else {0},"genome":genome}]}});
+        let snapshot = |alive: bool| json!({"core":{"people":[{"id":1,"health":if alive {100} else {0}}]},"family":{"members":[{"id":1,"alive":alive,"genome":genome}],"events":if alive {vec![json!({"kind":"partnership","people":[1,2],"tick":1})]} else {vec![]},"totals":{"births":0,"deaths":if alive {0} else {1}}},"fauna":{"species":[{"id":1,"name":"grazer"}],"animals":[{"id":1,"species":1,"health":if alive {100} else {0},"genome":genome}]}});
         for row in [
             json!({"kind":"metadata","calendar":"annual","seed":1,"limitations":["animal parentage is not recorded by the current fauna owner"]}),
             json!({"kind":"initial","year":0,"snapshot":snapshot(true)}),
-            json!({"kind":"year","year":1,"snapshot":snapshot(true),"observations":[{"kind":"meetings","events":[{"a":1,"b":2,"tick":1}]}]}),
+            json!({"kind":"year","year":1,"snapshot":snapshot(true),"observations":[{"kind":"meetings","events":[{"a":1,"b":2,"tick":1}]},{"kind":"animal_population","tick":1,"appeared":[{"id":1,"parents":[2,3]}],"inactive":[]}]}),
             json!({"kind":"year","year":2,"snapshot":snapshot(false),"observations":[]}),
             json!({"kind":"complete","years":2}),
         ] {
@@ -402,6 +443,14 @@ mod tests {
         assert_eq!(summary["first_zero_animals"], 2);
         assert_eq!(summary["recorded_meetings"], 1);
         assert_eq!(summary["genome_samples"][0]["human_locus_means"][0], 150.0);
+        assert_eq!(
+            summary["genome_samples"][0]["animal_species"][0]["name"],
+            "grazer"
+        );
+        assert_eq!(
+            summary["genome_samples"][0]["animal_species"][0]["locus_means"][1],
+            300.0
+        );
         let person = inspect(&path, Focus::Person(1)).unwrap();
         assert_eq!(person["first_observed_year"], 0);
         assert_eq!(person["last_year_alive"], 1);
@@ -409,6 +458,13 @@ mod tests {
         assert_eq!(person["family_events"].as_array().unwrap().len(), 1);
         let animal = inspect(&path, Focus::Animal(1)).unwrap();
         assert_eq!(animal["last_year_alive"], 1);
+        assert_eq!(
+            animal["recorded_population_events"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
         fs::remove_file(path).unwrap();
     }
 }

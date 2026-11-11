@@ -10,6 +10,9 @@ pub use view::{CareFamily, CareMember, FamilyView};
 #[serde(deny_unknown_fields)]
 pub struct Rules {
     pub dependent_until: u64,
+    /// Interval between dedicated care visits for each child, in simulation ticks.
+    #[serde(default = "default_interval")]
+    pub care_interval: u64,
     pub max_caregiver_hunger: u32,
     pub neglect_damage: u32,
     /// A selected caregiver may feed the child from personally carried food.
@@ -21,6 +24,9 @@ pub struct Rules {
     /// Personal fear or obligation toward the dependent can motivate care.
     #[serde(default)]
     pub pressure_threshold: Option<u64>,
+}
+fn default_interval() -> u64 {
+    1
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -68,6 +74,7 @@ impl DependentCare {
         tick: u64,
     ) -> Result<(), &'static str> {
         if self.rules.dependent_until == 0
+            || self.rules.care_interval == 0
             || self.rules.dependent_until > adult_age
             || self.rules.pressure_threshold == Some(0)
         {
@@ -128,7 +135,11 @@ impl DependentCare {
             .into_par_iter()
             .filter_map(|slot| {
                 let child = family.member(slot);
-                if !child.alive || child.age >= self.rules.dependent_until {
+                if !child.alive
+                    || child.age >= self.rules.dependent_until
+                    || tick % self.rules.care_interval.max(1)
+                        != child.id % self.rules.care_interval.max(1)
+                {
                     return None;
                 }
                 let index = person_index(people, child.id)?;
@@ -450,6 +461,7 @@ mod tests {
             rules: Rules {
                 dependent_until: 5,
                 max_caregiver_hunger: 10,
+                care_interval: 1,
                 neglect_damage: 2,
                 feed_from_cargo: false,
                 fetch_local_food: false,
@@ -502,6 +514,28 @@ mod tests {
         );
         assert!(none.actors.is_empty());
         assert!(none.events.iter().all(|event| event.caregiver.is_none()));
+        let mut periodic = care.clone();
+        periodic.rules.care_interval = 3;
+        let first = periodic.prepare(&family, 12, &people, &[], (42, 1), (|_, _| true, |_, _| 0));
+        let second = periodic.prepare(&family, 12, &people, &[], (42, 2), (|_, _| true, |_, _| 0));
+        let third = periodic.prepare(&family, 12, &people, &[], (42, 3), (|_, _| true, |_, _| 0));
+        assert_eq!(
+            first
+                .events
+                .iter()
+                .map(|event| event.child)
+                .collect::<Vec<_>>(),
+            vec![4]
+        );
+        assert!(second.events.is_empty() && second.actors.is_empty());
+        assert_eq!(
+            third
+                .events
+                .iter()
+                .map(|event| event.child)
+                .collect::<Vec<_>>(),
+            vec![3]
+        );
     }
     #[test]
     fn repeated_contention_rotates_priority_instead_of_always_starving_one_child() {
@@ -540,6 +574,7 @@ mod tests {
             rules: Rules {
                 dependent_until: 5,
                 max_caregiver_hunger: 10,
+                care_interval: 1,
                 neglect_damage: 0,
                 feed_from_cargo: false,
                 fetch_local_food: false,

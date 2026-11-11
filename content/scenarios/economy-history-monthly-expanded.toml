@@ -535,7 +535,7 @@ gestation = 9
 birth_spacing = 48
 lifespan_min = 780
 lifespan_max = 1020
-conception_one_in = 60
+conception_one_in = 24
 minimum_health = 50
 maximum_hunger = 20
 newborn_health = 100
@@ -906,7 +906,7 @@ genome = { sex = "Male", alleles = [[756,756], [400,600], [400,600], [500,700]],
 mate_preference = { desire = 650, genetic_weight = 150, affinity_weight = 4, attraction_weight = 60, hunger_weight = -3, minimum = -20 }
 
 [fauna]
-next_id = 13
+next_id = 25
 last_tick = 0
 
 [[fauna.species]]
@@ -932,6 +932,31 @@ breeding_max_hunger = 10
 newborn_health = 100
 mutation_per_million = 10000
 mutation_step = 15
+
+[[fauna.species]]
+id = 2
+name = "berry browser"
+food_good = "wild-berries"
+intake = 1
+hunger_per_tick = 1
+relief_per_unit = 1
+starvation_threshold = 20
+starvation_damage = 1
+max_health = 100
+adult_age = 24
+fertile_until = 180
+lifespan = 300
+gestation = 4
+conception_one_in = 48
+breeding_max_hunger = 10
+newborn_health = 100
+mutation_per_million = 10000
+mutation_step = 15
+climate = { tolerance = 0, inherited_tolerance = 2, hardiness_locus = 1, damage_per_excess = 1 }
+hunting = { good = "raw-meat", quantity = 10, success_per_thousand = 600 }
+newborn_social_response = { feed_affinity = 2, minimum = -10, maximum = 10, capacity = 8 }
+newborn_handling_response = { willing = true, on_accept = 0, on_refuse = 0 }
+newborn_restraint_response = { resistance = 1, escape_willing = true, escape_effort = 1 }
 
 [[fauna.animals]]
 id = 1
@@ -1073,6 +1098,151 @@ age = 36
 health = 100
 hunger = 0
 genome = { sex = "Male", alleles = [[880,900], [370,570], [410,610], [570,770]], mate_desire = [304, 318] }
+social_response = { feed_affinity = 2, minimum = -10, maximum = 10, capacity = 8 }
+handling_response = { willing = true, on_accept = 0, on_refuse = 0 }
+restraint_response = { resistance = 1, escape_willing = true, escape_effort = 1 }
+
+
+[[fauna.animals]]
+id = 13
+species = 2
+region = 1
+age = 36
+health = 100
+hunger = 0
+genome = { sex = "Female", alleles = [[700,800], [676,676], [400,600], [500,700]], mate_desire = [500,500] }
+social_response = { feed_affinity = 2, minimum = -10, maximum = 10, capacity = 8 }
+handling_response = { willing = true, on_accept = 0, on_refuse = 0 }
+restraint_response = { resistance = 1, escape_willing = true, escape_effort = 1 }
+
+[[fauna.animals]]
+id = 14
+species = 2
+region = 1
+age = 48
+health = 100
+hunger = 0
+genome = { sex = "Male", alleles = [[700,800], [755,755], [400,600], [500,700]], mate_desire = [500,500] }
+social_response = { feed_affinity = 2, minimum = -10, maximum = 10, capacity = 8 }
+handling_response = { willing = true, on_accept = 0, on_refuse = 0 }
+restraint_response = { resistance = 1, escape_willing = true, escape_effort = 1 }
+
+[[fauna.animals]]
+id = 15
+species = 2
+region = 1
+age = 24
+health = 100
+hunger = 0
+genome = { sex = "Female", alleles = [[700,800], [834,834], [400,600], [500,700]], mate_desire = [500,500] }
+social_response = { feed_affinity = 2, minimum = -10, maximum = 10, capacity = 8 }
+handling_response = { willing = true, on_accept = 0, on_refuse = 0 }
+restraint_response = { resistance = 1, escape_willing = true, escape_effort = 1 }
+
+[[fauna.animals]]
+id = 16
+species = 2
+region = 1
+age = 36
+health = 100
+hunger = 0
+genome = { sex = "Male", alleles = [[700,800], [312,312], [400,600], [500,700]], mate_desire = [500,500] }
+social_response = { feed_affinity = 2, minimum = -10, maximum = 10, capacity = 8 }
+handling_response = { willing = true, on_accept = 0, on_refuse = 0 }
+restraint_response = { resistance = 1, escape_willing = true, escape_effort = 1 }
+
+[[fauna.animals]]
+id = 17
+species = 2
+region = 1
+age = 48
+health = 100
+hunger = 0
+genome = { sex = "Female", alleles = [[700,800], [391,391], [400,600], [500,700]], mate_desire = [500,500] }
+social_response = { feed_affinity = 2, minimum = -10, maximum = 10, capacity = 8 }
+handling_response = { willing = true, on_accept = 0, on_refuse = 0 }
+restraint_response = { resistance = 1, escape_willing = true, escape_effort = 1 }
+
+[[fauna.animals]]
+id = 18
+species = 2
+region = 1
+age = 24
+health = 100
+hunger = 0
+genome = { sex = "Male", alleles = [[700,800], [470,470], [400,600], [500,700]], mate_desire = [500,500] }
+social_response = { feed_affinity = 2, minimum = -10, maximum = 10, capacity = 8 }
+handling_response = { willing = true, on_accept = 0, on_refuse = 0 }
+restraint_response = { resistance = 1, escape_willing = true, escape_effort = 1 }
+
+[[fauna.animals]]
+id = 19
+species = 2
+region = 2
+age = 36
+health = 100
+hunger = 0
+genome = { sex = "Female", alleles = [[700,800], [549,549], [400,600], [500,700]], mate_desire = [500,500] }
+social_response = { feed_affinity = 2, minimum = -10, maximum = 10, capacity = 8 }
+handling_response = { willing = true, on_accept = 0, on_refuse = 0 }
+restraint_response = { resistance = 1, escape_willing = true, escape_effort = 1 }
+
+[[fauna.animals]]
+id = 20
+species = 2
+region = 2
+age = 48
+health = 100
+hunger = 0
+genome = { sex = "Male", alleles = [[700,800], [628,628], [400,600], [500,700]], mate_desire = [500,500] }
+social_response = { feed_affinity = 2, minimum = -10, maximum = 10, capacity = 8 }
+handling_response = { willing = true, on_accept = 0, on_refuse = 0 }
+restraint_response = { resistance = 1, escape_willing = true, escape_effort = 1 }
+
+[[fauna.animals]]
+id = 21
+species = 2
+region = 2
+age = 24
+health = 100
+hunger = 0
+genome = { sex = "Female", alleles = [[700,800], [707,707], [400,600], [500,700]], mate_desire = [500,500] }
+social_response = { feed_affinity = 2, minimum = -10, maximum = 10, capacity = 8 }
+handling_response = { willing = true, on_accept = 0, on_refuse = 0 }
+restraint_response = { resistance = 1, escape_willing = true, escape_effort = 1 }
+
+[[fauna.animals]]
+id = 22
+species = 2
+region = 2
+age = 36
+health = 100
+hunger = 0
+genome = { sex = "Male", alleles = [[700,800], [786,786], [400,600], [500,700]], mate_desire = [500,500] }
+social_response = { feed_affinity = 2, minimum = -10, maximum = 10, capacity = 8 }
+handling_response = { willing = true, on_accept = 0, on_refuse = 0 }
+restraint_response = { resistance = 1, escape_willing = true, escape_effort = 1 }
+
+[[fauna.animals]]
+id = 23
+species = 2
+region = 2
+age = 48
+health = 100
+hunger = 0
+genome = { sex = "Female", alleles = [[700,800], [264,264], [400,600], [500,700]], mate_desire = [500,500] }
+social_response = { feed_affinity = 2, minimum = -10, maximum = 10, capacity = 8 }
+handling_response = { willing = true, on_accept = 0, on_refuse = 0 }
+restraint_response = { resistance = 1, escape_willing = true, escape_effort = 1 }
+
+[[fauna.animals]]
+id = 24
+species = 2
+region = 2
+age = 24
+health = 100
+hunger = 0
+genome = { sex = "Male", alleles = [[700,800], [343,343], [400,600], [500,700]], mate_desire = [500,500] }
 social_response = { feed_affinity = 2, minimum = -10, maximum = 10, capacity = 8 }
 handling_response = { willing = true, on_accept = 0, on_refuse = 0 }
 restraint_response = { resistance = 1, escape_willing = true, escape_effort = 1 }
@@ -1367,12 +1537,34 @@ capacity = 1200
 regrowth = 300
 yield_per_action = 20
 
+
+[[gathering.nodes]]
+id = 3
+region = 1
+good = "wild-berries"
+seasonal = true
+available = 900
+capacity = 1200
+regrowth = 300
+yield_per_action = 20
+
+[[gathering.nodes]]
+id = 4
+region = 2
+good = "wild-berries"
+seasonal = true
+available = 900
+capacity = 1200
+regrowth = 300
+yield_per_action = 20
+
 [care]
 inherit_births = true
 policies = [{ person = 1, willing = true }, { person = 2, willing = true }, { person = 3, willing = true }, { person = 4, willing = true }, { person = 5, willing = true }, { person = 6, willing = true }, { person = 7, willing = true }, { person = 8, willing = true }, { person = 9, willing = true }, { person = 10, willing = true }, { person = 11, willing = true }, { person = 12, willing = true }, { person = 13, willing = true }, { person = 14, willing = true }, { person = 15, willing = true }, { person = 16, willing = true }, { person = 17, willing = true }, { person = 18, willing = true }, { person = 19, willing = true }, { person = 20, willing = true }, { person = 21, willing = true }, { person = 22, willing = true }, { person = 23, willing = true }, { person = 24, willing = true }, { person = 25, willing = true }, { person = 26, willing = true }, { person = 27, willing = true }, { person = 28, willing = true }, { person = 29, willing = true }, { person = 30, willing = true }, { person = 31, willing = true }, { person = 32, willing = true }, { person = 33, willing = true }, { person = 34, willing = true }, { person = 35, willing = true }, { person = 36, willing = true }, { person = 37, willing = true }, { person = 38, willing = true }, { person = 39, willing = true }, { person = 40, willing = true }, { person = 41, willing = true }, { person = 42, willing = true }, { person = 43, willing = true }, { person = 44, willing = true }, { person = 45, willing = true }, { person = 46, willing = true }, { person = 47, willing = true }, { person = 48, willing = true }, { person = 49, willing = true }, { person = 50, willing = true }, { person = 51, willing = true }, { person = 52, willing = true }, { person = 53, willing = true }, { person = 54, willing = true }, { person = 55, willing = true }, { person = 56, willing = true }, { person = 57, willing = true }, { person = 58, willing = true }, { person = 59, willing = true }, { person = 60, willing = true }]
 
 [care.rules]
 dependent_until = 192
+care_interval = 3
 max_caregiver_hunger = 20
 neglect_damage = 1
 fetch_local_food = true

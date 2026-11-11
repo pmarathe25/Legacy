@@ -60,6 +60,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         rules: Rules {
             dependent_until: 5,
             max_caregiver_hunger: 10,
+            care_interval: 1,
             neglect_damage: 2,
             feed_from_cargo: false,
             fetch_local_food: false,

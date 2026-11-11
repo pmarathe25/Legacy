@@ -138,11 +138,21 @@ macro_rules! advance_world {
         let mut births = Vec::new();
         let cost_family =
             game_economy_campaign::family_with_cost($campaign.as_ref(), $world.family.as_ref())?;
+        let family_opinions = cost_family
+            .as_ref()
+            .or($world.family.as_ref())
+            .filter(|family| family.rules.subjective_mating)
+            .and_then(|_| $world.opinions.as_ref().map(|owner| owner.index()));
+        let family_affinity = |observer, target| {
+            family_opinions
+                .as_ref()
+                .map_or(0, |index| index.affinity(observer, target))
+        };
         let family = cost_family
             .as_ref()
             .or($world.family.as_ref())
             .map(|family| {
-                let next = $crate::advance_validated_with_partition(
+                let next = $crate::advance_validated_with_context(
                     family,
                     &mut $person.people,
                     &mut $travel,
@@ -150,6 +160,7 @@ macro_rules! advance_world {
                     $tick,
                     $care.is_some(),
                     $partition,
+                    Some(&family_affinity),
                 )?;
                 if let Some(care) = &mut $care {
                     game_economy_work::care::inherit(care, &next.family, &next.newborns);
