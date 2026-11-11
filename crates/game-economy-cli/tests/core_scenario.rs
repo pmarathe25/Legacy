@@ -836,6 +836,7 @@ fn work_intentions_compete_with_carrying_and_share_scarce_inputs() {
         });
     for person in &mut snapshot.core.people {
         person.willing_to_work = true;
+        person.hunger = 25;
     }
     snapshot.autowork = Some(game_autowork::Autowork {
         next_id: 1,
@@ -989,6 +990,17 @@ fn work_intentions_compete_with_carrying_and_share_scarce_inputs() {
                     1
                 );
                 assert_eq!(host.snapshot(), resumed.snapshot());
+                let active = host.snapshot();
+                let mut active_restored = CoreHost::resume(
+                    serde_json::from_str(&serde_json::to_string(&active).unwrap()).unwrap(),
+                )
+                .unwrap();
+                assert_eq!(host.advance_continuous(1, &[]).unwrap().failure, None);
+                assert_eq!(
+                    active_restored.advance_continuous(1, &[]).unwrap().failure,
+                    None
+                );
+                assert_eq!(host.snapshot(), active_restored.snapshot());
                 host.snapshot()
             })
     };

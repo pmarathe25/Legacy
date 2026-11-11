@@ -465,6 +465,16 @@ impl CoreInterval {
         offset_millis: u64,
         requests: &[(game_production_model::Start, u64)],
     ) -> Result<Vec<(u64, bool)>, String> {
+        self.start_work_with_hunger_limit(tick, offset_millis, requests, self.rules.max_work_hunger)
+    }
+
+    pub(crate) fn start_work_with_hunger_limit(
+        &mut self,
+        tick: u64,
+        offset_millis: u64,
+        requests: &[(game_production_model::Start, u64)],
+        max_hunger: u32,
+    ) -> Result<Vec<(u64, bool)>, String> {
         if self.physical.tick() != tick
             || self.elapsed_millis() != Some(offset_millis)
             || offset_millis >= self.physical.tick_millis()
@@ -481,7 +491,7 @@ impl CoreInterval {
                 .is_none_or(|index| {
                     let person = &self.people[index];
                     person.health == 0
-                        || person.hunger > self.rules.max_work_hunger
+                        || person.hunger > max_hunger
                         || person.region != Some(start.region)
                 })
         }) {
@@ -522,8 +532,14 @@ impl CoreInterval {
         blocked: &[u64],
         rate: u64,
     ) -> Result<Option<game_autowork::Plan>, String> {
-        let (people, production, busy) =
-            self.autonomous_work_opening(tick, offset_millis, owner, blocked, rate)?;
+        let (people, production, busy) = self.autonomous_work_opening(
+            tick,
+            offset_millis,
+            owner,
+            blocked,
+            rate,
+            self.rules.max_work_hunger,
+        )?;
         let max_job = self.physical.work().last().map(|row| row.job.id);
         owner.plan(&people, &production, &busy, max_job)
     }
@@ -538,8 +554,27 @@ impl CoreInterval {
         blocked: &[u64],
         rate: u64,
     ) -> Result<Vec<game_autowork::Opportunity>, String> {
+        self.autonomous_work_opportunities_with_hunger_limit(
+            tick,
+            offset_millis,
+            owner,
+            blocked,
+            rate,
+            self.rules.max_work_hunger,
+        )
+    }
+
+    pub(crate) fn autonomous_work_opportunities_with_hunger_limit(
+        &self,
+        tick: u64,
+        offset_millis: u64,
+        owner: &game_autowork::Autowork,
+        blocked: &[u64],
+        rate: u64,
+        max_hunger: u32,
+    ) -> Result<Vec<game_autowork::Opportunity>, String> {
         let (people, production, busy) =
-            self.autonomous_work_opening(tick, offset_millis, owner, blocked, rate)?;
+            self.autonomous_work_opening(tick, offset_millis, owner, blocked, rate, max_hunger)?;
         owner.opportunities(&people, &production, &busy, None)
     }
 
@@ -550,6 +585,7 @@ impl CoreInterval {
         owner: &game_autowork::Autowork,
         blocked: &[u64],
         rate: u64,
+        max_hunger: u32,
     ) -> Result<
         (
             Vec<game_production_model::PersonSnapshot>,
@@ -592,8 +628,7 @@ impl CoreInterval {
             .map(|person| (person.id, person.region, person.health, person.hunger))
             .collect();
         let view = self.physical.view(tick)?;
-        let production =
-            game_lot_projection::production(&self.physical, &view, self.rules.max_work_hunger);
+        let production = game_lot_projection::production(&self.physical, &view, max_hunger);
         Ok((people, production, busy))
     }
     /// Stop chosen jobs at this offset. Inputs stay in job custody until the

@@ -1712,6 +1712,15 @@ impl CoreHost {
         blocked: &[u64],
         rate: u64,
     ) -> Result<Vec<game_autowork::Opportunity>, String> {
+        self.preview_work_with_hunger_limit(blocked, rate, self.core.rules.max_work_hunger)
+    }
+
+    pub(super) fn preview_work_with_hunger_limit(
+        &self,
+        blocked: &[u64],
+        rate: u64,
+        max_hunger: u32,
+    ) -> Result<Vec<game_autowork::Opportunity>, String> {
         if rate == 0 || blocked.par_windows(2).any(|rows| rows[0] >= rows[1]) {
             return Err("invalid occupied people or work rate".into());
         }
@@ -1735,12 +1744,13 @@ impl CoreHost {
         let effective = effective.policy.as_ref().unwrap_or(owner);
         let filtered = self.claim_aware_work_policies(effective);
         let offset = self.core.elapsed_millis().ok_or("no physical interval")?;
-        self.core.autonomous_work_opportunities(
+        self.core.autonomous_work_opportunities_with_hunger_limit(
             tick,
             offset,
             filtered.as_ref().unwrap_or(effective),
             &busy,
             rate,
+            max_hunger,
         )
     }
 

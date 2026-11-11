@@ -301,7 +301,7 @@ impl CoreHost {
             .into_par_iter()
             .filter(|row| selected.contains(row))
             .collect();
-        let outcomes = self.start_with_sites(&starts)?;
+        let outcomes = self.start_with_sites_hunger_limit(&starts, u32::MAX)?;
         self.autowork.as_mut().expect("owner checked").next_id = next_id;
         self.publish_claim_work(&uses, &outcomes, self.core.physical.tick());
         self.record_goal_setbacks(&candidates, &outcomes);
@@ -594,7 +594,7 @@ impl CoreHost {
                 })
             {
                 Ok(self
-                    .preview_autonomous_work(&busy, schedule.work_rate)?
+                    .preview_work_with_hunger_limit(&busy, schedule.work_rate, u32::MAX)?
                     .into_par_iter()
                     .map(|opportunity| CoreChoiceIntent {
                         actor: opportunity.person,

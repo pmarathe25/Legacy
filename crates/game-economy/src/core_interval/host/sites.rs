@@ -144,6 +144,14 @@ impl CoreHost {
         &mut self,
         starts: &[(game_production_model::Start, u64)],
     ) -> Result<Vec<(u64, bool)>, String> {
+        self.start_with_sites_hunger_limit(starts, self.core.rules.max_work_hunger)
+    }
+
+    pub(super) fn start_with_sites_hunger_limit(
+        &mut self,
+        starts: &[(game_production_model::Start, u64)],
+        max_hunger: u32,
+    ) -> Result<Vec<(u64, bool)>, String> {
         let skill_rates = self.skill_start_rates(starts)?;
         let starts = skill_rates.as_deref().unwrap_or(starts);
         if let Some(family) = &self.family {
@@ -158,7 +166,9 @@ impl CoreHost {
         let tick = self.core.physical.tick();
         let offset = self.core.elapsed_millis().ok_or("no physical interval")?;
         if self.sites.is_none() && self.tool_requirements.is_empty() {
-            return self.core.start_work(tick, offset, starts);
+            return self
+                .core
+                .start_work_with_hunger_limit(tick, offset, starts, max_hunger);
         }
         let mut ids: Vec<_> = starts.par_iter().map(|(start, _)| start.id).collect();
         let mut workers: Vec<_> = starts.par_iter().map(|(start, _)| start.worker).collect();
@@ -214,7 +224,7 @@ impl CoreHost {
                         .is_none_or(|index| {
                             let person = &self.core.people[index];
                             person.health == 0
-                                || person.hunger > self.core.rules.max_work_hunger
+                                || person.hunger > max_hunger
                                 || person.region != Some(start.region)
                         })
             })
@@ -304,7 +314,9 @@ impl CoreHost {
             .copied()
             .filter(|(start, _)| permitted(start))
             .collect();
-        let mut outcomes = self.core.start_work(tick, offset, &allowed)?;
+        let mut outcomes = self
+            .core
+            .start_work_with_hunger_limit(tick, offset, &allowed, max_hunger)?;
         if let (Some(owner), Some(plan)) = (&mut self.sites, &plan) {
             owner.facilities.record_started(plan, &outcomes);
         }
