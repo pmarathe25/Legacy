@@ -1762,7 +1762,7 @@ impl CoreHost {
                         let (blocked_choice, mut choices) = attempt!('run, self.choice_blocked(&busy, people, &intents, personal_choice::CONSTRUCTION));
                         #[cfg(feature = "profile")]
                         let commit_span = game_diagnostics::span("choice.commit.construction");
-                        let result = attempt!('run, self.build_sites_autonomously(&blocked_choice));
+                        let result = attempt!('run, self.build_sites_with_hunger_limit(&blocked_choice, u32::MAX));
                         #[cfg(feature = "profile")]
                         drop(commit_span);
                         choices.par_extend(
@@ -1854,8 +1854,7 @@ impl CoreHost {
                         let (blocked_choice, mut choices) = attempt!('run, self.choice_blocked(&busy, people, &intents, personal_choice::CARRYING));
                         #[cfg(feature = "profile")]
                         let commit_span = game_diagnostics::span("choice.commit.carrying");
-                        let result =
-                            attempt!('run, self.carry_locally_autonomously(&blocked_choice));
+                        let result = attempt!('run, self.carry_locally_with_hunger_limit(&blocked_choice, u32::MAX));
                         #[cfg(feature = "profile")]
                         drop(commit_span);
                         choices.par_extend(
@@ -1959,8 +1958,7 @@ impl CoreHost {
                         let (blocked_choice, mut choices) = attempt!('run, self.choice_blocked(
                             &busy, people, &intents, personal_choice::MAINTENANCE
                         ));
-                        let result =
-                            attempt!('run, self.repair_sites_autonomously(&blocked_choice));
+                        let result = attempt!('run, self.repair_sites_with_hunger_limit(&blocked_choice, u32::MAX));
                         let outcomes: std::collections::HashMap<_, _> = result
                             .events
                             .iter()

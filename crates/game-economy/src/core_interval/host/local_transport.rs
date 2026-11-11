@@ -13,6 +13,14 @@ impl CoreHost {
         &mut self,
         blocked: &[u64],
     ) -> Result<CoreLocalTransportResults, String> {
+        self.carry_locally_with_hunger_limit(blocked, self.core.rules.max_work_hunger)
+    }
+
+    pub(super) fn carry_locally_with_hunger_limit(
+        &mut self,
+        blocked: &[u64],
+        max_hunger: u32,
+    ) -> Result<CoreLocalTransportResults, String> {
         if blocked.par_windows(2).any(|pair| pair[0] >= pair[1]) {
             return Err("invalid occupied people".into());
         }
@@ -50,7 +58,7 @@ impl CoreHost {
             opinions: self.opinions.as_ref(),
             claims: claims_index.as_ref(),
             busy: &busy,
-            max_hunger: self.core.rules.max_work_hunger,
+            max_hunger,
             manual: None,
             walking: None,
         };

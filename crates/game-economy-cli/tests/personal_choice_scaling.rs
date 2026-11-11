@@ -93,6 +93,11 @@ capacity = 10000
     let mut snapshot = game_economy_cli::core_scenario(&path, &root.join("content"))
         .unwrap()
         .snapshot();
+    if std::env::var_os("LEGACY_CHOICE_HUNGRY").is_some() {
+        for person in &mut snapshot.core.people {
+            person.hunger = 25;
+        }
+    }
     std::fs::remove_file(path).unwrap();
     let maintenance = std::env::var_os("LEGACY_CHOICE_MAINTENANCE").is_some();
     let work = std::env::var_os("LEGACY_CHOICE_WORK").is_some();

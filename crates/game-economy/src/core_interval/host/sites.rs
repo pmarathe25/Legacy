@@ -55,6 +55,14 @@ impl CoreHost {
         &mut self,
         blocked: &[u64],
     ) -> Result<CoreRepairResults, String> {
+        self.repair_sites_with_hunger_limit(blocked, self.core.rules.max_work_hunger)
+    }
+
+    pub(super) fn repair_sites_with_hunger_limit(
+        &mut self,
+        blocked: &[u64],
+        max_hunger: u32,
+    ) -> Result<CoreRepairResults, String> {
         if blocked.par_windows(2).any(|rows| rows[0] >= rows[1]) {
             return Err("invalid occupied people".into());
         }
@@ -95,7 +103,7 @@ impl CoreHost {
             opinions: self.opinions.as_ref(),
             claims: None,
             busy: &busy,
-            max_hunger: self.core.rules.max_work_hunger,
+            max_hunger,
             manual: None,
             manual_destroy: None,
             seed: self.core.seed,

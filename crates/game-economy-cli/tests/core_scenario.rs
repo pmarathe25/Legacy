@@ -1095,6 +1095,9 @@ fn people_independently_choose_repairs_before_site_contention() {
     )
     .unwrap();
     let mut snapshot = host.snapshot();
+    for person in &mut snapshot.core.people[..2] {
+        person.hunger = 25;
+    }
     let good = snapshot
         .core
         .physical
@@ -1530,6 +1533,77 @@ fn people_choose_between_competing_physical_actions_or_idleness() {
                     None
                 );
                 assert_eq!(host.snapshot(), resumed.snapshot());
+                serde_json::to_value(host.snapshot()).unwrap()
+            })
+    }
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
+fn hungry_people_can_choose_construction_or_carrying_or_decline_both() {
+    use game_economy::core_interval::{CoreChoiceOutcome, CoreHost, CoreRunEvent};
+    fn run(workers: usize) -> serde_json::Value {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let root = root();
+                let mut snapshot = game_economy_cli::core_scenario(
+                    &root.join("content/scenarios/economy-core-personal-choices.toml"),
+                    &root.join("content"),
+                )
+                .unwrap()
+                .snapshot();
+                for person in &mut snapshot.core.people {
+                    person.hunger = 25;
+                }
+                let mut legacy = snapshot.clone();
+                std::sync::Arc::make_mut(
+                    legacy
+                        .schedule
+                        .as_mut()
+                        .unwrap()
+                        .personal_choices
+                        .as_mut()
+                        .unwrap(),
+                )
+                .retain(|person| person.id != 1);
+                let mut legacy = CoreHost::resume(legacy).unwrap();
+                let legacy_result = legacy.advance_continuous(1, &[]).unwrap();
+                assert_eq!(legacy_result.failure, None);
+                assert!(!legacy_result.events.iter().any(|event| match event {
+                    CoreRunEvent::Construction(rows) => rows.iter().any(|row| row.person == 1),
+                    CoreRunEvent::LocalCarries(rows) => rows.iter().any(|row| row.person == 1),
+                    _ => false,
+                }));
+                let mut host = CoreHost::resume(snapshot.clone()).unwrap();
+                let mut resumed = CoreHost::resume(
+                    serde_json::from_str(&serde_json::to_string(&snapshot).unwrap()).unwrap(),
+                )
+                .unwrap();
+                let result = host.advance_continuous(1, &[]).unwrap();
+                assert_eq!(result.failure, None);
+                assert_eq!(resumed.advance_continuous(1, &[]).unwrap().failure, None);
+                assert_eq!(host.snapshot(), resumed.snapshot());
+                let choices: Vec<_> = result
+                    .events
+                    .iter()
+                    .filter_map(|event| match event {
+                        CoreRunEvent::PersonalChoices(rows) => Some(rows.as_slice()),
+                        _ => None,
+                    })
+                    .flatten()
+                    .collect();
+                assert!(choices.iter().any(|event| event.actor == 1
+                    && event.key.is_some_and(|key| key.domain == 1)
+                    && event.outcome == CoreChoiceOutcome::Accepted));
+                assert!(choices.iter().any(|event| event.actor == 2
+                    && event.key.is_some_and(|key| key.domain == 2)
+                    && event.outcome == CoreChoiceOutcome::Accepted));
+                assert!(choices.iter().any(|event| event.actor == 3
+                    && event.key.is_none()
+                    && event.outcome == CoreChoiceOutcome::NoLocalAction));
                 serde_json::to_value(host.snapshot()).unwrap()
             })
     }

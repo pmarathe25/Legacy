@@ -431,7 +431,7 @@ impl CoreHost {
                     opinions: self.opinions.as_ref(),
                     claims: claims.as_ref(),
                     busy: &busy,
-                    max_hunger: self.core.rules.max_work_hunger,
+                    max_hunger: u32::MAX,
                     tick,
                     manual: None,
                     goal_needs: &[],
@@ -499,7 +499,7 @@ impl CoreHost {
                     opinions: self.opinions.as_ref(),
                     claims: claims.as_ref(),
                     busy: &busy,
-                    max_hunger: self.core.rules.max_work_hunger,
+                    max_hunger: u32::MAX,
                     manual: None,
                     walking: None,
                 }
@@ -546,7 +546,7 @@ impl CoreHost {
                     opinions: self.opinions.as_ref(),
                     claims: None,
                     busy: &busy,
-                    max_hunger: self.core.rules.max_work_hunger,
+                    max_hunger: u32::MAX,
                     manual: None,
                     manual_destroy: None,
                     seed: self.core.seed,
@@ -1020,6 +1020,20 @@ impl CoreHost {
                 .filter(|p| index_by_person(&valid, p.id, |id| *id).is_none())
                 .map(|p| p.id),
         );
+        // Legacy actors retain their existing cutoff during this mixed batch.
+        // Only people who selected and revalidated a personal intention bypass it.
+        if matches!(domain, CONSTRUCTION | CARRYING | MAINTENANCE) {
+            denied.par_extend(
+                self.core
+                    .people
+                    .par_iter()
+                    .filter(|person| {
+                        person.hunger > self.core.rules.max_work_hunger
+                            && index_by_person(&valid, person.id, |id| *id).is_none()
+                    })
+                    .map(|person| person.id),
+            );
+        }
         denied.par_sort_unstable();
         denied.dedup();
         Ok((denied, stale))
