@@ -92,6 +92,7 @@ fn inspect(path: &Path, focus: Focus) -> Result<Value, String> {
     let mut peak_animals = (0u64, 0u64);
     let mut human_zero = None;
     let mut animal_zero = None;
+    let mut species_history: BTreeMap<u64, (Value, u64, u64, Option<u64>)> = BTreeMap::new();
     let mut totals = Value::Null;
     let mut samples = Vec::new();
     let mut meetings: BTreeMap<u64, u64> = BTreeMap::new();
@@ -127,7 +128,7 @@ fn inspect(path: &Path, focus: Focus) -> Result<Value, String> {
                     metadata_corrections.push("The source metadata incorrectly says animal parentage is absent. Animals born in these runs have recorded parent IDs; founders may not.");
                 }
                 expected_years = row["years_requested"].as_u64();
-                metadata = json!({"calendar":row["calendar"],"tick_millis":row["tick_millis"],"ticks_per_year":row["ticks_per_year"],"seed":row["seed"],"git_revision":row["git_revision"],"source_kind":row["source_kind"],"limitations":row["limitations"]});
+                metadata = json!({"calendar":row["calendar"],"tick_millis":row["tick_millis"],"ticks_per_year":row["ticks_per_year"],"seed":row["seed"],"git_revision":row["git_revision"],"git_revision_scope":row["git_revision_scope"],"tracked_source_modified":row["tracked_source_modified"],"executable":row["executable"],"source_kind":row["source_kind"],"limitations":row["limitations"]});
             }
             Some("complete") => {
                 complete = true;
@@ -163,6 +164,39 @@ fn inspect(path: &Path, focus: Focus) -> Result<Value, String> {
                         .filter(|animal| animal["health"].as_u64().unwrap_or(0) > 0)
                         .count() as u64
                 });
+                if matches!(focus, Focus::Summary)
+                    && let Some(definitions) =
+                        state.pointer("/fauna/species").and_then(Value::as_array)
+                    && let Some(animals) = fauna
+                {
+                    let mut counts: BTreeMap<u64, u64> = BTreeMap::new();
+                    for animal in animals
+                        .iter()
+                        .filter(|animal| animal["health"].as_u64().unwrap_or(0) > 0)
+                    {
+                        if let Some(species) = animal["species"].as_u64() {
+                            *counts.entry(species).or_default() += 1;
+                        }
+                    }
+                    for definition in definitions {
+                        if let Some(id) = definition["id"].as_u64() {
+                            let count = counts.get(&id).copied().unwrap_or(0);
+                            let entry = species_history.entry(id).or_insert((
+                                definition["name"].clone(),
+                                year,
+                                0,
+                                None,
+                            ));
+                            if count > entry.2 {
+                                entry.1 = year;
+                                entry.2 = count;
+                            }
+                            if count == 0 && entry.3.is_none() {
+                                entry.3 = Some(year);
+                            }
+                        }
+                    }
+                }
                 if live_people > peak_people.1 {
                     peak_people = (year, live_people);
                 }
@@ -355,7 +389,7 @@ fn inspect(path: &Path, focus: Focus) -> Result<Value, String> {
     let scope = json!({"source":path,"complete":complete,"first_year":first_year,"last_year":last_year,"annual_records":years,"metadata":metadata,"metadata_corrections":metadata_corrections});
     match focus {
         Focus::Summary => Ok(
-            json!({"scope":scope,"peak_people":{"year":peak_people.0,"count":peak_people.1},"peak_animals":{"year":peak_animals.0,"count":peak_animals.1},"first_zero_people":human_zero,"first_zero_animals":animal_zero,"family_totals":totals,"recorded_meetings":meeting_count,"most_recorded_meetings":ranking.iter().map(|(person,count)|json!({"person":person,"count":count})).collect::<Vec<_>>(),"genome_samples":samples,"interpretation":"Meeting counts do not establish leadership; changes in allele means do not establish selection or causation."}),
+            json!({"scope":scope,"peak_people":{"year":peak_people.0,"count":peak_people.1},"peak_animals":{"year":peak_animals.0,"count":peak_animals.1},"first_zero_people":human_zero,"first_zero_animals":animal_zero,"animal_species_history":species_history.iter().map(|(id,(name,year,count,zero))|json!({"species":id,"name":name,"peak":{"year":year,"count":count},"first_zero":zero})).collect::<Vec<_>>(),"family_totals":totals,"recorded_meetings":meeting_count,"most_recorded_meetings":ranking.iter().map(|(person,count)|json!({"person":person,"count":count})).collect::<Vec<_>>(),"genome_samples":samples,"interpretation":"Meeting counts do not establish leadership; changes in allele means do not establish selection or causation."}),
         ),
         Focus::Person(person) => {
             if focal_first.is_none() {
@@ -452,6 +486,7 @@ mod tests {
         );
         assert_eq!(summary["first_zero_people"], 2);
         assert_eq!(summary["first_zero_animals"], 2);
+        assert_eq!(summary["animal_species_history"][0]["first_zero"], 2);
         assert_eq!(summary["recorded_meetings"], 1);
         assert_eq!(summary["genome_samples"][0]["human_locus_means"][0], 150.0);
         assert_eq!(

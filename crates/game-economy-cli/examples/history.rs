@@ -26,6 +26,18 @@ fn revision(root: &Path) -> Option<String> {
         .success()
         .then(|| String::from_utf8_lossy(&output.stdout).trim().to_owned())
 }
+fn tracked_changes(root: &Path) -> Option<bool> {
+    let output = std::process::Command::new("git")
+        .args(["diff", "--quiet", "HEAD", "--"])
+        .current_dir(root)
+        .output()
+        .ok()?;
+    match output.status.code() {
+        Some(0) => Some(false),
+        Some(1) => Some(true),
+        _ => None,
+    }
+}
 
 fn observations(events: &[CoreRunEvent]) -> Vec<Value> {
     events.iter().filter_map(|event| match event {
@@ -136,7 +148,7 @@ fn run(
     }
     line(
         &mut writer,
-        &json!({"kind":"metadata","schema":1,"years_requested":years,"start_year":start_year,"tick_millis":tick_millis,"ticks_per_year":ticks_per_year,"calendar":"365-day years","seed":initial.core.seed,"workers":workers,"git_revision":revision(root),"source":source,"source_kind":if resume {"checkpoint"} else {"scenario"},"scenario":scenario_text,"limitations":limitations}),
+        &json!({"kind":"metadata","schema":1,"years_requested":years,"start_year":start_year,"tick_millis":tick_millis,"ticks_per_year":ticks_per_year,"calendar":"365-day years","seed":initial.core.seed,"workers":workers,"git_revision":revision(root),"git_revision_scope":"checkout at run time; executable build provenance is not verified","tracked_source_modified":tracked_changes(root),"executable":std::env::current_exe().ok(),"source":source,"source_kind":if resume {"checkpoint"} else {"scenario"},"scenario":scenario_text,"limitations":limitations}),
     )?;
     line(
         &mut writer,
@@ -543,6 +555,12 @@ mod tests {
         let continued = records(&four);
         assert_eq!(first.len(), 6);
         assert_eq!(first[0]["tick_millis"], YEAR_MILLIS);
+        assert!(
+            first[0]["git_revision_scope"]
+                .as_str()
+                .unwrap()
+                .contains("not verified")
+        );
         assert_eq!(first.last().unwrap()["kind"], "complete");
         assert_eq!(&first[1..], &parallel[1..]);
         assert_eq!(first[4]["year"], 3);
