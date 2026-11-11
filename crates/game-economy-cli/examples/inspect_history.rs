@@ -52,6 +52,11 @@ fn mate_desire_mean<'a>(genomes: impl Iterator<Item = &'a Value>) -> Option<f64>
 }
 fn animal_species_samples(animals: &[Value], species: &[Value]) -> Vec<Value> {
     let mut groups: BTreeMap<u64, Vec<&Value>> = BTreeMap::new();
+    for definition in species {
+        if let Some(id) = definition["id"].as_u64() {
+            groups.entry(id).or_default();
+        }
+    }
     for animal in animals {
         if animal["health"].as_u64().unwrap_or(0) > 0
             && let Some(id) = animal["species"].as_u64()
@@ -63,7 +68,13 @@ fn animal_species_samples(animals: &[Value], species: &[Value]) -> Vec<Value> {
         let name = species.iter().find(|row| row["id"].as_u64() == Some(id)).map_or(Value::Null, |row| row["name"].clone());
         let means = genome_means(members.iter().map(|animal| &animal["genome"]));
         let desire = mate_desire_mean(members.iter().map(|animal| &animal["genome"]));
-        json!({"species":id,"name":name,"living":members.len(),"locus_means":means,"mate_desire_mean":desire})
+        let mut regions: BTreeMap<u64, u64> = BTreeMap::new();
+        for animal in &members {
+            if let Some(region) = animal["region"].as_u64() {
+                *regions.entry(region).or_default() += 1;
+            }
+        }
+        json!({"species":id,"name":name,"living":members.len(),"regions":regions,"locus_means":means,"mate_desire_mean":desire})
     }).collect()
 }
 
@@ -450,6 +461,10 @@ mod tests {
         assert_eq!(
             summary["genome_samples"][0]["animal_species"][0]["locus_means"][1],
             300.0
+        );
+        assert_eq!(
+            animal_species_samples(&[], &[json!({"id": 1, "name": "grazer"})])[0]["living"],
+            0
         );
         let person = inspect(&path, Focus::Person(1)).unwrap();
         assert_eq!(person["first_observed_year"], 0);
