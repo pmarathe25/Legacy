@@ -105,3 +105,5 @@ policies = [{ person = 2, blueprint = 1, target_sites = 1, willing = true }]
 `economy-core-hauling.toml` demonstrates a personal choice to carry named goods between regions via physical pickup, travel, and delivery.
 
 `economy-core-hauling-request.toml` demonstrates a personal request and a carrier who chooses to act on it; the request does not compel the carrier.
+
+`economy-history-pilot.toml` is a coarse annual demographic experiment with modeled family and animal populations. Its disabled hunger and food scarcity, annual action resolution, founder-only social participation, and missing scientific, organizational, and artificial-selection mechanics make it an exploratory pilot rather than a calibrated civilization.
