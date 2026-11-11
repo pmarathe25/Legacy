@@ -30,6 +30,16 @@ fn revision(root: &Path) -> Option<String> {
 fn observations(events: &[CoreRunEvent]) -> Vec<Value> {
     events.iter().filter_map(|event| match event {
         CoreRunEvent::Meetings(rows) if !rows.is_empty() => Some(json!({"kind":"meetings","events":rows})),
+        CoreRunEvent::Disease(rows) if !rows.is_empty() => Some(json!({"kind":"disease","events":rows})),
+        CoreRunEvent::Meals(rows) if !rows.is_empty() => Some(json!({"kind":"meals","events":rows})),
+        CoreRunEvent::Treatments(rows) if !rows.is_empty() => Some(json!({"kind":"treatments","events":rows})),
+        CoreRunEvent::Provisions(rows) if !rows.is_empty() => Some(json!({"kind":"provisions","events":rows})),
+        CoreRunEvent::Repairs(rows) if !rows.is_empty() => Some(json!({"kind":"site_repairs","events":rows})),
+        CoreRunEvent::ToolRepairs(rows) if !rows.is_empty() => Some(json!({"kind":"tool_repairs","events":rows})),
+        CoreRunEvent::Exchanges(rows) if !rows.is_empty() => Some(json!({"kind":"exchanges","people":rows})),
+        CoreRunEvent::Offers(rows) if !rows.is_empty() => Some(json!({"kind":"offers","people":rows})),
+        CoreRunEvent::Acceptances(rows) if !rows.is_empty() => Some(json!({"kind":"acceptances","people":rows})),
+        CoreRunEvent::Requests(rows) if !rows.is_empty() => Some(json!({"kind":"work_requests","events":rows})),
         CoreRunEvent::Starts(rows) if !rows.is_empty() => Some(json!({"kind":"work_starts","outcomes":rows})),
         CoreRunEvent::Work(row) => Some(json!({"kind":"early_work","tick":row.tick,"finished":row.finished,"interrupted":row.interrupted})),
         CoreRunEvent::Construction(rows) if !rows.is_empty() => Some(json!({"kind":"construction","events":rows})),
@@ -74,13 +84,19 @@ fn run(
         )
     };
     let initial = host.snapshot();
-    if initial.core.physical.tick_millis != YEAR_MILLIS {
-        return Err("the annual history runner requires a 365-day tick in the scenario".into());
+    let tick_millis = initial.core.physical.tick_millis;
+    if tick_millis == 0 || !YEAR_MILLIS.is_multiple_of(tick_millis) {
+        return Err("the history tick must divide a 365-day year exactly".into());
     }
+    let ticks_per_year = YEAR_MILLIS / tick_millis;
     if years == 0 {
         return Err("years must be positive".into());
     }
-    let start_year = initial.core.physical.custody.tick;
+    let start_tick = initial.core.physical.custody.tick;
+    if !start_tick.is_multiple_of(ticks_per_year) {
+        return Err("history must start at a year boundary".into());
+    }
+    let start_year = start_tick / ticks_per_year;
     let end_year = start_year
         .checked_add(years)
         .ok_or("history year overflow")?;
@@ -94,7 +110,7 @@ fn run(
         .map_err(|e| e.to_string())?;
     let mut writer = BufWriter::new(file);
     let mut limitations = vec![
-        "one tick per year; production and decisions are quantized to years",
+        "production and decisions are quantized to the scenario tick",
         "scientific invention, political and organizational history, artificial selection, and several other features are not implemented",
         "observations include only selected event types; snapshots are retained annually",
     ];
@@ -120,7 +136,7 @@ fn run(
     }
     line(
         &mut writer,
-        &json!({"kind":"metadata","schema":1,"years_requested":years,"start_year":start_year,"tick_millis":YEAR_MILLIS,"calendar":"365-day years; one simulation tick per year","seed":initial.core.seed,"workers":workers,"git_revision":revision(root),"source":source,"source_kind":if resume {"checkpoint"} else {"scenario"},"scenario":scenario_text,"limitations":limitations}),
+        &json!({"kind":"metadata","schema":1,"years_requested":years,"start_year":start_year,"tick_millis":tick_millis,"ticks_per_year":ticks_per_year,"calendar":"365-day years","seed":initial.core.seed,"workers":workers,"git_revision":revision(root),"source":source,"source_kind":if resume {"checkpoint"} else {"scenario"},"scenario":scenario_text,"limitations":limitations}),
     )?;
     line(
         &mut writer,
@@ -128,34 +144,77 @@ fn run(
     )?;
     let mut previous_animals = animals(&host);
     for year in start_year + 1..=end_year {
-        let result = match host.advance_continuous(YEAR_MILLIS, &[]) {
-            Ok(result) => result,
-            Err(error) => {
+        let mut yearly_observations = Vec::new();
+        let mut previous_step_animals = previous_animals.clone();
+        for _ in 0..ticks_per_year {
+            let result = match host.advance_continuous(tick_millis, &[]) {
+                Ok(result) => result,
+                Err(error) => {
+                    line(
+                        &mut writer,
+                        &json!({"kind":"failure","year":year,"message":error}),
+                    )?;
+                    return Err(format!("year {year}: {error}"));
+                }
+            };
+            if let Some(error) = &result.failure {
                 line(
                     &mut writer,
                     &json!({"kind":"failure","year":year,"message":error}),
                 )?;
                 return Err(format!("year {year}: {error}"));
             }
-        };
-        if let Some(error) = &result.failure {
-            line(
-                &mut writer,
-                &json!({"kind":"failure","year":year,"message":error}),
-            )?;
-            return Err(format!("year {year}: {error}"));
-        }
-        if result.elapsed_millis != YEAR_MILLIS || result.boundaries != 1 {
-            line(
-                &mut writer,
-                &json!({"kind":"failure","year":year,"message":"unexpected elapsed time or boundary count"}),
-            )?;
-            return Err(format!(
-                "year {year}: unexpected elapsed time or boundary count"
-            ));
+            if result.elapsed_millis != tick_millis || result.boundaries != 1 {
+                line(
+                    &mut writer,
+                    &json!({"kind":"failure","year":year,"message":"unexpected elapsed time or boundary count"}),
+                )?;
+                return Err(format!(
+                    "year {year}: unexpected elapsed time or boundary count"
+                ));
+            }
+            yearly_observations.extend(observations(&result.events));
+            if ticks_per_year > 1 {
+                let tick_snapshot = host.snapshot();
+                if let Some(family) = &tick_snapshot.family
+                    && !family.events.is_empty()
+                {
+                    yearly_observations
+                        .push(json!({"kind":"family_events", "events":family.events}));
+                }
+                if let Some(fauna) = &tick_snapshot.fauna {
+                    let current: BTreeSet<_> = fauna
+                        .animals
+                        .iter()
+                        .filter(|animal| animal.health > 0)
+                        .map(|animal| animal.id)
+                        .collect();
+                    let appeared: Vec<_> = current
+                        .difference(&previous_step_animals)
+                        .copied()
+                        .collect();
+                    let inactive: Vec<_> = previous_step_animals
+                        .difference(&current)
+                        .copied()
+                        .collect();
+                    if !appeared.is_empty() || !inactive.is_empty() {
+                        let newborns: Vec<_> = fauna
+                            .animals
+                            .iter()
+                            .filter(|animal| appeared.binary_search(&animal.id).is_ok())
+                            .collect();
+                        yearly_observations.push(json!({"kind":"animal_population","tick":tick_snapshot.core.physical.custody.tick,"appeared":newborns,"inactive":inactive}));
+                    }
+                    previous_step_animals = current;
+                }
+            }
         }
         let snapshot = host.snapshot();
-        if snapshot.core.physical.custody.tick != year {
+        if snapshot.core.physical.custody.tick
+            != year
+                .checked_mul(ticks_per_year)
+                .ok_or("history tick overflow")?
+        {
             line(
                 &mut writer,
                 &json!({"kind":"failure","year":year,"message":"unexpected simulation tick"}),
@@ -188,7 +247,7 @@ fn run(
         let animal_count = current_animals.len();
         line(
             &mut writer,
-            &json!({"kind":"year","year":year,"living_people":living,"living_animals":animal_count,"animal_ids_appeared":appeared,"animal_ids_no_longer_alive":inactive,"observations":observations(&result.events),"snapshot":snapshot}),
+            &json!({"kind":"year","year":year,"living_people":living,"living_animals":animal_count,"animal_ids_appeared":appeared,"animal_ids_no_longer_alive":inactive,"observations":yearly_observations,"snapshot":snapshot}),
         )?;
         previous_animals = current_animals;
         if year % 50 == 0 || year == end_year {
@@ -270,6 +329,134 @@ mod tests {
             .lines()
             .map(|line| serde_json::from_str(line).unwrap())
             .collect()
+    }
+
+    #[test]
+    fn monthly_history_records_intermediate_family_events_and_replays() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let scenario = root.join("content/scenarios/economy-history-monthly.toml");
+        let token = format!(
+            "legacy-monthly-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+        let one = std::env::temp_dir().join(format!("{token}-one.ndjson"));
+        let four = std::env::temp_dir().join(format!("{token}-four.ndjson"));
+        for (path, workers) in [(&one, 1), (&four, 4)] {
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(workers)
+                .build()
+                .unwrap()
+                .install(|| run(&root, &scenario, path, 2, workers, false))
+                .unwrap();
+        }
+        let serial = records(&one);
+        let parallel = records(&four);
+        assert_eq!(serial[0]["ticks_per_year"], 12);
+        assert_eq!(
+            serial[3]["snapshot"]["core"]["physical"]["custody"]["tick"],
+            24
+        );
+        assert_eq!(&serial[1..], &parallel[1..]);
+        assert!(serial[2..4].iter().any(|year| {
+            year["observations"]
+                .as_array()
+                .is_some_and(|rows| rows.iter().any(|row| row["kind"] == "family_events"))
+        }));
+        let checkpoint: CoreHostSnapshot =
+            serde_json::from_reader(File::open(one.with_extension("year-2.json")).unwrap())
+                .unwrap();
+        assert_eq!(checkpoint.core.physical.custody.tick, 24);
+        for path in [&one, &four] {
+            fs::remove_file(path).unwrap();
+            fs::remove_file(path.with_extension("year-2.json")).unwrap();
+        }
+    }
+
+    #[test]
+    fn monthly_host_supplies_each_persons_directed_affinity_to_mate_choice() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let scenario = root.join("content/scenarios/economy-history-monthly.toml");
+        let host = game_economy_cli::core_scenario(&scenario, &root.join("content")).unwrap();
+        let mut snapshot = host.snapshot();
+        let family = snapshot.family.as_mut().unwrap();
+        family.rules.conception_one_in = 1;
+        for member in &mut family.members {
+            member.reproduction_allowed = member.id == 1 || member.id == 2;
+            if member.reproduction_allowed {
+                member.genome.alleles[0] = [1000, 1000];
+                member.mate_preference = Some(game_families::MatePreference {
+                    desire: 1000,
+                    genetic_weight: 0,
+                    affinity_weight: 1,
+                    attraction_weight: 0,
+                    hunger_weight: 0,
+                    dependent_weight: 0,
+                    minimum: 1,
+                });
+            }
+        }
+        let run = |reverse: i32| {
+            let mut initial = snapshot.clone();
+            initial.opinions.as_mut().unwrap().records = serde_json::from_value(json!([
+                {"observer":1,"target":2,"trust":0,"affinity":10},
+                {"observer":2,"target":1,"trust":0,"affinity":reverse}
+            ]))
+            .unwrap();
+            let mut host = CoreHost::resume(initial).unwrap();
+            let result = host.advance_continuous(2_628_000_000, &[]).unwrap();
+            assert_eq!(result.failure, None);
+            host.snapshot().family.unwrap().members[0].pregnancy.clone()
+        };
+        assert!(run(-10).is_none());
+        assert_eq!(run(10).unwrap().father, 2);
+    }
+
+    #[test]
+    fn expanded_monthly_world_loads_its_composed_owners() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let scenario = root.join("content/scenarios/economy-history-monthly-expanded.toml");
+        let host = game_economy_cli::core_scenario(&scenario, &root.join("content")).unwrap();
+        let state = host.snapshot();
+        assert_eq!(state.core.people.len(), 60);
+        assert!(state.family.as_ref().unwrap().rules.subjective_mating);
+        assert_eq!(state.health.as_ref().unwrap().owner.cases.len(), 1);
+        assert!(state.fauna.is_some() && state.social.is_some() && state.opinions.is_some());
+        assert!(
+            state.environment.is_some()
+                && state.agriculture.is_some()
+                && state.irrigation.is_some()
+        );
+        assert!(
+            state.gathering.is_some() && state.dependent_care.is_some() && state.hunting.is_some()
+        );
+        assert!(
+            state.goals.is_some()
+                && state.skills.is_some()
+                && state.giving.is_some()
+                && state.market.is_some()
+        );
+        assert!(
+            state.construction.is_some()
+                && state.hauling.is_some()
+                && state.local_transport.is_some()
+                && state.writing.is_some()
+        );
+        assert!(
+            state.animal_products.is_some()
+                && state.animal_care.is_some()
+                && state.animal_handling.is_some()
+                && state.animal_restraints.is_some()
+        );
+        assert!(
+            state.fatigue.is_some()
+                && state.claims.is_some()
+                && state.agreements.is_some()
+                && state.sites.is_some()
+        );
     }
 
     #[test]

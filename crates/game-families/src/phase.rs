@@ -27,6 +27,37 @@ fn eligible(m: &Member, p: &LifeInput, rules: &FamilyRules) -> bool {
         && p.health >= rules.minimum_health
         && p.hunger <= rules.maximum_hunger
 }
+fn seeks_mate(m: &Member, p: &LifeInput, dependents: u64, seed: u64, tick: u64) -> bool {
+    let pref = m.mate_preference.unwrap_or_default();
+    let genetic = (i128::from(m.genome.expressed_mate_desire()) - 500)
+        * i128::from(pref.genetic_weight)
+        / 500;
+    let desire = i128::from(pref.desire)
+        + genetic
+        + i128::from(pref.hunger_weight) * i128::from(p.hunger)
+        + i128::from(pref.dependent_weight) * i128::from(dependents);
+    (random(seed ^ 0x4d415445, m.id, tick) % 1000) < desire.clamp(0, 1000) as u64
+}
+fn mate_score(
+    observer: &Member,
+    target: &Member,
+    physical: &impl game_family_model::PhysicalView,
+    seed: u64,
+) -> i64 {
+    let pref = observer.mate_preference.unwrap_or_default();
+    let attraction = (random(seed ^ observer.id ^ 0x41545452, target.id, 0) % 2001) as i64 - 1000;
+    i64::from(pref.affinity_weight) * i64::from(physical.affinity(observer.id, target.id))
+        + i64::from(pref.attraction_weight) * attraction / 1000
+}
+fn accepts_mate(
+    observer: &Member,
+    target: &Member,
+    physical: &impl game_family_model::PhysicalView,
+    seed: u64,
+) -> bool {
+    mate_score(observer, target, physical, seed)
+        >= i64::from(observer.mate_preference.as_ref().map_or(0, |p| p.minimum))
+}
 // A valid pedigree has at most two parents and four grandparents. Repeated
 // ancestors need not be deduplicated for the intersection test.
 struct Ancestors {
@@ -180,8 +211,11 @@ impl Families {
             .par_iter()
             .filter_map(|m| {
                 let person = physical.read(m.id);
-                (m.partner.is_none() && !physical.controlled(m.id) && eligible(m, &person, rules))
-                    .then(|| (person.region.unwrap(), physical.contact_partition(m.id), m))
+                (!rules.subjective_mating
+                    && m.partner.is_none()
+                    && !physical.controlled(m.id)
+                    && eligible(m, &person, rules))
+                .then(|| (person.region.unwrap(), physical.contact_partition(m.id), m))
             })
             .collect();
         local.par_sort_unstable_by_key(|(region, partition, member)| {
@@ -287,6 +321,7 @@ impl Families {
                     alive: true,
                     reproduction_allowed: true,
                     reconsider_partnership: mother.reconsider_partnership,
+                    mate_preference: None,
                 };
                 let recover = tick
                     .checked_add(rules.birth_spacing)
@@ -328,6 +363,49 @@ impl Families {
             drop(profile_phase);
             profile_phase = game_diagnostics::span("family.conceptions");
         }
+        let mut parents: Vec<_> = if rules.subjective_mating {
+            members
+                .par_iter()
+                .filter(|child| child.alive && child.age < rules.adult_age)
+                .flat_map_iter(|child| child.parents.iter().copied())
+                .collect()
+        } else {
+            Vec::new()
+        };
+        parents.par_sort_unstable();
+        let dependents: Vec<_> = parents
+            .par_chunk_by(|a, b| a == b)
+            .map(|group| (group[0], group.len() as u64))
+            .collect();
+        let dependent_count = |id| {
+            dependents
+                .binary_search_by_key(&id, |row| row.0)
+                .ok()
+                .map_or(0, |index| dependents[index].1)
+        };
+        let mut prospective_fathers: Vec<_> = if rules.subjective_mating {
+            members
+                .par_iter()
+                .filter_map(|m| {
+                    let person = physical.read(m.id);
+                    (m.genome.sex == Sex::Male
+                        && !physical.controlled(m.id)
+                        && eligible(m, &person, rules)
+                        && seeks_mate(m, &person, dependent_count(m.id), seed, tick))
+                    .then(|| (person.region.unwrap(), physical.contact_partition(m.id), m))
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+        prospective_fathers.par_sort_unstable_by_key(|(region, partition, father)| {
+            (
+                *region,
+                *partition,
+                random(seed ^ 0x46415448, father.id, tick),
+                father.id,
+            )
+        });
         let conceptions: Vec<_> = members
             .par_iter()
             .filter_map(|mother| {
@@ -339,7 +417,42 @@ impl Families {
                 {
                     return None;
                 }
-                let father = mother.partner.and_then(|p| index.get(&p))?;
+                let mother_person = physical.read(mother.id);
+                let father = if rules.subjective_mating {
+                    if !seeks_mate(
+                        mother,
+                        &mother_person,
+                        dependent_count(mother.id),
+                        seed,
+                        tick,
+                    ) {
+                        return None;
+                    }
+                    let area = (mother_person.region?, physical.contact_partition(mother.id));
+                    let first = prospective_fathers.partition_point(|row| (row.0, row.1) < area);
+                    let end = prospective_fathers.partition_point(|row| (row.0, row.1) <= area);
+                    if first == end {
+                        return None;
+                    }
+                    let offset = (random(seed ^ 0x5345454b, mother.id, tick) % (end - first) as u64)
+                        as usize;
+                    let mother_ancestors = ancestors(mother.id, &index);
+                    (0..(end - first).min(32))
+                        .map(|n| prospective_fathers[first + (offset + n) % (end - first)].2)
+                        .filter(|father| {
+                            mother_ancestors.is_disjoint(&ancestors(father.id, &index))
+                                && accepts_mate(mother, father, physical, seed)
+                                && accepts_mate(father, mother, physical, seed)
+                        })
+                        .max_by_key(|father| {
+                            (
+                                mate_score(mother, father, physical, seed),
+                                std::cmp::Reverse(father.id),
+                            )
+                        })?
+                } else {
+                    mother.partner.and_then(|p| index.get(&p))?
+                };
                 let chance = 500 + u64::from(mother.genome.expressed(0));
                 if father.genome.sex != Sex::Male
                     || physical.controlled(father.id)

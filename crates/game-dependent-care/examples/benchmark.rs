@@ -13,6 +13,8 @@ fn member(id: u64, age: u64, parents: Vec<u64>) -> Member {
         genome: Genome {
             sex: Sex::Female,
             alleles: [[0; 2]; 4],
+
+            mate_desire: [500, 500],
         },
         parents: parents.into(),
         partner: None,
@@ -21,6 +23,8 @@ fn member(id: u64, age: u64, parents: Vec<u64>) -> Member {
         alive: true,
         reproduction_allowed: false,
         reconsider_partnership: false,
+
+        mate_preference: None,
     }
 }
 fn main() -> Result<(), Box<dyn std::error::Error>> {

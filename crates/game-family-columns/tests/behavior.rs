@@ -11,6 +11,7 @@ fn member(id: u64, parents: &[u64]) -> Member {
         genome: Genome {
             sex: Sex::Female,
             alleles: [[1000, 1000]; 4],
+            mate_desire: [500, 500],
         },
         parents: parents.iter().copied().collect(),
         partner: None,
@@ -19,6 +20,7 @@ fn member(id: u64, parents: &[u64]) -> Member {
         alive: true,
         reproduction_allowed: false,
         reconsider_partnership: false,
+        mate_preference: None,
     }
 }
 

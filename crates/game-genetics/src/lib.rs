@@ -12,10 +12,19 @@ pub struct Genome {
     pub sex: Sex,
     /// Four diploid quantitative loci: fertility, vigor, sociability, longevity.
     pub alleles: [[u16; 2]; 4],
+    /// A separate diploid tendency to seek reproductive encounters.
+    #[serde(default = "neutral_desire")]
+    pub mate_desire: [u16; 2],
+}
+fn neutral_desire() -> [u16; 2] {
+    [500, 500]
 }
 impl Genome {
     pub fn expressed(&self, locus: usize) -> u16 {
         ((u32::from(self.alleles[locus][0]) + u32::from(self.alleles[locus][1])) / 2) as u16
+    }
+    pub fn expressed_mate_desire(&self) -> u16 {
+        ((u32::from(self.mate_desire[0]) + u32::from(self.mate_desire[1])) / 2) as u16
     }
 }
 pub fn random(seed: u64, id: u64, tick: u64) -> u64 {
@@ -54,6 +63,20 @@ pub fn inherit(
             };
         }
     }
+    let mut mate_desire = [0; 2];
+    for (side, parent) in [mother, father].into_iter().enumerate() {
+        let n = random(seed ^ (211 + side as u64), mother_id, tick);
+        let allele = parent.mate_desire[(n & 1) as usize];
+        mate_desire[side] = if n.rotate_left(23) % 1_000_000 < u64::from(mutation_per_million) {
+            if n & 2 == 0 {
+                allele.saturating_sub(mutation_step)
+            } else {
+                allele.saturating_add(mutation_step).min(1000)
+            }
+        } else {
+            allele
+        };
+    }
     Genome {
         sex: if random(seed ^ 73, mother_id, tick) & 1 == 0 {
             Sex::Female
@@ -61,5 +84,6 @@ pub fn inherit(
             Sex::Male
         },
         alleles,
+        mate_desire,
     }
 }

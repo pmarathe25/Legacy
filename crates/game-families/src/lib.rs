@@ -1,6 +1,8 @@
 //! Individual life history and hereditary state. Workers return drafts, never callbacks.
 mod phase;
-pub use game_family_model::{Birth, FamilyEvent, FamilyTotals, LifeInput, Member, Pregnancy};
+pub use game_family_model::{
+    Birth, FamilyEvent, FamilyTotals, LifeInput, MatePreference, Member, Pregnancy,
+};
 pub use phase::Draft;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -26,6 +28,9 @@ pub struct FamilyRules {
     /// Enroll actual newborns in configured social, knowledge, and adult autonomy owners.
     #[serde(default)]
     pub enroll_births: bool,
+    /// Enable independent subjective reproductive encounters.
+    #[serde(default)]
+    pub subjective_mating: bool,
 }
 impl FamilyRules {
     pub fn validate(&self) -> Result<(), &'static str> {
@@ -166,6 +171,7 @@ impl Families {
                 || m.born
                     .is_some_and(|at| at > now || now - at != m.age && m.alive)
                 || m.genome.alleles.iter().flatten().any(|a| *a > 1000)
+                || m.genome.mate_desire.iter().any(|a| *a > 1000)
                 || !(m.parents.is_empty() || m.parents.len() == 2 && m.parents[0] != m.parents[1])
                 || m.parents
                     .iter()

@@ -5082,6 +5082,7 @@ fn gathering_depletes_resources_into_real_personal_custody() {
                     genome: game_genetics::Genome {
                         sex: game_genetics::Sex::Male,
                         alleles: [[100; 2]; 4],
+                        mate_desire: [500, 500],
                     },
                     pregnancy: None,
                     parents: None,
@@ -6042,6 +6043,7 @@ fn core_host_cultivation_benchmark() {
                 genome: game_genetics::Genome {
                     sex: game_genetics::Sex::Male,
                     alleles: [[100; 2]; 4],
+                    mate_desire: [500, 500],
                 },
                 pregnancy: None,
                 parents: None,

@@ -498,6 +498,14 @@ pub fn founders(seed: u64, profiles: &[Profile]) -> Result<Vec<game_families::Me
                             game_genetics::Sex::Male
                         },
                         alleles,
+                        mate_desire: [
+                            rule.min_allele
+                                + (random(4) % u64::from(rule.max_allele - rule.min_allele + 1))
+                                    as u16,
+                            rule.min_allele
+                                + (random(5) % u64::from(rule.max_allele - rule.min_allele + 1))
+                                    as u16,
+                        ],
                     },
                     parents: Default::default(),
                     partner: None,
@@ -507,6 +515,7 @@ pub fn founders(seed: u64, profiles: &[Profile]) -> Result<Vec<game_families::Me
                     reproduction_allowed: random(2) % 100 < u64::from(rule.reproduction_percent),
                     reconsider_partnership: random(3) % 100
                         < u64::from(rule.reconsider_partnership_percent),
+                    mate_preference: None,
                 }
             })
         })

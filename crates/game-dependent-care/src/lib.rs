@@ -421,6 +421,7 @@ mod tests {
             genome: Genome {
                 sex: Sex::Female,
                 alleles: [[0; 2]; 4],
+                mate_desire: [500, 500],
             },
             parents: parents.into(),
             partner: None,
@@ -429,6 +430,7 @@ mod tests {
             alive: true,
             reproduction_allowed: false,
             reconsider_partnership: false,
+            mate_preference: None,
         };
         let members = [
             member(1, 20, vec![]),
@@ -513,6 +515,7 @@ mod tests {
             genome: Genome {
                 sex: Sex::Female,
                 alleles: [[0; 2]; 4],
+                mate_desire: [500, 500],
             },
             parents: parents.into(),
             partner: None,
@@ -521,6 +524,7 @@ mod tests {
             alive: true,
             reproduction_allowed: false,
             reconsider_partnership: false,
+            mate_preference: None,
         };
         let family = Store::compile(&[
             member(1, 20, vec![]),

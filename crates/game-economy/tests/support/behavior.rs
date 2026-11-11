@@ -1578,6 +1578,7 @@ fn autonomous_animal_care_uses_real_food_and_personal_motivation() {
             genome: Genome {
                 sex: Sex::Male,
                 alleles: [[100; 2]; 4],
+                mate_desire: [500, 500],
             },
             pregnancy: None,
             parents: None,
@@ -2299,10 +2300,12 @@ fn hunting_fixture() -> State {
     let female = Genome {
         sex: Sex::Female,
         alleles: [[100; 2]; 4],
+        mate_desire: [500, 500],
     };
     let male = Genome {
         sex: Sex::Male,
         alleles: [[900; 2]; 4],
+        mate_desire: [500, 500],
     };
     state.fauna = Some(Fauna {
         last_tick: 0,
@@ -13588,6 +13591,7 @@ fn caregiver_can_choose_to_use_claimed_food_for_a_dependent() {
             genome: Genome {
                 sex: if id == 1 { Sex::Female } else { Sex::Male },
                 alleles: [[500; 2]; 4],
+                mate_desire: [500, 500],
             },
             parents: if id == 3 {
                 vec![1, 2].into()
@@ -13600,6 +13604,7 @@ fn caregiver_can_choose_to_use_claimed_food_for_a_dependent() {
             alive: true,
             reproduction_allowed: false,
             reconsider_partnership: false,
+            mate_preference: None,
         })
         .collect();
     initial.family = Some(Families {
@@ -13618,6 +13623,7 @@ fn caregiver_can_choose_to_use_claimed_food_for_a_dependent() {
             mutation_per_million: 0,
             mutation_step: 0,
             enroll_births: true,
+            subjective_mating: false,
         },
         members,
         next_id: 5,
@@ -16586,6 +16592,7 @@ fn campaign_fixture() -> State {
             mutation_per_million: 0,
             mutation_step: 0,
             enroll_births: true,
+            subjective_mating: false,
         },
         members: (1..=4)
             .map(|id| Member {
@@ -16596,6 +16603,7 @@ fn campaign_fixture() -> State {
                 genome: Genome {
                     sex: if id == 1 { Sex::Female } else { Sex::Male },
                     alleles: [[500; 2]; 4],
+                    mate_desire: [500, 500],
                 },
                 parents: Default::default(),
                 partner: match id {
@@ -16608,6 +16616,7 @@ fn campaign_fixture() -> State {
                 alive: id != 4,
                 reproduction_allowed: true,
                 reconsider_partnership: false,
+                mate_preference: None,
             })
             .collect(),
         next_id: 5,
@@ -30315,6 +30324,7 @@ fn newborn_gets_custody_in_the_same_generation_as_contested_food() {
             genome: Genome {
                 sex: if id == 1 { Sex::Female } else { Sex::Male },
                 alleles: [[500; 2]; 4],
+                mate_desire: [500, 500],
             },
             parents: Default::default(),
             partner: match id {
@@ -30327,6 +30337,7 @@ fn newborn_gets_custody_in_the_same_generation_as_contested_food() {
             alive: true,
             reproduction_allowed: true,
             reconsider_partnership: id == 2,
+            mate_preference: None,
         })
         .collect();
     initial.family = Some(Families {
@@ -30345,6 +30356,7 @@ fn newborn_gets_custody_in_the_same_generation_as_contested_food() {
             mutation_per_million: 0,
             mutation_step: 0,
             enroll_births: true,
+            subjective_mating: false,
         },
         members,
         next_id: 5,
@@ -36155,6 +36167,7 @@ fn concentrated_animal_care_benchmark() {
             genome: Genome {
                 sex: Sex::Male,
                 alleles: [[100; 2]; 4],
+                mate_desire: [500, 500],
             },
             pregnancy: None,
             parents: None,
@@ -36388,6 +36401,7 @@ fn people_and_wildlife_share_a_finite_physical_resource_atomically() {
                 genome: Genome {
                     sex: Sex::Male,
                     alleles: [[100; 2]; 4],
+                    mate_desire: [500, 500],
                 },
                 pregnancy: None,
                 parents: None,
@@ -40604,6 +40618,7 @@ fn mixed_settlement(count: u64) -> State {
                 genome: Genome {
                     sex: if id % 2 == 0 { Sex::Male } else { Sex::Female },
                     alleles: [[500; 2]; 4],
+                    mate_desire: [500, 500],
                 },
                 parents: if child {
                     vec![2 * offset + 1, 2 * offset + 2].into()
@@ -40616,6 +40631,7 @@ fn mixed_settlement(count: u64) -> State {
                 alive: true,
                 reproduction_allowed: false,
                 reconsider_partnership: false,
+                mate_preference: None,
             }
         })
         .collect();
@@ -40635,6 +40651,7 @@ fn mixed_settlement(count: u64) -> State {
             mutation_per_million: 0,
             mutation_step: 0,
             enroll_births: false,
+            subjective_mating: false,
         },
         members,
         next_id: count + 1,
@@ -45395,6 +45412,7 @@ fn concentrated_upbringing_workload(count: u64) -> State {
             mutation_per_million: 0,
             mutation_step: 0,
             enroll_births: false,
+            subjective_mating: false,
         },
         members: (1..=count)
             .map(|id| Member {
@@ -45405,6 +45423,7 @@ fn concentrated_upbringing_workload(count: u64) -> State {
                 genome: Genome {
                     sex: if id == 1 { Sex::Female } else { Sex::Male },
                     alleles: [[500; 2]; 4],
+                    mate_desire: [500, 500],
                 },
                 parents: if id <= 2 {
                     Default::default()
@@ -45417,6 +45436,7 @@ fn concentrated_upbringing_workload(count: u64) -> State {
                 alive: true,
                 reproduction_allowed: false,
                 reconsider_partnership: false,
+                mate_preference: None,
             })
             .collect(),
         next_id: count + 1,

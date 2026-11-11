@@ -97,13 +97,25 @@ impl CoreHost {
             return Ok(None);
         };
         let tick = draft.events().tick;
-        let next = game_economy_family::advance_validated(
+        let opinions = self
+            .opinions
+            .as_ref()
+            .filter(|_| owner.rules.subjective_mating)
+            .map(game_opinions::Opinions::index);
+        let affinity = |observer, target| {
+            opinions
+                .as_ref()
+                .map_or(0, |index| index.affinity(observer, target))
+        };
+        let next = game_economy_family::advance_validated_with_context(
             owner,
             &mut draft.people.people,
             &mut draft.travel,
             self.core.seed,
             tick,
             self.dependent_care.is_some(),
+            None,
+            Some(&affinity),
         )?;
         let newborns: Vec<_> = next
             .newborns

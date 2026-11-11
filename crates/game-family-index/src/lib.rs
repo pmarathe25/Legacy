@@ -217,6 +217,7 @@ mod tests {
             genome: Genome {
                 sex: Sex::Female,
                 alleles: [[0, 0]; 4],
+                mate_desire: [500, 500],
             },
             parents: vec![].into(),
             partner: None,
@@ -225,6 +226,7 @@ mod tests {
             alive: true,
             reproduction_allowed: true,
             reconsider_partnership: false,
+            mate_preference: None,
         }
     }
 

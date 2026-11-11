@@ -240,16 +240,19 @@ struct View<'a> {
     people: &'a [Person],
     suffix: Option<game_family_index::DenseSuffix>,
     partition: Option<&'a (dyn Fn(u64) -> ContactPartition + Sync)>,
+    affinity: Option<&'a (dyn Fn(u64, u64) -> i32 + Sync)>,
 }
 impl<'a> View<'a> {
     fn new(
         people: &'a [Person],
         partition: Option<&'a (dyn Fn(u64) -> ContactPartition + Sync)>,
+        affinity: Option<&'a (dyn Fn(u64, u64) -> i32 + Sync)>,
     ) -> Self {
         Self {
             people,
             suffix: game_family_index::DenseSuffix::new(people.len(), |i| people[i].id),
             partition,
+            affinity,
         }
     }
     fn index(&self, id: u64) -> Option<usize> {
@@ -271,6 +274,9 @@ impl PhysicalView for View<'_> {
     }
     fn controlled(&self, id: u64) -> bool {
         self.index(id).is_some_and(|i| self.people[i].controlled)
+    }
+    fn affinity(&self, observer: u64, target: u64) -> i32 {
+        self.affinity.map_or(0, |read| read(observer, target))
     }
     fn contact_partition(&self, id: u64) -> ContactPartition {
         self.partition.map_or((0, 0), |partition| partition(id))
@@ -329,8 +335,32 @@ pub fn advance_validated_with_partition(
     newborns_seek_meals: bool,
     partition: Option<&(dyn Fn(u64) -> ContactPartition + Sync)>,
 ) -> Result<ResultFrame, String> {
+    advance_validated_with_context(
+        family,
+        people,
+        travel,
+        seed,
+        tick,
+        newborns_seek_meals,
+        partition,
+        None,
+    )
+}
+
+/// Read personal opinions through an immutable host-owned view.
+#[allow(clippy::too_many_arguments)]
+pub fn advance_validated_with_context(
+    family: &Families,
+    people: &mut Vec<Person>,
+    travel: &mut Option<Travel>,
+    seed: u64,
+    tick: u64,
+    newborns_seek_meals: bool,
+    partition: Option<&(dyn Fn(u64) -> ContactPartition + Sync)>,
+    affinity: Option<&(dyn Fn(u64, u64) -> i32 + Sync)>,
+) -> Result<ResultFrame, String> {
     let next = family
-        .advance_validated(&View::new(people, partition), seed, tick)
+        .advance_validated(&View::new(people, partition, affinity), seed, tick)
         .map_err(str::to_owned)?;
     let mut grown: Vec<_> = next
         .families

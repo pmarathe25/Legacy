@@ -1,5 +1,5 @@
 //! Stable identity-ordered lifecycle storage; physical movement never relocates these rows.
-use game_family_model::{Member, Pregnancy};
+use game_family_model::{MatePreference, Member, Pregnancy};
 use game_genetics::Genome;
 use rayon::prelude::*;
 pub const BLOCK: usize = 1024;
@@ -31,6 +31,7 @@ pub struct Metadata {
     pub id: u64,
     pub born: Option<u64>,
     pub reconsider_partnership: bool,
+    pub mate_preference: Option<MatePreference>,
     pub genome: Genome,
     pub parents: [u64; 2],
     pub parent_count: usize,
@@ -45,6 +46,7 @@ impl Metadata {
             id: member.id,
             born: member.born,
             reconsider_partnership: member.reconsider_partnership,
+            mate_preference: member.mate_preference,
             genome: member.genome.clone(),
             parents,
             parent_count: member.parents.len(),
@@ -73,6 +75,7 @@ impl Metadata {
             alive: state.alive,
             reproduction_allowed: state.reproduction_allowed,
             reconsider_partnership: self.reconsider_partnership,
+            mate_preference: self.mate_preference,
         }
     }
 }

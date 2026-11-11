@@ -34,6 +34,22 @@ fn genome_means<'a>(genomes: impl Iterator<Item = &'a Value>) -> Option<Vec<f64>
     }
     (count > 0).then(|| sums.into_iter().map(|sum| sum / count as f64).collect())
 }
+fn mate_desire_mean<'a>(genomes: impl Iterator<Item = &'a Value>) -> Option<f64> {
+    let (mut sum, mut count) = (0.0, 0u64);
+    for genome in genomes {
+        // Earlier snapshots predate the separate locus and load as neutral.
+        let value = match genome.get("mate_desire") {
+            None => 500.0,
+            Some(pair) => {
+                let pair = pair.as_array()?;
+                (pair.first()?.as_f64()? + pair.get(1)?.as_f64()?) / 2.0
+            }
+        };
+        sum += value;
+        count += 1;
+    }
+    (count > 0).then_some(sum / count as f64)
+}
 
 fn inspect(path: &Path, focus: Focus) -> Result<Value, String> {
     let input = BufReader::new(File::open(path).map_err(|e| e.to_string())?);
@@ -84,7 +100,7 @@ fn inspect(path: &Path, focus: Focus) -> Result<Value, String> {
                     metadata_corrections.push("The source metadata incorrectly says animal parentage is absent. Animals born in these runs have recorded parent IDs; founders may not.");
                 }
                 expected_years = row["years_requested"].as_u64();
-                metadata = json!({"calendar":row["calendar"],"seed":row["seed"],"git_revision":row["git_revision"],"source_kind":row["source_kind"],"limitations":row["limitations"]});
+                metadata = json!({"calendar":row["calendar"],"tick_millis":row["tick_millis"],"ticks_per_year":row["ticks_per_year"],"seed":row["seed"],"git_revision":row["git_revision"],"source_kind":row["source_kind"],"limitations":row["limitations"]});
             }
             Some("complete") => {
                 complete = true;
@@ -152,11 +168,45 @@ fn inspect(path: &Path, focus: Focus) -> Result<Value, String> {
                                 .map(|animal| &animal["genome"]),
                         )
                     });
-                    samples.push(json!({"year":year,"living_people":live_people,"living_animals":live_animals,"human_locus_means":human_means,"animal_locus_means":animal_means}));
+                    let human_desire = people.and_then(|items| {
+                        mate_desire_mean(
+                            items
+                                .iter()
+                                .filter(|member| member["alive"] == true)
+                                .map(|member| &member["genome"]),
+                        )
+                    });
+                    let animal_desire = fauna.and_then(|items| {
+                        mate_desire_mean(
+                            items
+                                .iter()
+                                .filter(|animal| animal["health"].as_u64().unwrap_or(0) > 0)
+                                .map(|animal| &animal["genome"]),
+                        )
+                    });
+                    samples.push(json!({"year":year,"living_people":live_people,"living_animals":live_animals,"human_locus_means":human_means,"animal_locus_means":animal_means,"human_mate_desire_mean":human_desire,"animal_mate_desire_mean":animal_desire}));
                 }
                 if row["kind"] == "year" {
                     if let Some(events) = row["observations"].as_array() {
                         for event in events {
+                            if event["kind"] == "family_events" {
+                                if let Focus::Person(person) = focus
+                                    && let Some(rows) = event["events"].as_array()
+                                {
+                                    focal_events.extend(
+                                        rows.iter()
+                                            .filter(|row| {
+                                                row["people"].as_array().is_some_and(|people| {
+                                                    people
+                                                        .iter()
+                                                        .any(|id| id.as_u64() == Some(person))
+                                                })
+                                            })
+                                            .cloned(),
+                                    );
+                                }
+                                continue;
+                            }
                             if event["kind"] != "meetings" {
                                 continue;
                             }
@@ -178,7 +228,9 @@ fn inspect(path: &Path, focus: Focus) -> Result<Value, String> {
                             }
                         }
                     }
-                    if let Focus::Person(person) = focus
+                    if !row["observations"].as_array().is_some_and(|events| {
+                        events.iter().any(|event| event["kind"] == "family_events")
+                    }) && let Focus::Person(person) = focus
                         && let Some(events) =
                             state.pointer("/family/events").and_then(Value::as_array)
                     {

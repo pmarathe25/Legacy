@@ -907,6 +907,7 @@ impl Fauna {
                     !regions.contains(&a.region)
                         || a.health > s.max_health
                         || a.genome.alleles.iter().flatten().any(|value| *value > 1000)
+                        || a.genome.mate_desire.iter().any(|value| *value > 1000)
                         || a.social_response
                             .as_ref()
                             .map_or(!a.opinions.is_empty(), |response| {
@@ -948,6 +949,10 @@ impl Fauna {
                                     .alleles
                                     .iter()
                                     .flatten()
+                                    .any(|value| *value > 1000)
+                                || p.father_genome
+                                    .mate_desire
+                                    .iter()
                                     .any(|value| *value > 1000)
                         })
                 })

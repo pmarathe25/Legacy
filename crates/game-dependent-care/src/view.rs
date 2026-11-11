@@ -141,6 +141,7 @@ mod tests {
             genome: Genome {
                 sex: Sex::Female,
                 alleles: [[0; 2]; 4],
+                mate_desire: [500, 500],
             },
             parents: parents.iter().copied().collect(),
             partner: None,
@@ -149,6 +150,7 @@ mod tests {
             alive: true,
             reproduction_allowed: false,
             reconsider_partnership: false,
+            mate_preference: None,
         }
     }
 

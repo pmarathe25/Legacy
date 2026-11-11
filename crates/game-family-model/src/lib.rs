@@ -10,6 +10,38 @@ pub struct Pregnancy {
 fn yes() -> bool {
     true
 }
+/// An individual's subjective inclinations; weights may be negative.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct MatePreference {
+    /// Baseline desire per thousand before genetic and personal circumstances.
+    pub desire: i32,
+    /// Contribution of the inherited mate-desire locus, scaled by 1000.
+    pub genetic_weight: i32,
+    /// Personal response to directed affinity toward the prospective mate.
+    pub affinity_weight: i32,
+    /// Personal response to a stable, directed attraction toward this person.
+    pub attraction_weight: i32,
+    /// Personal response to own hunger.
+    pub hunger_weight: i32,
+    /// Personal response to each living minor child; either sign is permitted.
+    pub dependent_weight: i32,
+    /// Minimum acceptable subjective evaluation of a prospective mate.
+    pub minimum: i32,
+}
+impl Default for MatePreference {
+    fn default() -> Self {
+        Self {
+            desire: 500,
+            genetic_weight: 250,
+            affinity_weight: 10,
+            attraction_weight: 100,
+            hunger_weight: -2,
+            dependent_weight: -100,
+            minimum: 0,
+        }
+    }
+}
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Member {
@@ -38,6 +70,8 @@ pub struct Member {
     /// Willing to leave a partnership when the other person no longer wishes or can conceive.
     #[serde(default)]
     pub reconsider_partnership: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mate_preference: Option<MatePreference>,
 }
 #[derive(Clone, Copy)]
 pub struct LifeInput {
@@ -62,6 +96,10 @@ pub trait PhysicalView: Sync {
     /// A player-controlled person does not make this autonomous decision.
     fn controlled(&self, _id: u64) -> bool {
         false
+    }
+    /// The observer's own directed feeling, not a shared relationship score.
+    fn affinity(&self, _observer: u64, _target: u64) -> i32 {
+        0
     }
     /// Zero denotes the unpartitioned region; distinct values cannot touch.
     fn contact_partition(&self, _id: u64) -> ContactPartition {
