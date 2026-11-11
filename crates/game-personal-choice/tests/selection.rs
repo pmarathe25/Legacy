@@ -88,8 +88,6 @@ fn malformed_or_duplicate_proposals_fail_without_selecting() {
     let people = [profile(1, i64::MAX, i64::MIN)];
     assert!(select(&people, &[proposal(2, 1, 1, 0)], 1, 1).is_err());
     assert!(select(&people, &[proposal(1, 1, 1, 0), proposal(1, 1, 1, 5)], 1, 1).is_err());
-    let excessive: Vec<_> = (1..=65).map(|action| proposal(1, 1, action, 1)).collect();
-    assert!(select(&people, &excessive, 1, 1).is_err());
     let result = select(
         &people,
         &[proposal(1, 1, 1, i64::MAX), proposal(1, 2, 1, i64::MIN)],
@@ -102,6 +100,37 @@ fn malformed_or_duplicate_proposals_fail_without_selecting() {
         Some(Key {
             domain: 1,
             action: 1
+        })
+    );
+}
+
+#[test]
+fn a_person_can_consider_more_than_64_opportunities_and_domains() {
+    let mut person = profile(1, 0, 0);
+    person.preferences = (1..=100)
+        .map(|domain| Preference {
+            domain,
+            enabled: true,
+            bias: 0,
+            weight: 1000,
+        })
+        .collect();
+    let candidates: Vec<_> = (1..=100)
+        .map(|action| proposal(1, 100, action, action as i64))
+        .collect();
+    let decide = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| select(&[person.clone()], &candidates, 7, 1).unwrap())
+    };
+    assert_eq!(decide(1), decide(4));
+    assert_eq!(
+        decide(1)[0].action,
+        Some(Key {
+            domain: 100,
+            action: 100
         })
     );
 }

@@ -10,8 +10,8 @@ Optional sorted `actions` refine a person's domain preferences using a signed
 bias or an explicit refusal for an individual domain and action key. They can
 therefore like or dislike different foods, recipes, or experiments separately;
 an action refinement does not activate an unlisted or disabled domain.
-Inputs exceeding 64 personal domains or 64 opportunities per person are
-rejected rather than silently truncated.
+The owner considers all supplied domains and opportunities rather than
+rejecting or silently truncating a person's choices at an arbitrary count.
 
 The interval host can opt in to using this selection for construction,
 local carrying, site maintenance and starting work. This is not yet a common chooser for the other activities;

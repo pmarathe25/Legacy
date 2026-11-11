@@ -4,9 +4,6 @@
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
-pub const MAX_DOMAINS: usize = 64;
-pub const MAX_OPPORTUNITIES: usize = 64;
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Key {
@@ -83,7 +80,6 @@ pub fn validate_people(people: &[Person]) -> Result<(), &'static str> {
     if people.par_windows(2).any(|w| w[0].id >= w[1].id)
         || people.par_iter().any(|p| {
             p.id == 0
-                || p.preferences.len() > MAX_DOMAINS
                 || p.preferences.windows(2).any(|w| w[0].domain >= w[1].domain)
                 || p.preferences.iter().any(|row| row.domain == 0)
                 || p.actions.windows(2).any(|w| w[0].key >= w[1].key)
@@ -150,9 +146,6 @@ pub fn select(
     if sorted
         .par_windows(2)
         .any(|w| (w[0].actor, w[0].key) == (w[1].actor, w[1].key))
-        || sorted
-            .par_chunk_by(|a, b| a.actor == b.actor)
-            .any(|rows| rows.len() > MAX_OPPORTUNITIES)
         || sorted.par_iter().any(|p| {
             p.actor == 0
                 || p.key.domain == 0
