@@ -88,6 +88,8 @@ struct Scenario {
     #[serde(default)]
     dynamics: Option<game_economy::Dynamics>,
     #[serde(default)]
+    language: Option<game_language::Language>,
+    #[serde(default)]
     remedies: Vec<game_economy_dynamics::treatment::Remedy>,
     #[serde(default)]
     missions: Option<game_economy::Missions>,
@@ -801,9 +803,19 @@ pub fn core_scenario_with_options(
     seed: Option<u64>,
     population_path: Option<&Path>,
 ) -> Result<game_economy::core_interval::CoreHost, String> {
-    let scenario = scenario_with_options(path, content, seed, population_path)?;
-    let snapshot =
+    let text = std::fs::read_to_string(path).map_err(|error| error.to_string())?;
+    let authored: Scenario = toml::from_str(&text).map_err(|error| error.to_string())?;
+    let language = authored.language;
+    let scenario = scenario_with_options_inner(path, content, seed, population_path, true)?;
+    let mut snapshot =
         game_economy::core_interval::CoreHostSnapshot::from_scenario(scenario.snapshot())?;
+    if let Some(language) = language {
+        snapshot
+            .social
+            .as_mut()
+            .ok_or("language requires social encounters")?
+            .language = Some(language);
+    }
     let period = snapshot.core.physical.tick_millis;
     let mut host = game_economy::core_interval::CoreHost::begin(snapshot, &[])?;
     host.enable_schedule(period, 1)?;
@@ -826,8 +838,21 @@ pub fn scenario_with_options(
     seed: Option<u64>,
     population_path: Option<&Path>,
 ) -> Result<Economy, String> {
+    scenario_with_options_inner(path, content, seed, population_path, false)
+}
+
+fn scenario_with_options_inner(
+    path: &Path,
+    content: &Path,
+    seed: Option<u64>,
+    population_path: Option<&Path>,
+    allow_language: bool,
+) -> Result<Economy, String> {
     let source = std::fs::read_to_string(path).map_err(|error| error.to_string())?;
     let mut scenario: Scenario = toml::from_str(&source).map_err(|error| error.to_string())?;
+    if scenario.language.is_some() && !allow_language {
+        return Err("language requires the interval simulation host".into());
+    }
     if let Some(path) = population_path {
         let source = std::fs::read_to_string(path).map_err(|error| error.to_string())?;
         let overlay: population::Overlay =

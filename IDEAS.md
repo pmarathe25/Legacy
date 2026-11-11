@@ -4,6 +4,11 @@ This document tracks improvement ideas for the Legacy simulation.
 Items which have not been implemented are marked `[NOT DONE]`.
 Completed items should be marked `[DONE]` after they have been verified.
 
+The completed labels and implementation notes below refer to the earlier engine
+at `eba0eb9`. They do not establish that the current parallel interval host has
+these capabilities; see `docs/research/legacy-feature-audit.md` for the current
+restoration inventory.
+
 - [DONE] Language should arise naturally from phonemes as people try different sounds to communicate. Agreed upon sounds (which can happen using gestures or show and tell) can eventually proliferate as a full language. Names should be derived from the language itself or its phonemes. Not every language will use every phoneme that can be physically generated.
 - [DONE] When choosing names, characters should consider whether other important characters in their lives have the same or similar names and if that will cause confusion. The cost of confusion can be balanced against their reverance/respect for other characters - so you still might have a child named after a beloved family member, but we shouldn't have every child always named the same thing or have the same two or three names constantly repeat in every single family line. We shouldn't explicitly prevent such a thing, but we should change the cost model for choosing names.
 - [DONE] After language is generated, we can also have characters write poetry, music, books, etc. For the sake of the player, we will probably also want to keep some kind of decoder/translator which we can probably do by tracking how the language evolves and how the characters themselves explain and share it with each other.

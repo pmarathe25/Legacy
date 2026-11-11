@@ -66,6 +66,7 @@ impl CoreHostSnapshot {
             let social = dynamics.social.map(|owner| CoreSocial {
                 owner,
                 last_tick: None,
+                language: None,
             });
             let health = dynamics.disease.map(|owner| CoreHealth {
                 owner,

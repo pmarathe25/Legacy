@@ -201,6 +201,7 @@ dependencies = [
  "game-genetics",
  "game-goals",
  "game-goods-cargo",
+ "game-language",
  "game-lot-content",
  "game-lot-diet",
  "game-lot-projection",
@@ -319,6 +320,7 @@ dependencies = [
  "game-fatigue",
  "game-fauna",
  "game-genetics",
+ "game-language",
  "game-lot-content",
  "game-lot-runtime",
  "game-lots",
@@ -789,6 +791,15 @@ dependencies = [
  "game-people",
  "game-social",
  "game-transport",
+ "rayon",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "game-language"
+version = "0.2.0"
+dependencies = [
  "rayon",
  "serde",
  "serde_json",

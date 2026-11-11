@@ -5,6 +5,11 @@ tick_millis = 3600000
 stock_capacity = 100000
 food_relief_divisor = 1
 
+[language.rules]
+sounds = ["a", "i", "u", "k", "m", "t", "n"]
+word_length = 3
+capacity = 32
+
 [rules]
 hunger_per_tick = 1
 meal_threshold = 48

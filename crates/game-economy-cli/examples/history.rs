@@ -194,8 +194,17 @@ fn run(
                 yearly_observations
                     .push(json!({"kind":"opinion_changes", "events":opinion_events}));
             }
+            let tick_snapshot = host.snapshot();
+            if let Some(language) = tick_snapshot
+                .social
+                .as_ref()
+                .and_then(|social| social.language.as_ref())
+                && !language.events.is_empty()
+            {
+                yearly_observations
+                    .push(json!({"kind":"language_events", "events":language.events}));
+            }
             if ticks_per_year > 1 {
-                let tick_snapshot = host.snapshot();
                 if let Some(family) = &tick_snapshot.family
                     && !family.events.is_empty()
                 {
@@ -349,6 +358,44 @@ mod tests {
             .lines()
             .map(|line| serde_json::from_str(line).unwrap())
             .collect()
+    }
+
+    #[test]
+    fn language_observations_are_archived_from_real_meetings() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let original = root.join("content/scenarios/economy-history-monthly.toml");
+        let token = format!(
+            "legacy-language-history-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+        let scenario = std::env::temp_dir().join(format!("{token}.toml"));
+        let output = std::env::temp_dir().join(format!("{token}.ndjson"));
+        let text = format!(
+            "{}\n[language.rules]\nsounds = [\"a\", \"k\"]\nword_length = 3\ncapacity = 16\n",
+            fs::read_to_string(original).unwrap()
+        );
+        fs::write(&scenario, text).unwrap();
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(1)
+            .build()
+            .unwrap()
+            .install(|| run(&root, &scenario, &output, 2, 1, false))
+            .unwrap();
+        let rows = records(&output);
+        assert!(rows.iter().filter(|row| row["kind"] == "year").any(|row| {
+            row["observations"].as_array().is_some_and(|events| {
+                events
+                    .iter()
+                    .any(|event| event["kind"] == "language_events")
+            })
+        }));
+        fs::remove_file(scenario).unwrap();
+        fs::remove_file(&output).unwrap();
+        fs::remove_file(output.with_extension("year-2.json")).unwrap();
     }
 
     #[test]

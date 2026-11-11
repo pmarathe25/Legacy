@@ -158,6 +158,57 @@ fn archiving_opinion_events_preserves_decisions_and_every_event() {
 }
 
 #[test]
+fn authored_language_runs_in_meetings_and_survives_resume() {
+    fn run(workers: usize) -> serde_json::Value {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let root = root();
+                let path = root.join("content/scenarios/economy-history-hourly.toml");
+                assert!(game_economy_cli::scenario(&path, &root.join("content")).is_err());
+                let mut host =
+                    game_economy_cli::core_scenario(&path, &root.join("content")).unwrap();
+                for _ in 0..20 {
+                    assert!(
+                        host.advance_continuous(3_600_000, &[])
+                            .unwrap()
+                            .failure
+                            .is_none()
+                    );
+                }
+                let snapshot = host.snapshot();
+                let language = snapshot.social.as_ref().unwrap().language.as_ref().unwrap();
+                assert!(language.minds.iter().any(|mind| !mind.words.is_empty()));
+                let saved = serde_json::to_string(&snapshot).unwrap();
+                let mut resumed = game_economy::core_interval::CoreHost::resume(
+                    serde_json::from_str(&saved).unwrap(),
+                )
+                .unwrap();
+                for _ in 0..5 {
+                    assert!(
+                        host.advance_continuous(3_600_000, &[])
+                            .unwrap()
+                            .failure
+                            .is_none()
+                    );
+                    assert!(
+                        resumed
+                            .advance_continuous(3_600_000, &[])
+                            .unwrap()
+                            .failure
+                            .is_none()
+                    );
+                }
+                assert_eq!(host.snapshot(), resumed.snapshot());
+                serde_json::to_value(host.snapshot()).unwrap()
+            })
+    }
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
 fn unsupported_scenario_owners_are_reported() {
     let root = root();
     let state = game_economy_cli::scenario(
@@ -665,6 +716,7 @@ fn personal_practice_can_report_false_readiness_without_creating_goods() {
             std::sync::Arc::make_mut(&mut minds[0].reports).clear();
             std::sync::Arc::make_mut(&mut minds[1].sent_reports).clear();
             moved.social = Some(game_economy::core_interval::CoreSocial {
+                language: None,
                 owner: game_social::Social {
                     inherit_births: false, rules: game_social::Rules { interval: 1, min_health: 1, max_hunger: 100,
                         familiarity_gain: 1, familiarity_max: 10, relationship_retention: None },

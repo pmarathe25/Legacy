@@ -7,6 +7,8 @@ pub struct CoreSocial {
     pub owner: game_social::Social,
     #[serde(default)]
     pub last_tick: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub language: Option<game_language::Language>,
 }
 
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -145,6 +147,22 @@ impl CoreHost {
             .social
             .as_ref()
             .map_or_else(Vec::new, |owner| owner.events.par_iter().cloned().collect());
+        let language = social
+            .and_then(|social| social.language.as_ref())
+            .map(|language| {
+                let rows: Vec<_> = meetings
+                    .par_iter()
+                    .map(|meeting| game_language::Meeting {
+                        a: meeting.a,
+                        b: meeting.b,
+                        meaning: game_language::Meaning::Place(meeting.region),
+                    })
+                    .collect();
+                language
+                    .prepare(&rows, self.core.seed, tick)
+                    .map_err(str::to_owned)
+            })
+            .transpose()?;
         let disease_events: Vec<_> = next
             .disease
             .as_ref()
@@ -251,6 +269,7 @@ impl CoreHost {
             self.social = Some(CoreSocial {
                 owner,
                 last_tick: Some(tick),
+                language,
             });
         }
         if let Some(owner) = next.disease {

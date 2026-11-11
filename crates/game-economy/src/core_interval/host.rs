@@ -662,6 +662,11 @@ impl CoreHost {
                 .owner
                 .validate(&people, core.physical.tick())
                 .map_err(str::to_owned)?;
+            if let Some(language) = &social.language {
+                language
+                    .validate(&people, core.physical.tick())
+                    .map_err(str::to_owned)?;
+            }
             if social
                 .last_tick
                 .is_some_and(|tick| tick == 0 || tick > core.physical.tick())
