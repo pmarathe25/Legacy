@@ -1,0 +1,102 @@
+seed = 7
+tick_millis = 900000
+stock_capacity = 100
+food_relief_divisor = 20
+
+[rules]
+hunger_per_tick = 1
+meal_threshold = 5
+starvation_threshold = 50
+starvation_damage = 1
+max_health = 100
+carrying_capacity = 20
+max_work_hunger = 20
+
+[knowledge]
+max_records = 4
+minds = []
+
+[[regions]]
+id = 1
+stock = { grain = 10, bread = 4, timber = 10 }
+[[regions]]
+id = 2
+stock = {}
+[[routes]]
+source = 1
+destination = 2
+ticks = 1
+[[routes]]
+source = 2
+destination = 1
+ticks = 1
+
+[[people]]
+id = 1
+region = 1
+health = 100
+hunger = 0
+willing_to_work = false
+seek_meals = true
+[[people]]
+id = 2
+region = 1
+health = 100
+hunger = 0
+willing_to_work = false
+seek_meals = true
+[[people]]
+id = 3
+region = 1
+health = 100
+hunger = 10
+willing_to_work = false
+seek_meals = true
+
+[food_search]
+min_hunger = 10
+min_report_food = 1
+max_report_age = 10
+retry_ticks = 1
+people = []
+
+[local_transport]
+[[local_transport.stores]]
+id = 1
+region = 1
+name = "Store"
+capacity = 10
+[[local_transport.policies]]
+person = 1
+region = 1
+source = { kind = "stock" }
+destination = { kind = "store", id = 1 }
+good = "timber"
+quantity = 1
+willing = true
+
+[[personal_choices]]
+id = 1
+idle = 0
+preferences = [{ domain = 2, enabled = true, bias = 0 }, { domain = 9, enabled = true, bias = 10 }]
+[[personal_choices]]
+id = 2
+idle = 0
+preferences = [{ domain = 9, enabled = true, bias = 10 }]
+[[personal_choices]]
+id = 3
+idle = 0
+preferences = [{ domain = 9, enabled = false, bias = 10 }]
+
+[[meal_preferences]]
+person = 1
+domain = 9
+good = "bread"
+enabled = false
+bias = 0
+[[meal_preferences]]
+person = 2
+domain = 9
+good = "bread"
+enabled = false
+bias = 0

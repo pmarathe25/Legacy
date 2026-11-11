@@ -84,13 +84,25 @@ impl CoreHost {
                     .map_or(Some(0), |index| index.food_access(person, region, good))
             },
         )?;
+        self.commit_provision(plan)
+    }
+
+    /// Publish claim consequences and commit a previously selected pickup batch.
+    pub(super) fn commit_provision(
+        &mut self,
+        plan: game_economy_person::provision::Plan,
+    ) -> Result<CoreFoodProvision, String> {
         if plan.actions.is_empty() {
             return Ok(CoreFoodProvision::default());
         }
+        let tick = self.core.physical.tick();
+        let claims = self.claims.as_ref();
         let draft = self
             .core
             .physical
             .prepare_interval_transfer(&plan.actions, self.core.seed)?;
+        let tools = self.stage_tools(&[], None, draft.item_updates())?;
+        let writing = self.stage_written_page_removals(draft.item_updates());
         let mut staged_claims = claims.cloned();
         let mut staged_opinions = claims.is_some().then(|| self.opinions.clone());
         if let Some(claims) = &mut staged_claims {
@@ -130,6 +142,12 @@ impl CoreHost {
                 .par_sort_unstable_by_key(|e| (e.tick, e.claimant, e.person, e.region, e.good));
         }
         let outcomes = self.core.physical.commit_interval_consumption(draft)?;
+        if let Some(tools) = tools {
+            self.tool_wear = Some(tools);
+        }
+        if let Some(writing) = writing {
+            self.writing = Some(writing);
+        }
         self.claims = staged_claims;
         if let Some(opinions) = staged_opinions {
             self.opinions = opinions;

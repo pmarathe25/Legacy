@@ -10,6 +10,78 @@ pub struct Plan {
     pub actions: Vec<Transaction>,
 }
 
+/// One locally visible food portion before the individual decides to seek it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Opportunity {
+    pub person: u64,
+    pub region: u64,
+    pub good: u32,
+    pub quantity: u64,
+}
+
+/// Enumerate available regional food without deciding that a person wants it.
+/// `consider` applies only that person's own claim-related inclinations.
+pub fn opportunities_now(
+    people: &[Person],
+    goods: &[Good],
+    view: &View,
+    busy: &[u64],
+    consider: impl Fn(&Person, u64, u32) -> Option<u8> + Sync,
+) -> Result<Vec<Opportunity>, String> {
+    if people.par_windows(2).any(|rows| rows[0].id >= rows[1].id)
+        || busy.par_windows(2).any(|rows| rows[0] >= rows[1])
+    {
+        return Err("provision people and exclusions must be ordered and unique".into());
+    }
+    let edible: HashMap<_, _> = goods
+        .iter()
+        .filter_map(|good| good.food.as_ref().map(|food| (good.id, food.portion)))
+        .collect();
+    let mut stock: Vec<_> = view
+        .containers
+        .par_iter()
+        .filter_map(|row| {
+            let Place::Stock { region, good } = row.place else {
+                return None;
+            };
+            let portion = *edible.get(&good)?;
+            (portion > 0 && row.quantity(good) >= portion).then_some((region, good, portion))
+        })
+        .collect();
+    stock.par_sort_unstable();
+    let stock = &stock;
+    let consider = &consider;
+    Ok(people
+        .par_iter()
+        .flat_map_iter(|person| {
+            let region = (person.seek_meals
+                && !person.controlled
+                && person.health > 0
+                && busy.binary_search(&person.id).is_err())
+            .then_some(person.region)
+            .flatten();
+            region.into_iter().flat_map(move |region| {
+                let remaining = view
+                    .container(Place::Person(person.id))
+                    .map_or(0, |holding| holding.capacity.saturating_sub(holding.used));
+                let start = stock.partition_point(|row| row.0 < region);
+                let end = stock.partition_point(|row| row.0 <= region);
+                stock[start..end]
+                    .iter()
+                    .filter_map(move |&(_, good, quantity)| {
+                        (quantity <= remaining && consider(person, region, good).is_some())
+                            .then_some(Opportunity {
+                                person: person.id,
+                                region,
+                                good,
+                                quantity,
+                            })
+                    })
+            })
+        })
+        .collect())
+}
+
 struct Sources {
     region: u64,
     good: u32,

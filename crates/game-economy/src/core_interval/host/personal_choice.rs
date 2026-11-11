@@ -11,6 +11,7 @@ pub(super) const CONTINUE_WORK: u32 = 5;
 pub(super) const EXPERIMENT: u32 = 6;
 pub(super) const MEAL: u32 = 7;
 pub(super) const TOOL_REPAIR: u32 = 8;
+pub(super) const FOOD_PICKUP: u32 = 9;
 
 fn index_by_person<T>(rows: &[T], id: u64, key: impl Fn(&T) -> u64) -> Option<usize> {
     rows.first()
@@ -372,11 +373,26 @@ impl CoreHost {
         domain: Option<u32>,
     ) -> Result<Vec<CoreChoiceIntent>, String> {
         let tick = self.core.physical.tick();
-        let needs_view = (domain.is_none_or(|domain| domain == CONSTRUCTION)
+        let needs_provision = domain.is_none_or(|domain| domain == FOOD_PICKUP)
+            && self.food_search.is_some()
             && self
-                .construction
+                .schedule
                 .as_ref()
-                .is_some_and(|owner| !owner.policies.is_empty()))
+                .and_then(|s| s.personal_choices.as_ref())
+                .is_some_and(|people| {
+                    people.par_iter().any(|person| {
+                        person
+                            .preferences
+                            .binary_search_by_key(&FOOD_PICKUP, |p| p.domain)
+                            .is_ok()
+                    })
+                });
+        let needs_view = needs_provision
+            || (domain.is_none_or(|domain| domain == CONSTRUCTION)
+                && self
+                    .construction
+                    .as_ref()
+                    .is_some_and(|owner| !owner.policies.is_empty()))
             || (domain.is_none_or(|domain| domain == CARRYING)
                 && self
                     .local_transport
@@ -733,17 +749,67 @@ impl CoreHost {
                 })
                 .collect())
         };
-        let ((construction, carrying), (maintenance, (work, (experiments, (meals, tool_repairs))))) =
-            rayon::join(
-                || rayon::join(construction, carrying),
-                || {
-                    rayon::join(maintenance, || {
-                        rayon::join(work, || {
-                            rayon::join(experiments, || rayon::join(meals, tool_repairs))
+        let food_pickups = || -> Result<Vec<CoreChoiceIntent>, String> {
+            if !needs_provision {
+                return Ok(Vec::new());
+            }
+            Ok(game_economy_person::provision::opportunities_now(
+                &self.core.people,
+                self.core.physical.goods(),
+                view.as_ref().expect("food pickup view"),
+                &busy,
+                |person, region, good| {
+                    claims
+                        .as_ref()
+                        .map_or(Some(0), |index| index.food_access(person, region, good))
+                },
+            )?
+            .into_par_iter()
+            .map(|opportunity| {
+                let person = index_by_person(&self.core.people, opportunity.person, |p| p.id)
+                    .expect("known person");
+                CoreChoiceIntent {
+                    actor: opportunity.person,
+                    key: Key {
+                        domain: FOOD_PICKUP,
+                        action: u64::from(opportunity.good),
+                    },
+                    movement: Some(game_lots::Movement {
+                        id: 0,
+                        from: game_lots::Place::Stock {
+                            region: opportunity.region,
+                            good: opportunity.good,
+                        },
+                        to: Some(game_lots::Place::Person(opportunity.person)),
+                        good: opportunity.good,
+                        quantity: opportunity.quantity,
+                        item: None,
+                    }),
+                    second_movement: None,
+                    work: None,
+                    experiment: None,
+                    experiment_value: None,
+                    meal_value: Some(i64::from(self.core.people[person].hunger)),
+                    tool_damage: None,
+                }
+            })
+            .collect())
+        };
+        let (
+            (construction, carrying),
+            (maintenance, (work, (experiments, (meals, (tool_repairs, food_pickups))))),
+        ) = rayon::join(
+            || rayon::join(construction, carrying),
+            || {
+                rayon::join(maintenance, || {
+                    rayon::join(work, || {
+                        rayon::join(experiments, || {
+                            rayon::join(meals, || rayon::join(tool_repairs, food_pickups))
                         })
                     })
-                },
-            );
+                })
+            },
+        );
         let mut intents = construction?;
         intents.par_extend(carrying);
         intents.par_extend(maintenance);
@@ -751,6 +817,7 @@ impl CoreHost {
         intents.par_extend(experiments?);
         intents.par_extend(meals?);
         intents.par_extend(tool_repairs?);
+        intents.par_extend(food_pickups?);
         if intents
             .par_windows(2)
             .any(|rows| (rows[0].actor, rows[0].key) > (rows[1].actor, rows[1].key))

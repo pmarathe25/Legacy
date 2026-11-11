@@ -6,6 +6,7 @@ use std::path::PathBuf;
 #[test]
 #[ignore = "mixed-workload performance measurement"]
 fn concentrated_personal_choice_benchmark() {
+    let food_pickups = std::env::var_os("LEGACY_CHOICE_FOOD_PICKUPS").is_some();
     let count: u64 = std::env::var("LEGACY_CHOICE_PEOPLE")
         .ok()
         .map(|value| value.parse().expect("invalid population"))
@@ -66,6 +67,9 @@ capacity = 10000
         let (build, carry) = if id % 2 == 0 { (0, 10) } else { (10, 0) };
         writeln!(text, "[[personal_choices]]\nid = {id}\nidle = 0\npreferences = [{{ domain = 1, enabled = true, bias = {build} }}, {{ domain = 2, enabled = true, bias = {carry} }}]").unwrap();
     }
+    if food_pickups {
+        text.push_str("[knowledge]\nmax_records = 4\nminds = []\n[[regions]]\nid = 2\nstock = {}\n[[routes]]\nsource = 1\ndestination = 2\nticks = 1\n[[routes]]\nsource = 2\ndestination = 1\nticks = 1\n[food_search]\nmin_hunger = 10\nmin_report_food = 1\nmax_report_age = 10\nretry_ticks = 1\npeople = []\n");
+    }
     text = text
         .replace(
             "stock_capacity = 100000",
@@ -99,9 +103,37 @@ capacity = 10000
             + usize::from(work)
             + usize::from(meals)
             + usize::from(tool_repairs)
+            + usize::from(food_pickups)
             <= 1,
         "choose one additional workload"
     );
+    if food_pickups {
+        for person in snapshot
+            .core
+            .people
+            .iter_mut()
+            .filter(|person| person.id % 3 == 0)
+        {
+            person.seek_meals = true;
+        }
+        let profiles = std::sync::Arc::make_mut(
+            snapshot
+                .schedule
+                .as_mut()
+                .unwrap()
+                .personal_choices
+                .as_mut()
+                .unwrap(),
+        );
+        for person in profiles.iter_mut().filter(|person| person.id % 3 == 0) {
+            person.preferences.push(game_personal_choice::Preference {
+                domain: 9,
+                enabled: true,
+                bias: 30,
+                weight: 1000,
+            });
+        }
+    }
     if tool_repairs {
         use game_economy_work::tool_wear::{Condition, RepairChoice, Rule, ToolWear};
         use game_lots::{Container, Lot, Place};
@@ -488,6 +520,19 @@ capacity = 10000
                     .iter()
                     .filter_map(|event| match event {
                         game_economy::core_interval::CoreRunEvent::ToolRepairs(rows) => {
+                            Some(rows.iter().filter(|row| row.accepted).count())
+                        }
+                        _ => None,
+                    })
+                    .sum::<usize>();
+                assert_eq!(decisions as u64, count / 3);
+            }
+            if food_pickups && count >= 3 {
+                let decisions = result
+                    .events
+                    .iter()
+                    .filter_map(|event| match event {
+                        game_economy::core_interval::CoreRunEvent::Provisions(rows) => {
                             Some(rows.iter().filter(|row| row.accepted).count())
                         }
                         _ => None,

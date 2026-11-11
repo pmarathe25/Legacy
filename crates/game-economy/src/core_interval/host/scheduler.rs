@@ -3,7 +3,7 @@ use super::*;
 use std::sync::Arc;
 
 const SELECTED_DOMAINS: u64 =
-    (1 << 1) | (1 << 2) | (1 << 3) | (1 << 4) | (1 << 6) | (1 << 7) | (1 << 8);
+    (1 << 1) | (1 << 2) | (1 << 3) | (1 << 4) | (1 << 6) | (1 << 7) | (1 << 8) | (1 << 9);
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "phase", rename_all = "snake_case")]
@@ -82,6 +82,11 @@ pub enum DecisionPhase {
         remaining: u64,
     },
     ChosenToolRepair {
+        meal_people: Vec<u64>,
+        intents: Arc<Vec<CoreChoiceIntent>>,
+        remaining: u64,
+    },
+    ChosenFoodPickup {
         meal_people: Vec<u64>,
         intents: Arc<Vec<CoreChoiceIntent>>,
         remaining: u64,
@@ -206,7 +211,8 @@ impl CoreSchedule {
             DecisionPhase::ChosenBatch { remaining, .. }
             | DecisionPhase::ChosenExperiment { remaining, .. }
             | DecisionPhase::ChosenMeal { remaining, .. }
-            | DecisionPhase::ChosenToolRepair { remaining, .. } => Some(*remaining),
+            | DecisionPhase::ChosenToolRepair { remaining, .. }
+            | DecisionPhase::ChosenFoodPickup { remaining, .. } => Some(*remaining),
             DecisionPhase::ChosenConstruction { remaining, .. }
             | DecisionPhase::ChosenCarrying { remaining, .. }
             | DecisionPhase::ChosenMaintenance { remaining, .. }
@@ -232,6 +238,7 @@ impl CoreSchedule {
             DecisionPhase::ChosenExperiment { .. } => Some(6),
             DecisionPhase::ChosenMeal { .. } => Some(7),
             DecisionPhase::ChosenToolRepair { .. } => Some(8),
+            DecisionPhase::ChosenFoodPickup { .. } => Some(9),
             _ => None,
         };
         if current_domain
@@ -247,7 +254,8 @@ impl CoreSchedule {
         | DecisionPhase::ChosenBatch { intents, .. }
         | DecisionPhase::ChosenExperiment { intents, .. }
         | DecisionPhase::ChosenMeal { intents, .. }
-        | DecisionPhase::ChosenToolRepair { intents, .. } = &self.phase
+        | DecisionPhase::ChosenToolRepair { intents, .. }
+        | DecisionPhase::ChosenFoodPickup { intents, .. } = &self.phase
         {
             let Some(people) = &self.personal_choices else {
                 return Err("selected actions require personal choices".into());
@@ -319,6 +327,14 @@ impl CoreSchedule {
                                     || movement.to.is_some()
                                     || movement.item.is_some()
                             }
+                            (9, Some(movement), None, None) => {
+                                intent.tool_damage.is_some() || intent.meal_value.is_none()
+                                    || intent.experiment_value.is_some() || intent.second_movement.is_some()
+                                    || movement.id != 0 || movement.quantity == 0 || movement.item.is_some()
+                                    || !matches!(movement.from, game_lots::Place::Stock { region, good } if region != 0 && good == movement.good)
+                                    || movement.to != Some(game_lots::Place::Person(intent.actor))
+                                    || intent.key.action != u64::from(movement.good)
+                            }
                             _ => true,
                         }
                         || people
@@ -355,6 +371,7 @@ impl CoreSchedule {
         | DecisionPhase::ChosenExperiment { meal_people, .. }
         | DecisionPhase::ChosenMeal { meal_people, .. }
         | DecisionPhase::ChosenToolRepair { meal_people, .. }
+        | DecisionPhase::ChosenFoodPickup { meal_people, .. }
         | DecisionPhase::ChosenConstruction { meal_people, .. }
         | DecisionPhase::ChosenCarrying { meal_people, .. }
         | DecisionPhase::ChosenMaintenance { meal_people, .. }
@@ -495,6 +512,7 @@ impl CoreHost {
                 || self.autowork.is_some()
                 || self.mechanics.is_some()
                 || self.tool_wear.is_some()
+                || self.food_search.is_some()
                 || self
                     .schedule
                     .as_ref()
@@ -778,6 +796,22 @@ impl CoreHost {
                     DecisionPhase::Provision { mut meal_people } => {
                         let mut busy = blocked.to_vec();
                         busy.extend(meal_people.iter().copied());
+                        if let Some(people) = &schedule.personal_choices {
+                            busy.par_extend(
+                                people
+                                    .par_iter()
+                                    .filter(|person| {
+                                        person
+                                            .preferences
+                                            .binary_search_by_key(
+                                                &personal_choice::FOOD_PICKUP,
+                                                |p| p.domain,
+                                            )
+                                            .is_ok()
+                                    })
+                                    .map(|person| person.id),
+                            );
+                        }
                         busy.par_sort_unstable();
                         busy.dedup();
                         let result = attempt!('run, self.acquire_food_autonomously(&busy));
@@ -1204,6 +1238,9 @@ impl CoreHost {
                         let has_tool_repairs = intents
                             .par_iter()
                             .any(|intent| intent.key.domain == personal_choice::TOOL_REPAIR);
+                        let has_food_pickups = intents
+                            .par_iter()
+                            .any(|intent| intent.key.domain == personal_choice::FOOD_PICKUP);
                         let random = game_genetics::random(self.core.seed, 0x63686f696365, round);
                         let first = if has_work {
                             random % 4
@@ -1213,7 +1250,8 @@ impl CoreHost {
                             random & 1
                         };
                         self.schedule.as_mut().expect("active schedule").phase =
-                            if has_experiments || has_meals || has_tool_repairs {
+                            if has_experiments || has_meals || has_tool_repairs || has_food_pickups
+                            {
                                 let mut remaining = 0;
                                 if has_experiments {
                                     remaining |= 1 << 6;
@@ -1223,6 +1261,9 @@ impl CoreHost {
                                 }
                                 if has_tool_repairs {
                                     remaining |= 1 << 8;
+                                }
+                                if has_food_pickups {
+                                    remaining |= 1 << 9;
                                 }
                                 if self.construction.is_some() {
                                     remaining |= 1 << 1;
@@ -1285,7 +1326,7 @@ impl CoreHost {
                         remaining,
                     } => {
                         let round = self.core.physical.tick().rotate_left(21) ^ offset;
-                        let domain = [1u32, 2, 3, 4, 6, 7, 8]
+                        let domain = [1u32, 2, 3, 4, 6, 7, 8, 9]
                             .into_iter()
                             .filter(|domain| remaining & (1u64 << domain) != 0)
                             .min_by_key(|domain| {
@@ -1345,8 +1386,80 @@ impl CoreHost {
                                 intents,
                                 remaining,
                             },
+                            9 => DecisionPhase::ChosenFoodPickup {
+                                meal_people,
+                                intents,
+                                remaining,
+                            },
                             _ => unreachable!("validated domain"),
                         };
+                    }
+                    DecisionPhase::ChosenFoodPickup {
+                        mut meal_people,
+                        intents,
+                        remaining,
+                    } => {
+                        let mut busy = blocked.to_vec();
+                        busy.extend(meal_people.iter().copied());
+                        busy.par_sort_unstable();
+                        busy.dedup();
+                        let people = schedule.personal_choices.as_ref().expect("choice profile");
+                        let (blocked_choice, mut choices) = attempt!('run, self.choice_blocked(&busy, people, &intents, personal_choice::FOOD_PICKUP));
+                        let chosen: Vec<_> = intents
+                            .par_iter()
+                            .filter(|intent| {
+                                intent.key.domain == personal_choice::FOOD_PICKUP
+                                    && blocked_choice.binary_search(&intent.actor).is_err()
+                            })
+                            .collect();
+                        let plan = game_economy_person::provision::Plan {
+                            actors: chosen.par_iter().map(|intent| intent.actor).collect(),
+                            actions: chosen
+                                .par_iter()
+                                .map(|intent| {
+                                    let mut movement =
+                                        intent.movement.expect("validated food pickup");
+                                    movement.id = intent.actor;
+                                    game_lots::Transaction {
+                                        id: intent.actor,
+                                        movements: vec![movement],
+                                        creations: vec![],
+                                    }
+                                })
+                                .collect(),
+                        };
+                        let result = attempt!('run, self.commit_provision(plan));
+                        let mut outcomes = result.outcomes;
+                        outcomes.par_sort_unstable_by_key(|row| row.id);
+                        choices.par_extend(result.actors.par_iter().map(|&actor| {
+                            CoreChoiceEvent {
+                                tick: self.core.physical.tick(),
+                                offset_millis: offset,
+                                actor,
+                                key: personal_choice::selected_key(&intents, actor),
+                                outcome: if outcomes
+                                    .binary_search_by_key(&actor, |row| row.id)
+                                    .ok()
+                                    .is_some_and(|i| outcomes[i].accepted)
+                                {
+                                    CoreChoiceOutcome::Accepted
+                                } else {
+                                    CoreChoiceOutcome::Denied
+                                },
+                            }
+                        }));
+                        meal_people.par_extend(result.actors);
+                        meal_people.par_sort_unstable();
+                        meal_people.dedup();
+                        if !outcomes.is_empty() {
+                            run.events.push(CoreRunEvent::Provisions(outcomes));
+                        }
+                        if !choices.is_empty() {
+                            choices.par_sort_unstable_by_key(|event| event.actor);
+                            run.events.push(CoreRunEvent::PersonalChoices(choices));
+                        }
+                        self.schedule.as_mut().expect("active schedule").phase =
+                            self.after_selected_batch(meal_people, intents, remaining);
                     }
                     DecisionPhase::ChosenToolRepair {
                         mut meal_people,

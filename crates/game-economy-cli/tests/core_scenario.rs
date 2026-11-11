@@ -5,6 +5,156 @@ fn root() -> PathBuf {
 }
 
 #[test]
+fn chosen_food_pickup_stages_identified_item_metadata_and_rolls_back() {
+    use game_economy::core_interval::CoreHost;
+    use game_economy_work::tool_wear::{Condition, Rule, ToolWear};
+    use game_lots::{Container, Lot, Place};
+    let root = root();
+    let host = game_economy_cli::core_scenario(
+        &root.join("content/scenarios/economy-core-food-pickup-choice.toml"),
+        &root.join("content"),
+    )
+    .unwrap();
+    let mut initial = host.snapshot();
+    let good = initial
+        .core
+        .physical
+        .goods
+        .iter_mut()
+        .find(|good| good.name == "grain")
+        .unwrap();
+    good.food.as_mut().unwrap().portion = 1;
+    let grain = good.id;
+    let timber = initial
+        .core
+        .physical
+        .goods
+        .iter()
+        .find(|good| good.name == "timber")
+        .unwrap()
+        .id;
+    let stock = initial
+        .core
+        .physical
+        .custody
+        .containers
+        .iter_mut()
+        .find(|row| {
+            row.place
+                == Place::Stock {
+                    region: 1,
+                    good: grain,
+                }
+        })
+        .unwrap();
+    *stock = Container::new(
+        stock.place,
+        stock.capacity,
+        vec![Lot {
+            item: Some(1001),
+            good: grain,
+            quantity: 1,
+            expires_at: None,
+        }],
+    )
+    .unwrap();
+    initial.tool_wear = Some(ToolWear {
+        next_item: 1002,
+        rules: vec![Rule {
+            good: grain,
+            durability: 5,
+            wear: 1,
+            repair_good: timber,
+            repair_quantity: 1,
+        }],
+        conditions: vec![Condition {
+            item: 1001,
+            good: grain,
+            damage: 2,
+        }],
+        repairs: vec![],
+        events: vec![],
+    });
+    let mut without_owner = initial.clone();
+    without_owner.tool_wear = None;
+    let mut without_owner = CoreHost::resume(without_owner).unwrap();
+    let before = without_owner.snapshot().core.physical.custody;
+    let failure = without_owner.advance_continuous(1, &[]).unwrap();
+    assert!(
+        failure
+            .failure
+            .as_deref()
+            .is_some_and(|message| message.contains("item owner"))
+    );
+    assert_eq!(without_owner.snapshot().core.physical.custody, before);
+    let mut host = CoreHost::resume(initial).unwrap();
+    assert_eq!(host.advance_continuous(1, &[]).unwrap().failure, None);
+    let result = host.snapshot();
+    assert!(
+        result
+            .core
+            .physical
+            .custody
+            .containers
+            .iter()
+            .any(|container| matches!(container.place, Place::Person(1 | 2))
+                && container.lots.iter().any(|lot| lot.item == Some(1001)))
+    );
+    assert_eq!(result.tool_wear.as_ref().unwrap().conditions[0].damage, 2);
+    assert!(CoreHost::resume(result).is_ok());
+}
+
+#[test]
+fn food_pickups_are_personal_choices_with_shared_stock_and_claim_consequences() {
+    use game_economy::core_interval::{CoreChoiceOutcome, CoreHost, CoreRunEvent, DecisionPhase};
+    fn run(workers: usize) -> serde_json::Value {
+        rayon::ThreadPoolBuilder::new().num_threads(workers).build().unwrap().install(|| {
+            let root = root();
+            let mut host = game_economy_cli::core_scenario(&root.join("content/scenarios/economy-core-food-pickup-choice.toml"), &root.join("content")).unwrap();
+            let grain = host.snapshot().core.physical.goods.iter().find(|good| good.name == "grain").unwrap().id;
+            let (intents, idle) = host.preview_personal_choices(&[]).unwrap();
+            assert_eq!(intents.iter().filter(|row| row.key.domain == 9 && row.key.action == u64::from(grain)).count(), 2);
+            assert!(idle.iter().any(|row| row.actor == 3));
+            let mut alternative = host.snapshot();
+            std::sync::Arc::make_mut(alternative.schedule.as_mut().unwrap().personal_choices.as_mut().unwrap())[0].preferences[0].bias = 100;
+            let alternative = CoreHost::resume(alternative).unwrap();
+            assert_eq!(alternative.preview_personal_choices(&[]).unwrap().0.iter().find(|row| row.actor == 1).unwrap().key.domain, 2);
+            let mut pending = host.snapshot();
+            pending.schedule.as_mut().unwrap().phase = DecisionPhase::ChosenFoodPickup { meal_people: vec![], intents: std::sync::Arc::new(intents), remaining: 0 };
+            let mut resumed = CoreHost::resume(serde_json::from_str(&serde_json::to_string(&pending).unwrap()).unwrap()).unwrap();
+            let mut stale = pending.clone();
+            let stock = stale.core.physical.custody.containers.iter_mut().find(|row| row.place == game_lots::Place::Stock { region: 1, good: grain }).unwrap();
+            *stock = game_lots::Container::new(stock.place, stock.capacity, vec![]).unwrap();
+            let mut stale = CoreHost::resume(stale).unwrap();
+            let stale_run = stale.advance_continuous(1, &[]).unwrap();
+            assert_eq!(stale_run.failure, None);
+            assert!(stale_run.events.iter().any(|event| matches!(event, CoreRunEvent::PersonalChoices(rows) if rows.iter().filter(|row| row.outcome == CoreChoiceOutcome::Stale).count() == 2)));
+            let mut pending_host = CoreHost::resume(pending).unwrap();
+            assert_eq!(pending_host.advance_continuous(1, &[]).unwrap().failure, None);
+            assert_eq!(resumed.advance_continuous(1, &[]).unwrap().failure, None);
+            assert_eq!(pending_host.snapshot(), resumed.snapshot());
+            let mut claimed = host.snapshot();
+            claimed.claims = Some(serde_json::from_value(serde_json::json!({
+                "claims": [{"person": 3, "region": 1, "good": grain}],
+                "preferences": [{"person": 1, "disregard_others": true}]
+            })).unwrap());
+            let mut claimed = CoreHost::resume(claimed).unwrap();
+            let (claimed_intents, _) = claimed.preview_personal_choices(&[]).unwrap();
+            assert!(claimed_intents.iter().any(|row| row.actor == 1 && row.key.domain == 9));
+            assert!(!claimed_intents.iter().any(|row| row.actor == 2 && row.key.domain == 9));
+            assert_eq!(claimed.advance_continuous(1, &[]).unwrap().failure, None);
+            assert!(claimed.snapshot().claims.unwrap().events.iter().any(|row| row.person == 1 && row.claimant == 3));
+            let result = host.advance_continuous(1, &[]).unwrap();
+            assert_eq!(result.failure, None);
+            assert!(result.events.iter().any(|event| matches!(event, CoreRunEvent::Provisions(rows) if rows.len() == 2 && rows.iter().filter(|row| row.accepted).count() == 1)));
+            assert!(result.events.iter().any(|event| matches!(event, CoreRunEvent::PersonalChoices(rows) if rows.iter().filter(|row| row.outcome == CoreChoiceOutcome::Denied).count() == 1)));
+            serde_json::to_value(host.snapshot()).unwrap()
+        })
+    }
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
 fn tool_repairs_compete_with_other_choices_and_revalidate() {
     use game_economy::core_interval::{CoreChoiceOutcome, CoreHost, CoreRunEvent, DecisionPhase};
     fn run(workers: usize) -> serde_json::Value {

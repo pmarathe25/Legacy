@@ -817,8 +817,14 @@ struct ResidentItem {
 struct MealPreference {
     person: u64,
     good: String,
+    #[serde(default = "default_food_preference_domain")]
+    domain: u32,
     enabled: bool,
     bias: i64,
+}
+
+fn default_food_preference_domain() -> u32 {
+    7
 }
 
 /// Construct fresh custody only for a new scenario, never for a saved world.
@@ -851,6 +857,9 @@ pub fn core_scenario_with_options(
     let mut snapshot =
         game_economy::core_interval::CoreHostSnapshot::from_scenario(scenario.snapshot())?;
     for preference in meal_preferences {
+        if !matches!(preference.domain, 7 | 9) {
+            return Err("food preference requires the meal or pickup domain".into());
+        }
         let good = snapshot
             .core
             .physical
@@ -862,12 +871,16 @@ pub fn core_scenario_with_options(
             .iter_mut()
             .find(|person| person.id == preference.person)
             .ok_or("meal preference requires a personal choice profile")?;
-        if !person.preferences.iter().any(|row| row.domain == 7) {
-            return Err("meal preference requires a meal domain preference".into());
+        if !person
+            .preferences
+            .iter()
+            .any(|row| row.domain == preference.domain)
+        {
+            return Err("food preference requires its personal domain preference".into());
         }
         person.actions.push(game_personal_choice::ActionPreference {
             key: game_personal_choice::Key {
-                domain: 7,
+                domain: preference.domain,
                 action: u64::from(good.id),
             },
             enabled: preference.enabled,
