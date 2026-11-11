@@ -155,6 +155,10 @@ struct MechanicsConfig {
     materials: Vec<MechanicsMaterialConfig>,
     #[serde(default)]
     capabilities: Vec<game_economy::core_interval::MechanicalCapability>,
+    #[serde(default)]
+    policies: Vec<game_economy::core_interval::MechanicalPolicy>,
+    #[serde(default)]
+    memories: Vec<game_economy::core_interval::MechanicalMemory>,
 }
 
 #[derive(Deserialize)]
@@ -876,6 +880,10 @@ pub fn core_scenario_with_options(
         mechanics
             .capabilities
             .sort_unstable_by_key(|row| row.person);
+        mechanics
+            .policies
+            .sort_unstable_by_key(|row| (row.experiment.actor, row.id));
+        mechanics.memories.sort_unstable_by_key(|row| row.person);
         mechanics.apparatus.sort_unstable_by_key(|row| row.id);
         for machine in &mut mechanics.apparatus {
             std::sync::Arc::make_mut(&mut machine.parts).sort_unstable_by_key(|part| part.id);
@@ -889,6 +897,8 @@ pub fn core_scenario_with_options(
             },
             materials,
             capabilities: mechanics.capabilities,
+            policies: mechanics.policies,
+            memories: mechanics.memories,
             observations: vec![],
         });
     }

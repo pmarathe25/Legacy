@@ -8,6 +8,28 @@ pub(super) const CARRYING: u32 = 2;
 pub(super) const MAINTENANCE: u32 = 3;
 pub(super) const WORK: u32 = 4;
 pub(super) const CONTINUE_WORK: u32 = 5;
+pub(super) const EXPERIMENT: u32 = 6;
+
+fn index_by_person<T>(rows: &[T], id: u64, key: impl Fn(&T) -> u64) -> Option<usize> {
+    rows.first()
+        .and_then(|first| id.checked_sub(key(first)))
+        .and_then(|offset| usize::try_from(offset).ok())
+        .filter(|&index| rows.get(index).is_some_and(|row| key(row) == id))
+        .or_else(|| rows.binary_search_by_key(&id, key).ok())
+}
+
+fn candidate_index(rows: &[CoreChoiceIntent], actor: u64, key: Key) -> Option<usize> {
+    index_by_person(rows, actor, |row| row.actor)
+        .filter(|&index| rows[index].key == key)
+        .or_else(|| {
+            rows.binary_search_by_key(&(actor, key), |row| (row.actor, row.key))
+                .ok()
+        })
+}
+
+pub(super) fn selected_key(rows: &[CoreChoiceIntent], actor: u64) -> Option<Key> {
+    index_by_person(rows, actor, |row| row.actor).map(|index| rows[index].key)
+}
 
 /// A selected work start; job identity is assigned only during admission.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -31,10 +53,17 @@ pub struct CoreChoiceIntent {
     pub second_movement: Option<game_lots::Movement>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub work: Option<CoreWorkIntent>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub experiment: Option<game_mechanics::Experiment>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub experiment_value: Option<i64>,
 }
 
 impl CoreChoiceIntent {
     pub(super) fn magnitude(&self) -> i64 {
+        if let Some(value) = self.experiment_value {
+            return value;
+        }
         (self.movement.map_or(0, |row| u128::from(row.quantity))
             + self.work.map_or(0, |row| u128::from(row.units))
             + self
@@ -342,7 +371,21 @@ impl CoreHost {
         domain: Option<u32>,
     ) -> Result<Vec<CoreChoiceIntent>, String> {
         let tick = self.core.physical.tick();
-        let view = self.core.physical.view(tick)?;
+        let needs_view = (domain.is_none_or(|domain| domain == CONSTRUCTION)
+            && self
+                .construction
+                .as_ref()
+                .is_some_and(|owner| !owner.policies.is_empty()))
+            || (domain.is_none_or(|domain| domain == CARRYING)
+                && self
+                    .local_transport
+                    .as_ref()
+                    .is_some_and(|owner| !owner.policies.is_empty()));
+        let view = if needs_view {
+            Some(self.core.physical.view(tick)?)
+        } else {
+            None
+        };
         let busy = self.choice_busy(blocked);
         let claims = self.claims.as_ref().map(game_economy_claims::Claims::index);
         let construction = || -> Result<Vec<CoreChoiceIntent>, String> {
@@ -360,7 +403,7 @@ impl CoreHost {
                     owner,
                     sites: &sites.facilities,
                     people: &self.core.people,
-                    view: &view,
+                    view: view.as_ref().expect("construction view"),
                     opinions: self.opinions.as_ref(),
                     claims: claims.as_ref(),
                     busy: &busy,
@@ -405,6 +448,8 @@ impl CoreHost {
                             ),
                             second_movement: retained.and(consumed),
                             work: None,
+                            experiment: None,
+                            experiment_value: None,
                         }
                     })
                     .collect();
@@ -423,7 +468,7 @@ impl CoreHost {
                 let opportunities = game_economy_local_transport::Context {
                     owner,
                     people: &self.core.people,
-                    view: &view,
+                    view: view.as_ref().expect("carrying view"),
                     opinions: self.opinions.as_ref(),
                     claims: claims.as_ref(),
                     busy: &busy,
@@ -450,6 +495,8 @@ impl CoreHost {
                         }),
                         second_movement: None,
                         work: None,
+                        experiment: None,
+                        experiment_value: None,
                     })
                     .collect();
                 rows
@@ -493,6 +540,8 @@ impl CoreHost {
                     }),
                     second_movement: None,
                     work: None,
+                    experiment: None,
+                    experiment_value: None,
                 })
                 .collect()
             } else {
@@ -528,21 +577,61 @@ impl CoreHost {
                             units: 1,
                             base_rate: schedule.work_rate,
                         }),
+                        experiment: None,
+                        experiment_value: None,
                     })
                     .collect())
             } else {
                 Ok(Vec::new())
             }
         };
-        let ((construction, carrying), (maintenance, work)) = rayon::join(
+        let experiments = || -> Result<Vec<CoreChoiceIntent>, String> {
+            let schedule = self.schedule.as_ref().ok_or("no core schedule")?;
+            if domain.is_none_or(|domain| domain == EXPERIMENT)
+                && schedule.personal_choices.as_ref().is_some_and(|people| {
+                    people.par_iter().any(|person| {
+                        person
+                            .preferences
+                            .binary_search_by_key(&EXPERIMENT, |preference| preference.domain)
+                            .is_ok()
+                    })
+                })
+            {
+                Ok(self
+                    .preview_mechanical_experiments(&busy)?
+                    .into_par_iter()
+                    .map(|policy| CoreChoiceIntent {
+                        actor: policy.experiment.actor,
+                        key: Key {
+                            domain: EXPERIMENT,
+                            action: policy.id,
+                        },
+                        movement: None,
+                        second_movement: None,
+                        work: None,
+                        experiment: Some(policy.experiment),
+                        experiment_value: Some(policy.value),
+                    })
+                    .collect())
+            } else {
+                Ok(Vec::new())
+            }
+        };
+        let ((construction, carrying), (maintenance, (work, experiments))) = rayon::join(
             || rayon::join(construction, carrying),
-            || rayon::join(maintenance, work),
+            || rayon::join(maintenance, || rayon::join(work, experiments)),
         );
         let mut intents = construction?;
         intents.par_extend(carrying);
         intents.par_extend(maintenance);
         intents.par_extend(work?);
-        intents.par_sort_unstable_by_key(|intent| (intent.actor, intent.key));
+        intents.par_extend(experiments?);
+        if intents
+            .par_windows(2)
+            .any(|rows| (rows[0].actor, rows[0].key) > (rows[1].actor, rows[1].key))
+        {
+            intents.par_sort_unstable_by_key(|intent| (intent.actor, intent.key));
+        }
         Ok(intents)
     }
 
@@ -555,18 +644,13 @@ impl CoreHost {
         let busy = self.choice_busy(blocked);
         let available = |id: u64| {
             busy.binary_search(&id).is_err()
-                && self
-                    .core
-                    .people
-                    .binary_search_by_key(&id, |person| person.id)
-                    .ok()
-                    .is_some_and(|i| {
-                        self.core.people[i].health > 0 && !self.core.people[i].controlled
-                    })
+                && index_by_person(&self.core.people, id, |person| person.id).is_some_and(|i| {
+                    self.core.people[i].health > 0 && !self.core.people[i].controlled
+                })
         };
         let proposals: Vec<_> = candidates
             .par_iter()
-            .filter(|intent| people.binary_search_by_key(&intent.actor, |p| p.id).is_ok())
+            .filter(|intent| index_by_person(people, intent.actor, |p| p.id).is_some())
             .map(|intent| {
                 let observed = intent.magnitude();
                 Proposal {
@@ -588,8 +672,8 @@ impl CoreHost {
             .par_iter()
             .filter_map(|row| row.action.map(|key| (row.actor, key)))
             .map(|key| {
-                candidates
-                    .binary_search_by_key(&key, |candidate| (candidate.actor, candidate.key))
+                candidate_index(&candidates, key.0, key.1)
+                    .ok_or(())
                     .map(|i| candidates[i].clone())
                     .map_err(|_| "selected opportunity disappeared".to_owned())
             })
@@ -626,14 +710,13 @@ impl CoreHost {
             .par_iter()
             .filter(|row| row.key.domain == domain)
             .map(|intent| {
-                let found = current
-                    .binary_search_by_key(&(intent.actor, intent.key), |row| (row.actor, row.key))
-                    .ok()
-                    .is_some_and(|i| {
-                        current[i].movement == intent.movement
-                            && current[i].second_movement == intent.second_movement
-                            && current[i].work == intent.work
-                    });
+                let found = candidate_index(&current, intent.actor, intent.key).is_some_and(|i| {
+                    current[i].movement == intent.movement
+                        && current[i].second_movement == intent.second_movement
+                        && current[i].work == intent.work
+                        && current[i].experiment == intent.experiment
+                        && current[i].experiment_value == intent.experiment_value
+                });
                 (intent, found)
             })
             .collect();
@@ -655,12 +738,14 @@ impl CoreHost {
                 outcome: CoreChoiceOutcome::Stale,
             })
             .collect();
-        valid.par_sort_unstable();
+        if valid.par_windows(2).any(|rows| rows[0] > rows[1]) {
+            valid.par_sort_unstable();
+        }
         let mut denied = blocked.to_vec();
         denied.par_extend(
             people
                 .par_iter()
-                .filter(|p| valid.binary_search(&p.id).is_err())
+                .filter(|p| index_by_person(&valid, p.id, |id| *id).is_none())
                 .map(|p| p.id),
         );
         denied.par_sort_unstable();

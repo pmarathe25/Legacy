@@ -57,6 +57,7 @@ fn observations(events: &[CoreRunEvent]) -> Vec<Value> {
         CoreRunEvent::Construction(rows) if !rows.is_empty() => Some(json!({"kind":"construction","events":rows})),
         CoreRunEvent::LocalCarries(rows) if !rows.is_empty() => Some(json!({"kind":"local_carrying","events":rows})),
         CoreRunEvent::PersonalChoices(rows) if !rows.is_empty() => Some(json!({"kind":"personal_choices","events":rows})),
+        CoreRunEvent::MechanicalExperiments(rows) if !rows.is_empty() => Some(json!({"kind":"mechanical_experiments","events":rows})),
         CoreRunEvent::HaulingRequests(rows) if !rows.is_empty() => Some(json!({"kind":"hauling_requests","people":rows})),
         CoreRunEvent::HaulingTransfers(rows) if !rows.is_empty() => Some(json!({"kind":"hauling_transfers","outcomes":rows})),
         CoreRunEvent::WrittenPages(rows) if !rows.is_empty() => Some(json!({"kind":"written_pages","items":rows})),
@@ -429,6 +430,42 @@ mod tests {
                 events
                     .iter()
                     .any(|event| event["kind"] == "personal_choices")
+            })
+        }));
+        fs::remove_file(scenario).unwrap();
+        fs::remove_file(&output).unwrap();
+        fs::remove_file(output.with_extension("year-1.json")).unwrap();
+    }
+
+    #[test]
+    fn chosen_mechanical_experiments_are_archived() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let token = format!(
+            "legacy-mechanics-history-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+        let scenario = std::env::temp_dir().join(format!("{token}.toml"));
+        let output = std::env::temp_dir().join(format!("{token}.ndjson"));
+        let source = fs::read_to_string(root.join("content/scenarios/economy-core-mechanics.toml"))
+            .unwrap()
+            .replace("tick_millis = 900000", "tick_millis = 31536000000");
+        fs::write(&scenario, source).unwrap();
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(1)
+            .build()
+            .unwrap()
+            .install(|| run(&root, &scenario, &output, 1, 1, false))
+            .unwrap();
+        let rows = records(&output);
+        assert!(rows.iter().filter(|row| row["kind"] == "year").any(|row| {
+            row["observations"].as_array().is_some_and(|events| {
+                events.iter().any(|event| {
+                    event["kind"] == "mechanical_experiments" && event["events"][0]["actor"] == 1
+                })
             })
         }));
         fs::remove_file(scenario).unwrap();

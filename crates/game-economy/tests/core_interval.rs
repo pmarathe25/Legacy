@@ -259,6 +259,8 @@ fn mechanical_experiments_require_real_carried_parts_and_survive_reload() {
                         max_force: 200,
                         max_distance: 200,
                     }],
+                    policies: vec![],
+                    memories: vec![],
                     observations: vec![],
                 })
                 .unwrap();
@@ -321,7 +323,9 @@ fn mechanical_experiments_require_real_carried_parts_and_survive_reload() {
 #[test]
 #[ignore = "manual physical mechanics scaling benchmark"]
 fn independent_physical_mechanics_benchmark() {
-    use game_economy::core_interval::{CoreMechanics, MechanicalCapability, MechanicalMaterial};
+    use game_economy::core_interval::{
+        CoreMechanics, MechanicalCapability, MechanicalMaterial, MechanicalMemory, MechanicalPolicy,
+    };
     use game_mechanics::{
         Apparatus, Catalog, Component, Experiment, Part, Snapshot as MechanicsSnapshot,
     };
@@ -329,6 +333,8 @@ fn independent_physical_mechanics_benchmark() {
         .ok()
         .and_then(|value| value.parse::<u64>().ok())
         .unwrap_or(20_000);
+    let scheduled = std::env::var_os("LEGACY_MECHANICS_CHOICES").is_some();
+    let retain = std::env::var_os("LEGACY_MECHANICS_MEMORIES").is_some();
     assert!(count > 0);
     let mut initial = fixture();
     let template = initial.people[0].clone();
@@ -405,9 +411,59 @@ fn independent_physical_mechanics_benchmark() {
                 max_distance: 200,
             })
             .collect(),
+        policies: if scheduled {
+            (2..=count + 1)
+                .map(|actor| MechanicalPolicy {
+                    id: 1,
+                    value: 1,
+                    experiment: Experiment {
+                        actor,
+                        apparatus: actor,
+                        output_part: actor + 1000,
+                        input_force: 100,
+                        input_distance: 100,
+                        load_force: 20,
+                    },
+                    willing: true,
+                })
+                .collect()
+        } else {
+            vec![]
+        },
+        memories: if retain {
+            (2..=count + 1)
+                .map(|person| MechanicalMemory {
+                    person,
+                    capacity: 4,
+                    retain: true,
+                    observations: vec![],
+                })
+                .collect()
+        } else {
+            vec![]
+        },
         observations: vec![],
     })
     .unwrap();
+    if scheduled {
+        host.enable_schedule(1000, 1).unwrap();
+        host.enable_personal_choices(
+            (2..=count + 1)
+                .map(|id| game_personal_choice::Person {
+                    id,
+                    idle: 0,
+                    act_on_tie: false,
+                    preferences: vec![game_personal_choice::Preference {
+                        domain: 6,
+                        enabled: true,
+                        bias: 10,
+                        weight: 1000,
+                    }],
+                })
+                .collect(),
+        )
+        .unwrap();
+    }
     let opening = host.snapshot();
     let requests: Vec<_> = (2..=count + 1)
         .map(|actor| Experiment {
@@ -429,10 +485,37 @@ fn independent_physical_mechanics_benchmark() {
         for _ in 0..3 {
             let mut host = pool.install(|| CoreHost::resume(opening.clone()).unwrap());
             let start = std::time::Instant::now();
-            let observations = pool.install(|| host.experiment_mechanics(&requests, &[]).unwrap());
+            let observations = if scheduled {
+                let run = pool.install(|| host.advance_continuous(1, &[]).unwrap());
+                assert_eq!(run.failure, None);
+                run.events
+                    .into_iter()
+                    .filter_map(|event| match event {
+                        game_economy::core_interval::CoreRunEvent::MechanicalExperiments(rows) => {
+                            Some(rows)
+                        }
+                        _ => None,
+                    })
+                    .flatten()
+                    .collect::<Vec<_>>()
+            } else {
+                pool.install(|| host.experiment_mechanics(&requests, &[]).unwrap())
+            };
             samples.push(start.elapsed());
             assert_eq!(observations.len(), count as usize);
             let result = (pool.install(|| host.snapshot()), observations);
+            if retain {
+                assert!(
+                    result
+                        .0
+                        .mechanics
+                        .as_ref()
+                        .unwrap()
+                        .memories
+                        .iter()
+                        .all(|memory| memory.observations.len() == 1)
+                );
+            }
             if let Some(expected) = &reference {
                 assert_eq!(&result, expected);
             } else {

@@ -15,7 +15,7 @@ max_work_hunger = 20
 
 [[regions]]
 id = 1
-stock = {}
+stock = { timber = 10 }
 
 [[people]]
 id = 1
@@ -25,6 +25,21 @@ hunger = 0
 willing_to_work = false
 seek_meals = false
 items = [{ id = 1001, good = "timber" }, { id = 1002, good = "tool" }]
+
+[local_transport]
+[[local_transport.stores]]
+id = 1
+region = 1
+name = "Store"
+capacity = 10
+[[local_transport.policies]]
+person = 1
+region = 1
+source = { kind = "stock" }
+destination = { kind = "store", id = 1 }
+good = "timber"
+quantity = 1
+willing = true
 
 [mechanics]
 catalog = "mechanics/basic.toml"
@@ -48,3 +63,25 @@ good = "tool"
 person = 1
 max_force = 200
 max_distance = 200
+
+[[mechanics.memories]]
+person = 1
+capacity = 4
+retain = true
+
+[[mechanics.policies]]
+id = 1
+willing = true
+value = 5
+experiment = { actor = 1, apparatus = 1, output_part = 1002, input_force = 100, input_distance = 100, load_force = 20 }
+
+[[mechanics.policies]]
+id = 2
+willing = true
+value = -10
+experiment = { actor = 1, apparatus = 1, output_part = 1002, input_force = 100, input_distance = 100, load_force = 30 }
+
+[[personal_choices]]
+id = 1
+idle = 0
+preferences = [{ domain = 2, enabled = true, bias = 0 }, { domain = 6, enabled = true, bias = 10 }]

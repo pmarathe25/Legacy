@@ -85,6 +85,13 @@ pub struct Observation {
     pub actor: u64,
     pub apparatus: u64,
     pub output_part: u64,
+    /// The experimenter's supplied conditions, retained with the result.
+    #[serde(default)]
+    pub input_force: u64,
+    #[serde(default)]
+    pub input_distance: u64,
+    #[serde(default)]
+    pub load_force: u64,
     pub outcome: Outcome,
     pub available_force: u64,
     pub travel: u64,
@@ -327,6 +334,9 @@ impl World {
                             actor: row.actor,
                             apparatus: row.apparatus,
                             output_part: row.output_part,
+                            input_force: row.input_force,
+                            input_distance: row.input_distance,
+                            load_force: row.load_force,
                             outcome: Outcome::Contended,
                             available_force: 0,
                             travel: 0,
@@ -471,6 +481,9 @@ fn evaluate(
         actor: request.actor,
         apparatus: request.apparatus,
         output_part: request.output_part,
+        input_force: request.input_force,
+        input_distance: request.input_distance,
+        load_force: request.load_force,
         outcome,
         available_force: target.force,
         travel,

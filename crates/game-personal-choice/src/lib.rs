@@ -92,6 +92,14 @@ pub fn select(
 ) -> Result<Vec<Selection>, &'static str> {
     validate_people(people)?;
     let mut sorted: Vec<_> = proposals.par_iter().copied().collect();
+    let person_index = |id: u64| {
+        people
+            .first()
+            .and_then(|person| id.checked_sub(person.id))
+            .and_then(|offset| usize::try_from(offset).ok())
+            .filter(|&index| people.get(index).is_some_and(|person| person.id == id))
+            .or_else(|| people.binary_search_by_key(&id, |person| person.id).ok())
+    };
     if sorted
         .par_windows(2)
         .any(|w| (w[0].actor, w[0].key) > (w[1].actor, w[1].key))
@@ -108,18 +116,28 @@ pub fn select(
             p.actor == 0
                 || p.key.domain == 0
                 || p.key.action == 0
-                || people
-                    .binary_search_by_key(&p.actor, |person| person.id)
-                    .is_err()
+                || person_index(p.actor).is_none()
         })
     {
         return Err("invalid personal choice proposals");
     }
+    let aligned = people.len() == sorted.len()
+        && people
+            .par_iter()
+            .zip(sorted.par_iter())
+            .all(|(person, proposal)| person.id == proposal.actor);
     Ok(people
         .par_iter()
-        .map(|person| {
-            let start = sorted.partition_point(|row| row.actor < person.id);
-            let end = sorted.partition_point(|row| row.actor <= person.id);
+        .enumerate()
+        .map(|(index, person)| {
+            let (start, end) = if aligned {
+                (index, index + 1)
+            } else {
+                (
+                    sorted.partition_point(|row| row.actor < person.id),
+                    sorted.partition_point(|row| row.actor <= person.id),
+                )
+            };
             let mut best: Option<(i128, u64, Key)> = None;
             for proposal in &sorted[start..end] {
                 let Some(pref) = person

@@ -46,7 +46,9 @@ pub use giving::CorePracticeWorkEvidence;
 pub use hauling::CoreHaulingResults;
 pub use local_transport::CoreLocalTransportResults;
 pub use market::CoreMarketResults;
-pub use mechanics::{CoreMechanics, MechanicalCapability, MechanicalMaterial};
+pub use mechanics::{
+    CoreMechanics, MechanicalCapability, MechanicalMaterial, MechanicalMemory, MechanicalPolicy,
+};
 pub use offers::CoreSocialResults;
 pub use personal_choice::{CoreChoiceEvent, CoreChoiceIntent, CoreChoiceOutcome, CoreWorkIntent};
 pub use purpose::CorePurpose;
@@ -1479,6 +1481,28 @@ impl CoreHost {
                     .collect::<Vec<_>>()
             });
         let updates = page_updates.as_deref().unwrap_or(updates);
+        // Mechanics tracks part condition by identity; custody changes stay in
+        // the lot owner. A part also tracked as a tool still reaches that owner.
+        let mechanical_updates = self
+            .mechanics
+            .as_ref()
+            .filter(|mechanics| updates.par_iter().any(|(id, _)| mechanics.owns_part(*id)))
+            .map(|mechanics| {
+                updates
+                    .par_iter()
+                    .filter(|(id, _)| {
+                        !mechanics.owns_part(*id)
+                            || self.tool_wear.as_ref().is_some_and(|tools| {
+                                tools
+                                    .conditions
+                                    .binary_search_by_key(id, |condition| condition.item)
+                                    .is_ok()
+                            })
+                    })
+                    .copied()
+                    .collect::<Vec<_>>()
+            });
+        let updates = mechanical_updates.as_deref().unwrap_or(updates);
         let Some(owner) = &self.tool_wear else {
             if !updates.is_empty() || !items.is_empty() {
                 return Err("identified changes require an item owner".into());

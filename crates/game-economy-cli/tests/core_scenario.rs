@@ -22,11 +22,100 @@ fn authored_mechanics_loads_content_and_uses_identified_parts() {
         host.experiment_mechanics(&[request], &[]).unwrap()[0].outcome,
         game_mechanics::Outcome::Moved
     );
+    for load_force in 21..=25 {
+        host.experiment_mechanics(
+            &[game_mechanics::Experiment {
+                load_force,
+                ..request
+            }],
+            &[],
+        )
+        .unwrap();
+    }
+    assert_eq!(
+        host.snapshot().mechanics.unwrap().memories[0]
+            .observations
+            .iter()
+            .map(|row| row.load_force)
+            .collect::<Vec<_>>(),
+        vec![22, 23, 24, 25]
+    );
     let saved = serde_json::to_string(&host.snapshot()).unwrap();
     let restored =
         game_economy::core_interval::CoreHost::resume(serde_json::from_str(&saved).unwrap())
             .unwrap();
     assert_eq!(host.snapshot(), restored.snapshot());
+}
+
+#[test]
+fn people_choose_mechanical_experiments_and_can_reconsider() {
+    use game_economy::core_interval::{CoreChoiceOutcome, CoreHost, CoreRunEvent, DecisionPhase};
+    fn run(workers: usize) -> serde_json::Value {
+        rayon::ThreadPoolBuilder::new().num_threads(workers).build().unwrap().install(|| {
+            let root = root();
+            let mut host = game_economy_cli::core_scenario(
+                &root.join("content/scenarios/economy-core-mechanics.toml"), &root.join("content"),
+            ).unwrap();
+            let (intentions, _) = host.preview_personal_choices(&[]).unwrap();
+            assert_eq!(intentions.len(), 1);
+            assert_eq!(intentions[0].key.domain, 6);
+            assert_eq!(intentions[0].key.action, 1);
+            let mut alternative = host.snapshot();
+            alternative.mechanics.as_mut().unwrap().policies[1].value = 50;
+            let alternative = CoreHost::resume(alternative).unwrap();
+            assert_eq!(alternative.preview_personal_choices(&[]).unwrap().0[0].key.action, 2);
+            let mut carrying = host.snapshot();
+            let profiles = std::sync::Arc::make_mut(carrying.schedule.as_mut().unwrap().personal_choices.as_mut().unwrap());
+            profiles[0].preferences.iter_mut().find(|preference| preference.domain == 2).unwrap().bias = 100;
+            let mut carrying = CoreHost::resume(carrying).unwrap();
+            assert_eq!(carrying.preview_personal_choices(&[]).unwrap().0[0].key.domain, 2);
+            let carry_run = carrying.advance_continuous(1, &[]).unwrap();
+            assert_eq!(carry_run.failure, None);
+            assert!(carry_run.events.iter().any(|event| matches!(event,
+                CoreRunEvent::LocalCarries(rows) if rows.iter().any(|row| row.person == 1 && row.moved))));
+            assert!(carrying.snapshot().mechanics.unwrap().observations.is_empty());
+            assert!(carrying.snapshot().core.physical.custody.containers.iter().any(|container|
+                container.place == game_lots::Place::Inventory(1)
+                    && container.lots.iter().any(|lot| lot.item == Some(1001))));
+            assert!(carrying.experiment_mechanics(&[game_mechanics::Experiment {
+                actor: 1, apparatus: 1, output_part: 1002, input_force: 100, input_distance: 100, load_force: 20,
+            }], &[]).is_err());
+            let mut pending = host.snapshot();
+            pending.schedule.as_mut().unwrap().phase = DecisionPhase::ChosenExperiment {
+                meal_people: vec![], intents: std::sync::Arc::new(intentions), remaining: 0,
+            };
+            let mut replay = pending.clone();
+            if let DecisionPhase::ChosenExperiment { remaining, .. } = &mut replay.schedule.as_mut().unwrap().phase {
+                *remaining = 1 << 6;
+            }
+            assert!(CoreHost::resume(replay).is_err());
+            let saved = serde_json::to_string(&pending).unwrap();
+            let mut resumed = CoreHost::resume(serde_json::from_str(&saved).unwrap()).unwrap();
+            let mut no_memory = pending.clone();
+            no_memory.mechanics.as_mut().unwrap().memories[0].retain = false;
+            let mut no_memory = CoreHost::resume(no_memory).unwrap();
+            assert_eq!(no_memory.advance_continuous(1, &[]).unwrap().failure, None);
+            assert!(no_memory.snapshot().mechanics.unwrap().memories[0].observations.is_empty());
+            let mut refused = pending;
+            refused.mechanics.as_mut().unwrap().policies[0].willing = false;
+            let mut refused = CoreHost::resume(refused).unwrap();
+            let declined = refused.advance_continuous(1, &[]).unwrap();
+            assert_eq!(declined.failure, None);
+            assert!(declined.events.iter().any(|event| matches!(event,
+                CoreRunEvent::PersonalChoices(rows) if rows.iter().any(|row| row.actor == 1 && row.outcome == CoreChoiceOutcome::Stale))));
+            assert!(refused.snapshot().mechanics.unwrap().observations.is_empty());
+            let result = host.advance_continuous(1, &[]).unwrap();
+            assert_eq!(result.failure, None);
+            assert!(result.events.iter().any(|event| matches!(event,
+                CoreRunEvent::MechanicalExperiments(rows) if rows.iter().any(|row| row.actor == 1 && row.outcome == game_mechanics::Outcome::Moved))));
+            let remembered = &host.snapshot().mechanics.unwrap().memories[0].observations[0];
+            assert_eq!((remembered.input_force, remembered.input_distance, remembered.load_force), (100, 100, 20));
+            assert_eq!(resumed.advance_continuous(1, &[]).unwrap().failure, None);
+            assert_eq!(host.snapshot(), resumed.snapshot());
+            serde_json::to_value(host.snapshot()).unwrap()
+        })
+    }
+    assert_eq!(run(1), run(4));
 }
 
 #[test]
@@ -187,6 +276,7 @@ fn work_intentions_compete_with_carrying_and_share_scarce_inputs() {
                     construction_after: true,
                     carrying_after: true,
                     maintenance_after: false,
+                    remaining: None,
                 };
                 let mut stale = pending.clone();
                 stale.autowork.as_mut().unwrap().policies[0].enabled = false;
@@ -439,6 +529,7 @@ fn people_independently_choose_repairs_before_site_contention() {
                     construction_after: true,
                     carrying_after: true,
                     work_after: false,
+                    remaining: None,
                 };
                 let saved = serde_json::to_string(&pending).unwrap();
                 let mut resumed = CoreHost::resume(serde_json::from_str(&saved).unwrap()).unwrap();
@@ -806,6 +897,7 @@ fn stale_saved_carrying_intention_is_reported_without_substituting_an_action() {
         construction_after: false,
         maintenance_after: false,
         work_after: false,
+        remaining: None,
         meal_people: vec![],
         intents: std::sync::Arc::new(vec![CoreChoiceIntent {
             actor: 2,
@@ -826,6 +918,8 @@ fn stale_saved_carrying_intention_is_reported_without_substituting_an_action() {
             }),
             second_movement: None,
             work: None,
+            experiment: None,
+            experiment_value: None,
         }]),
     };
     let mut forbidden = snapshot.clone();
@@ -876,6 +970,7 @@ fn saved_choice_round_keeps_exact_intentions_across_workers() {
         carrying_after: true,
         maintenance_after: false,
         work_after: false,
+        remaining: None,
     };
     let saved = serde_json::to_string(&snapshot).unwrap();
     let run = |workers| {

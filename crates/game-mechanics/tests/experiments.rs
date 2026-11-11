@@ -63,6 +63,14 @@ fn branched_transmission_never_creates_work() {
     let draft = world.prepare(1, 7, &[first, second]).unwrap();
     let rows = draft.observations().to_vec();
     assert_eq!(rows.len(), 2);
+    assert_eq!(
+        (
+            rows[0].input_force,
+            rows[0].input_distance,
+            rows[0].load_force
+        ),
+        (100, 120, 50)
+    );
     assert!(rows.iter().all(|row| row.outcome == Outcome::Moved));
     let maximum: u128 = rows
         .iter()
