@@ -278,6 +278,26 @@ impl CoreHost {
         if let Some(opinions) = &mut opinions {
             game_economy_dynamics::learn_social(opinions, Some(&next), tick);
         }
+        if let Some(signals) = &signals {
+            let changes: Vec<_> = signals
+                .feeling_changes()
+                .into_par_iter()
+                .map(|change| game_opinions::PersonalChange {
+                    observer: change.observer,
+                    target: change.target,
+                    trust: change.reaction.trust,
+                    affinity: change.reaction.affinity,
+                    fear: change.reaction.fear,
+                    obligation: change.reaction.obligation,
+                })
+                .collect();
+            if !changes.is_empty() {
+                let current = opinions.get_or_insert_with(|| self.opinions.clone());
+                if let Some(opinions) = current {
+                    opinions.apply_personal_changes(&changes, tick);
+                }
+            }
+        }
         let knowledge = if let (Some(owner), Some(_)) = (&self.knowledge, &next.social) {
             let view = self.core.physical.view(tick)?;
             game_economy_knowledge::advance(

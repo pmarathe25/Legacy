@@ -16,6 +16,9 @@ assign meanings to forms. Encounters are disjoint and are prepared in parallel
 from an immutable opening generation. The host checks actual proximity for
 directed signals. Configured memories are bounded and optional; when many
 signals arrive at once, the most recent retained observations use deterministic
-actor order. Learning new interpretations and making other decisions from these
-memories remain to be implemented. Only configured minds participate; newborns
+actor order. Each observer can also assign signed relationship reactions to
+their own inferred meanings. These can change affinity, trust, fear, or
+obligation independently; no reaction is required, and the actor's private
+intention is never used. Learning new interpretations and choosing physical
+responses from these memories remain to be implemented. Only configured minds participate; newborns
 are not yet enrolled through heredity or upbringing.

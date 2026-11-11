@@ -1,4 +1,6 @@
-use game_signals::{Catalog, Contact, Directed, Expression, Interpretation, Mind, Named, Signals};
+use game_signals::{
+    Catalog, Contact, Directed, Expression, Interpretation, Mind, Named, Reaction, Signals,
+};
 use std::collections::HashSet;
 
 fn initial() -> Signals {
@@ -41,6 +43,7 @@ fn initial() -> Signals {
                     hunger_weight: 0,
                 }],
                 interpretations: vec![],
+                reactions: vec![],
                 remember: false,
                 capacity: 0,
                 observations: vec![],
@@ -55,6 +58,7 @@ fn initial() -> Signals {
                     form: 1,
                     meaning: 2,
                 }],
+                reactions: vec![],
                 remember: true,
                 capacity: 2,
                 observations: vec![],
@@ -62,6 +66,65 @@ fn initial() -> Signals {
         ],
         events: vec![],
     }
+}
+
+#[test]
+fn feelings_follow_the_observers_interpretation_and_personal_reaction() {
+    let mut state = initial();
+    state.minds[1].reactions = vec![
+        Reaction {
+            meaning: 1,
+            trust: 0,
+            affinity: 8,
+            fear: 0,
+            obligation: 0,
+        },
+        Reaction {
+            meaning: 2,
+            trust: 0,
+            affinity: -4,
+            fear: 2,
+            obligation: 0,
+        },
+    ];
+    let contact = [Contact {
+        a: 1,
+        b: 2,
+        a_hunger: 0,
+        b_hunger: 0,
+    }];
+    let next = state.prepare(&contact, 7, 1).unwrap();
+    let changes = next.feeling_changes();
+    assert_eq!(changes.len(), 1);
+    assert_eq!((changes[0].observer, changes[0].target), (2, 1));
+    assert_eq!(
+        (changes[0].reaction.affinity, changes[0].reaction.fear),
+        (-4, 2)
+    );
+    state.minds[1].interpretations[0].meaning = 1;
+    assert_eq!(
+        state.prepare(&contact, 7, 1).unwrap().feeling_changes()[0]
+            .reaction
+            .affinity,
+        8
+    );
+    state.minds[1].attention = 0;
+    assert!(
+        state
+            .prepare(&contact, 7, 1)
+            .unwrap()
+            .feeling_changes()
+            .is_empty()
+    );
+    state.minds[1].attention = 1000;
+    state.minds[1].reactions.clear();
+    assert!(
+        state
+            .prepare(&contact, 7, 1)
+            .unwrap()
+            .feeling_changes()
+            .is_empty()
+    );
 }
 
 #[test]

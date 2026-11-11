@@ -12,6 +12,15 @@ max_health = 100
 carrying_capacity = 10
 max_work_hunger = 20
 
+[opinions.rules]
+minimum = -100
+maximum = 100
+initial = 0
+fulfilled_gain = 1
+default_loss = 1
+gratitude_gain = 2
+affinity = { limit = 100 }
+
 [[regions]]
 id = 1
 stock = {}
@@ -83,3 +92,4 @@ attention = 1000
 remember = true
 capacity = 2
 interpretations = [{ form = 1, meaning = 2 }]
+reactions = [{ meaning = 1, affinity = 9 }, { meaning = 2, affinity = -3, obligation = 0 }]

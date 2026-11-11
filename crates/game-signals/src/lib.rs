@@ -43,6 +43,29 @@ pub struct Interpretation {
     pub meaning: u32,
 }
 
+/// How this observer personally feels about an inferred meaning.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Reaction {
+    pub meaning: u32,
+    #[serde(default)]
+    pub trust: i32,
+    #[serde(default)]
+    pub affinity: i32,
+    #[serde(default)]
+    pub fear: i64,
+    #[serde(default)]
+    pub obligation: i64,
+}
+
+/// Receiver-owned request to adjust a directed relationship.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FeelingChange {
+    pub observer: u64,
+    pub target: u64,
+    pub reaction: Reaction,
+}
+
 /// A listener's own recollection, without access to the sender's intention.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -66,6 +89,8 @@ pub struct Mind {
     pub expressions: Vec<Expression>,
     #[serde(default)]
     pub interpretations: Vec<Interpretation>,
+    #[serde(default)]
+    pub reactions: Vec<Reaction>,
     #[serde(default)]
     pub remember: bool,
     #[serde(default)]
@@ -203,6 +228,14 @@ impl Signals {
                         .windows(2)
                         .any(|rows| rows[0].form >= rows[1].form)
                     || mind
+                        .reactions
+                        .windows(2)
+                        .any(|rows| rows[0].meaning >= rows[1].meaning)
+                    || mind
+                        .reactions
+                        .iter()
+                        .any(|row| !self.valid_meaning(row.meaning))
+                    || mind
                         .observations
                         .windows(2)
                         .any(|rows| rows[0].tick > rows[1].tick)
@@ -282,6 +315,26 @@ impl Signals {
                 .collect();
         }
         targets
+    }
+
+    /// Interpret only noticed events, using each observer's own preferences.
+    pub fn feeling_changes(&self) -> Vec<FeelingChange> {
+        self.events
+            .par_iter()
+            .filter_map(|event| {
+                let meaning = event.interpreted?;
+                let mind = self.mind(event.observer)?;
+                let index = mind
+                    .reactions
+                    .binary_search_by_key(&meaning, |row| row.meaning)
+                    .ok()?;
+                Some(FeelingChange {
+                    observer: event.observer,
+                    target: event.actor,
+                    reaction: mind.reactions[index],
+                })
+            })
+            .collect()
     }
 
     /// Prepare independent expressions from actual encounters.

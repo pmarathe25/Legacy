@@ -11,6 +11,7 @@ fn hosted_concentrated_signals_benchmark() {
         .unwrap_or(20_000);
     assert!(count > 0 && count < u64::MAX);
     let observer = count + 1;
+    let reactions = std::env::var_os("LEGACY_SIGNAL_REACTIONS").is_some();
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let mut text = String::from(
         r#"seed = 7
@@ -39,6 +40,9 @@ familiarity_gain = 1
 familiarity_max = 10
 "#,
     );
+    if reactions {
+        text.push_str("\n[opinions.rules]\nminimum = -100\nmaximum = 100\ninitial = 0\nfulfilled_gain = 1\ndefault_loss = 1\ngratitude_gain = 2\naffinity = { limit = 100 }\n");
+    }
     for id in 1..=observer {
         writeln!(text, "[[people]]\nid = {id}\nregion = 1\nhealth = 100\nhunger = 0\nwilling_to_work = false\nseek_meals = false").unwrap();
         writeln!(
@@ -51,6 +55,9 @@ familiarity_max = 10
         }
     }
     writeln!(text, "[[signals.minds]]\nperson = {observer}\nidle = 0\nattention = 1000\nremember = true\ncapacity = 16\ninterpretations = [{{ form = 1, meaning = 2 }}]").unwrap();
+    if reactions {
+        writeln!(text, "reactions = [{{ meaning = 2, affinity = -3 }}]").unwrap();
+    }
     let path = std::env::temp_dir().join(format!(
         "legacy-signals-{}-{}.toml",
         std::process::id(),
@@ -106,6 +113,9 @@ familiarity_max = 10
                     signals.minds.last().unwrap().observations.len(),
                     16.min(count as usize)
                 );
+                if reactions {
+                    assert_eq!(state.opinions.as_ref().unwrap().records.len() as u64, count);
+                }
             }
             if let Some(expected) = &reference {
                 assert_eq!(&state, expected);
@@ -119,6 +129,8 @@ familiarity_max = 10
             times[1],
             if baseline {
                 "boundary only"
+            } else if reactions {
+                "directed signals and relationship reactions"
             } else {
                 "directed signals"
             }

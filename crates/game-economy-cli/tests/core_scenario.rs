@@ -65,6 +65,15 @@ fn directed_nonverbal_signals_are_personal_and_need_no_meeting() {
                 assert_eq!(ignored.events.len(), 1);
                 assert!(!ignored.events[0].noticed);
                 assert!(ignored.minds[1].observations.is_empty());
+                assert_eq!(
+                    distracted
+                        .snapshot()
+                        .opinions
+                        .unwrap()
+                        .index()
+                        .affinity(2, 1),
+                    0
+                );
                 let mut distant = initial.clone();
                 distant.core.people[1].region = Some(2);
                 let mut distant = CoreHost::resume(distant).unwrap();
@@ -105,6 +114,14 @@ fn directed_nonverbal_signals_are_personal_and_need_no_meeting() {
                     |event| matches!(event, CoreRunEvent::Meetings(rows) if !rows.is_empty())
                 ));
                 let snapshot = host.snapshot();
+                assert_eq!(
+                    snapshot.opinions.as_ref().unwrap().index().affinity(2, 1),
+                    -3
+                );
+                assert_eq!(
+                    snapshot.opinions.as_ref().unwrap().index().obligation(2, 1),
+                    0
+                );
                 let signals = snapshot.social.as_ref().unwrap().signals.as_ref().unwrap();
                 assert_eq!(signals.events.len(), 1);
                 let event = signals.events[0];

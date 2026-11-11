@@ -1003,6 +1003,7 @@ pub fn core_scenario_with_options(
             mind.expressions
                 .sort_unstable_by_key(|row| (row.form, row.recipient));
             mind.interpretations.sort_unstable_by_key(|row| row.form);
+            mind.reactions.sort_unstable_by_key(|row| row.meaning);
         }
         snapshot
             .social
