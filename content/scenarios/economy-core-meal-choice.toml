@@ -9,7 +9,7 @@ meal_threshold = 5
 starvation_threshold = 50
 starvation_damage = 1
 max_health = 100
-carrying_capacity = 10
+carrying_capacity = 14
 max_work_hunger = 20
 
 [[regions]]
@@ -23,7 +23,7 @@ health = 100
 hunger = 0
 willing_to_work = false
 seek_meals = true
-goods = { grain = 10 }
+goods = { grain = 10, bread = 4 }
 
 [[people]]
 id = 2
@@ -100,3 +100,14 @@ preferences = [{ domain = 7, enabled = false, bias = 20 }]
 id = 5
 idle = 0
 preferences = [{ domain = 2, enabled = true, bias = 20 }, { domain = 7, enabled = true, bias = 0 }]
+
+[[meal_preferences]]
+person = 1
+good = "grain"
+enabled = true
+bias = -5
+[[meal_preferences]]
+person = 1
+good = "bread"
+enabled = true
+bias = 5

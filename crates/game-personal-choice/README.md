@@ -6,6 +6,10 @@ domain inclinations, personal tie behavior and an explicit idle alternative. Dis
 domains cannot win, and selection is an intention, not a physical commitment
 or a decision by another person. Scoring uses checked-width integer arithmetic,
 stable semantic tie-breaking, and parallel per-person batches.
+Optional sorted `actions` refine a person's domain preferences using a signed
+bias or an explicit refusal for an individual domain and action key. They can
+therefore like or dislike different foods, recipes, or experiments separately;
+an action refinement does not activate an unlisted or disabled domain.
 Inputs exceeding 64 personal domains or 64 opportunities per person are
 rejected rather than silently truncated.
 

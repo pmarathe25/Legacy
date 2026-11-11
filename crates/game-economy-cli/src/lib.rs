@@ -94,6 +94,8 @@ struct Scenario {
     #[serde(default)]
     personal_choices: Vec<game_personal_choice::Person>,
     #[serde(default)]
+    meal_preferences: Vec<MealPreference>,
+    #[serde(default)]
     remedies: Vec<game_economy_dynamics::treatment::Remedy>,
     #[serde(default)]
     missions: Option<game_economy::Missions>,
@@ -810,6 +812,15 @@ struct ResidentItem {
     good: String,
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct MealPreference {
+    person: u64,
+    good: String,
+    enabled: bool,
+    bias: i64,
+}
+
 /// Construct fresh custody only for a new scenario, never for a saved world.
 pub fn scenario(path: &Path, content: &Path) -> Result<Economy, String> {
     scenario_with_seed(path, content, None)
@@ -834,10 +845,38 @@ pub fn core_scenario_with_options(
     let authored: Scenario = toml::from_str(&text).map_err(|error| error.to_string())?;
     let language = authored.language;
     let mechanics = authored.mechanics;
-    let personal_choices = authored.personal_choices;
+    let mut personal_choices = authored.personal_choices;
+    let meal_preferences = authored.meal_preferences;
     let scenario = scenario_with_options_inner(path, content, seed, population_path, true)?;
     let mut snapshot =
         game_economy::core_interval::CoreHostSnapshot::from_scenario(scenario.snapshot())?;
+    for preference in meal_preferences {
+        let good = snapshot
+            .core
+            .physical
+            .goods
+            .iter()
+            .find(|good| good.name == preference.good && good.food.is_some())
+            .ok_or_else(|| format!("unknown edible good {}", preference.good))?;
+        let person = personal_choices
+            .iter_mut()
+            .find(|person| person.id == preference.person)
+            .ok_or("meal preference requires a personal choice profile")?;
+        if !person.preferences.iter().any(|row| row.domain == 7) {
+            return Err("meal preference requires a meal domain preference".into());
+        }
+        person.actions.push(game_personal_choice::ActionPreference {
+            key: game_personal_choice::Key {
+                domain: 7,
+                action: u64::from(good.id),
+            },
+            enabled: preference.enabled,
+            bias: preference.bias,
+        });
+    }
+    for person in &mut personal_choices {
+        person.actions.sort_unstable_by_key(|row| row.key);
+    }
     if let Some(language) = language {
         snapshot
             .social
@@ -945,7 +984,9 @@ fn scenario_with_options_inner(
     if scenario.mechanics.is_some() && !interval_features {
         return Err("mechanics requires the interval simulation host".into());
     }
-    if !scenario.personal_choices.is_empty() && !interval_features {
+    if (!scenario.personal_choices.is_empty() || !scenario.meal_preferences.is_empty())
+        && !interval_features
+    {
         return Err("personal choices require the interval simulation host".into());
     }
     if let Some(path) = population_path {

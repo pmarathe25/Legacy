@@ -98,18 +98,9 @@ pub struct CoreChoiceEvent {
 }
 
 pub(super) fn intention_permitted(person: &Person, intent: &CoreChoiceIntent) -> bool {
-    let Some(preference) = person
-        .preferences
-        .binary_search_by_key(&intent.key.domain, |row| row.domain)
-        .ok()
-        .map(|index| person.preferences[index])
-        .filter(|row| row.enabled)
-    else {
+    let Some(score) = game_personal_choice::score(person, intent.key, intent.magnitude()) else {
         return false;
     };
-    let magnitude = intent.magnitude();
-    let score =
-        i128::from(magnitude) * i128::from(preference.weight) / 1000 + i128::from(preference.bias);
     score > i128::from(person.idle) || (score == i128::from(person.idle) && person.act_on_tie)
 }
 

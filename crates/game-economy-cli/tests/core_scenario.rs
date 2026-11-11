@@ -22,6 +22,8 @@ fn meals_compete_with_other_choices_and_survive_resume() {
                 CoreRunEvent::Meals(rows) if rows.iter().any(|row| row.0 == 1))));
             let (intents, idle) = host.preview_personal_choices(&[]).unwrap();
             assert!(intents.iter().any(|row| row.actor == 1 && row.key.domain == 7));
+            let bread = host.snapshot().core.physical.goods.iter().find(|good| good.name == "bread").unwrap().id;
+            assert_eq!(intents.iter().find(|row| row.actor == 1).unwrap().key.action, u64::from(bread));
             assert!(intents.iter().any(|row| row.actor == 5 && row.key.domain == 2));
             assert!(idle.iter().any(|row| row.actor == 2));
             assert!(idle.iter().any(|row| row.actor == 3));
@@ -30,6 +32,10 @@ fn meals_compete_with_other_choices_and_survive_resume() {
             pending.schedule.as_mut().unwrap().phase = DecisionPhase::ChosenMeal {
                 meal_people: vec![], intents: std::sync::Arc::new(vec![selected]), remaining: 0,
             };
+            let mut rejected = pending.clone();
+            let profiles = std::sync::Arc::make_mut(rejected.schedule.as_mut().unwrap().personal_choices.as_mut().unwrap());
+            profiles[0].actions.iter_mut().find(|row| row.key.action == u64::from(bread)).unwrap().enabled = false;
+            assert!(CoreHost::resume(rejected).is_err());
             let mut replay = pending.clone();
             if let DecisionPhase::ChosenMeal { remaining, .. } = &mut replay.schedule.as_mut().unwrap().phase { *remaining = 1 << 7; }
             assert!(CoreHost::resume(replay).is_err());

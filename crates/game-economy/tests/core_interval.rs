@@ -453,6 +453,7 @@ fn independent_physical_mechanics_benchmark() {
                     id,
                     idle: 0,
                     act_on_tie: false,
+                    actions: vec![],
                     preferences: vec![game_personal_choice::Preference {
                         domain: 6,
                         enabled: true,
@@ -552,6 +553,7 @@ fn people_can_choose_to_continue_or_stop_existing_ordinary_work() {
                     id: 1,
                     idle: 0,
                     act_on_tie: false,
+                    actions: vec![],
                     preferences: vec![game_personal_choice::Preference {
                         domain: 5,
                         enabled: continue_work,
@@ -681,6 +683,7 @@ fn concentrated_work_continuation_benchmark() {
                 id,
                 idle: 0,
                 act_on_tie: false,
+                actions: vec![],
                 preferences: vec![game_personal_choice::Preference {
                     domain: 5,
                     enabled: id % 2 == 0,

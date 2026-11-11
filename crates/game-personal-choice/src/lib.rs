@@ -35,6 +35,15 @@ pub struct Preference {
     pub weight: i32,
 }
 
+/// A person's additional attitude toward one particular opportunity.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ActionPreference {
+    pub key: Key,
+    pub enabled: bool,
+    pub bias: i64,
+}
+
 fn unit_weight() -> i32 {
     1000
 }
@@ -50,6 +59,9 @@ pub struct Person {
     pub act_on_tie: bool,
     /// Sorted by domain; unlisted domains are not accepted automatically.
     pub preferences: Vec<Preference>,
+    /// Optional, sorted refinements to the person's domain preferences.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub actions: Vec<ActionPreference>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -74,11 +86,40 @@ pub fn validate_people(people: &[Person]) -> Result<(), &'static str> {
                 || p.preferences.len() > MAX_DOMAINS
                 || p.preferences.windows(2).any(|w| w[0].domain >= w[1].domain)
                 || p.preferences.iter().any(|row| row.domain == 0)
+                || p.actions.windows(2).any(|w| w[0].key >= w[1].key)
+                || p.actions
+                    .iter()
+                    .any(|row| row.key.domain == 0 || row.key.action == 0)
         })
     {
         return Err("invalid personal choice profiles");
     }
     Ok(())
+}
+
+/// Interpret a proposal through this person's domain and specific preferences.
+/// None means the person has disabled or not adopted the corresponding domain
+/// or has explicitly rejected this particular opportunity.
+pub fn score(person: &Person, key: Key, value: i64) -> Option<i128> {
+    let preference = person
+        .preferences
+        .binary_search_by_key(&key.domain, |row| row.domain)
+        .ok()
+        .map(|index| person.preferences[index])
+        .filter(|row| row.enabled)?;
+    let specific = person
+        .actions
+        .binary_search_by_key(&key, |row| row.key)
+        .ok()
+        .map(|index| person.actions[index]);
+    if specific.is_some_and(|row| !row.enabled) {
+        return None;
+    }
+    Some(
+        i128::from(value) * i128::from(preference.weight) / 1000
+            + i128::from(preference.bias)
+            + i128::from(specific.map_or(0, |row| row.bias)),
+    )
 }
 
 /// Select at most one intention per person without touching any feature state.
@@ -140,17 +181,9 @@ pub fn select(
             };
             let mut best: Option<(i128, u64, Key)> = None;
             for proposal in &sorted[start..end] {
-                let Some(pref) = person
-                    .preferences
-                    .binary_search_by_key(&proposal.key.domain, |p| p.domain)
-                    .ok()
-                    .map(|i| person.preferences[i])
-                    .filter(|p| p.enabled)
-                else {
+                let Some(value) = score(person, proposal.key, proposal.value) else {
                     continue;
                 };
-                let value = i128::from(proposal.value) * i128::from(pref.weight) / 1000
-                    + i128::from(pref.bias);
                 if value < i128::from(person.idle)
                     || (value == i128::from(person.idle) && !person.act_on_tie)
                 {
