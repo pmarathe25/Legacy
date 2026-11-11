@@ -3897,7 +3897,7 @@ fn pressured_meeting_can_share_a_false_personal_report_once_per_tick() {
         }], events: vec![]};
         let social = game_economy::core_interval::CoreSocial {
             owner: game_social::Social {
-                rules: game_social::Rules {interval: 1, min_health: 1, max_hunger: 10, familiarity_gain: 1, familiarity_max: 10, relationship_retention: None},
+                inherit_births: false, rules: game_social::Rules {interval: 1, min_health: 1, max_hunger: 10, familiarity_gain: 1, familiarity_max: 10, relationship_retention: None},
                 participants: vec![game_social::Participant {person: 2, willing: false}, game_social::Participant {person: 3, willing: true}],
                 pressures: vec![game_social::PressurePolicy {person: 2, fear_at_least: Some(1), obligation_at_least: None, enabled: true}],
                 relationships: vec![], events: vec![], needs: None,
@@ -3967,7 +3967,7 @@ fn pressured_meeting_can_share_false_taking_testimony_once() {
         }], events: vec![]};
         let social = game_economy::core_interval::CoreSocial {
             owner: game_social::Social {
-                rules: game_social::Rules {interval: 1, min_health: 1, max_hunger: 10, familiarity_gain: 1, familiarity_max: 10, relationship_retention: None},
+                inherit_births: false, rules: game_social::Rules {interval: 1, min_health: 1, max_hunger: 10, familiarity_gain: 1, familiarity_max: 10, relationship_retention: None},
                 participants: vec![game_social::Participant {person: 2, willing: false}, game_social::Participant {person: 3, willing: true}],
                 pressures: vec![game_social::PressurePolicy {person: 2, fear_at_least: Some(1), obligation_at_least: None, enabled: true}],
                 relationships: vec![], events: vec![], needs: None,
@@ -4046,7 +4046,7 @@ fn personal_inquiry_requires_later_meetings_and_subjective_assessment() {
         }], events: vec![]};
         let social = game_economy::core_interval::CoreSocial {
             owner: game_social::Social {
-                rules: game_social::Rules {interval: 1, min_health: 1, max_hunger: 10, familiarity_gain: 1, familiarity_max: 10, relationship_retention: None},
+                inherit_births: false, rules: game_social::Rules {interval: 1, min_health: 1, max_hunger: 10, familiarity_gain: 1, familiarity_max: 10, relationship_retention: None},
                 participants: vec![game_social::Participant {person: 2, willing: false}, game_social::Participant {person: 3, willing: true}],
                 pressures: vec![game_social::PressurePolicy {person: 2, fear_at_least: Some(1), obligation_at_least: None, enabled: true}],
                 relationships: vec![], events: vec![], needs: None,
@@ -4129,7 +4129,7 @@ fn personal_inquiry_can_be_declined() {
         }], events: vec![]};
         let social = game_economy::core_interval::CoreSocial {
             owner: game_social::Social {
-                rules: game_social::Rules {interval: 1, min_health: 1, max_hunger: 10, familiarity_gain: 1, familiarity_max: 10, relationship_retention: None},
+                inherit_births: false, rules: game_social::Rules {interval: 1, min_health: 1, max_hunger: 10, familiarity_gain: 1, familiarity_max: 10, relationship_retention: None},
                 participants: vec![game_social::Participant {person: 2, willing: false}, game_social::Participant {person: 3, willing: true}],
                 pressures: vec![game_social::PressurePolicy {person: 2, fear_at_least: Some(1), obligation_at_least: None, enabled: true}],
                 relationships: vec![], events: vec![], needs: None,
@@ -4199,7 +4199,7 @@ fn personal_inquiry_expires_without_a_later_decision() {
         }], events: vec![]};
         let social = game_economy::core_interval::CoreSocial {
             owner: game_social::Social {
-                rules: game_social::Rules {interval: 1, min_health: 1, max_hunger: 10, familiarity_gain: 1, familiarity_max: 10, relationship_retention: None},
+                inherit_births: false, rules: game_social::Rules {interval: 1, min_health: 1, max_hunger: 10, familiarity_gain: 1, familiarity_max: 10, relationship_retention: None},
                 participants: vec![game_social::Participant {person: 2, willing: false}, game_social::Participant {person: 3, willing: true}],
                 pressures: vec![game_social::PressurePolicy {person: 2, fear_at_least: Some(1), obligation_at_least: None, enabled: true}],
                 relationships: vec![], events: vec![], needs: None,
@@ -4259,7 +4259,7 @@ fn disease_uses_actual_meetings_and_does_not_require_social_to_progress() {
         };
         let social = game_economy::core_interval::CoreSocial {
             owner: game_social::Social {
-                rules: game_social::Rules {interval: 1, min_health: 1, max_hunger: 10, familiarity_gain: 1, familiarity_max: 10, relationship_retention: None},
+                inherit_births: false, rules: game_social::Rules {interval: 1, min_health: 1, max_hunger: 10, familiarity_gain: 1, familiarity_max: 10, relationship_retention: None},
                 participants: vec![game_social::Participant {person: 2, willing: true}, game_social::Participant {person: 3, willing: true}],
                 pressures: vec![], relationships: vec![], events: vec![], needs: None,
             }, last_tick: None,
@@ -5562,11 +5562,13 @@ fn core_host_cultivation_benchmark() {
     let dependent_disease = std::env::var_os("LEGACY_DEPENDENT_DISEASE").is_some();
     let dependent = std::env::var_os("LEGACY_DEPENDENT_CARE").is_some() || dependent_disease;
     assert!(!dependent || count.is_multiple_of(3));
+    let social_inheritance = std::env::var_os("LEGACY_SOCIAL_INHERITANCE").is_some();
     let personality_inheritance = std::env::var_os("LEGACY_PERSONALITY_INHERITANCE").is_some();
     let teaching_inheritance = std::env::var_os("LEGACY_TEACHING_INHERITANCE").is_some();
     let inheritance = std::env::var_os("LEGACY_BIRTH_INHERITANCE").is_some()
         || teaching_inheritance
-        || personality_inheritance;
+        || personality_inheritance
+        || social_inheritance;
     let birth_disease = std::env::var_os("LEGACY_BIRTH_DISEASE").is_some();
     let births = std::env::var_os("LEGACY_FAMILY_BIRTHS").is_some() || birth_disease || inheritance;
     let family_mode = std::env::var_os("LEGACY_FAMILY").is_some() || births || dependent;
@@ -6144,7 +6146,7 @@ fn core_host_cultivation_benchmark() {
                 }, events: vec![],
             }, treatment: vec![], last_tick: None,
         }) },
-        social: None, personality: personality_inheritance.then(|| game_economy_dynamics::personality::Personality {
+        social: social_inheritance.then(|| game_economy::core_interval::CoreSocial { owner: game_social::Social { inherit_births: true, rules: game_social::Rules { interval: 1, min_health: 1, max_hunger: 100, familiarity_gain: 1, familiarity_max: 10, relationship_retention: None }, participants: (1..=count).map(|person| game_social::Participant { person, willing: true }).collect(), pressures: vec![], relationships: vec![], events: vec![], needs: None }, last_tick: None }), personality: personality_inheritance.then(|| game_economy_dynamics::personality::Personality {
             social_urgency_per_isolation: 0, inherit_births: true,
             people: (1..=count).map(|person| game_economy_dynamics::personality::Person { person, sociability: 500, diligence: 500 }).collect(),
         }),
@@ -6260,6 +6262,7 @@ fn core_host_cultivation_benchmark() {
                     }
                 );
             }
+            if social_inheritance { assert_eq!(state.social.as_ref().unwrap().owner.participants.len(), (count + count / 2) as usize); }
             if personality_inheritance { assert_eq!(state.personality.as_ref().unwrap().people.len(), (count + count / 2) as usize); }
             if teaching_inheritance {
                 assert_eq!(state.skills.as_ref().unwrap().owner.teachers.len(), (count + count / 2) as usize);
@@ -6602,6 +6605,7 @@ fn core_host_social_benchmark() {
     }
     let social = game_economy::core_interval::CoreSocial {
         owner: game_social::Social {
+            inherit_births: false,
             rules: game_social::Rules {
                 interval: 1,
                 min_health: 1,
@@ -12984,7 +12988,7 @@ fn personal_teaching_follows_willingness_pressure_and_subjective_reactions() {
             *stock = Container::new(stock.place, 10, vec![Lot { item: None, good: 1, quantity: 2, expires_at: None }]).unwrap();
             let social = game_economy::core_interval::CoreSocial {
                 owner: game_social::Social {
-                    rules: game_social::Rules { interval: 1, min_health: 1, max_hunger: 10, familiarity_gain: 1, familiarity_max: 10, relationship_retention: None },
+                    inherit_births: false, rules: game_social::Rules { interval: 1, min_health: 1, max_hunger: 10, familiarity_gain: 1, familiarity_max: 10, relationship_retention: None },
                     participants: vec![game_social::Participant { person: 2, willing: true }, game_social::Participant { person: 3, willing: true }],
                     pressures: if pressured { vec![game_social::PressurePolicy { person: 2, fear_at_least: Some(1), obligation_at_least: None, enabled: true }] } else { vec![] },
                     relationships: vec![], events: vec![], needs: None,
@@ -14563,6 +14567,7 @@ fn literacy_study_depends_on_personal_choice_encounter_and_a_physical_page() {
                 }
                 snapshot.social = Some(game_economy::core_interval::CoreSocial {
                     owner: game_social::Social {
+                        inherit_births: false,
                         rules: game_social::Rules {
                             interval: 1,
                             min_health: 1,
@@ -15571,4 +15576,38 @@ fn core_host_hauling_requests_benchmark() {
                 hash.finish()
             );
         });
+}
+
+#[test]
+fn newborns_can_inherit_personal_social_inclinations_without_relationships() {
+    fn run(workers: usize, inherit: bool, enroll: bool, willing: bool) -> serde_json::Value {
+        rayon::ThreadPoolBuilder::new().num_threads(workers).build().unwrap().install(||{
+            let mut core=fixture();core.people[1].region=Some(1);core.travel=None;core.nutrition=None;core.pending_food.clear();
+            let snapshot:CoreHostSnapshot=serde_json::from_value(serde_json::json!({"core":core,
+                "family":{"rules":{"adult_age":12,"min_work_age":12,"fertile_until":40,"gestation":3,"birth_spacing":8,"lifespan_min":50,"lifespan_max":70,"conception_one_in":1,"minimum_health":1,"maximum_hunger":100,"newborn_health":100,"mutation_per_million":0,"mutation_step":0,"enroll_births":enroll},
+                    "members":[{"id":1,"age":20,"genome":{"sex":"Male","alleles":[[500,500],[500,500],[500,500],[500,500]]}},
+                    {"id":2,"age":20,"genome":{"sex":"Female","alleles":[[500,500],[500,500],[500,500],[500,500]]},"pregnancy":{"father":1,"due":1}}],"next_id":3},
+                "social":{"owner":{"inherit_births":inherit,"rules":{"interval":1,"min_health":1,"max_hunger":100,"familiarity_gain":1,"familiarity_max":10},"participants":[{"person":1,"willing":false},{"person":2,"willing":willing}]}}
+            })).unwrap();
+            let mut host=CoreHost::begin(snapshot,&[(1,1)]).unwrap();assert_eq!(host.progress(1000).unwrap(),1000);host.settle().unwrap();
+            let state=host.snapshot();let social=&state.social.as_ref().unwrap().owner;
+            let child=social.participants.iter().find(|row|row.person==3);
+            if inherit&&enroll {assert_eq!(child.unwrap().willing,willing);} else {assert!(child.is_none());}
+            assert!(!social.relationships.iter().any(|row|row.a==3||row.b==3));assert!(!social.pressures.iter().any(|row|row.person==3));
+            let resumed=CoreHost::begin(serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap(),&[]).unwrap();
+            assert_eq!(resumed.snapshot().social,state.social);
+            serde_json::to_value(state).unwrap()
+        })
+    }
+    for (inherit, enroll, willing) in [
+        (true, true, true),
+        (true, true, false),
+        (false, true, true),
+        (true, false, true),
+    ] {
+        assert_eq!(
+            run(1, inherit, enroll, willing),
+            run(6, inherit, enroll, willing)
+        );
+    }
 }

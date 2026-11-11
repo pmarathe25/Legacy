@@ -17,6 +17,36 @@ impl CoreHost {
         else {
             return;
         };
+        if let Some(social) = self
+            .social
+            .as_mut()
+            .filter(|social| social.owner.inherit_births)
+        {
+            let mut parents: Vec<_> = social
+                .owner
+                .participants
+                .par_iter()
+                .map(|row| (row.person, row.willing))
+                .collect();
+            parents.par_sort_unstable_by_key(|row| row.0);
+            let choices: Vec<_> = newborns
+                .par_iter()
+                .filter_map(|person| {
+                    let member = &family.members[family
+                        .members
+                        .binary_search_by_key(person, |member| member.id)
+                        .ok()?];
+                    let willing = member.parents.iter().find_map(|parent| {
+                        parents
+                            .binary_search_by_key(parent, |row| row.0)
+                            .ok()
+                            .map(|index| parents[index].1)
+                    })?;
+                    Some((*person, willing))
+                })
+                .collect();
+            social.owner.enroll_inherited(&choices);
+        }
         crate::animal_restraint_inheritance::enroll(
             self.animal_restraints.as_mut(),
             Some(family),

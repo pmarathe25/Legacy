@@ -481,3 +481,7 @@ With `LEGACY_HAUL_DEPARTURE=1 LEGACY_PEOPLE=50000`, the same benchmark measures 
 With `LEGACY_PEOPLE=50000`, the ignored `core_host_hauling_requests_benchmark` measures 24,999 requests and the carriers' chosen pickups in 24.9, 16.2, 11.3, and 10.7 ms at one, two, four, and six workers. Fingerprints matched and setup was excluded; this single sample shows sublinear scaling.
 
 With `LEGACY_HAUL_REQUEST_FEAR=1 LEGACY_PEOPLE=50000`, the same benchmark uses fear-motivated carriers and takes 26.2, 17.4, 11.3, and 9.8 ms at one, two, four, and six workers. Fingerprints matched and setup was excluded; this single sample shows sublinear scaling.
+
+A social owner may opt into inherited birth inclinations with `inherit_births = true`. When family birth enrollment is also enabled, a newborn receives one parent's configured willingness to meet; existing relationships, pressures, and obligations are never copied. This initializes a personal preference rather than imposing future cooperation.
+
+With `LEGACY_SOCIAL_INHERITANCE=1 LEGACY_PEOPLE=50000`, `core_host_cultivation_benchmark` measures 25,000 births with several inherited preferences, including social willingness, in 47.4, 31.3, 21.9, and 20.5 ms at one, two, four, and six workers. Fingerprints matched and setup was excluded; this single sample shows sublinear scaling.

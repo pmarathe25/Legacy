@@ -575,7 +575,7 @@ fn personal_practice_can_report_false_readiness_without_creating_goods() {
             std::sync::Arc::make_mut(&mut minds[1].sent_reports).clear();
             moved.social = Some(game_economy::core_interval::CoreSocial {
                 owner: game_social::Social {
-                    rules: game_social::Rules { interval: 1, min_health: 1, max_hunger: 100,
+                    inherit_births: false, rules: game_social::Rules { interval: 1, min_health: 1, max_hunger: 100,
                         familiarity_gain: 1, familiarity_max: 10, relationship_retention: None },
                     participants: vec![game_social::Participant { person: 1, willing: false }, game_social::Participant { person: 2, willing: false }], pressures: vec![], relationships: vec![],
                     events: vec![game_social::Encounter { tick: 1, region: 1, a: 1, b: 2,

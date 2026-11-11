@@ -107,3 +107,5 @@ policies = [{ person = 2, blueprint = 1, target_sites = 1, willing = true }]
 `economy-core-hauling-request.toml` demonstrates a personal request and a carrier who chooses to act on it; the request does not compel the carrier.
 
 `economy-history-pilot.toml` is a coarse annual demographic experiment with modeled family and animal populations. Its disabled hunger and food scarcity, annual action resolution, founder-only social participation, and missing scientific, organizational, and artificial-selection mechanics make it an exploratory pilot rather than a calibrated civilization.
+
+`economy-history-pilot-social.toml` uses the same exploratory annual setup but opts into inheriting a parent's personal willingness to meet. Newborns do not inherit their parents' relationships or obligations. Its annual clock, disabled hunger and scarcity, and missing science and institutional history remain major limitations.

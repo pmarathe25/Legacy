@@ -1,0 +1,389 @@
+# Exploratory demographic pilot. One tick is one 365-day year.
+# Hunger is disabled, and production is quantized to whole years; this is not a calibrated world.
+seed = 1701
+tick_millis = 31536000000
+stock_capacity = 100000
+food_relief_divisor = 20
+
+[rules]
+hunger_per_tick = 0
+meal_threshold = 1
+starvation_threshold = 100
+starvation_damage = 1
+max_health = 100
+carrying_capacity = 100
+max_work_hunger = 100
+
+[[regions]]
+id = 1
+stock = { timber = 1000 }
+
+[[people]]
+id = 1
+region = 1
+health = 100
+hunger = 0
+willing_to_work = true
+seek_meals = false
+recipe = "fixture-tool"
+
+[[people]]
+id = 2
+region = 1
+health = 100
+hunger = 0
+willing_to_work = true
+seek_meals = false
+recipe = "fixture-tool"
+
+[[people]]
+id = 3
+region = 1
+health = 100
+hunger = 0
+willing_to_work = true
+seek_meals = false
+recipe = "fixture-tool"
+
+[[people]]
+id = 4
+region = 1
+health = 100
+hunger = 0
+willing_to_work = true
+seek_meals = false
+recipe = "fixture-tool"
+
+[[people]]
+id = 5
+region = 1
+health = 100
+hunger = 0
+willing_to_work = false
+seek_meals = false
+
+[[people]]
+id = 6
+region = 1
+health = 100
+hunger = 0
+willing_to_work = false
+seek_meals = false
+
+[[people]]
+id = 7
+region = 1
+health = 100
+hunger = 0
+willing_to_work = false
+seek_meals = false
+
+[[people]]
+id = 8
+region = 1
+health = 100
+hunger = 0
+willing_to_work = false
+seek_meals = false
+
+[[people]]
+id = 9
+region = 1
+health = 100
+hunger = 0
+willing_to_work = false
+seek_meals = false
+
+[[people]]
+id = 10
+region = 1
+health = 100
+hunger = 0
+willing_to_work = false
+seek_meals = false
+
+[[people]]
+id = 11
+region = 1
+health = 100
+hunger = 0
+willing_to_work = false
+seek_meals = false
+
+[[people]]
+id = 12
+region = 1
+health = 100
+hunger = 0
+willing_to_work = false
+seek_meals = false
+
+[family]
+next_id = 13
+last_tick = 0
+
+[family.rules]
+adult_age = 16
+min_work_age = 16
+fertile_until = 45
+gestation = 1
+birth_spacing = 4
+lifespan_min = 65
+lifespan_max = 85
+conception_one_in = 5
+minimum_health = 50
+maximum_hunger = 20
+newborn_health = 100
+mutation_per_million = 10000
+mutation_step = 15
+enroll_births = true
+
+[[family.members]]
+id = 1
+age = 19
+genome = { sex = "Female", alleles = [[720,740], [310,510], [405,605], [510,710]] }
+
+[[family.members]]
+id = 2
+age = 20
+genome = { sex = "Male", alleles = [[740,760], [320,520], [410,610], [520,720]] }
+
+[[family.members]]
+id = 3
+age = 21
+genome = { sex = "Female", alleles = [[760,780], [330,530], [415,615], [530,730]] }
+
+[[family.members]]
+id = 4
+age = 22
+genome = { sex = "Male", alleles = [[780,800], [340,540], [420,620], [540,740]] }
+
+[[family.members]]
+id = 5
+age = 23
+genome = { sex = "Female", alleles = [[800,820], [350,550], [425,625], [550,750]] }
+
+[[family.members]]
+id = 6
+age = 18
+genome = { sex = "Male", alleles = [[820,840], [360,560], [430,630], [560,760]] }
+
+[[family.members]]
+id = 7
+age = 19
+genome = { sex = "Female", alleles = [[840,860], [370,570], [435,635], [570,770]] }
+
+[[family.members]]
+id = 8
+age = 20
+genome = { sex = "Male", alleles = [[860,880], [380,580], [440,640], [580,780]] }
+
+[[family.members]]
+id = 9
+age = 21
+genome = { sex = "Female", alleles = [[880,900], [390,590], [445,645], [590,790]] }
+
+[[family.members]]
+id = 10
+age = 22
+genome = { sex = "Male", alleles = [[900,920], [400,600], [450,650], [600,800]] }
+
+[[family.members]]
+id = 11
+age = 23
+genome = { sex = "Female", alleles = [[920,940], [410,610], [455,655], [610,810]] }
+
+[[family.members]]
+id = 12
+age = 18
+genome = { sex = "Male", alleles = [[940,960], [420,620], [460,660], [620,820]] }
+
+[fauna]
+next_id = 13
+last_tick = 0
+
+[[fauna.species]]
+id = 1
+name = "pilot grazer"
+food_good = "grain"
+intake = 1
+hunger_per_tick = 0
+relief_per_unit = 1
+starvation_threshold = 100
+starvation_damage = 1
+max_health = 100
+adult_age = 2
+fertile_until = 18
+lifespan = 30
+gestation = 1
+conception_one_in = 6
+breeding_max_hunger = 10
+newborn_health = 100
+mutation_per_million = 10000
+mutation_step = 15
+
+[[fauna.animals]]
+id = 1
+species = 1
+region = 1
+age = 4
+health = 100
+hunger = 0
+genome = { sex = "Female", alleles = [[715,735], [260,460], [355,555], [460,660]] }
+
+[[fauna.animals]]
+id = 2
+species = 1
+region = 1
+age = 5
+health = 100
+hunger = 0
+genome = { sex = "Male", alleles = [[730,750], [270,470], [360,560], [470,670]] }
+
+[[fauna.animals]]
+id = 3
+species = 1
+region = 1
+age = 6
+health = 100
+hunger = 0
+genome = { sex = "Female", alleles = [[745,765], [280,480], [365,565], [480,680]] }
+
+[[fauna.animals]]
+id = 4
+species = 1
+region = 1
+age = 3
+health = 100
+hunger = 0
+genome = { sex = "Male", alleles = [[760,780], [290,490], [370,570], [490,690]] }
+
+[[fauna.animals]]
+id = 5
+species = 1
+region = 1
+age = 4
+health = 100
+hunger = 0
+genome = { sex = "Female", alleles = [[775,795], [300,500], [375,575], [500,700]] }
+
+[[fauna.animals]]
+id = 6
+species = 1
+region = 1
+age = 5
+health = 100
+hunger = 0
+genome = { sex = "Male", alleles = [[790,810], [310,510], [380,580], [510,710]] }
+
+[[fauna.animals]]
+id = 7
+species = 1
+region = 1
+age = 6
+health = 100
+hunger = 0
+genome = { sex = "Female", alleles = [[805,825], [320,520], [385,585], [520,720]] }
+
+[[fauna.animals]]
+id = 8
+species = 1
+region = 1
+age = 3
+health = 100
+hunger = 0
+genome = { sex = "Male", alleles = [[820,840], [330,530], [390,590], [530,730]] }
+
+[[fauna.animals]]
+id = 9
+species = 1
+region = 1
+age = 4
+health = 100
+hunger = 0
+genome = { sex = "Female", alleles = [[835,855], [340,540], [395,595], [540,740]] }
+
+[[fauna.animals]]
+id = 10
+species = 1
+region = 1
+age = 5
+health = 100
+hunger = 0
+genome = { sex = "Male", alleles = [[850,870], [350,550], [400,600], [550,750]] }
+
+[[fauna.animals]]
+id = 11
+species = 1
+region = 1
+age = 6
+health = 100
+hunger = 0
+genome = { sex = "Female", alleles = [[865,885], [360,560], [405,605], [560,760]] }
+
+[[fauna.animals]]
+id = 12
+species = 1
+region = 1
+age = 3
+health = 100
+hunger = 0
+genome = { sex = "Male", alleles = [[880,900], [370,570], [410,610], [570,770]] }
+
+[dynamics.social]
+inherit_births = true
+
+[dynamics.social.rules]
+interval = 1
+min_health = 1
+max_hunger = 100
+familiarity_gain = 1
+familiarity_max = 20
+
+[[dynamics.social.participants]]
+person = 1
+willing = true
+
+[[dynamics.social.participants]]
+person = 2
+willing = true
+
+[[dynamics.social.participants]]
+person = 3
+willing = true
+
+[[dynamics.social.participants]]
+person = 4
+willing = true
+
+[[dynamics.social.participants]]
+person = 5
+willing = true
+
+[[dynamics.social.participants]]
+person = 6
+willing = true
+
+[[dynamics.social.participants]]
+person = 7
+willing = true
+
+[[dynamics.social.participants]]
+person = 8
+willing = true
+
+[[dynamics.social.participants]]
+person = 9
+willing = true
+
+[[dynamics.social.participants]]
+person = 10
+willing = true
+
+[[dynamics.social.participants]]
+person = 11
+willing = true
+
+[[dynamics.social.participants]]
+person = 12
+willing = true

@@ -274,6 +274,7 @@ mod tests {
             })
             .collect();
         let mut social = Social {
+            inherit_births: false,
             rules: SocialRules {
                 interval: 1,
                 min_health: 1,

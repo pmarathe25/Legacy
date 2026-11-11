@@ -282,6 +282,7 @@ mod tests {
             })
             .collect();
         let social = Social {
+            inherit_births: false,
             rules: Rules {
                 interval: 1,
                 min_health: 1,

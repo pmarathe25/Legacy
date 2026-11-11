@@ -10665,6 +10665,7 @@ fn actual_personal_encounters_transmit_disease_and_survive_reload() {
         treatment: vec![],
         claims: None,
         social: Some(Social {
+            inherit_births: false,
             rules: SocialRules {
                 interval: 1,
                 min_health: 1,
@@ -10788,6 +10789,7 @@ fn personal_fear_or_obligation_can_cause_an_unwilling_encounter() {
             ],
         }),
         social: Some(Social {
+            inherit_births: false,
             rules: SocialRules {
                 interval: 1,
                 min_health: 1,
@@ -10935,6 +10937,7 @@ fn hungry_person_can_ask_a_met_acquaintance_who_remains_free_to_refuse() {
         treatment: vec![],
         claims: None,
         social: Some(Social {
+            inherit_births: false,
             rules: SocialRules {
                 interval: 1,
                 min_health: 1,
@@ -11100,6 +11103,7 @@ fn acquaintance_requests_follow_personal_affinity_and_try_other_known_people() {
         treatment: vec![],
         claims: None,
         social: Some(Social {
+            inherit_births: false,
             rules: SocialRules {
                 interval: 10,
                 min_health: 1,
@@ -11249,6 +11253,7 @@ fn isolation_changes_personal_social_choices_without_compelling_contact() {
             ],
         }),
         social: Some(Social {
+            inherit_births: false,
             rules: SocialRules {
                 interval: 1,
                 min_health: 1,
@@ -12230,6 +12235,7 @@ fn caregivers_choose_reachable_acquaintances_from_their_own_priorities_and_feeli
     other_case.person = 3;
     disease.cases.push(other_case);
     dynamics.social = Some(Social {
+        inherit_births: false,
         rules: SocialRules {
             interval: 1,
             min_health: 1,
@@ -12721,6 +12727,7 @@ fn acquainted_medical_workload(count: u64) -> State {
         })
         .collect();
     state.dynamics.as_mut().unwrap().social = Some(Social {
+        inherit_births: false,
         rules: SocialRules {
             interval: 1,
             min_health: 1,
@@ -15126,6 +15133,7 @@ fn expedition_fixture() -> State {
     state.dynamics = Some(Dynamics {
         personality: None,
         social: Some(Social {
+            inherit_births: false,
             rules: SocialRules {
                 interval: 1,
                 min_health: 1,
@@ -23128,6 +23136,7 @@ fn skilled_person_can_teach_from_fear_despite_not_volunteering() {
     initial.dynamics = Some(Dynamics {
         personality: None,
         social: Some(Social {
+            inherit_births: false,
             rules: SocialRules {
                 interval: 1,
                 min_health: 1,
@@ -23300,6 +23309,7 @@ fn controlled_lessons_use_real_meetings_and_personal_pressure() {
         initial.dynamics = Some(Dynamics {
             personality: None,
             social: Some(Social {
+                inherit_births: false,
                 rules: SocialRules {
                     interval: 1,
                     min_health: 1,
@@ -23566,6 +23576,7 @@ fn meeting_objective_workload(count: u64) -> State {
         treatment: vec![],
         claims: None,
         social: Some(Social {
+            inherit_births: false,
             rules: SocialRules {
                 interval: 1,
                 min_health: 1,
@@ -24906,6 +24917,7 @@ fn disease_workload(count: u64) -> State {
     state.dynamics = Some(Dynamics {
         personality: None,
         social: Some(Social {
+            inherit_births: false,
             rules: SocialRules {
                 interval: 1,
                 min_health: 1,
@@ -25877,6 +25889,7 @@ fn controlled_person_can_offer_unbacked_work_terms_and_ask_for_the_work() {
         treatment: vec![],
         claims: None,
         social: Some(Social {
+            inherit_births: false,
             rules: SocialRules {
                 interval: 1,
                 min_health: 1,
@@ -26527,6 +26540,7 @@ fn witnessed_work_and_a_real_gift_can_inspire_a_personal_work_proposal() {
         treatment: vec![],
         claims: None,
         social: Some(Social {
+            inherit_births: false,
             rules: SocialRules {
                 interval: 1,
                 min_health: 1,
@@ -27106,6 +27120,7 @@ fn people_invent_and_independently_act_on_a_conditional_food_practice() {
         claims: None,
         disease: None,
         social: Some(Social {
+            inherit_births: false,
             rules: SocialRules {
                 interval: 1,
                 min_health: 1,
@@ -29401,6 +29416,7 @@ fn autonomous_route_sharing_respects_personal_motives_and_listener_reception() {
         claims: None,
         disease: None,
         social: Some(Social {
+            inherit_births: false,
             rules: SocialRules {
                 interval: 1,
                 min_health: 1,
@@ -29549,6 +29565,7 @@ fn a_route_lie_requires_contact_and_is_filtered_by_the_listeners_own_reception()
         claims: None,
         disease: None,
         social: Some(Social {
+            inherit_births: false,
             rules: SocialRules {
                 interval: 1,
                 min_health: 1,
@@ -30354,6 +30371,7 @@ fn newborn_gets_custody_in_the_same_generation_as_contested_food() {
     initial.dynamics = Some(Dynamics {
         personality: None,
         social: Some(game_social::Social {
+            inherit_births: false,
             rules: game_social::Rules {
                 interval: 1,
                 min_health: 1,
@@ -37089,6 +37107,7 @@ fn traveling_social_workload(count: u64) -> State {
         treatment: vec![],
         claims: None,
         social: Some(Social {
+            inherit_births: false,
             rules: SocialRules {
                 interval: 1,
                 min_health: 1,

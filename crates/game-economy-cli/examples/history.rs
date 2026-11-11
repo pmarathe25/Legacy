@@ -102,13 +102,19 @@ fn run(
     if !resume
         && source
             .file_name()
-            .is_some_and(|name| name == "economy-history-pilot.toml")
+            .is_some_and(|name| name.to_string_lossy().starts_with("economy-history-pilot"))
     {
         limitations.extend([
             "exploratory annual pilot, not a calibrated civilization",
             "hunger and animal food scarcity are disabled in this scenario",
-            "newborn social participation is not automatically inherited",
         ]);
+        if initial
+            .social
+            .as_ref()
+            .is_none_or(|social| !social.owner.inherit_births)
+        {
+            limitations.push("newborn social participation is not automatically inherited");
+        }
     }
     if resume {
         limitations.push("consult the source history metadata for scenario-specific limitations");
@@ -337,5 +343,38 @@ mod tests {
             fs::remove_file(path).unwrap();
             fs::remove_file(path.with_extension(format!("year-{year}.json"))).unwrap();
         }
+    }
+
+    #[test]
+    fn annual_social_pilot_records_later_generations_meeting() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let scenario = root.join("content/scenarios/economy-history-pilot-social.toml");
+        let token = format!(
+            "legacy-social-history-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+        let output = std::env::temp_dir().join(format!("{token}.ndjson"));
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(6)
+            .build()
+            .unwrap()
+            .install(|| run(&root, &scenario, &output, 25, 6, false))
+            .unwrap();
+        let rows = records(&output);
+        let later_meeting = rows.iter().filter(|row| row["kind"] == "year").any(|row| {
+            row["observations"].as_array().unwrap().iter().any(|event| {
+                event["kind"] == "meetings"
+                    && event["events"].as_array().unwrap().iter().any(|meeting| {
+                        meeting["a"].as_u64().unwrap() > 12 || meeting["b"].as_u64().unwrap() > 12
+                    })
+            })
+        });
+        assert!(later_meeting);
+        fs::remove_file(&output).unwrap();
+        fs::remove_file(output.with_extension("year-25.json")).unwrap();
     }
 }

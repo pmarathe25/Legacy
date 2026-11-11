@@ -13,6 +13,9 @@ pub use wellbeing::{Need, NeedRules, Needs};
 #[serde(deny_unknown_fields)]
 pub struct Social {
     pub rules: Rules,
+    /// Newborns may inherit a parent's general willingness, never their relationships.
+    #[serde(default)]
+    pub inherit_births: bool,
     pub participants: Vec<Participant>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub pressures: Vec<PressurePolicy>,
@@ -27,6 +30,7 @@ impl Clone for Social {
     fn clone(&self) -> Self {
         Self {
             rules: self.rules.clone(),
+            inherit_births: self.inherit_births,
             participants: self.participants.par_iter().cloned().collect(),
             pressures: self.pressures.par_iter().cloned().collect(),
             relationships: self.relationships.par_iter().cloned().collect(),
@@ -71,6 +75,15 @@ pub struct Selection {
     pub needs: Option<Needs>,
 }
 impl Social {
+    /// Add independently stored newborn inclinations selected by the family host.
+    /// The caller supplies fresh, distinct person identities.
+    pub fn enroll_inherited(&mut self, choices: &[(u64, bool)]) {
+        self.participants.par_extend(
+            choices
+                .par_iter()
+                .map(|&(person, willing)| Participant { person, willing }),
+        );
+    }
     pub fn validate(&self, people: &HashSet<u64>, now: u64) -> Result<(), &'static str> {
         if self.rules.interval == 0
             || self.rules.familiarity_gain == 0
@@ -198,6 +211,7 @@ impl Social {
     ) -> Result<Self, &'static str> {
         let mut next = Self {
             rules: self.rules.clone(),
+            inherit_births: self.inherit_births,
             participants: self.participants.par_iter().cloned().collect(),
             pressures: self.pressures.par_iter().cloned().collect(),
             relationships: Vec::new(),
