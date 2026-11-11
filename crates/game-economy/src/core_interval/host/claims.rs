@@ -2,25 +2,12 @@
 use super::*;
 
 impl CoreHost {
-    pub(super) fn start_claim_aware_work(
-        &mut self,
-        blocked: &[u64],
-        rate: u64,
-        effective: Option<&Autowork>,
-    ) -> Result<Option<Vec<(u64, bool)>>, String> {
-        let Some(claims) = self
+    /// Filter an individual's work policy by their chosen regard for claims.
+    pub(super) fn claim_aware_work_policies(&self, effective: &Autowork) -> Option<Autowork> {
+        let claims = self
             .claims
             .as_ref()
-            .filter(|owner| !owner.claims.is_empty())
-        else {
-            return Ok(None);
-        };
-        let Some(owner) = &self.autowork else {
-            return Ok(Some(Vec::new()));
-        };
-        let tick = self.core.physical.tick();
-        let offset = self.core.elapsed_millis().ok_or("no physical interval")?;
-        let effective = effective.unwrap_or(owner);
+            .filter(|owner| !owner.claims.is_empty())?;
         let index = claims.index();
         let recipes: std::collections::HashMap<_, _> = self
             .core
@@ -29,7 +16,7 @@ impl CoreHost {
             .par_iter()
             .map(|recipe| (recipe.id, recipe))
             .collect();
-        let filtered = game_autowork::Autowork {
+        Some(Autowork {
             next_id: effective.next_id,
             requests: None,
             policies: effective
@@ -53,7 +40,31 @@ impl CoreHost {
                 })
                 .cloned()
                 .collect(),
+        })
+    }
+
+    pub(super) fn start_claim_aware_work(
+        &mut self,
+        blocked: &[u64],
+        rate: u64,
+        effective: Option<&Autowork>,
+    ) -> Result<Option<Vec<(u64, bool)>>, String> {
+        let Some(_claims) = self
+            .claims
+            .as_ref()
+            .filter(|owner| !owner.claims.is_empty())
+        else {
+            return Ok(None);
         };
+        let Some(owner) = &self.autowork else {
+            return Ok(Some(Vec::new()));
+        };
+        let tick = self.core.physical.tick();
+        let offset = self.core.elapsed_millis().ok_or("no physical interval")?;
+        let effective = effective.unwrap_or(owner);
+        let filtered = self
+            .claim_aware_work_policies(effective)
+            .expect("claims checked");
         let Some(plan) = self
             .core
             .plan_autonomous_work(tick, offset, &filtered, blocked, rate)?

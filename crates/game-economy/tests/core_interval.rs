@@ -1346,6 +1346,16 @@ fn autonomous_work_respects_individual_claim_choices_but_explicit_work_can_take_
                     vec![(2, true)]
                 );
                 let mut host = CoreHost::begin(snapshot, &[(1, 1)]).unwrap();
+                let before = host.snapshot();
+                assert_eq!(
+                    host.preview_autonomous_work(&[], 1)
+                        .unwrap()
+                        .iter()
+                        .map(|row| row.person)
+                        .collect::<Vec<_>>(),
+                    vec![3]
+                );
+                assert_eq!(host.snapshot(), before);
                 assert_eq!(host.start_autonomous_work(&[], 1).unwrap(), vec![(2, true)]);
                 let state = host.snapshot();
                 assert_eq!(state.core.physical.work[1].job.worker, 3);
@@ -2722,6 +2732,17 @@ fn autonomous_interval_work_respects_personal_choices_and_real_stock() {
                         .is_err()
                 );
                 assert_eq!(invalid, invalid_before);
+                assert_eq!(core.snapshot(), before);
+                let opportunities = core
+                    .autonomous_work_opportunities(0, 300, &owner, &[], 2)
+                    .unwrap();
+                assert_eq!(
+                    opportunities
+                        .iter()
+                        .map(|row| row.person)
+                        .collect::<Vec<_>>(),
+                    vec![2, 7]
+                );
                 assert_eq!(core.snapshot(), before);
                 assert_eq!(
                     core.start_autonomous_work(0, 300, &mut owner, &[], 2)
@@ -13109,6 +13130,8 @@ fn personality_controls_voluntary_autonomous_work_and_survives_resume() {
                 "personality":{"social_urgency_per_isolation":0,"people":[{"person":2,"sociability":1000,"diligence":diligence}]}
             })).unwrap();
             let mut host = CoreHost::begin(snapshot, &[(1, 1)]).unwrap();
+            let preview = host.preview_autonomous_work(&[], 1).unwrap();
+            if diligence == 0 { assert!(preview.is_empty()); } else { assert_eq!(preview[0].person, 2); }
             let started = host.start_autonomous_work(&[], 1).unwrap();
             if diligence == 0 { assert!(started.is_empty()); } else { assert_eq!(started, vec![(2, true)]); }
             let state = host.snapshot();

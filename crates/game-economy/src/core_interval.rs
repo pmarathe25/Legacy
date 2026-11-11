@@ -520,6 +520,42 @@ impl CoreInterval {
         blocked: &[u64],
         rate: u64,
     ) -> Result<Option<game_autowork::Plan>, String> {
+        let (people, production, busy) =
+            self.autonomous_work_opening(tick, offset_millis, owner, blocked, rate)?;
+        let max_job = self.physical.work().last().map(|row| row.job.id);
+        owner.plan(&people, &production, &busy, max_job)
+    }
+
+    /// Inspect work intentions before stock allocation. Host-owned claims,
+    /// goals, tools and site restrictions still need to be applied by the caller.
+    pub fn autonomous_work_opportunities(
+        &self,
+        tick: u64,
+        offset_millis: u64,
+        owner: &game_autowork::Autowork,
+        blocked: &[u64],
+        rate: u64,
+    ) -> Result<Vec<game_autowork::Opportunity>, String> {
+        let (people, production, busy) =
+            self.autonomous_work_opening(tick, offset_millis, owner, blocked, rate)?;
+        owner.opportunities(&people, &production, &busy, None)
+    }
+
+    fn autonomous_work_opening(
+        &self,
+        tick: u64,
+        offset_millis: u64,
+        owner: &game_autowork::Autowork,
+        blocked: &[u64],
+        rate: u64,
+    ) -> Result<
+        (
+            Vec<game_production_model::PersonSnapshot>,
+            game_production::Production,
+            Vec<u64>,
+        ),
+        String,
+    > {
         if self.physical.tick() != tick
             || self.elapsed_millis() != Some(offset_millis)
             || offset_millis >= self.physical.tick_millis()
@@ -556,8 +592,7 @@ impl CoreInterval {
         let view = self.physical.view(tick)?;
         let production =
             game_lot_projection::production(&self.physical, &view, self.rules.max_work_hunger);
-        let max_job = self.physical.work().last().map(|row| row.job.id);
-        owner.plan(&people, &production, &busy, max_job)
+        Ok((people, production, busy))
     }
     /// Stop chosen jobs at this offset. Inputs stay in job custody until the
     /// boundary, where their return can succeed or remain blocked.

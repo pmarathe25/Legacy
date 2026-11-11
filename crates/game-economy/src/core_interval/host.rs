@@ -255,6 +255,11 @@ struct CoreRuntimeOptions {
     construction: Option<game_economy_building::Construction>,
     hauling: Option<crate::Hauling>,
 }
+struct EffectiveWork {
+    policy: Option<Autowork>,
+    goal_candidates: Vec<(u64, u32)>,
+}
+
 impl CoreHost {
     pub fn begin(snapshot: CoreHostSnapshot, rates: &[(u64, u64)]) -> Result<Self, String> {
         let CoreHostSnapshot {
@@ -1620,6 +1625,45 @@ impl CoreHost {
         }
         Ok(meals)
     }
+    /// Inspect individual work opportunities before shared-stock admission.
+    /// Site, tool and physical resource admission can still deny an attempt.
+    pub fn preview_autonomous_work(
+        &self,
+        blocked: &[u64],
+        rate: u64,
+    ) -> Result<Vec<game_autowork::Opportunity>, String> {
+        if rate == 0 || blocked.par_windows(2).any(|rows| rows[0] >= rows[1]) {
+            return Err("invalid occupied people or work rate".into());
+        }
+        let Some(owner) = &self.autowork else {
+            return Ok(Vec::new());
+        };
+        let rest = self.blocked_with_rest(blocked);
+        let mut busy = rest.as_deref().unwrap_or(blocked).to_vec();
+        let tick = self.core.physical.tick();
+        if self.personality_refusal_tick == Some(tick) {
+            busy.par_extend(self.personality_refusals.par_iter().copied());
+        } else if let Some(personality) = &self.personality {
+            busy.par_extend(personality.work_refusals(self.core.seed, tick));
+        }
+        if let Some(family) = &self.family {
+            busy.par_extend(game_economy_work::underage(family));
+        }
+        busy.par_sort_unstable();
+        busy.dedup();
+        let effective = self.effective_autonomous_work(&busy)?;
+        let effective = effective.policy.as_ref().unwrap_or(owner);
+        let filtered = self.claim_aware_work_policies(effective);
+        let offset = self.core.elapsed_millis().ok_or("no physical interval")?;
+        self.core.autonomous_work_opportunities(
+            tick,
+            offset,
+            filtered.as_ref().unwrap_or(effective),
+            &busy,
+            rate,
+        )
+    }
+
     /// Admit personally chosen work. Other owners' activity, claim, site and
     /// tool restrictions must be supplied in `blocked` by the enclosing host.
     pub fn start_autonomous_work(
@@ -1641,6 +1685,15 @@ impl CoreHost {
             rows
         });
         let blocked = reluctant.as_deref().unwrap_or(blocked);
+        let mut effective = self.effective_autonomous_work(blocked)?;
+        let outcomes =
+            self.start_autonomous_work_inner(blocked, rate, effective.policy.as_mut())?;
+        self.record_goal_setbacks(&effective.goal_candidates, &outcomes);
+        Ok(outcomes)
+    }
+
+    /// Prepare the same goal-derived policy for inspection and admission.
+    fn effective_autonomous_work(&self, blocked: &[u64]) -> Result<EffectiveWork, String> {
         let mut effective = self
             .goals
             .as_ref()
@@ -1673,9 +1726,10 @@ impl CoreHost {
                 tick / goals.retry_interval,
             );
         }
-        let outcomes = self.start_autonomous_work_inner(blocked, rate, effective.as_mut())?;
-        self.record_goal_setbacks(&candidates, &outcomes);
-        Ok(outcomes)
+        Ok(EffectiveWork {
+            policy: effective,
+            goal_candidates: candidates,
+        })
     }
     fn start_autonomous_work_inner(
         &mut self,
