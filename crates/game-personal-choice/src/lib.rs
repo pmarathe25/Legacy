@@ -1,0 +1,147 @@
+//! Deterministic per-person selection among owner-provided opportunities.
+//! Selection creates intentions only: feature owners must still revalidate and
+//! commit the chosen action, and other people's responses remain independent.
+use rayon::prelude::*;
+use serde::{Deserialize, Serialize};
+
+pub const MAX_DOMAINS: usize = 64;
+pub const MAX_OPPORTUNITIES: usize = 64;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Key {
+    pub domain: u32,
+    pub action: u64,
+}
+
+/// A receiver-owned candidate, prepared from the actor's accessible evidence.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Proposal {
+    pub actor: u64,
+    pub key: Key,
+    /// An observed or personally estimated consequence, never global welfare.
+    pub value: i64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Preference {
+    pub domain: u32,
+    pub enabled: bool,
+    pub bias: i64,
+    /// Signed per-thousand interpretation of the proposed consequence.
+    #[serde(default = "unit_weight")]
+    pub weight: i32,
+}
+
+fn unit_weight() -> i32 {
+    1000
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Person {
+    pub id: u64,
+    /// The person's value for remaining idle at this decision opportunity.
+    pub idle: i64,
+    /// Sorted by domain; unlisted domains are not accepted automatically.
+    pub preferences: Vec<Preference>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Selection {
+    pub actor: u64,
+    /// None is the explicit personal choice to remain idle.
+    pub action: Option<Key>,
+}
+
+fn random(mut x: u64) -> u64 {
+    x = (x ^ (x >> 30)).wrapping_mul(0xbf58476d1ce4e5b9);
+    x = (x ^ (x >> 27)).wrapping_mul(0x94d049bb133111eb);
+    x ^ (x >> 31)
+}
+
+/// Select at most one intention per person without touching any feature state.
+/// A value equal to idle leaves the actor idle. Stable semantic identifiers,
+/// not proposal input order, break ties among equally valued actions.
+pub fn select(
+    people: &[Person],
+    proposals: &[Proposal],
+    seed: u64,
+    round: u64,
+) -> Result<Vec<Selection>, &'static str> {
+    if people.par_windows(2).any(|w| w[0].id >= w[1].id)
+        || people.par_iter().any(|p| {
+            p.id == 0
+                || p.preferences.len() > MAX_DOMAINS
+                || p.preferences.windows(2).any(|w| w[0].domain >= w[1].domain)
+                || p.preferences.iter().any(|row| row.domain == 0)
+        })
+    {
+        return Err("invalid personal choice profiles");
+    }
+    let mut sorted: Vec<_> = proposals.par_iter().copied().collect();
+    if sorted
+        .par_windows(2)
+        .any(|w| (w[0].actor, w[0].key) > (w[1].actor, w[1].key))
+    {
+        sorted.par_sort_unstable_by_key(|row| (row.actor, row.key));
+    }
+    if sorted
+        .par_windows(2)
+        .any(|w| (w[0].actor, w[0].key) == (w[1].actor, w[1].key))
+        || sorted
+            .par_chunk_by(|a, b| a.actor == b.actor)
+            .any(|rows| rows.len() > MAX_OPPORTUNITIES)
+        || sorted.par_iter().any(|p| {
+            p.actor == 0
+                || p.key.domain == 0
+                || p.key.action == 0
+                || people
+                    .binary_search_by_key(&p.actor, |person| person.id)
+                    .is_err()
+        })
+    {
+        return Err("invalid personal choice proposals");
+    }
+    Ok(people
+        .par_iter()
+        .map(|person| {
+            let start = sorted.partition_point(|row| row.actor < person.id);
+            let end = sorted.partition_point(|row| row.actor <= person.id);
+            let mut best: Option<(i128, u64, Key)> = None;
+            for proposal in &sorted[start..end] {
+                let Some(pref) = person
+                    .preferences
+                    .binary_search_by_key(&proposal.key.domain, |p| p.domain)
+                    .ok()
+                    .map(|i| person.preferences[i])
+                    .filter(|p| p.enabled)
+                else {
+                    continue;
+                };
+                let value = i128::from(proposal.value) * i128::from(pref.weight) / 1000
+                    + i128::from(pref.bias);
+                if value <= i128::from(person.idle) {
+                    continue;
+                }
+                let tie = random(
+                    seed ^ round.rotate_left(13)
+                        ^ person.id
+                        ^ u64::from(proposal.key.domain).rotate_left(27)
+                        ^ proposal.key.action,
+                );
+                let candidate = (value, tie, proposal.key);
+                if best.is_none_or(|prior| candidate > prior) {
+                    best = Some(candidate);
+                }
+            }
+            Selection {
+                actor: person.id,
+                action: best.map(|row| row.2),
+            }
+        })
+        .collect())
+}
