@@ -6,7 +6,9 @@ The goal is a complete, playable sandbox simulation of people, societies, and a 
 
 ## Start here
 
-Read the current workspace and its executable tests for implemented behavior, then consult the relevant domain document when extending a mechanic. The [implementation stages](design/implementation.md#1-deterministic-concurrent-simulation-kernel) and [open questions](design/decisions.md#when-to-ask) provide historical design context. The previous simulation is available in git history; the workspace maintains one simulation implementation.
+Read the current workspace and its executable tests for implemented behavior, then consult the relevant domain document when extending a mechanic. The [implementation stages](design/implementation.md#1-deterministic-concurrent-simulation-kernel) and [open questions](design/decisions.md#when-to-ask) provide historical design context. The workspace still contains both the older whole-boundary engine and the interval host; removing the older engine remains unfinished.
+
+The [long-running history design](design/history.md) describes the intended ability to follow individuals, emergent collective patterns, knowledge, technology, and evolving populations over centuries.
 
 ## Working agreement
 
@@ -28,7 +30,7 @@ When the ruler dies, a successor can be chosen from subsequent births. Without n
 - Players choose among multiple starting scenarios or request random selection. Individual scenario contents can be developed as their mechanics become playable.
 - Ordinary player views show the ruler's knowledge and received reports. Guardian-search spectating is an explicit exception; observing does not give NPCs extra knowledge.
 - Government, food access, property arrangements, employment, and other social patterns emerge from people's individual behavior. Sharing, bargaining, refusal, theft, coercion, and enforcement all belong in the design; cooperation can result from fear or obligation as well as willingness.
-- Social invention uses bounded personal models: people develop practices, acquire values grounded in modeled experience, and reason from structured precedents. Institutions are descriptions of recurring individual behavior, not simulation entities or predefined rule systems. Agreements are personal records and do not compel compliance. Technological invention is deferred for evaluation after production exists.
+- Social invention uses bounded personal models: people develop practices, acquire values grounded in modeled experience, and reason from structured precedents. Institutions are descriptions of recurring individual behavior, not simulation entities or predefined rule systems. Agreements are personal records and do not compel compliance. Technological discovery, testing, transmission, and application are needed for long histories; their mechanics remain to be designed and implemented.
 - Goods have physical locations and must be carried or delivered. Ownership, custody, access, and possession are separate.
 - The player controls the ruler, except during an explicitly accepted loss of control. Guardians are loyal to each ruler and unwaveringly dedicated to their mission across lives, but may disagree, warn, and refuse orders. They decide readiness to leave mentorship.
 - Guardians locate the ruler through an innate connection. They are immortal and do not suffer hunger; injuries and even destroyed bodies recover with time. Regeneration occurs in place and does not defeat imprisonment.
