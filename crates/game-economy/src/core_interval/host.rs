@@ -1205,7 +1205,7 @@ impl CoreHost {
             schedule,
         })
     }
-    /// Remove recorded opinion-change events after a caller has archived them.
+    /// Extract recorded opinion-change events for archival by the caller.
     /// Directed opinions and the rules used for future decisions are unchanged.
     pub fn take_opinion_events(&mut self) -> Vec<game_opinions::Event> {
         self.opinions
