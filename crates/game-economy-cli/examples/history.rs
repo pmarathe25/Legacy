@@ -154,6 +154,9 @@ fn run(
         &mut writer,
         &json!({"kind":"initial","year":start_year,"snapshot":initial}),
     )?;
+    // The initial snapshot already contains any events restored from a save.
+    // Subsequent events are archived with the year in which they occurred.
+    host.take_opinion_events();
     let mut previous_animals = animals(&host);
     for year in start_year + 1..=end_year {
         let mut yearly_observations = Vec::new();
@@ -186,6 +189,11 @@ fn run(
                 ));
             }
             yearly_observations.extend(observations(&result.events));
+            let opinion_events = host.take_opinion_events();
+            if !opinion_events.is_empty() {
+                yearly_observations
+                    .push(json!({"kind":"opinion_changes", "events":opinion_events}));
+            }
             if ticks_per_year > 1 {
                 let tick_snapshot = host.snapshot();
                 if let Some(family) = &tick_snapshot.family
@@ -262,7 +270,7 @@ fn run(
             &json!({"kind":"year","year":year,"living_people":living,"living_animals":animal_count,"animal_ids_appeared":appeared,"animal_ids_no_longer_alive":inactive,"observations":yearly_observations,"snapshot":snapshot}),
         )?;
         previous_animals = current_animals;
-        if year % 50 == 0 || year == end_year {
+        if ticks_per_year >= 8_760 || year % 50 == 0 || year == end_year {
             let checkpoint = output.with_extension(format!("year-{year}.json"));
             let file = OpenOptions::new()
                 .write(true)

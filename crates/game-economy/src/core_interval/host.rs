@@ -1205,6 +1205,14 @@ impl CoreHost {
             schedule,
         })
     }
+    /// Remove recorded opinion-change events after a caller has archived them.
+    /// Directed opinions and the rules used for future decisions are unchanged.
+    pub fn take_opinion_events(&mut self) -> Vec<game_opinions::Event> {
+        self.opinions
+            .as_mut()
+            .map_or_else(Vec::new, |owner| std::mem::take(&mut owner.events))
+    }
+
     pub fn snapshot(&self) -> CoreHostSnapshot {
         CoreHostSnapshot {
             core: self.core.snapshot(),

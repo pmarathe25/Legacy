@@ -108,6 +108,56 @@ fn hourly_history_food_supply_supports_founders_and_is_worker_deterministic() {
 }
 
 #[test]
+fn archiving_opinion_events_preserves_decisions_and_every_event() {
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(1)
+        .build()
+        .unwrap()
+        .install(|| {
+            let root = root();
+            let scenario = root.join("content/scenarios/economy-history-hourly.toml");
+            let mut retained =
+                game_economy_cli::core_scenario(&scenario, &root.join("content")).unwrap();
+            let mut archived =
+                game_economy_cli::core_scenario(&scenario, &root.join("content")).unwrap();
+            let mut events = Vec::new();
+            for _ in 0..168 {
+                assert!(
+                    retained
+                        .advance_continuous(3_600_000, &[])
+                        .unwrap()
+                        .failure
+                        .is_none()
+                );
+                assert!(
+                    archived
+                        .advance_continuous(3_600_000, &[])
+                        .unwrap()
+                        .failure
+                        .is_none()
+                );
+                events.extend(archived.take_opinion_events());
+            }
+            let mut original = retained.snapshot();
+            let mut expected = std::mem::take(&mut original.opinions.as_mut().unwrap().events);
+            assert!(!events.is_empty());
+            let key = |event: &game_opinions::Event| {
+                (
+                    event.tick,
+                    event.observer,
+                    event.target,
+                    event.before,
+                    event.after,
+                )
+            };
+            events.sort_by_key(key);
+            expected.sort_by_key(key);
+            assert_eq!(events, expected);
+            assert_eq!(original, archived.snapshot());
+        });
+}
+
+#[test]
 fn unsupported_scenario_owners_are_reported() {
     let root = root();
     let state = game_economy_cli::scenario(
