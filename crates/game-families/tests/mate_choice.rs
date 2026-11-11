@@ -1,5 +1,5 @@
 use game_families::{Families, FamilyRules, Genome, LifeInput, MatePreference, Member, Sex};
-use game_family_model::PhysicalView;
+use game_family_model::{MateFeelings, PhysicalView};
 
 struct View {
     reverse_affinity: i32,
@@ -25,11 +25,55 @@ impl PhysicalView for View {
         }
     }
 }
+struct PressureView(View);
+impl PhysicalView for PressureView {
+    fn read(&self, id: u64) -> LifeInput {
+        self.0.read(id)
+    }
+    fn mate_feelings(&self, observer: u64, target: u64) -> MateFeelings {
+        if (observer, target) == (1, 3) {
+            MateFeelings {
+                affinity: -10,
+                trust: 20,
+                fear: 20,
+                obligation: 20,
+            }
+        } else {
+            MateFeelings {
+                affinity: self.0.affinity(observer, target),
+                ..MateFeelings::default()
+            }
+        }
+    }
+}
+struct RespondentView(View);
+impl PhysicalView for RespondentView {
+    fn read(&self, id: u64) -> LifeInput {
+        self.0.read(id)
+    }
+    fn mate_feelings(&self, observer: u64, target: u64) -> MateFeelings {
+        if (observer, target) == (3, 1) {
+            MateFeelings {
+                affinity: -10,
+                fear: 20,
+                ..MateFeelings::default()
+            }
+        } else {
+            MateFeelings {
+                affinity: self.0.affinity(observer, target),
+                ..MateFeelings::default()
+            }
+        }
+    }
+}
 fn pref() -> MatePreference {
     MatePreference {
         desire: 1000,
         genetic_weight: 0,
         affinity_weight: 1,
+        trust_weight: 0,
+        fear_weight: 0,
+        obligation_weight: 0,
         attraction_weight: 0,
         female_attraction: 0,
         male_attraction: 0,
@@ -124,6 +168,65 @@ fn each_persons_affinity_matters_and_partnership_does_not_restrict_conception() 
             .father,
         2
     );
+}
+#[test]
+fn fear_trust_and_obligation_have_individual_signed_effects() {
+    let mut state = family();
+    let view = PressureView(View {
+        reverse_affinity: 10,
+        hunger: 0,
+    });
+    let father = |state: &Families| {
+        state
+            .advance_validated(&view, 9, 1)
+            .unwrap()
+            .families
+            .members[0]
+            .pregnancy
+            .as_ref()
+            .unwrap()
+            .father
+    };
+    assert_eq!(father(&state), 2);
+    state.members[0]
+        .mate_preference
+        .as_mut()
+        .unwrap()
+        .fear_weight = 1;
+    assert_eq!(father(&state), 3);
+    let pref = state.members[0].mate_preference.as_mut().unwrap();
+    pref.fear_weight = -1;
+    pref.obligation_weight = 1;
+    assert_eq!(father(&state), 2);
+    let pref = state.members[0].mate_preference.as_mut().unwrap();
+    pref.fear_weight = 0;
+    pref.obligation_weight = 0;
+    pref.trust_weight = 1;
+    assert_eq!(father(&state), 3);
+}
+#[test]
+fn a_person_can_respond_to_fear_without_actively_seeking_a_mate() {
+    let mut state = family();
+    let view = RespondentView(View {
+        reverse_affinity: 10,
+        hunger: 0,
+    });
+    let preference = state.members[2].mate_preference.as_mut().unwrap();
+    preference.desire = 0;
+    preference.fear_weight = 1;
+    let result = state.advance_validated(&view, 9, 1).unwrap().families;
+    assert_eq!(result.members[0].pregnancy.as_ref().unwrap().father, 3);
+    state.members[0].partner = None;
+    state.members[1].partner = None;
+    let result = state.advance_validated(&view, 9, 1).unwrap().families;
+    assert_eq!(result.members[0].partner, Some(3));
+    state.members[2]
+        .mate_preference
+        .as_mut()
+        .unwrap()
+        .fear_weight = 0;
+    let result = state.advance_validated(&view, 9, 1).unwrap().families;
+    assert_eq!(result.members[0].pregnancy.as_ref().unwrap().father, 2);
 }
 #[test]
 fn people_choose_partnerships_subjectively_and_either_can_leave() {
@@ -367,6 +470,9 @@ fn concentrated_mate_choice_benchmark() {
                 desire: 1000,
                 genetic_weight: 0,
                 affinity_weight: 0,
+                trust_weight: 0,
+                fear_weight: 0,
+                obligation_weight: 0,
                 attraction_weight: 0,
                 female_attraction: 0,
                 male_attraction: 0,
@@ -382,26 +488,38 @@ fn concentrated_mate_choice_benchmark() {
         reverse_affinity: 0,
         hunger: 0,
     };
-    let mut reference = None;
-    for workers in [1, 6] {
-        let pool = rayon::ThreadPoolBuilder::new()
-            .num_threads(workers)
-            .build()
-            .unwrap();
-        let mut durations = Vec::new();
-        for _ in 0..4 {
-            let started = std::time::Instant::now();
-            let output = pool.install(|| state.advance_validated(&view, 9, 1).unwrap().families);
-            let duration = started.elapsed();
-            if let Some(expected) = &reference {
-                assert_eq!(expected, &output);
-            } else {
-                reference = Some(output);
-            }
-            durations.push(duration);
+    for feelings in [false, true] {
+        for person in &mut state.members {
+            let preference = person.mate_preference.as_mut().unwrap();
+            preference.trust_weight = i32::from(feelings);
+            preference.fear_weight = i32::from(feelings);
+            preference.obligation_weight = i32::from(feelings);
         }
-        durations.remove(0);
-        durations.sort();
-        println!("{workers} workers: median {:?}", durations[1]);
+        let mut reference = None;
+        for workers in [1, 6] {
+            let pool = rayon::ThreadPoolBuilder::new()
+                .num_threads(workers)
+                .build()
+                .unwrap();
+            let mut durations = Vec::new();
+            for _ in 0..4 {
+                let started = std::time::Instant::now();
+                let output =
+                    pool.install(|| state.advance_validated(&view, 9, 1).unwrap().families);
+                let duration = started.elapsed();
+                if let Some(expected) = &reference {
+                    assert_eq!(expected, &output);
+                } else {
+                    reference = Some(output);
+                }
+                durations.push(duration);
+            }
+            durations.remove(0);
+            durations.sort();
+            println!(
+                "feelings={feelings}, {workers} workers: median {:?}",
+                durations[1]
+            );
+        }
     }
 }

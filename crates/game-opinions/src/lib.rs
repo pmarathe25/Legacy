@@ -117,6 +117,13 @@ impl Index<'_> {
     pub fn affinity(&self, observer: u64, target: u64) -> i32 {
         self.get(observer, target).map_or(0, |row| row.affinity)
     }
+    /// Read a person's directed assessment in one lookup.
+    pub fn subjective(&self, observer: u64, target: u64) -> (i32, i32, u64, u64) {
+        self.get(observer, target)
+            .map_or((self.rules.initial, 0, 0, 0), |row| {
+                (row.trust, row.affinity, row.fear, row.obligation)
+            })
+    }
     pub fn trust(&self, observer: u64, target: u64) -> i32 {
         self.get(observer, target)
             .map_or(self.rules.initial, |row| row.trust)

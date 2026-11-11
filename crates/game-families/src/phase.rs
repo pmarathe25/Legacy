@@ -49,12 +49,34 @@ fn mate_score(
 ) -> i64 {
     let pref = observer.mate_preference.unwrap_or_default();
     let attraction = (random(seed ^ observer.id ^ 0x41545452, target.id, 0) % 2001) as i64 - 1000;
-    i64::from(pref.affinity_weight) * i64::from(physical.affinity(observer.id, target.id))
-        + i64::from(pref.attraction_weight) * attraction / 1000
-        + i64::from(match target.genome.sex {
-            Sex::Female => pref.female_attraction,
-            Sex::Male => pref.male_attraction,
-        })
+    let feelings = physical.mate_feelings(observer.id, target.id);
+    let sex_attraction = match target.genome.sex {
+        Sex::Female => pref.female_attraction,
+        Sex::Male => pref.male_attraction,
+    };
+    if pref.trust_weight == 0 && pref.fear_weight == 0 && pref.obligation_weight == 0 {
+        return i64::from(pref.affinity_weight) * i64::from(feelings.affinity)
+            + i64::from(pref.attraction_weight) * attraction / 1000
+            + i64::from(sex_attraction);
+    }
+    let score = i128::from(pref.affinity_weight) * i128::from(feelings.affinity)
+        + i128::from(pref.trust_weight) * i128::from(feelings.trust)
+        + i128::from(pref.fear_weight) * i128::from(feelings.fear)
+        + i128::from(pref.obligation_weight) * i128::from(feelings.obligation)
+        + i128::from(pref.attraction_weight) * i128::from(attraction) / 1000
+        + i128::from(sex_attraction);
+    score.clamp(i128::from(i64::MIN), i128::from(i64::MAX)) as i64
+}
+fn mutual_mate_score(
+    observer: &Member,
+    target: &Member,
+    physical: &impl game_family_model::PhysicalView,
+    seed: u64,
+) -> Option<i64> {
+    let score = mate_score(observer, target, physical, seed);
+    (score >= i64::from(observer.mate_preference.as_ref().map_or(0, |p| p.minimum))
+        && accepts_mate(target, observer, physical, seed))
+    .then_some(score)
 }
 fn accepts_mate(
     observer: &Member,
@@ -101,6 +123,7 @@ fn subjective_partnerships(
     group: &[(u64, game_family_model::ContactPartition, &Member)],
     index: &OrderedMemberIndex<'_>,
     physical: &impl game_family_model::PhysicalView,
+    dependent_count: &(impl Fn(u64) -> u64 + Sync),
     seed: u64,
     tick: u64,
 ) -> Vec<(u64, u64, u64)> {
@@ -117,22 +140,25 @@ fn subjective_partnerships(
     let mut edges: Vec<_> = candidates
         .par_iter()
         .filter_map(|person| {
+            if !seeks_mate(
+                person,
+                &physical.read(person.id),
+                dependent_count(person.id),
+                seed,
+                tick,
+            ) {
+                return None;
+            }
             let own_kin = ancestors(person.id, index);
             let offset = (random(seed ^ 71, person.id, tick) % candidates.len() as u64) as usize;
             let choice = (0..candidates.len().min(32))
                 .map(|n| (offset + n) % candidates.len())
-                .filter(|&i| {
-                    candidates[i].id != person.id
-                        && own_kin.is_disjoint(&kin[i])
-                        && accepts_mate(person, candidates[i], physical, seed)
-                        && accepts_mate(candidates[i], person, physical, seed)
+                .filter(|&i| candidates[i].id != person.id && own_kin.is_disjoint(&kin[i]))
+                .filter_map(|i| {
+                    mutual_mate_score(person, candidates[i], physical, seed).map(|score| (i, score))
                 })
-                .max_by_key(|&i| {
-                    (
-                        mate_score(person, candidates[i], physical, seed),
-                        std::cmp::Reverse(candidates[i].id),
-                    )
-                })?;
+                .max_by_key(|&(i, score)| (score, std::cmp::Reverse(candidates[i].id)))?
+                .0;
             let other = candidates[choice].id;
             Some((person.id.min(other), person.id.max(other)))
         })
@@ -354,7 +380,6 @@ impl Families {
                     && !physical.controlled(m.id)
                     && if rules.subjective_mating {
                         eligible_for_partnership(m, &person, rules)
-                            && seeks_mate(m, &person, dependent_count(m.id), seed, tick)
                     } else {
                         eligible(m, &person, rules)
                     })
@@ -368,7 +393,14 @@ impl Families {
             .par_chunk_by(|a, b| (a.0, a.1) == (b.0, b.1))
             .map(|group| {
                 if rules.subjective_mating {
-                    return subjective_partnerships(group, &index, physical, seed, tick);
+                    return subjective_partnerships(
+                        group,
+                        &index,
+                        physical,
+                        &dependent_count,
+                        seed,
+                        tick,
+                    );
                 }
                 let area = group[0].0;
                 let females: Vec<_> = group
@@ -517,8 +549,7 @@ impl Families {
                     let person = physical.read(m.id);
                     (m.genome.sex == Sex::Male
                         && !physical.controlled(m.id)
-                        && eligible(m, &person, rules)
-                        && seeks_mate(m, &person, dependent_count(m.id), seed, tick))
+                        && eligible(m, &person, rules))
                     .then(|| (person.region.unwrap(), physical.contact_partition(m.id), m))
                 })
                 .collect()
@@ -568,15 +599,13 @@ impl Families {
                         .map(|n| prospective_fathers[first + (offset + n) % (end - first)].2)
                         .filter(|father| {
                             mother_ancestors.is_disjoint(&ancestors(father.id, &index))
-                                && accepts_mate(mother, father, physical, seed)
-                                && accepts_mate(father, mother, physical, seed)
                         })
-                        .max_by_key(|father| {
-                            (
-                                mate_score(mother, father, physical, seed),
-                                std::cmp::Reverse(father.id),
-                            )
-                        })?
+                        .filter_map(|father| {
+                            mutual_mate_score(mother, father, physical, seed)
+                                .map(|score| (father, score))
+                        })
+                        .max_by_key(|(father, score)| (*score, std::cmp::Reverse(father.id)))?
+                        .0
                 } else {
                     mother.partner.and_then(|p| index.get(&p))?
                 };

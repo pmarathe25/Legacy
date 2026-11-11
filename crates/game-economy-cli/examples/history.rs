@@ -404,6 +404,9 @@ mod tests {
                     desire: 1000,
                     genetic_weight: 0,
                     affinity_weight: 1,
+                    trust_weight: 0,
+                    fear_weight: 0,
+                    obligation_weight: 0,
                     attraction_weight: 0,
                     female_attraction: 0,
                     male_attraction: 0,
@@ -427,6 +430,27 @@ mod tests {
         };
         assert!(run(-10).is_none());
         assert_eq!(run(10).unwrap().father, 2);
+        let run_with_fear = |weight: i32| {
+            let mut initial = snapshot.clone();
+            initial.family.as_mut().unwrap().members[0]
+                .mate_preference
+                .as_mut()
+                .unwrap()
+                .fear_weight = weight;
+            initial.opinions.as_mut().unwrap().records = serde_json::from_value(json!([
+                {"observer":1,"target":2,"trust":0,"affinity":-10,"fear":20},
+                {"observer":2,"target":1,"trust":0,"affinity":10}
+            ]))
+            .unwrap();
+            let mut host = CoreHost::resume(initial).unwrap();
+            assert_eq!(
+                host.advance_continuous(2_628_000_000, &[]).unwrap().failure,
+                None
+            );
+            host.snapshot().family.unwrap().members[0].pregnancy.clone()
+        };
+        assert!(run_with_fear(0).is_none());
+        assert_eq!(run_with_fear(1).unwrap().father, 2);
     }
 
     #[test]
@@ -445,6 +469,9 @@ mod tests {
                     desire: 1000,
                     genetic_weight: 0,
                     affinity_weight: 1,
+                    trust_weight: 0,
+                    fear_weight: 0,
+                    obligation_weight: 0,
                     attraction_weight: 0,
                     female_attraction: 0,
                     male_attraction: 0,
@@ -479,6 +506,17 @@ mod tests {
         let state = host.snapshot();
         assert_eq!(state.core.people.len(), 60);
         assert!(state.family.as_ref().unwrap().rules.subjective_mating);
+        let preference = state.family.as_ref().unwrap().members[0]
+            .mate_preference
+            .unwrap();
+        assert_eq!(
+            (
+                preference.trust_weight,
+                preference.fear_weight,
+                preference.obligation_weight
+            ),
+            (2, 3, 2)
+        );
         assert_eq!(
             state.dependent_care.as_ref().unwrap().rules.care_interval,
             3

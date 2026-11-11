@@ -20,6 +20,10 @@ pub struct MatePreference {
     pub genetic_weight: i32,
     /// Personal response to directed affinity toward the prospective mate.
     pub affinity_weight: i32,
+    /// Each feeling has its own signed, personal influence.
+    pub trust_weight: i32,
+    pub fear_weight: i32,
+    pub obligation_weight: i32,
     /// Personal response to a stable, directed attraction toward this person.
     pub attraction_weight: i32,
     /// Individual attraction adjustments for the candidate's modeled sex.
@@ -38,6 +42,9 @@ impl Default for MatePreference {
             desire: 500,
             genetic_weight: 250,
             affinity_weight: 10,
+            trust_weight: 0,
+            fear_weight: 0,
+            obligation_weight: 0,
             attraction_weight: 100,
             female_attraction: 0,
             male_attraction: 0,
@@ -95,6 +102,15 @@ pub struct Birth {
 /// Matching people must share both sides of a staged physical partition.
 pub type ContactPartition = (u64, u64);
 
+/// Directed feelings belong to the observer, and need not be reciprocal.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct MateFeelings {
+    pub affinity: i32,
+    pub trust: i32,
+    pub fear: u64,
+    pub obligation: u64,
+}
+
 /// Committed or staged physical reads keyed by stable identity.
 pub trait PhysicalView: Sync {
     fn read(&self, id: u64) -> LifeInput;
@@ -105,6 +121,12 @@ pub trait PhysicalView: Sync {
     /// The observer's own directed feeling, not a shared relationship score.
     fn affinity(&self, _observer: u64, _target: u64) -> i32 {
         0
+    }
+    fn mate_feelings(&self, observer: u64, target: u64) -> MateFeelings {
+        MateFeelings {
+            affinity: self.affinity(observer, target),
+            ..MateFeelings::default()
+        }
     }
     /// Zero denotes the unpartitioned region; distinct values cannot touch.
     fn contact_partition(&self, _id: u64) -> ContactPartition {

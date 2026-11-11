@@ -102,10 +102,18 @@ impl CoreHost {
             .as_ref()
             .filter(|_| owner.rules.subjective_mating)
             .map(game_opinions::Opinions::index);
-        let affinity = |observer, target| {
+        let feelings = |observer, target| {
             opinions
                 .as_ref()
-                .map_or(0, |index| index.affinity(observer, target))
+                .map_or(game_economy_family::MateFeelings::default(), |index| {
+                    let (trust, affinity, fear, obligation) = index.subjective(observer, target);
+                    game_economy_family::MateFeelings {
+                        trust,
+                        affinity,
+                        fear,
+                        obligation,
+                    }
+                })
         };
         let next = game_economy_family::advance_validated_with_context(
             owner,
@@ -115,7 +123,7 @@ impl CoreHost {
             tick,
             self.dependent_care.is_some(),
             None,
-            Some(&affinity),
+            Some(&feelings),
         )?;
         let newborns: Vec<_> = next
             .newborns

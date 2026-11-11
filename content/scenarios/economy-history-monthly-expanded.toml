@@ -548,13 +548,13 @@ subjective_mating = true
 id = 1
 age = 228
 genome = { sex = "Female", alleles = [[720,740], [310,510], [405,605], [510,710]], mate_desire = [367, 401] }
-mate_preference = { desire = 650, genetic_weight = 150, affinity_weight = 4, attraction_weight = 60, hunger_weight = -3, minimum = -20 }
+mate_preference = { desire = 650, genetic_weight = 150, affinity_weight = 4, trust_weight = 2, fear_weight = 3, obligation_weight = 2, attraction_weight = 60, hunger_weight = -3, minimum = -20 }
 
 [[family.members]]
 id = 2
 age = 240
 genome = { sex = "Male", alleles = [[740,760], [320,520], [410,610], [520,720]], mate_desire = [434, 502] }
-mate_preference = { desire = 750, genetic_weight = 200, affinity_weight = 8, attraction_weight = 100, hunger_weight = -3, minimum = -40 }
+mate_preference = { desire = 750, genetic_weight = 200, affinity_weight = 8, trust_weight = 1, fear_weight = -2, obligation_weight = 0, attraction_weight = 100, hunger_weight = -3, minimum = -40 }
 
 [[family.members]]
 id = 3
@@ -1506,6 +1506,10 @@ fulfilled_gain = 1
 default_loss = 2
 encounter_gain = 1
 affinity = { limit = 10, encounter_change = 1, help_change = 2, harm_change_per_damage = -1 }
+
+[[opinions.sensitivities]]
+person = 1
+gratitude_gain = 1
 
 [dynamics.personality]
 social_urgency_per_isolation = 1

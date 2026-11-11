@@ -2,6 +2,7 @@
 use game_economy_person::{Person, travel::Travel};
 pub use game_families::Families;
 use game_families::LifeInput;
+pub use game_family_model::MateFeelings;
 use game_family_model::{ContactPartition, PhysicalView};
 use rayon::prelude::*;
 
@@ -143,10 +144,18 @@ macro_rules! advance_world {
             .or($world.family.as_ref())
             .filter(|family| family.rules.subjective_mating)
             .and_then(|_| $world.opinions.as_ref().map(|owner| owner.index()));
-        let family_affinity = |observer, target| {
+        let family_feelings = |observer, target| {
             family_opinions
                 .as_ref()
-                .map_or(0, |index| index.affinity(observer, target))
+                .map_or($crate::MateFeelings::default(), |index| {
+                    let (trust, affinity, fear, obligation) = index.subjective(observer, target);
+                    $crate::MateFeelings {
+                        trust,
+                        affinity,
+                        fear,
+                        obligation,
+                    }
+                })
         };
         let family = cost_family
             .as_ref()
@@ -160,7 +169,7 @@ macro_rules! advance_world {
                     $tick,
                     $care.is_some(),
                     $partition,
-                    Some(&family_affinity),
+                    Some(&family_feelings),
                 )?;
                 if let Some(care) = &mut $care {
                     game_economy_work::care::inherit(care, &next.family, &next.newborns);
@@ -251,19 +260,19 @@ struct View<'a> {
     people: &'a [Person],
     suffix: Option<game_family_index::DenseSuffix>,
     partition: Option<&'a (dyn Fn(u64) -> ContactPartition + Sync)>,
-    affinity: Option<&'a (dyn Fn(u64, u64) -> i32 + Sync)>,
+    feelings: Option<&'a (dyn Fn(u64, u64) -> MateFeelings + Sync)>,
 }
 impl<'a> View<'a> {
     fn new(
         people: &'a [Person],
         partition: Option<&'a (dyn Fn(u64) -> ContactPartition + Sync)>,
-        affinity: Option<&'a (dyn Fn(u64, u64) -> i32 + Sync)>,
+        feelings: Option<&'a (dyn Fn(u64, u64) -> MateFeelings + Sync)>,
     ) -> Self {
         Self {
             people,
             suffix: game_family_index::DenseSuffix::new(people.len(), |i| people[i].id),
             partition,
-            affinity,
+            feelings,
         }
     }
     fn index(&self, id: u64) -> Option<usize> {
@@ -286,8 +295,9 @@ impl PhysicalView for View<'_> {
     fn controlled(&self, id: u64) -> bool {
         self.index(id).is_some_and(|i| self.people[i].controlled)
     }
-    fn affinity(&self, observer: u64, target: u64) -> i32 {
-        self.affinity.map_or(0, |read| read(observer, target))
+    fn mate_feelings(&self, observer: u64, target: u64) -> MateFeelings {
+        self.feelings
+            .map_or(MateFeelings::default(), |read| read(observer, target))
     }
     fn contact_partition(&self, id: u64) -> ContactPartition {
         self.partition.map_or((0, 0), |partition| partition(id))
@@ -368,10 +378,10 @@ pub fn advance_validated_with_context(
     tick: u64,
     newborns_seek_meals: bool,
     partition: Option<&(dyn Fn(u64) -> ContactPartition + Sync)>,
-    affinity: Option<&(dyn Fn(u64, u64) -> i32 + Sync)>,
+    feelings: Option<&(dyn Fn(u64, u64) -> MateFeelings + Sync)>,
 ) -> Result<ResultFrame, String> {
     let next = family
-        .advance_validated(&View::new(people, partition, affinity), seed, tick)
+        .advance_validated(&View::new(people, partition, feelings), seed, tick)
         .map_err(str::to_owned)?;
     let mut grown: Vec<_> = next
         .families

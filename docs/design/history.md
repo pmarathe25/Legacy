@@ -1,6 +1,10 @@
 # Long-running world history
 
-The intended long-run use includes advancing a world for centuries, for example 300 simulated years, and examining how its people and living populations change. This is a design target, not a claim that the current simulation can yet produce or analyze such a history. A scenario must eventually define the relationship between simulation time and the calendar; do not assume a year length from a benchmark.
+The intended long-run use includes advancing a world for centuries, for example 300 simulated years, and examining how its people and living populations change. An exploratory runner now streams selected events and annual snapshots for a data-defined calendar, including a 300-year monthly scenario. It can inspect individuals, observed encounters, populations, and genetic samples; it does not yet provide a calibrated or complete civilization history. Do not infer a scenario’s calendar from a benchmark.
+
+## Current limitations
+
+The interval host rejects combat, confinement, missions, and campaign state, as well as some demolition, goal-directed construction, local walking, and taking escalation. Its history runner records selected event types and annual snapshots rather than every decision or causal event. Scientific invention, artificial selection, and recognition of political or organizational histories are not implemented. The expanded monthly scenario configures each owner the interval host currently exposes, but configured policies need not produce activity. Its care cadence, conception rate, environment, and resource renewal are exploratory settings, not validated demographic or ecological estimates. Existing human partnership matching can be configured with directed individual feelings and may be independent of conception; old scenarios can still select the earlier matching behavior.
 
 ## People and collective patterns
 
