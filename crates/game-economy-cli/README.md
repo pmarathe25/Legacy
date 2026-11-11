@@ -317,3 +317,11 @@ To stream annual snapshots and selected observed events without replacing an exi
 A saved annual checkpoint can be continued into a new history file with `cargo run -p game-economy-cli --example history -- --resume target/history/pilot.year-50.json target/history/resumed.ndjson 50 6`; the year count is additional years. Keep the source history and its metadata for the original scenario and its limitations.
 
 For durable local archives, prefer an output under `runs/history/`; this directory is ignored by Git so large simulation histories are not accidentally committed. Preserve the NDJSON file together with its checkpoints. The initial 300-year pilot is archived under `runs/history/pilot-300-seed-1701/` when present.
+
+Inspect a saved NDJSON history without loading the whole file at once:
+
+- `cargo run -p game-economy-cli --example inspect_history -- summary runs/history/pilot-300-seed-1701/pilot-300.ndjson`
+- `cargo run -p game-economy-cli --example inspect_history -- person runs/history/pilot-300-seed-1701/pilot-300.ndjson 75`
+- `cargo run -p game-economy-cli --example inspect_history -- animal runs/history/pilot-300-seed-1701/pilot-300.ndjson 37`
+
+The inspector reports observed population changes, sample genome means, selected family events, and recorded meetings. Meeting counts do not establish leadership, and changes in genome averages do not establish selection or causation. It preserves the run metadata and indicates whether a completion record was present.
