@@ -9,4 +9,5 @@ model carrying capacity. A host must check the same rule before admission.
 The current interval-host integration applies only to personally chosen
 production starts. Existing active work is not invalidated when capability
 later changes; newborns need no separate capability record. Other activities
-and enrollment of newborn choice profiles remain separate work.
+remain separate work. Optional newborn choice profiles are configured by the
+personal-choice owner, independently of physical capability.

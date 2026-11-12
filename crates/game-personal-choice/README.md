@@ -13,6 +13,15 @@ an action refinement does not activate an unlisted or disabled domain.
 The owner considers all supplied domains and opportunities rather than
 rejecting or silently truncating a person's choices at an arbitrary count.
 
+An optional authored birth profile can initialize general domain inclinations
+for actual newborns using their own expressed genes. It copies no other
+person's target-specific preferences, memories or decisions. The profile does
+not create physical opportunities or bypass other owners' existing eligibility
+rules; genetic effects and refusal are configured rather than universal.
+For a newborn enrolled with a meal-domain profile, the interval host enables
+meal consideration even without a configured dependent-care owner. The
+individual profile still decides whether a meal wins over idleness.
+
 The interval host can opt in to using this selection for construction,
 local carrying, site maintenance and starting work. This is not yet a common chooser for the other activities;
 their existing fixed-order scheduling remains in effect.

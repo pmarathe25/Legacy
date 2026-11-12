@@ -17,6 +17,37 @@ impl CoreHost {
         else {
             return;
         };
+        if let Some(schedule) = &mut self.schedule
+            && let Some(profile) = &schedule.birth_choices
+            && let Some(people) = &mut schedule.personal_choices
+        {
+            let members =
+                game_family_index::MemberIndex::new(&family.members).expect("validated family");
+            let births: Vec<_> = newborns
+                .par_iter()
+                .filter_map(|person| {
+                    if people.binary_search_by_key(person, |row| row.id).is_ok() {
+                        return None;
+                    }
+                    let member = members.get(person)?;
+                    Some(game_personal_choice::Newborn {
+                        id: *person,
+                        genes: std::array::from_fn(|locus| member.genome.expressed(locus)),
+                    })
+                })
+                .collect();
+            if !births.is_empty() {
+                let inherited = profile.enroll(&births);
+                if std::sync::Arc::get_mut(people).is_none() {
+                    *people = std::sync::Arc::new(people.par_iter().cloned().collect());
+                }
+                let people = std::sync::Arc::get_mut(people).expect("exclusive choice generation");
+                people.par_extend(inherited);
+                if people.par_windows(2).any(|rows| rows[0].id > rows[1].id) {
+                    people.par_sort_unstable_by_key(|row| row.id);
+                }
+            }
+        }
         if let Some(social) = self
             .social
             .as_mut()
@@ -115,13 +146,24 @@ impl CoreHost {
                     }
                 })
         };
+        let personal_meals = owner.rules.enroll_births
+            && self
+                .schedule
+                .as_ref()
+                .and_then(|schedule| schedule.birth_choices.as_ref())
+                .is_some_and(|profile| {
+                    profile
+                        .preferences
+                        .iter()
+                        .any(|row| row.domain == personal_choice::MEAL)
+                });
         let next = game_economy_family::advance_validated_with_context(
             owner,
             &mut draft.people.people,
             &mut draft.travel,
             self.core.seed,
             tick,
-            self.dependent_care.is_some(),
+            self.dependent_care.is_some() || personal_meals,
             None,
             Some(&feelings),
         )?;

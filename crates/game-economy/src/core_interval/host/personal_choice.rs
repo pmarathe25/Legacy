@@ -379,6 +379,20 @@ impl CoreHost {
         Ok(())
     }
 
+    /// Configure inclinations for future births without changing existing people.
+    pub fn enable_birth_choices(
+        &mut self,
+        profile: game_personal_choice::BirthProfile,
+    ) -> Result<(), String> {
+        profile.validate().map_err(str::to_owned)?;
+        let schedule = self.schedule.as_mut().ok_or("no core schedule")?;
+        if !matches!(schedule.phase, DecisionPhase::Meals) || schedule.personal_choices.is_none() {
+            return Err("newborn preferences require an idle personal-choice schedule".into());
+        }
+        schedule.birth_choices = Some(profile);
+        Ok(())
+    }
+
     fn choice_busy(&self, blocked: &[u64]) -> Vec<u64> {
         let rest = self.blocked_with_rest(blocked);
         let mut busy = rest.as_deref().unwrap_or(blocked).to_vec();

@@ -177,6 +177,9 @@ pub struct CoreSchedule {
     /// Opt-in personal choice for construction, carrying, maintenance and work starts.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub personal_choices: Option<Arc<Vec<game_personal_choice::Person>>>,
+    /// Optional authored inclinations for actual newborns.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub birth_choices: Option<game_personal_choice::BirthProfile>,
 }
 impl CoreSchedule {
     pub(super) fn validate(&self, core: &CoreInterval) -> Result<(), String> {
@@ -209,6 +212,12 @@ impl CoreSchedule {
                     .is_err()
             }) {
                 return Err("invalid personal choice people".into());
+            }
+        }
+        if let Some(profile) = &self.birth_choices {
+            profile.validate().map_err(str::to_owned)?;
+            if self.personal_choices.is_none() {
+                return Err("newborn preferences require personal choices".into());
             }
         }
         if matches!(self.phase, DecisionPhase::ChooseLocal { .. })
@@ -596,6 +605,7 @@ impl CoreHost {
             phase: DecisionPhase::Meals,
             carried_rates,
             personal_choices: None,
+            birth_choices: None,
         };
         schedule.validate(&self.core)?;
         self.schedule = Some(schedule);
@@ -2277,7 +2287,7 @@ impl CoreHost {
                 .rates
                 .clone();
             self.base_shared_rates(&mut current_rates);
-            let events = match self.settle_with_occupied(blocked) {
+            let events = match self.settle_with_schedule(blocked, Some(&mut schedule)) {
                 Ok(events) => events,
                 Err(error) => {
                     combined.failure = Some(error);

@@ -1955,6 +1955,14 @@ impl CoreHost {
     }
     /// Settle while excluding people occupied by owners outside this host.
     pub fn settle_with_occupied(&mut self, occupied: &[u64]) -> Result<Events, String> {
+        self.settle_with_schedule(occupied, None)
+    }
+
+    fn settle_with_schedule(
+        &mut self,
+        occupied: &[u64],
+        next_schedule: Option<&mut CoreSchedule>,
+    ) -> Result<Events, String> {
         if occupied.par_windows(2).any(|rows| rows[0] >= rows[1]) {
             return Err("invalid occupied people".into());
         }
@@ -2642,6 +2650,9 @@ impl CoreHost {
                 })
         });
         self.work_checked_revision = None;
+        if let (Some(next), Some(current)) = (next_schedule, &self.schedule) {
+            next.personal_choices = current.personal_choices.clone();
+        }
         self.schedule = None;
         Ok(events)
     }

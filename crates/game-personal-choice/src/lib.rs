@@ -61,6 +61,87 @@ pub struct Person {
     pub actions: Vec<ActionPreference>,
 }
 
+/// A data-defined inclination for a newly born person, not a copied decision.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BirthPreference {
+    pub domain: u32,
+    pub enabled: bool,
+    pub bias: i64,
+    #[serde(default = "unit_weight")]
+    pub weight: i32,
+    /// Optional inherited quantitative locus in the person's own genome.
+    #[serde(default)]
+    pub locus: Option<u8>,
+    /// Signed change to bias per 1000 expressed units away from neutral 500.
+    #[serde(default)]
+    pub genetic_bias: i32,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BirthProfile {
+    pub idle: i64,
+    #[serde(default)]
+    pub act_on_tie: bool,
+    pub preferences: Vec<BirthPreference>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Newborn {
+    pub id: u64,
+    pub genes: [u16; 4],
+}
+
+impl BirthProfile {
+    pub fn validate(&self) -> Result<(), &'static str> {
+        if self
+            .preferences
+            .windows(2)
+            .any(|rows| rows[0].domain >= rows[1].domain)
+            || self
+                .preferences
+                .iter()
+                .any(|row| row.domain == 0 || row.locus.is_some_and(|locus| locus >= 4))
+        {
+            return Err("invalid newborn choice preferences");
+        }
+        Ok(())
+    }
+
+    /// Construct independent inclinations from each newborn's own genes.
+    pub fn enroll(&self, births: &[Newborn]) -> Vec<Person> {
+        births
+            .par_iter()
+            .map(|birth| Person {
+                id: birth.id,
+                idle: self.idle,
+                act_on_tie: self.act_on_tie,
+                preferences: self
+                    .preferences
+                    .iter()
+                    .map(|row| {
+                        let gene = row
+                            .locus
+                            .and_then(|locus| birth.genes.get(usize::from(locus)))
+                            .copied()
+                            .unwrap_or(500);
+                        let bias = i128::from(row.bias)
+                            + i128::from(row.genetic_bias) * (i128::from(gene) - 500) / 1000;
+                        Preference {
+                            domain: row.domain,
+                            enabled: row.enabled,
+                            bias: bias.clamp(i128::from(i64::MIN), i128::from(i64::MAX)) as i64,
+                            weight: row.weight,
+                        }
+                    })
+                    .collect(),
+                actions: Vec::new(),
+            })
+            .collect()
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Selection {

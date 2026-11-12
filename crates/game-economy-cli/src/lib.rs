@@ -100,6 +100,8 @@ struct Scenario {
     #[serde(default)]
     personal_choices: Vec<game_personal_choice::Person>,
     #[serde(default)]
+    birth_choices: Option<game_personal_choice::BirthProfile>,
+    #[serde(default)]
     meal_preferences: Vec<MealPreference>,
     #[serde(default)]
     remedies: Vec<game_economy_dynamics::treatment::Remedy>,
@@ -925,6 +927,7 @@ pub fn core_scenario_with_options(
     let regions: HashSet<_> = authored.regions.iter().map(|region| region.id).collect();
     let mechanics = authored.mechanics;
     let mut personal_choices = authored.personal_choices;
+    let birth_choices = authored.birth_choices;
     let meal_preferences = authored.meal_preferences;
     let scenario = scenario_with_options_inner(path, content, seed, population_path, true)?;
     let mut snapshot =
@@ -1167,8 +1170,11 @@ pub fn core_scenario_with_options(
     let period = snapshot.core.physical.tick_millis;
     let mut host = game_economy::core_interval::CoreHost::begin(snapshot, &[])?;
     host.enable_schedule(period, 1)?;
-    if !personal_choices.is_empty() {
+    if !personal_choices.is_empty() || birth_choices.is_some() {
         host.enable_personal_choices(personal_choices)?;
+    }
+    if let Some(profile) = birth_choices {
+        host.enable_birth_choices(profile)?;
     }
     Ok(host)
 }
@@ -1215,7 +1221,9 @@ fn scenario_with_options_inner(
     if scenario.mechanics.is_some() && !interval_features {
         return Err("mechanics requires the interval simulation host".into());
     }
-    if (!scenario.personal_choices.is_empty() || !scenario.meal_preferences.is_empty())
+    if (!scenario.personal_choices.is_empty()
+        || !scenario.meal_preferences.is_empty()
+        || scenario.birth_choices.is_some())
         && !interval_features
     {
         return Err("personal choices require the interval simulation host".into());

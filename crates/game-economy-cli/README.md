@@ -354,6 +354,8 @@ The hourly scenario also enables experimental personal vocabularies with a data-
 
 `economy-core-work-capabilities.toml` defines a growth curve, genetic vigor scaling, and named recipe requirements for the optional physical capability model. In the interval host it applies to personally chosen production starts. It does not choose work, govern carrying, or replace age gates in other activities.
 
+`economy-core-birth-choices.toml` illustrates an optional `birth_choices` profile. When family birth enrollment is enabled, actual newborns receive general domain inclinations adjusted by their own expressed genes; no other person's targets or memories are copied. A meal-domain profile enables meal consideration without a caregiver owner, while the person's own score can still select idleness.
+
 An optional domain 5 preference lets a person reconsider an ordinary active job at each decision. It compares the person's value for continuing, using remaining work as the current candidate value, with their idle value. A disabled preference expresses a decision to stop. The worker can choose another activity at a later decision; reserved inputs remain in the job until physically returned. Shared sessions, succession and direct same-round switching are not yet covered.
 
 The ignored `concentrated_work_continuation_benchmark` measures a decision with half of 10,000 active workers stopping. On one development machine it measured 14.0, 8.74, 5.80 and 5.16 ms with one, two, four and six workers. The benchmark verifies complete saved-state equality across worker counts.

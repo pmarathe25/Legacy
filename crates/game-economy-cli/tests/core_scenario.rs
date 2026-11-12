@@ -2739,6 +2739,109 @@ fn newborn_inherits_teaching_inclination_without_skill() {
 }
 
 #[test]
+fn actual_newborns_receive_personal_genetic_inclinations() {
+    use game_economy::core_interval::CoreHost;
+    fn run(workers: usize, enabled: bool) -> serde_json::Value {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let root = root();
+                let mut snapshot = game_economy_cli::core_scenario(
+                    &root.join("content/scenarios/economy-core-birth-choices.toml"),
+                    &root.join("content"),
+                )
+                .unwrap()
+                .snapshot();
+                assert!(
+                    snapshot
+                        .schedule
+                        .as_ref()
+                        .unwrap()
+                        .personal_choices
+                        .as_ref()
+                        .unwrap()
+                        .is_empty()
+                );
+                snapshot.family.as_mut().unwrap().rules.enroll_births = enabled;
+                snapshot.dependent_care = None;
+                let mut host = CoreHost::resume(snapshot).unwrap();
+                assert_eq!(
+                    host.advance_continuous(3_600_000, &[]).unwrap().failure,
+                    None
+                );
+                let state = host.snapshot();
+                let child = state
+                    .family
+                    .as_ref()
+                    .unwrap()
+                    .members
+                    .iter()
+                    .find(|member| member.id == 3)
+                    .unwrap();
+                assert_eq!(
+                    state
+                        .core
+                        .people
+                        .iter()
+                        .find(|person| person.id == 3)
+                        .unwrap()
+                        .seek_meals,
+                    enabled
+                );
+                let choices = state
+                    .schedule
+                    .as_ref()
+                    .unwrap()
+                    .personal_choices
+                    .as_ref()
+                    .unwrap();
+                let preference = choices.iter().find(|person| person.id == 3);
+                if enabled {
+                    let preference = preference.unwrap();
+                    let expected = 100 + (i64::from(child.genome.expressed(2)) - 500);
+                    assert_eq!(preference.preferences[0].bias, expected);
+                    assert!(preference.actions.is_empty());
+                    let mut meal_state = state.clone();
+                    meal_state.schedule.as_mut().unwrap().next_decision_millis = Some(0);
+                    let bread = meal_state.core.physical.goods.iter().find(|good| good.name == "bread").unwrap();
+                    let good = bread.id;
+                    let portion = bread.food.as_ref().unwrap().portion;
+                    meal_state.core.people.iter_mut().find(|person| person.id == 3).unwrap().hunger = 10;
+                    let bag = meal_state.core.physical.custody.containers.iter_mut().find(|row| row.place == game_lots::Place::Person(3)).unwrap();
+                    *bag = game_lots::Container::new(game_lots::Place::Person(3), 100, vec![game_lots::Lot { item: None, good, quantity: portion, expires_at: None }]).unwrap();
+                    let mut declined = CoreHost::resume(meal_state.clone()).unwrap();
+                    let declined_run = declined.advance_continuous(1, &[]).unwrap();
+                    assert_eq!(declined_run.failure, None);
+                    assert!(!declined_run.events.iter().any(|event| matches!(event, game_economy::core_interval::CoreRunEvent::Meals(rows) if rows.iter().any(|row| row.0 == 3))));
+                    let people = std::sync::Arc::make_mut(meal_state.schedule.as_mut().unwrap().personal_choices.as_mut().unwrap());
+                    people.iter_mut().find(|person| person.id == 3).unwrap().preferences[0].bias = 100;
+                    let mut willing = CoreHost::resume(meal_state).unwrap();
+                    let (preview, idle) = willing.preview_personal_choices(&[]).unwrap();
+                    assert!(preview.iter().any(|intent| intent.actor == 3), "preview={preview:?}, idle={idle:?}");
+                    let willing_run = willing.advance_continuous(1, &[]).unwrap();
+                    assert_eq!(willing_run.failure, None);
+                    assert!(willing_run.events.iter().any(|event| matches!(event, game_economy::core_interval::CoreRunEvent::Meals(rows) if rows.iter().any(|row| row.0 == 3))), "events={:?}, schedule={:?}", willing_run.events, state.schedule);
+                } else {
+                    assert!(preference.is_none());
+                }
+                let mut restored = CoreHost::resume(
+                    serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap(),
+                )
+                .unwrap();
+                assert_eq!(host.advance_continuous(1, &[]).unwrap().failure, None);
+                assert_eq!(restored.advance_continuous(1, &[]).unwrap().failure, None);
+                assert_eq!(host.snapshot(), restored.snapshot());
+                serde_json::to_value(host.snapshot()).unwrap()
+            })
+    }
+    for enabled in [false, true] {
+        assert_eq!(run(1, enabled), run(4, enabled));
+    }
+}
+
+#[test]
 fn authored_personality_is_inherited_only_at_real_births() {
     fn run(workers: usize) -> serde_json::Value {
         rayon::ThreadPoolBuilder::new()
