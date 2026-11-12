@@ -62,6 +62,8 @@ pub enum Meaning {
     Need(u32),
     /// A personally identified person, grounded in an actual encounter.
     Person(u64),
+    /// An observable physical signal form, not its private intention.
+    Signal(u32),
 }
 
 impl Meaning {
@@ -71,12 +73,13 @@ impl Meaning {
             Self::Object(id) => random(u64::from(id) ^ 2),
             Self::Need(id) => random(u64::from(id) ^ 3),
             Self::Person(id) => random(id ^ 4),
+            Self::Signal(id) => random(u64::from(id) ^ 5),
         }
     }
     fn valid(self) -> bool {
         match self {
             Self::Place(id) | Self::Person(id) => id != 0,
-            Self::Object(id) | Self::Need(id) => id != 0,
+            Self::Object(id) | Self::Need(id) | Self::Signal(id) => id != 0,
         }
     }
 

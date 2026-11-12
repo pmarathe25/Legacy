@@ -1,0 +1,87 @@
+seed = 7
+tick_millis = 900000
+stock_capacity = 100
+food_relief_divisor = 20
+
+[rules]
+hunger_per_tick = 1
+meal_threshold = 5
+starvation_threshold = 50
+starvation_damage = 1
+max_health = 100
+carrying_capacity = 10
+max_work_hunger = 20
+
+[language.rules]
+sounds = ["a", "k", "m"]
+word_length = 2
+capacity = 8
+[[language.minds]]
+person = 1
+initiative = 1000
+adoption = 1000
+[[language.minds]]
+person = 2
+initiative = 1000
+adoption = 1000
+
+[[language_topic_profiles]]
+person = 1
+idle = 0
+preferences = []
+[[language_topic_profiles]]
+person = 2
+idle = 0
+preferences = [{ signal = 1, enabled = true, value = 10 }]
+
+[[regions]]
+id = 1
+stock = { timber = 10 }
+
+[[people]]
+id = 1
+region = 1
+health = 100
+hunger = 0
+willing_to_work = false
+seek_meals = false
+goods = { grain = 1 }
+[[people]]
+id = 2
+region = 1
+health = 100
+hunger = 0
+willing_to_work = false
+seek_meals = false
+
+[dynamics.social]
+participants = [{ person = 1, willing = true }, { person = 2, willing = true }]
+[dynamics.social.rules]
+interval = 1
+min_health = 1
+max_hunger = 100
+familiarity_gain = 1
+familiarity_max = 10
+
+[[people]]
+id = 3
+region = 1
+health = 100
+hunger = 0
+willing_to_work = false
+seek_meals = false
+
+[signals]
+catalog = "signals/basic.toml"
+[[signals.minds]]
+person = 1
+idle = 0
+attention = 0
+expressions = [{ form = 1, intended = 1, recipient = 2, enabled = true, value = 10 }]
+[[signals.minds]]
+person = 2
+idle = 0
+attention = 1000
+remember = true
+capacity = 2
+interpretations = [{ form = 1, meaning = 2 }]

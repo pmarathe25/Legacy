@@ -179,6 +179,41 @@ impl CoreHost {
                         .prepare(&rows, self.core.seed, tick)
                         .map_err(str::to_owned);
                 }
+                // Only a person's own noticed or remembered form is available;
+                // an interpretation or the signaler's private intention is not shared.
+                let signal_topics = language
+                    .minds
+                    .par_iter()
+                    .any(|mind| {
+                        mind.topic_policy.as_ref().is_some_and(|policy| {
+                            policy.preferences.iter().any(|row| {
+                                row.enabled
+                                    && matches!(row.meaning, game_language::Meaning::Signal(_))
+                            })
+                        })
+                    })
+                    .then(|| {
+                        let mut rows = Vec::new();
+                        if let Some(signals) = social.and_then(|owner| owner.signals.as_ref()) {
+                            rows.par_extend(
+                                signals
+                                    .events
+                                    .par_iter()
+                                    .filter(|event| {
+                                        event.noticed && event.tick.checked_add(1) == Some(tick)
+                                    })
+                                    .map(|event| (event.observer, event.actor, event.form)),
+                            );
+                            rows.par_extend(signals.minds.par_iter().flat_map_iter(|mind| {
+                                mind.observations
+                                    .iter()
+                                    .map(move |event| (mind.person, event.actor, event.form))
+                            }));
+                            rows.par_sort_unstable();
+                            rows.dedup();
+                        }
+                        rows
+                    });
                 let topics = |person: u64, other: u64, region: u64| {
                     let mut topics = vec![game_language::Meaning::Place(region)];
                     let policy = language
@@ -216,6 +251,14 @@ impl CoreHost {
                                 game_language::Meaning::Person(target)
                                     if preference.enabled
                                         && (target == person || target == other) =>
+                                {
+                                    Some(preference.meaning)
+                                }
+                                game_language::Meaning::Signal(form)
+                                    if preference.enabled
+                                        && signal_topics.as_ref().is_some_and(|rows| {
+                                            rows.binary_search(&(person, other, form)).is_ok()
+                                        }) =>
                                 {
                                     Some(preference.meaning)
                                 }

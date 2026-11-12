@@ -26,8 +26,10 @@ the newborn's work-readiness flag rather than copying the mother's flag; the
 newborn's own choice still decides whether to pursue a work opportunity.
 
 The interval host can opt in to using this selection for construction,
-local carrying, site maintenance and starting work. This is not yet a common chooser for the other activities;
-their existing fixed-order scheduling remains in effect.
+local carrying, site maintenance, work starts, mechanical experiments,
+meals, tool repair, local food pickup and self-treatment. This is not yet a
+common chooser for other activities; their existing fixed-order scheduling
+remains in effect.
 
 Separately, an opted-in person can compare continuing an ordinary active job
 with stopping; shared sessions and direct switches remain outside this slice.

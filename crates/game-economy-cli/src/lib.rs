@@ -852,6 +852,8 @@ struct LanguageTopic {
     place: Option<u64>,
     #[serde(default)]
     person: Option<u64>,
+    #[serde(default)]
+    signal: Option<u32>,
     enabled: bool,
     value: i64,
 }
@@ -1038,21 +1040,29 @@ pub fn core_scenario_with_options(
         for profile in language_topic_profiles {
             let mut preferences = Vec::with_capacity(profile.preferences.len());
             for topic in profile.preferences {
-                let meaning = match (topic.object.as_deref(), topic.place, topic.person) {
-                    (Some(name), None, None) => game_language::Meaning::Object(
+                let meaning = match (
+                    topic.object.as_deref(),
+                    topic.place,
+                    topic.person,
+                    topic.signal,
+                ) {
+                    (Some(name), None, None, None) => game_language::Meaning::Object(
                         *goods
                             .get(name)
                             .ok_or_else(|| format!("unknown language topic object {name}"))?,
                     ),
-                    (None, Some(region), None) if regions.contains(&region) => {
+                    (None, Some(region), None, None) if regions.contains(&region) => {
                         game_language::Meaning::Place(region)
                     }
-                    (None, None, Some(person)) if people.contains(&person) => {
+                    (None, None, Some(person), None) if people.contains(&person) => {
                         game_language::Meaning::Person(person)
+                    }
+                    (None, None, None, Some(form)) if form != 0 => {
+                        game_language::Meaning::Signal(form)
                     }
                     _ => {
                         return Err(
-                            "language topic requires one known object, place or person".into()
+                            "language topic requires one known object, place, person or signal form".into()
                         );
                     }
                 };

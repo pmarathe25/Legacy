@@ -27,3 +27,12 @@ forms must be in that speaker's vocabulary and within their phoneme inventory.
 See `content/scenarios/economy-core-namesake.toml` for an authored example.
 Naming absent people, similarity beyond exact forms, grammar, and transmission
 of general factual claims remain incomplete.
+
+A participant who previously noticed or personally remembers another
+participant's nonverbal signal can choose that physical form as a topic in a
+later encounter. The speaker demonstrates the form; speech associates sounds
+with the observable signal, not the sender's private intention or the
+observer's interpretation. The listener independently chooses whether to
+learn. `content/scenarios/economy-core-signal-language.toml` illustrates the
+numeric signal-form topic. A form that the speaker did not notice or remember
+does not become an available topic merely because it exists in a catalog.

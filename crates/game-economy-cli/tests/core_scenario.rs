@@ -482,6 +482,101 @@ fn language_topics_arise_from_personally_chosen_physical_demonstrations() {
 }
 
 #[test]
+fn observed_signals_can_become_personally_chosen_spoken_topics() {
+    use game_economy::core_interval::CoreHost;
+    use game_language::Meaning;
+    fn run(workers: usize, attention: u16, learn: bool) -> serde_json::Value {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let root = root();
+                let mut opening = game_economy_cli::core_scenario(
+                    &root.join("content/scenarios/economy-core-signal-language.toml"),
+                    &root.join("content"),
+                )
+                .unwrap()
+                .snapshot();
+                opening
+                    .social
+                    .as_mut()
+                    .unwrap()
+                    .signals
+                    .as_mut()
+                    .unwrap()
+                    .minds[1]
+                    .attention = attention;
+                opening
+                    .social
+                    .as_mut()
+                    .unwrap()
+                    .language
+                    .as_mut()
+                    .unwrap()
+                    .minds[0]
+                    .learn = learn;
+                let mut host = CoreHost::resume(opening).unwrap();
+                assert_eq!(host.advance_continuous(900_001, &[]).unwrap().failure, None);
+                let first = host.snapshot();
+                let signal = &first
+                    .social
+                    .as_ref()
+                    .unwrap()
+                    .signals
+                    .as_ref()
+                    .unwrap()
+                    .events[0];
+                assert_eq!(signal.interpreted, (attention != 0).then_some(2));
+                assert!(
+                    first
+                        .social
+                        .as_ref()
+                        .unwrap()
+                        .language
+                        .as_ref()
+                        .unwrap()
+                        .events
+                        .is_empty()
+                );
+                let mut resumed = CoreHost::resume(
+                    serde_json::from_str(&serde_json::to_string(&first).unwrap()).unwrap(),
+                )
+                .unwrap();
+                assert_eq!(host.advance_continuous(900_000, &[]).unwrap().failure, None);
+                assert_eq!(
+                    resumed.advance_continuous(900_000, &[]).unwrap().failure,
+                    None
+                );
+                let snapshot = host.snapshot();
+                assert_eq!(snapshot, resumed.snapshot());
+                let events = &snapshot
+                    .social
+                    .as_ref()
+                    .unwrap()
+                    .language
+                    .as_ref()
+                    .unwrap()
+                    .events;
+                if attention == 0 {
+                    assert!(events.is_empty());
+                } else {
+                    assert_eq!(events.len(), 1);
+                    assert_eq!(
+                        (events[0].speaker, events[0].listener, events[0].meaning),
+                        (2, 1, Meaning::Signal(1))
+                    );
+                    assert_eq!(events[0].learned, learn);
+                }
+                serde_json::to_value(snapshot).unwrap()
+            })
+    }
+    assert_eq!(run(1, 1000, true), run(4, 1000, true));
+    assert_eq!(run(1, 1000, false), run(4, 1000, false));
+    assert_eq!(run(1, 0, true), run(4, 0, true));
+}
+
+#[test]
 fn namesake_form_uses_the_speakers_directed_affinity_in_the_host() {
     use game_economy::core_interval::CoreHost;
     fn run(workers: usize, affinity: i32) -> serde_json::Value {

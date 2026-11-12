@@ -12,7 +12,11 @@ fn hosted_personal_topics_benchmark() {
     assert!(count > 1 && count.is_multiple_of(2));
     let person_topics = std::env::var_os("LEGACY_LANGUAGE_PERSON_TOPICS").is_some();
     let naming = std::env::var_os("LEGACY_LANGUAGE_NAMING_POLICY").is_some();
+    let signal_topics = std::env::var_os("LEGACY_LANGUAGE_SIGNAL_TOPICS").is_some();
+    let signal_baseline = std::env::var_os("LEGACY_LANGUAGE_SIGNAL_BASELINE").is_some();
     assert!(!naming || person_topics);
+    assert!(!signal_topics || !person_topics);
+    assert!(!signal_baseline || signal_topics);
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let mut text = String::from(
         r#"seed = 7
@@ -43,8 +47,15 @@ familiarity_gain = 1
 familiarity_max = 10
 "#,
     );
+    if signal_topics {
+        for region in 2..=count / 2 {
+            writeln!(text, "[[regions]]\nid = {region}\nstock = {{}}").unwrap();
+        }
+        writeln!(text, "[signals]\ncatalog = \"signals/basic.toml\"").unwrap();
+    }
     for id in 1..=count {
-        writeln!(text, "[[people]]\nid = {id}\nregion = 1\nhealth = 100\nhunger = 0\nwilling_to_work = false\nseek_meals = false\ngoods = {{ grain = 1 }}").unwrap();
+        let region = if signal_topics { id.div_ceil(2) } else { 1 };
+        writeln!(text, "[[people]]\nid = {id}\nregion = {region}\nhealth = 100\nhunger = 0\nwilling_to_work = false\nseek_meals = false\ngoods = {{ grain = 1 }}").unwrap();
         writeln!(
             text,
             "[[language.minds]]\nperson = {id}\ninitiative = 1000\nadoption = 1000"
@@ -54,7 +65,15 @@ familiarity_max = 10
             let namesake = if id == 1 { 2 } else { 1 };
             writeln!(text, "words = [{{ meaning = {{ kind = \"person\", id = {namesake} }}, sounds = [0, 1, 2] }}]\nnaming = {{ idle = 0, novel_value = 5, confusion_weight = 1, namesakes = [{{ person = {namesake}, value = 100 }}] }}").unwrap();
         }
-        if person_topics {
+        if signal_topics {
+            let actor = if id.is_multiple_of(2) { id - 1 } else { id + 1 };
+            writeln!(text, "[[signals.minds]]\nperson = {id}\nidle = 0\nattention = 0\nremember = true\ncapacity = 1\nobservations = [{{ tick = 0, actor = {actor}, form = 1 }}]").unwrap();
+            if signal_baseline {
+                writeln!(text, "[[language_topic_profiles]]\nperson = {id}\nidle = 0\npreferences = [{{ object = \"grain\", enabled = true, value = 10 }}]").unwrap();
+            } else {
+                writeln!(text, "[[language_topic_profiles]]\nperson = {id}\nidle = 0\npreferences = [{{ signal = 1, enabled = true, value = 10 }}]").unwrap();
+            }
+        } else if person_topics {
             writeln!(text, "[[language_topic_profiles]]\nperson = {id}\nidle = 0\npreferences = [{{ person = {id}, enabled = true, value = 10 }}]").unwrap();
         } else {
             writeln!(text, "[[language_topic_profiles]]\nperson = {id}\nidle = 0\npreferences = [{{ object = \"grain\", enabled = true, value = 10 }}]").unwrap();
@@ -128,7 +147,9 @@ familiarity_max = 10
                 .events;
             assert!(!events.is_empty());
             assert!(events.iter().all(|event| event.meaning
-                == if person_topics {
+                == if signal_topics && !signal_baseline {
+                    game_language::Meaning::Signal(1)
+                } else if person_topics {
                     game_language::Meaning::Person(event.speaker)
                 } else {
                     game_language::Meaning::Object(grain)
