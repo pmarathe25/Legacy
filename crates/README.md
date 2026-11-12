@@ -6,4 +6,6 @@ Individual crate READMEs describe their responsibilities and behavioral boundari
 
 [game-mechanics](game-mechanics/README.md) provides parallel apparatus experiments. The interval host can run personally selected experiments using carried identified items; discovery and real load movement remain unfinished.
 
-[game-signals](game-signals/README.md) owns voluntary nonverbal expressions and each observer's own interpretations and optional memories. Signal-driven care and learned interpretations remain unfinished.
+[game-signals](game-signals/README.md) owns voluntary nonverbal expressions and each observer's own interpretations, reactions and optional memories. Broader signal-driven care and learned interpretations remain unfinished.
+
+[game-work-capability](game-work-capability/README.md) evaluates data-defined physical capability for chosen production work. It does not make work decisions or determine carrying capacity.

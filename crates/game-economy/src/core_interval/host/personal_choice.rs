@@ -301,7 +301,29 @@ impl CoreHost {
             .into_par_iter()
             .filter(|row| selected.contains(row))
             .collect();
-        let outcomes = self.start_with_sites_hunger_limit(&starts, u32::MAX)?;
+        let attempts: Vec<_> = starts
+            .par_iter()
+            .map(|(start, _)| (start.worker, start.recipe))
+            .collect();
+        let permitted = self.work_capability_checks(&attempts);
+        let allowed: Vec<_> = starts
+            .par_iter()
+            .copied()
+            .zip(permitted.par_iter().copied())
+            .filter_map(|(start, allowed)| allowed.then_some(start))
+            .collect();
+        let mut outcomes = if allowed.is_empty() {
+            Vec::new()
+        } else {
+            self.start_with_sites_hunger_limit(&allowed, u32::MAX, true)?
+        };
+        outcomes.par_extend(
+            starts
+                .par_iter()
+                .zip(permitted.par_iter())
+                .filter_map(|((start, _), allowed)| (!allowed).then_some((start.id, false))),
+        );
+        outcomes.par_sort_unstable_by_key(|row| row.0);
         self.autowork.as_mut().expect("owner checked").next_id = next_id;
         self.publish_claim_work(&uses, &outcomes, self.core.physical.tick());
         self.record_goal_setbacks(&candidates, &outcomes);
@@ -594,7 +616,7 @@ impl CoreHost {
                 })
             {
                 Ok(self
-                    .preview_work_with_hunger_limit(&busy, schedule.work_rate, u32::MAX)?
+                    .preview_work_with_hunger_limit(&busy, schedule.work_rate, u32::MAX, true)?
                     .into_par_iter()
                     .map(|opportunity| CoreChoiceIntent {
                         actor: opportunity.person,

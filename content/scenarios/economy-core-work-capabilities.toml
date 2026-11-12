@@ -1,0 +1,109 @@
+seed = 7
+tick_millis = 900000
+stock_capacity = 100
+food_relief_divisor = 20
+
+[rules]
+hunger_per_tick = 1
+meal_threshold = 5
+starvation_threshold = 50
+starvation_damage = 1
+max_health = 100
+carrying_capacity = 10
+max_work_hunger = 20
+
+[opinions.rules]
+minimum = -100
+maximum = 100
+initial = 0
+fulfilled_gain = 1
+default_loss = 1
+gratitude_gain = 2
+affinity = { limit = 100 }
+
+[[regions]]
+id = 1
+stock = {}
+[[regions]]
+id = 2
+stock = {}
+
+[[people]]
+id = 1
+region = 1
+health = 100
+hunger = 0
+willing_to_work = false
+seek_meals = false
+[[people]]
+id = 2
+region = 1
+health = 100
+hunger = 0
+willing_to_work = false
+seek_meals = false
+
+[family]
+next_id = 3
+last_tick = 0
+[family.rules]
+adult_age = 12
+min_work_age = 12
+fertile_until = 40
+gestation = 3
+birth_spacing = 3
+lifespan_min = 50
+lifespan_max = 70
+conception_one_in = 10
+minimum_health = 50
+maximum_hunger = 15
+newborn_health = 100
+mutation_per_million = 0
+mutation_step = 0
+[[family.members]]
+id = 1
+age = 0
+genome = { sex = "Male", alleles = [[100,100], [100,100], [100,100], [100,100]] }
+[[family.members]]
+id = 2
+age = 18
+genome = { sex = "Female", alleles = [[200,200], [200,200], [200,200], [200,200]] }
+
+[dynamics.social]
+participants = [{ person = 1, willing = false }, { person = 2, willing = false }]
+[dynamics.social.rules]
+interval = 1
+min_health = 1
+max_hunger = 100
+familiarity_gain = 1
+familiarity_max = 10
+
+[signals]
+catalog = "signals/basic.toml"
+[[signals.minds]]
+person = 1
+idle = 0
+attention = 0
+expressions = [{ form = 1, intended = 1, recipient = 2, enabled = true, value = 10 }]
+[[signals.minds]]
+person = 2
+idle = 0
+attention = 1000
+remember = true
+capacity = 2
+interpretations = [{ form = 1, meaning = 2 }]
+reactions = [{ meaning = 1, affinity = 9 }, { meaning = 2, affinity = -3, obligation = 0 }]
+
+[[signals.gifts]]
+person = 2
+meaning = "comfort"
+good = "bread"
+quantity = 1
+value = 1
+
+[work_capabilities]
+growth = [{ age = 0, strength = 0 }, { age = 10, strength = 100 }]
+vigor_base = 0
+vigor_weight = 1000
+default_strength = 30
+requirements = [{ recipe = "bake-bread", strength = 30 }]

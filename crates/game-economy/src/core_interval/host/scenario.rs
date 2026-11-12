@@ -138,6 +138,7 @@ impl CoreHostSnapshot {
             animal_restraints: state.animal_restraints,
             animal_handling: state.animal_handling,
             family: state.family,
+            work_capabilities: None,
             dependent_care: state.care,
             opinions: state.opinions,
             goals: state.goals,

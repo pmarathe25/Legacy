@@ -93,6 +93,47 @@ capacity = 10000
     let mut snapshot = game_economy_cli::core_scenario(&path, &root.join("content"))
         .unwrap()
         .snapshot();
+    let capabilities = std::env::var_os("LEGACY_CHOICE_CAPABILITIES").is_some();
+    if capabilities || std::env::var_os("LEGACY_CHOICE_FAMILY").is_some() {
+        let template = game_economy_cli::core_scenario(
+            &root.join("content/scenarios/economy-core-work-capabilities.toml"),
+            &root.join("content"),
+        )
+        .unwrap()
+        .snapshot();
+        let mut family = template.family.unwrap();
+        let member = family.members[0].clone();
+        family.members = (1..=count)
+            .map(|id| {
+                let mut person = member.clone();
+                person.id = id;
+                person.age = 18;
+                person.genome.alleles[1] = [1000, 1000];
+                person
+            })
+            .collect();
+        family.next_id = count + 1;
+        snapshot.family = Some(family);
+    }
+    if capabilities {
+        snapshot.work_capabilities = Some(game_work_capability::Capabilities {
+            growth: vec![
+                game_work_capability::GrowthPoint {
+                    age: 0,
+                    strength: 0,
+                },
+                game_work_capability::GrowthPoint {
+                    age: 10,
+                    strength: 100,
+                },
+            ],
+            vigor_base: 0,
+            vigor_weight: 1000,
+            default_strength: 30,
+            missing_strength: None,
+            requirements: vec![],
+        });
+    }
     if std::env::var_os("LEGACY_CHOICE_HUNGRY").is_some() {
         for person in &mut snapshot.core.people {
             person.hunger = 25;

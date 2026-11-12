@@ -132,6 +132,8 @@ pub struct CoreHostSnapshot {
     pub animal_handling: Option<crate::AnimalHandling>,
     #[serde(default)]
     pub family: Option<game_economy_family::Families>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub work_capabilities: Option<game_work_capability::Capabilities>,
     #[serde(default)]
     pub dependent_care: Option<crate::DependentCare>,
     #[serde(default)]
@@ -199,6 +201,7 @@ pub struct CoreHost {
     animal_restraints: Option<crate::AnimalRestraints>,
     animal_handling: Option<crate::AnimalHandling>,
     family: Option<game_economy_family::Families>,
+    work_capabilities: Option<game_work_capability::Capabilities>,
     dependent_care: Option<crate::DependentCare>,
     skill_rates: Option<game_economy_skills::Index>,
     skill_practice_recipes: HashSet<u32>,
@@ -254,6 +257,7 @@ struct CoreRuntimeOptions {
     animal_restraints: Option<crate::AnimalRestraints>,
     animal_handling: Option<crate::AnimalHandling>,
     family: Option<game_economy_family::Families>,
+    work_capabilities: Option<game_work_capability::Capabilities>,
     dependent_care: Option<crate::DependentCare>,
     dreams: Option<game_economy_goals::Dreams>,
     shared_work: Option<CoreSharedWork>,
@@ -306,6 +310,7 @@ impl CoreHost {
             animal_restraints,
             animal_handling,
             family,
+            work_capabilities,
             dependent_care,
             opinions,
             goals,
@@ -374,6 +379,7 @@ impl CoreHost {
                 animal_restraints,
                 animal_handling,
                 family,
+                work_capabilities,
                 dependent_care,
             },
         )
@@ -415,6 +421,7 @@ impl CoreHost {
             animal_restraints,
             animal_handling,
             family,
+            work_capabilities,
             dependent_care,
             opinions,
             goals,
@@ -479,6 +486,7 @@ impl CoreHost {
                 animal_restraints,
                 animal_handling,
                 family,
+                work_capabilities,
                 dependent_care,
             },
         )
@@ -534,6 +542,7 @@ impl CoreHost {
             mut animal_restraints,
             mut animal_handling,
             family,
+            work_capabilities,
             dependent_care,
         } = options;
         if let Some(legacy) = food_search.as_mut().and_then(|owner| owner.claims.take()) {
@@ -1007,10 +1016,21 @@ impl CoreHost {
                 core.physical.tick(),
                 core.rules.max_health,
             )?;
-            game_economy_work::validate_age(
-                &game_economy_work::underage(owner),
-                core.physical.work(),
-            )?;
+            if work_capabilities.is_none() {
+                game_economy_work::validate_age(
+                    &game_economy_work::underage(owner),
+                    core.physical.work(),
+                )?;
+            }
+        }
+        if let Some(capabilities) = &work_capabilities {
+            let recipes: Vec<_> = core
+                .physical
+                .recipes()
+                .iter()
+                .map(|recipe| recipe.id)
+                .collect();
+            capabilities.validate(&recipes).map_err(str::to_owned)?;
         }
         if let Some(owner) = &mut animal_handling {
             let people: HashSet<_> = core.people.par_iter().map(|person| person.id).collect();
@@ -1234,6 +1254,7 @@ impl CoreHost {
             animal_restraints,
             animal_handling,
             family,
+            work_capabilities,
             dependent_care,
             skill_rates,
             skill_practice_recipes,
@@ -1300,6 +1321,7 @@ impl CoreHost {
             animal_restraints: self.animal_restraints.clone(),
             animal_handling: self.animal_handling.clone(),
             family: self.family.clone(),
+            work_capabilities: self.work_capabilities.clone(),
             dependent_care: self.dependent_care.clone(),
             opinions: self.opinions.clone(),
             goals: self.goals.clone(),
@@ -1712,7 +1734,7 @@ impl CoreHost {
         blocked: &[u64],
         rate: u64,
     ) -> Result<Vec<game_autowork::Opportunity>, String> {
-        self.preview_work_with_hunger_limit(blocked, rate, self.core.rules.max_work_hunger)
+        self.preview_work_with_hunger_limit(blocked, rate, self.core.rules.max_work_hunger, false)
     }
 
     pub(super) fn preview_work_with_hunger_limit(
@@ -1720,6 +1742,7 @@ impl CoreHost {
         blocked: &[u64],
         rate: u64,
         max_hunger: u32,
+        personal: bool,
     ) -> Result<Vec<game_autowork::Opportunity>, String> {
         if rate == 0 || blocked.par_windows(2).any(|rows| rows[0] >= rows[1]) {
             return Err("invalid occupied people or work rate".into());
@@ -1735,7 +1758,9 @@ impl CoreHost {
         } else if let Some(personality) = &self.personality {
             busy.par_extend(personality.work_refusals(self.core.seed, tick));
         }
-        if let Some(family) = &self.family {
+        if (!personal || self.work_capabilities.is_none())
+            && let Some(family) = &self.family
+        {
             busy.par_extend(game_economy_work::underage(family));
         }
         busy.par_sort_unstable();
@@ -1744,14 +1769,54 @@ impl CoreHost {
         let effective = effective.policy.as_ref().unwrap_or(owner);
         let filtered = self.claim_aware_work_policies(effective);
         let offset = self.core.elapsed_millis().ok_or("no physical interval")?;
-        self.core.autonomous_work_opportunities_with_hunger_limit(
+        let opportunities = self.core.autonomous_work_opportunities_with_hunger_limit(
             tick,
             offset,
             filtered.as_ref().unwrap_or(effective),
             &busy,
             rate,
             max_hunger,
-        )
+        )?;
+        if !personal || self.work_capabilities.is_none() {
+            return Ok(opportunities);
+        }
+        let permitted = self.work_capability_checks(
+            &opportunities
+                .par_iter()
+                .map(|row| (row.person, row.recipe))
+                .collect::<Vec<_>>(),
+        );
+        Ok(opportunities
+            .into_par_iter()
+            .zip(permitted)
+            .filter_map(|(row, allowed)| allowed.then_some(row))
+            .collect())
+    }
+
+    fn work_capability_checks(&self, attempts: &[(u64, u32)]) -> Vec<bool> {
+        if attempts.is_empty() {
+            return Vec::new();
+        }
+        let Some(capabilities) = &self.work_capabilities else {
+            return vec![true; attempts.len()];
+        };
+        let members = self.family.as_ref().map(|family| {
+            game_family_index::MemberIndex::new(&family.members).expect("validated family")
+        });
+        attempts
+            .par_iter()
+            .map(|&(person, recipe)| {
+                let body = members
+                    .as_ref()
+                    .and_then(|members| members.get(&person))
+                    .map(|member| game_work_capability::Body {
+                        person: member.id,
+                        age: member.age,
+                        vigor: member.genome.expressed(1),
+                    });
+                capabilities.permits(body, recipe)
+            })
+            .collect()
     }
 
     /// Admit personally chosen work. Other owners' activity, claim, site and

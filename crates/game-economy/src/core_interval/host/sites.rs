@@ -144,17 +144,20 @@ impl CoreHost {
         &mut self,
         starts: &[(game_production_model::Start, u64)],
     ) -> Result<Vec<(u64, bool)>, String> {
-        self.start_with_sites_hunger_limit(starts, self.core.rules.max_work_hunger)
+        self.start_with_sites_hunger_limit(starts, self.core.rules.max_work_hunger, false)
     }
 
     pub(super) fn start_with_sites_hunger_limit(
         &mut self,
         starts: &[(game_production_model::Start, u64)],
         max_hunger: u32,
+        personal: bool,
     ) -> Result<Vec<(u64, bool)>, String> {
         let skill_rates = self.skill_start_rates(starts)?;
         let starts = skill_rates.as_deref().unwrap_or(starts);
-        if let Some(family) = &self.family {
+        if (!personal || self.work_capabilities.is_none())
+            && let Some(family) = &self.family
+        {
             let underage = game_economy_work::underage(family);
             if starts
                 .par_iter()

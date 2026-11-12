@@ -1094,6 +1094,88 @@ fn work_intentions_compete_with_carrying_and_share_scarce_inputs() {
 }
 
 #[test]
+fn individual_capability_allows_young_workers_and_can_limit_adults() {
+    use game_economy::core_interval::{CoreChoiceOutcome, CoreHost, CoreRunEvent, DecisionPhase};
+    use game_lots::{Container, Lot, Place};
+    fn run(workers: usize) -> serde_json::Value {
+        rayon::ThreadPoolBuilder::new().num_threads(workers).build().unwrap().install(|| {
+            let root = root();
+            let mut snapshot = game_economy_cli::core_scenario(
+                &root.join("content/scenarios/economy-core-work-capabilities.toml"), &root.join("content")
+            ).unwrap().snapshot();
+            let family = snapshot.family.as_mut().unwrap();
+            family.members[0].age = 5;
+            family.members[0].genome.alleles[1] = [1000, 1000];
+            family.members[1].age = 18;
+            family.members[1].genome.alleles[1] = [100, 100];
+            for person in &mut snapshot.core.people { person.willing_to_work = true; }
+            let grain = snapshot.core.physical.goods.iter().find(|good| good.name == "grain").unwrap().id;
+            let output = snapshot.core.physical.goods.iter().find(|good| good.name == "bread").unwrap().id;
+            let recipe = snapshot.core.physical.recipes.iter().map(|recipe| recipe.id).max().unwrap_or(0) + 1;
+            snapshot.core.physical.recipes.push(game_production::Recipe {
+                id: recipe, name: "light work".into(), ticks: 2,
+                inputs: vec![game_production::Amount { good: grain, quantity: 1 }],
+                outputs: vec![game_production::Amount { good: output, quantity: 1 }],
+            });
+            for (good, quantity) in [(grain, 2), (output, 0)] {
+                let place = Place::Stock { region: 1, good };
+                let lots = if quantity == 0 { vec![] } else { vec![Lot { item: None, good, quantity, expires_at: None }] };
+                snapshot.core.physical.custody.containers.retain(|row| row.place != place);
+                snapshot.core.physical.custody.containers.push(Container::new(place, 100, lots).unwrap());
+            }
+            snapshot.core.physical.custody.containers.sort_by_key(|row| row.place);
+            snapshot.autowork = Some(game_autowork::Autowork {
+                next_id: 1,
+                policies: (1..=2).map(|person| game_autowork::Policy { person, recipe, enabled: true, disregard_claims: false }).collect(),
+                requests: None,
+            });
+            snapshot.schedule.as_mut().unwrap().personal_choices = Some(std::sync::Arc::new((1..=2).map(|id| game_personal_choice::Person {
+                id, idle: 0, act_on_tie: false, preferences: vec![game_personal_choice::Preference { domain: 4, enabled: true, bias: 10, weight: 1000 }], actions: vec![],
+            }).collect()));
+            let mut host = CoreHost::resume(snapshot.clone()).unwrap();
+            let (choices, _) = host.preview_personal_choices(&[]).unwrap();
+            assert!(choices.iter().any(|row| row.actor == 1 && row.key.domain == 4));
+            assert!(!choices.iter().any(|row| row.actor == 2 && row.key.domain == 4));
+            let mut stale = snapshot.clone();
+            stale.family.as_mut().unwrap().members[0].genome.alleles[1] = [0, 0];
+            stale.schedule.as_mut().unwrap().phase = DecisionPhase::ChosenWork {
+                meal_people: vec![], intents: std::sync::Arc::new(choices), construction_after: false,
+                carrying_after: false, maintenance_after: false, remaining: None,
+            };
+            let mut stale = CoreHost::resume(stale).unwrap();
+            let stale_result = stale.advance_continuous(1, &[]).unwrap();
+            assert_eq!(stale_result.failure, None);
+            assert!(stale_result.events.iter().any(|event| matches!(event, CoreRunEvent::PersonalChoices(rows) if rows.iter().any(|row| row.actor == 1 && row.outcome == CoreChoiceOutcome::Stale))));
+            assert!(stale.snapshot().core.physical.work.is_empty());
+            let stale_stock = stale.snapshot().core.physical.custody.containers.into_iter()
+                .find(|row| row.place == Place::Stock { region: 1, good: grain }).unwrap();
+            assert_eq!(stale_stock.used, 2);
+            let result = host.advance_continuous(1, &[]).unwrap();
+            assert_eq!(result.failure, None);
+            assert!(result.events.iter().any(|event| matches!(event, CoreRunEvent::PersonalChoices(rows) if rows.iter().any(|row| row.actor == 1 && row.outcome == CoreChoiceOutcome::Accepted))));
+            let started = host.snapshot();
+            assert!(started.core.physical.work.iter().any(|row| row.job.worker == 1));
+            assert!(!started.core.physical.work.iter().any(|row| row.job.worker == 2));
+            let mut weaker = started.clone();
+            weaker.family.as_mut().unwrap().members[0].genome.alleles[1] = [0, 0];
+            assert!(CoreHost::resume(weaker).is_ok());
+            let mut restored = CoreHost::resume(serde_json::from_str(&serde_json::to_string(&started).unwrap()).unwrap()).unwrap();
+            assert_eq!(host.advance_continuous(1, &[]).unwrap().failure, None);
+            assert_eq!(restored.advance_continuous(1, &[]).unwrap().failure, None);
+            assert_eq!(host.snapshot(), restored.snapshot());
+            let mut legacy = snapshot;
+            legacy.work_capabilities = None;
+            let legacy = CoreHost::resume(legacy).unwrap();
+            let (choices, _) = legacy.preview_personal_choices(&[]).unwrap();
+            assert!(!choices.iter().any(|row| row.actor == 1 && row.key.domain == 4));
+            assert!(choices.iter().any(|row| row.actor == 2 && row.key.domain == 4));
+            serde_json::to_value(host.snapshot()).unwrap()
+        })
+    }
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
 fn people_independently_choose_repairs_before_site_contention() {
     use game_economy::core_interval::{CoreChoiceOutcome, CoreHost, CoreRunEvent, DecisionPhase};
     use game_economy_building::maintenance::{Condition, Maintenance, Policy, Rule};

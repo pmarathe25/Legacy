@@ -94,6 +94,8 @@ struct Scenario {
     #[serde(default)]
     signals: Option<SignalsConfig>,
     #[serde(default)]
+    work_capabilities: Option<WorkCapabilitiesConfig>,
+    #[serde(default)]
     mechanics: Option<MechanicsConfig>,
     #[serde(default)]
     personal_choices: Vec<game_personal_choice::Person>,
@@ -870,6 +872,26 @@ struct SignalGift {
     value: i64,
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WorkCapabilitiesConfig {
+    growth: Vec<game_work_capability::GrowthPoint>,
+    vigor_base: u32,
+    vigor_weight: u32,
+    default_strength: u32,
+    #[serde(default)]
+    missing_strength: Option<u32>,
+    #[serde(default)]
+    requirements: Vec<NamedWorkRequirement>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct NamedWorkRequirement {
+    recipe: String,
+    strength: u32,
+}
+
 fn default_food_preference_domain() -> u32 {
     7
 }
@@ -899,6 +921,7 @@ pub fn core_scenario_with_options(
     let language = authored.language;
     let language_topic_profiles = authored.language_topic_profiles;
     let signals = authored.signals;
+    let work_capabilities = authored.work_capabilities;
     let regions: HashSet<_> = authored.regions.iter().map(|region| region.id).collect();
     let mechanics = authored.mechanics;
     let mut personal_choices = authored.personal_choices;
@@ -906,6 +929,35 @@ pub fn core_scenario_with_options(
     let scenario = scenario_with_options_inner(path, content, seed, population_path, true)?;
     let mut snapshot =
         game_economy::core_interval::CoreHostSnapshot::from_scenario(scenario.snapshot())?;
+    if let Some(config) = work_capabilities {
+        let mut requirements = config
+            .requirements
+            .into_iter()
+            .map(|row| {
+                let recipe = snapshot
+                    .core
+                    .physical
+                    .recipes
+                    .iter()
+                    .find(|recipe| recipe.name == row.recipe)
+                    .ok_or_else(|| format!("unknown capability recipe {}", row.recipe))?
+                    .id;
+                Ok(game_work_capability::Requirement {
+                    recipe,
+                    strength: row.strength,
+                })
+            })
+            .collect::<Result<Vec<_>, String>>()?;
+        requirements.sort_unstable_by_key(|row| row.recipe);
+        snapshot.work_capabilities = Some(game_work_capability::Capabilities {
+            growth: config.growth,
+            vigor_base: config.vigor_base,
+            vigor_weight: config.vigor_weight,
+            default_strength: config.default_strength,
+            missing_strength: config.missing_strength,
+            requirements,
+        });
+    }
     for preference in meal_preferences {
         if !matches!(preference.domain, 7 | 9) {
             return Err("food preference requires the meal or pickup domain".into());
@@ -1156,6 +1208,9 @@ fn scenario_with_options_inner(
     }
     if scenario.signals.is_some() && !interval_features {
         return Err("signals require the interval simulation host".into());
+    }
+    if scenario.work_capabilities.is_some() && !interval_features {
+        return Err("work capabilities require the interval simulation host".into());
     }
     if scenario.mechanics.is_some() && !interval_features {
         return Err("mechanics requires the interval simulation host".into());

@@ -196,6 +196,7 @@ dependencies = [
  "game-economy-work",
  "game-environment",
  "game-families",
+ "game-family-index",
  "game-fatigue",
  "game-fauna",
  "game-genetics",
@@ -220,6 +221,7 @@ dependencies = [
  "game-social",
  "game-tactics",
  "game-work-asking",
+ "game-work-capability",
  "rayon",
  "serde",
  "serde_json",
@@ -339,6 +341,7 @@ dependencies = [
  "game-signals",
  "game-skill-catalog",
  "game-social",
+ "game-work-capability",
  "rayon",
  "serde",
  "serde_json",
@@ -1266,6 +1269,15 @@ dependencies = [
  "game-production-model",
  "game-work-requests",
  "rayon",
+]
+
+[[package]]
+name = "game-work-capability"
+version = "0.2.0"
+dependencies = [
+ "rayon",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
