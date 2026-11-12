@@ -33,3 +33,15 @@ policies = [{ person = 1, willing = true }]
 id = 1
 region = 1
 crop = "grain"
+
+[[cultivation.seed_batches]]
+region = 1
+good = "grain-seed"
+batch = 11
+quantity = 4
+
+[[cultivation.seed_batches]]
+region = 1
+good = "grain-seed"
+batch = 12
+quantity = 16

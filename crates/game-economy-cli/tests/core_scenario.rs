@@ -487,7 +487,7 @@ fn language_topics_arise_from_personally_chosen_physical_demonstrations() {
 fn planting_records_actual_seed_batches_and_retains_them_until_harvest() {
     use game_economy::core_interval::CoreHost;
     use game_economy_agriculture::Phase;
-    use game_lots::{Container, Lot, Place};
+    use game_lots::Place;
     fn run(workers: usize) -> serde_json::Value {
         rayon::ThreadPoolBuilder::new()
             .num_threads(workers)
@@ -495,7 +495,7 @@ fn planting_records_actual_seed_batches_and_retains_them_until_harvest() {
             .unwrap()
             .install(|| {
                 let root = root();
-                let mut opening = game_economy_cli::core_scenario(
+                let opening = game_economy_cli::core_scenario(
                     &root.join("content/scenarios/economy-core-seed-provenance.toml"),
                     &root.join("content"),
                 )
@@ -510,41 +510,6 @@ fn planting_records_actual_seed_batches_and_retains_them_until_harvest() {
                     .find(|crop| crop.id == opening.agriculture.as_ref().unwrap().fields[0].crop)
                     .unwrap()
                     .clone();
-                let stock = opening
-                    .core
-                    .physical
-                    .custody
-                    .containers
-                    .iter_mut()
-                    .find(|row| {
-                        row.place
-                            == Place::Stock {
-                                region: 1,
-                                good: crop.seed,
-                            }
-                    })
-                    .unwrap();
-                *stock = Container::new(
-                    stock.place,
-                    stock.capacity,
-                    vec![
-                        Lot {
-                            good: crop.seed,
-                            quantity: 4,
-                            batch: Some(11),
-                            item: None,
-                            expires_at: None,
-                        },
-                        Lot {
-                            good: crop.seed,
-                            quantity: 16,
-                            batch: Some(12),
-                            item: None,
-                            expires_at: None,
-                        },
-                    ],
-                )
-                .unwrap();
                 let mut host = CoreHost::resume(opening).unwrap();
                 assert_eq!(host.advance_continuous(900_001, &[]).unwrap().failure, None);
                 let first = host.snapshot();

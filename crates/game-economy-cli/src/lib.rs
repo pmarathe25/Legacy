@@ -1,5 +1,6 @@
 //! Load new economic scenarios from authored content and retain lot ages in saves.
 mod population;
+mod seed_batches;
 use game_autowork::{Autowork, Policy};
 use game_economy::{
     Agreements, Agriculture, CropPhase, DependentCare, Dream, Dreams, Economy, Families,
@@ -741,6 +742,8 @@ struct Cultivation {
     max_hunger: u32,
     #[serde(default)]
     track_seed_batches: bool,
+    #[serde(default)]
+    seed_batches: Vec<seed_batches::SeedBatch>,
     #[serde(default)]
     soil: Option<game_economy_agriculture::soil::Soil>,
     #[serde(default)]
@@ -2138,6 +2141,10 @@ fn scenario_with_options_inner(
             )
         })
         .transpose()?;
+    let authored_seed_batches = scenario
+        .cultivation
+        .as_ref()
+        .map_or_else(Vec::new, |state| state.seed_batches.clone());
     let agriculture = scenario
         .cultivation
         .map(|state| -> Result<_, String> {
@@ -2196,6 +2203,14 @@ fn scenario_with_options_inner(
         })
         .transpose()?;
     let mut custody = catalog.fresh_world(&production.inventories, 0)?;
+    if !authored_seed_batches.is_empty() {
+        let farm = agriculture
+            .as_ref()
+            .ok_or("seed batches require cultivation")?;
+        seed_batches::assign(&mut custody, &authored_seed_batches, &farm.crops, |name| {
+            goods.get(name).copied()
+        })?;
+    }
     let local_transport = scenario
         .local_transport
         .map(|config| {

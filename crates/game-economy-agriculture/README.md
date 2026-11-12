@@ -9,6 +9,10 @@ harvest fails, and are removed on successful harvest. They do not yet cause
 plant inheritance or put batch identities on harvests. Without tracking,
 planting retains the compact consumption path. See
 `content/scenarios/economy-core-seed-provenance.toml`.
+That scenario also uses `[[cultivation.seed_batches]]` entries with a region,
+named seed good, nonzero batch ID and quantity. Loading these entries assigns
+tags to existing regional stock; their combined quantities cannot exceed that
+stock. Unassigned seed remains untagged.
 
 Optional `[cultivation.soil]` content specifies `capacity`, `loss_per_harvest`, `recovery_per_fallow`, and sorted `fields = [{ field, fertility }, ...]`. A configured field's harvest yields its crop's ordinary output multiplied by fertility over capacity, rounded down with a minimum of one unit. A successful physical harvest depletes fertility; a field that starts a boundary fallow recovers up to capacity. Failed harvests cause no depletion. Fields without a soil record keep their ordinary yield. This is a basic fertility model, not a complete treatment of soils or nutrients.
 
