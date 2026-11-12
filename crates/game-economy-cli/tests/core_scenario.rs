@@ -482,6 +482,51 @@ fn language_topics_arise_from_personally_chosen_physical_demonstrations() {
 }
 
 #[test]
+fn namesake_form_uses_the_speakers_directed_affinity_in_the_host() {
+    use game_economy::core_interval::CoreHost;
+    fn run(workers: usize, affinity: i32) -> serde_json::Value {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let root = root();
+                let mut opening = game_economy_cli::core_scenario(
+                    &root.join("content/scenarios/economy-core-namesake.toml"),
+                    &root.join("content"),
+                )
+                .unwrap()
+                .snapshot();
+                opening.opinions.as_mut().unwrap().records[0].affinity = affinity;
+                let mut host = CoreHost::resume(opening).unwrap();
+                assert_eq!(host.advance_continuous(900_001, &[]).unwrap().failure, None);
+                let snapshot = host.snapshot();
+                let event = &snapshot
+                    .social
+                    .as_ref()
+                    .unwrap()
+                    .language
+                    .as_ref()
+                    .unwrap()
+                    .events[0];
+                if affinity > 0 {
+                    assert_eq!(event.sounds, vec![2, 2, 2]);
+                } else {
+                    assert_eq!(event.sounds.len(), 2);
+                }
+                let resumed = CoreHost::resume(
+                    serde_json::from_str(&serde_json::to_string(&snapshot).unwrap()).unwrap(),
+                )
+                .unwrap();
+                assert_eq!(snapshot, resumed.snapshot());
+                serde_json::to_value(snapshot).unwrap()
+            })
+    }
+    assert_eq!(run(1, 100), run(4, 100));
+    assert_eq!(run(1, -100), run(4, -100));
+}
+
+#[test]
 fn personal_names_emerge_from_chosen_sounds_in_real_encounters() {
     use game_economy::core_interval::CoreHost;
     use game_language::Meaning;

@@ -5,6 +5,8 @@ use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicUsize, Ordering};
+mod names;
+pub use names::{Namesake, NamingPolicy};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -133,6 +135,8 @@ pub struct Mind {
     /// None retains the earlier place-only behavior; an empty policy can refuse all topics.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub topic_policy: Option<TopicPolicy>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub naming: Option<NamingPolicy>,
 }
 
 fn enabled() -> bool {
@@ -157,6 +161,7 @@ impl Mind {
             phonemes: Vec::new(),
             words: Vec::new(),
             topic_policy: None,
+            naming: None,
         }
     }
 }
@@ -212,6 +217,65 @@ fn random(mut x: u64) -> u64 {
 }
 
 impl Language {
+    fn new_form<F: Fn(u64, u64) -> i32 + Sync>(
+        &self,
+        mind: &Mind,
+        meaning: Meaning,
+        seed: u64,
+        tick: u64,
+        affinity: &F,
+    ) -> Option<Vec<u8>> {
+        if !mind.coin
+            || mind.words.len() >= self.rules.capacity
+            || self.rules.sounds.is_empty()
+            || self.rules.word_length == 0
+        {
+            return None;
+        }
+        let novel: Vec<_> = (0..self.rules.word_length)
+            .map(|i| {
+                let draw =
+                    random(seed ^ mind.person ^ meaning.key().rotate_left(13) ^ u64::from(i));
+                if mind.phonemes.is_empty() {
+                    (draw % self.rules.sounds.len() as u64) as u8
+                } else {
+                    mind.phonemes[draw as usize % mind.phonemes.len()]
+                }
+            })
+            .collect();
+        match meaning {
+            Meaning::Person(target) if mind.naming.is_some() => {
+                names::choose(mind, target, novel, affinity, seed, tick)
+            }
+            _ => Some(novel),
+        }
+    }
+
+    fn can_form<F: Fn(u64, u64) -> i32 + Sync>(
+        &self,
+        mind: &Mind,
+        meaning: Meaning,
+        seed: u64,
+        tick: u64,
+        affinity: &F,
+    ) -> bool {
+        if mind
+            .words
+            .binary_search_by_key(&meaning, |word| word.meaning)
+            .is_ok()
+        {
+            return true;
+        }
+        if !mind.coin || mind.words.len() >= self.rules.capacity {
+            return false;
+        }
+        if matches!(meaning, Meaning::Person(_)) && mind.naming.is_some() {
+            self.new_form(mind, meaning, seed, tick, affinity).is_some()
+        } else {
+            true
+        }
+    }
+
     /// Set personal topic policies without creating or sharing vocabulary.
     pub fn configure_topics(&mut self, entries: &[(u64, TopicPolicy)]) -> Result<(), &'static str> {
         let mut entries = entries.to_vec();
@@ -262,6 +326,17 @@ impl Language {
         seed: u64,
         tick: u64,
     ) -> Result<Self, &'static str> {
+        self.prepare_grounded_with_affinity(meetings, seed, tick, &|_, _| 0)
+    }
+
+    /// Personal naming may use only the speaker's own directed affinities.
+    pub fn prepare_grounded_with_affinity<F: Fn(u64, u64) -> i32 + Sync>(
+        &self,
+        meetings: &[GroundedMeeting],
+        seed: u64,
+        tick: u64,
+        affinity: &F,
+    ) -> Result<Self, &'static str> {
         if meetings.par_iter().any(|meeting| {
             let valid = |topics: &[Meaning]| {
                 !topics.is_empty()
@@ -300,11 +375,7 @@ impl Language {
                         mind.speak
                             && random(seed ^ tick.rotate_left(11) ^ person ^ meaning.key()) % 1000
                                 < u64::from(mind.initiative)
-                            && (mind
-                                .words
-                                .binary_search_by_key(&meaning, |word| word.meaning)
-                                .is_ok()
-                                || (mind.coin && mind.words.len() < self.rules.capacity))
+                            && self.can_form(mind, meaning, seed, tick, affinity)
                     };
                     match &mind.topic_policy {
                         None => observed.iter().copied().find(|meaning| {
@@ -362,7 +433,7 @@ impl Language {
             })
             .collect();
         let (meetings, speakers): (Vec<_>, Vec<_>) = selected.into_par_iter().unzip();
-        self.prepare_internal(&meetings, Some(&speakers), seed, tick)
+        self.prepare_internal(&meetings, Some(&speakers), seed, tick, affinity)
     }
 
     pub fn validate(&self, people: &HashSet<u64>, now: u64) -> Result<(), &'static str> {
@@ -387,6 +458,13 @@ impl Language {
                         .any(|sound| usize::from(*sound) >= r.sounds.len())
                     || m.phonemes.windows(2).any(|sounds| sounds[0] >= sounds[1])
                     || m.words.len() > r.capacity
+                    || m.naming.as_ref().is_some_and(|policy| {
+                        !policy.valid()
+                            || policy
+                                .namesakes
+                                .iter()
+                                .any(|row| !people.contains(&row.person))
+                    })
                     || m.topic_policy.as_ref().is_some_and(|policy| {
                         policy
                             .preferences
@@ -434,15 +512,16 @@ impl Language {
         seed: u64,
         tick: u64,
     ) -> Result<Self, &'static str> {
-        self.prepare_internal(meetings, None, seed, tick)
+        self.prepare_internal(meetings, None, seed, tick, &|_, _| 0)
     }
 
-    fn prepare_internal(
+    fn prepare_internal<F: Fn(u64, u64) -> i32 + Sync>(
         &self,
         meetings: &[Meeting],
         speakers: Option<&[Option<u64>]>,
         seed: u64,
         tick: u64,
+        affinity: &F,
     ) -> Result<Self, &'static str> {
         if self.rules.sounds.is_empty()
             || self.rules.sounds.len() > 256
@@ -463,6 +542,7 @@ impl Language {
                         .iter()
                         .any(|sound| usize::from(*sound) >= self.rules.sounds.len())
                     || m.words.len() > self.rules.capacity
+                    || m.naming.as_ref().is_some_and(|policy| !policy.valid())
                     || m.topic_policy.as_ref().is_some_and(|policy| {
                         policy
                             .preferences
@@ -544,11 +624,7 @@ impl Language {
                         })
                         && random(seed ^ tick.rotate_left(11) ^ id ^ meeting.meaning.key()) % 1000
                             < u64::from(mind.initiative)
-                        && (mind
-                            .words
-                            .binary_search_by_key(&meeting.meaning, |w| w.meaning)
-                            .is_ok()
-                            || (mind.coin && mind.words.len() < next.rules.capacity))
+                        && next.can_form(mind, meeting.meaning, seed, tick, affinity)
                 };
                 let (speaker, listener) = if let Some(speakers) = speakers {
                     let speaker = speakers[meeting_index]?;
@@ -590,24 +666,9 @@ impl Language {
                     .binary_search_by_key(&meeting.meaning, |w| w.meaning)
                     .ok()
                     .map(|i| source.words[i].sounds.clone());
-                let sounds = known.clone().or_else(|| {
-                    (source.coin && source.words.len() < next.rules.capacity).then(|| {
-                        (0..next.rules.word_length)
-                            .map(|i| {
-                                let draw = random(
-                                    seed ^ speaker
-                                        ^ meeting.meaning.key().rotate_left(13)
-                                        ^ u64::from(i),
-                                );
-                                if source.phonemes.is_empty() {
-                                    (draw % next.rules.sounds.len() as u64) as u8
-                                } else {
-                                    source.phonemes[draw as usize % source.phonemes.len()]
-                                }
-                            })
-                            .collect()
-                    })
-                })?;
+                let sounds = known
+                    .clone()
+                    .or_else(|| next.new_form(source, meeting.meaning, seed, tick, affinity))?;
                 let mut interpretations = target
                     .words
                     .iter()

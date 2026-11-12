@@ -234,8 +234,19 @@ impl CoreHost {
                         b_topics: topics(meeting.b, meeting.a, meeting.region),
                     })
                     .collect();
+                let opinions = language
+                    .minds
+                    .par_iter()
+                    .any(|mind| mind.naming.is_some())
+                    .then(|| self.opinions.as_ref().map(|owner| owner.index()))
+                    .flatten();
+                let affinity = |observer, target| {
+                    opinions
+                        .as_ref()
+                        .map_or(0, |index| index.affinity(observer, target))
+                };
                 language
-                    .prepare_grounded(&rows, self.core.seed, tick)
+                    .prepare_grounded_with_affinity(&rows, self.core.seed, tick, &affinity)
                     .map_err(str::to_owned)
             })
             .transpose()?;

@@ -11,6 +11,8 @@ fn hosted_personal_topics_benchmark() {
         .unwrap_or(20_000);
     assert!(count > 1 && count.is_multiple_of(2));
     let person_topics = std::env::var_os("LEGACY_LANGUAGE_PERSON_TOPICS").is_some();
+    let naming = std::env::var_os("LEGACY_LANGUAGE_NAMING_POLICY").is_some();
+    assert!(!naming || person_topics);
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let mut text = String::from(
         r#"seed = 7
@@ -48,6 +50,10 @@ familiarity_max = 10
             "[[language.minds]]\nperson = {id}\ninitiative = 1000\nadoption = 1000"
         )
         .unwrap();
+        if naming {
+            let namesake = if id == 1 { 2 } else { 1 };
+            writeln!(text, "words = [{{ meaning = {{ kind = \"person\", id = {namesake} }}, sounds = [0, 1, 2] }}]\nnaming = {{ idle = 0, novel_value = 5, confusion_weight = 1, namesakes = [{{ person = {namesake}, value = 100 }}] }}").unwrap();
+        }
         if person_topics {
             writeln!(text, "[[language_topic_profiles]]\nperson = {id}\nidle = 0\npreferences = [{{ person = {id}, enabled = true, value = 10 }}]").unwrap();
         } else {

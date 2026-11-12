@@ -1,5 +1,6 @@
 use game_language::{
-    GroundedMeeting, Language, Meaning, Meeting, Mind, Rules, TopicPolicy, TopicPreference, Word,
+    GroundedMeeting, Language, Meaning, Meeting, Mind, Namesake, NamingPolicy, Rules, TopicPolicy,
+    TopicPreference, Word,
 };
 use std::collections::HashSet;
 
@@ -13,6 +14,112 @@ fn language() -> Language {
         minds: vec![],
         events: vec![],
     }
+}
+
+#[test]
+fn namesake_choice_uses_the_speakers_subjective_affinity_and_confusion() {
+    let mut state = language();
+    state
+        .configure_topics(&[
+            (
+                1,
+                TopicPolicy {
+                    idle: 0,
+                    act_on_tie: false,
+                    preferences: vec![TopicPreference {
+                        meaning: Meaning::Person(2),
+                        enabled: true,
+                        value: 10,
+                    }],
+                },
+            ),
+            (
+                2,
+                TopicPolicy {
+                    idle: 0,
+                    act_on_tie: false,
+                    preferences: vec![],
+                },
+            ),
+        ])
+        .unwrap();
+    state.minds[0].initiative = 1000;
+    state.minds[0].words.push(Word {
+        meaning: Meaning::Person(3),
+        sounds: vec![2, 2],
+    });
+    state.minds[0].naming = Some(NamingPolicy {
+        idle: 0,
+        act_on_tie: false,
+        novel_value: Some(5),
+        confusion_weight: 10,
+        namesakes: vec![Namesake {
+            person: 3,
+            value: 0,
+            affinity_weight: 1000,
+        }],
+    });
+    let meeting = GroundedMeeting {
+        a: 1,
+        b: 2,
+        a_topics: vec![Meaning::Place(7), Meaning::Person(2)],
+        b_topics: vec![Meaning::Place(7)],
+    };
+    let liked = state
+        .prepare_grounded_with_affinity(std::slice::from_ref(&meeting), 7, 1, &|a, b| {
+            if (a, b) == (1, 3) { 100 } else { 0 }
+        })
+        .unwrap();
+    assert_eq!(liked.events[0].sounds, vec![2, 2]);
+    let disliked = state
+        .prepare_grounded_with_affinity(std::slice::from_ref(&meeting), 7, 1, &|_, _| -100)
+        .unwrap();
+    assert_eq!(disliked.events[0].sounds.len(), 3);
+    let mut refuses = state.clone();
+    refuses.minds[0].naming.as_mut().unwrap().novel_value = None;
+    assert!(
+        refuses
+            .prepare_grounded_with_affinity(std::slice::from_ref(&meeting), 7, 1, &|_, _| -100)
+            .unwrap()
+            .events
+            .is_empty()
+    );
+    let mut forgotten = state.clone();
+    forgotten.minds[0].words.clear();
+    forgotten.minds[0].naming.as_mut().unwrap().novel_value = None;
+    assert!(
+        forgotten
+            .prepare_grounded_with_affinity(std::slice::from_ref(&meeting), 7, 1, &|_, _| 100)
+            .unwrap()
+            .events
+            .is_empty()
+    );
+    let mut unable = state.clone();
+    unable.minds[0].phonemes = vec![0, 1];
+    unable.minds[0].naming.as_mut().unwrap().novel_value = None;
+    assert!(
+        unable
+            .prepare_grounded_with_affinity(std::slice::from_ref(&meeting), 7, 1, &|_, _| 100)
+            .unwrap()
+            .events
+            .is_empty()
+    );
+    let policy = refuses.minds[0].naming.as_mut().unwrap();
+    policy.confusion_weight = -200;
+    assert_eq!(
+        refuses
+            .prepare_grounded_with_affinity(&[meeting], 7, 1, &|_, _| -100)
+            .unwrap()
+            .events[0]
+            .sounds,
+        vec![2, 2]
+    );
+    assert!(liked.validate(&HashSet::from([1, 2, 3]), 1).is_ok());
+    assert!(liked.validate(&HashSet::from([1, 2]), 1).is_err());
+    assert_eq!(
+        serde_json::from_str::<Language>(&serde_json::to_string(&liked).unwrap()).unwrap(),
+        liked
+    );
 }
 
 #[test]
@@ -382,6 +489,7 @@ fn a_listener_can_have_a_different_interpretation_and_decline_learning() {
             coin: false,
             initiative: 1000,
             topic_policy: None,
+            naming: None,
             adoption: 0,
             modify: false,
             phonemes: vec![],
@@ -398,6 +506,7 @@ fn a_listener_can_have_a_different_interpretation_and_decline_learning() {
             coin: false,
             initiative: 1000,
             topic_policy: None,
+            naming: None,
             adoption: 0,
             modify: false,
             phonemes: vec![],
@@ -442,6 +551,7 @@ fn people_can_decline_to_speak_or_choose_to_change_a_form() {
             coin: true,
             initiative: 0,
             topic_policy: None,
+            naming: None,
             adoption: 1000,
             modify: true,
             phonemes: vec![0, 1],
@@ -527,6 +637,7 @@ fn a_person_can_speak_even_when_the_other_person_cannot_hear() {
             coin: true,
             initiative: 1000,
             topic_policy: None,
+            naming: None,
             adoption: 1000,
             modify: false,
             phonemes: vec![],
@@ -568,6 +679,7 @@ fn a_chosen_form_can_spread_through_separate_grounded_encounters() {
             coin: true,
             initiative: 1000,
             topic_policy: None,
+            naming: None,
             adoption: 1000,
             modify: false,
             phonemes: vec![],

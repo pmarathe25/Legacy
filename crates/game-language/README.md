@@ -19,6 +19,11 @@ retained. Need referents require a host able to establish an actual signal;
 private hunger is not automatically shared. A speaker may also choose a
 present participant as a topic, coin a personal sound form for that person,
 and share it; the listener can independently refuse or adopt the form. These
-are personal associations, not mandatory or globally unique names. Naming
-absent people, selecting forms based on admiration and confusion, grammar,
-and transmission of general factual claims remain incomplete.
+are personal associations, not mandatory or globally unique names. An optional
+personal naming policy can value novel forms or reuse a known person's form,
+weighted by the speaker's directed affinity and their own signed tolerance for
+exact-form confusion. A speaker may instead decline to coin a form. Namesake
+forms must be in that speaker's vocabulary and within their phoneme inventory.
+See `content/scenarios/economy-core-namesake.toml` for an authored example.
+Naming absent people, similarity beyond exact forms, grammar, and transmission
+of general factual claims remain incomplete.
