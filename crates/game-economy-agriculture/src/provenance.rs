@@ -33,6 +33,9 @@ pub struct Planting {
     pub tick: u64,
     /// Actual consumed physical cohorts, including any unknown batch.
     pub seeds: Vec<Lot>,
+    /// Assigned once when the field matures; absent before maturation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub offspring: Option<Vec<crate::reproduction::Offspring>>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -50,6 +53,55 @@ pub struct Provenance {
 }
 
 impl Provenance {
+    pub(crate) fn mature(
+        &self,
+        maturations: crate::reproduction::Maturations,
+    ) -> Result<Self, String> {
+        if maturations.rows.is_empty() {
+            return Ok(self.clone());
+        }
+        if maturations
+            .rows
+            .par_windows(2)
+            .any(|rows| rows[0].0 >= rows[1].0)
+            || maturations.rows.par_iter().any(|(field, _)| {
+                self.plantings
+                    .binary_search_by_key(field, |record| record.field)
+                    .ok()
+                    .is_none_or(|i| self.plantings[i].offspring.is_some())
+            })
+        {
+            return Err("invalid seed maturation".into());
+        }
+        let genetics = self
+            .genetics
+            .as_ref()
+            .ok_or("maturation requires genetics")?;
+        let genetics = Arc::new(
+            genetics
+                .with_descendants(&maturations.descendants)
+                .map_err(str::to_owned)?,
+        );
+        let plantings: Vec<_> = self
+            .plantings
+            .par_iter()
+            .map(|record| {
+                let mut next = record.clone();
+                if let Ok(index) = maturations
+                    .rows
+                    .binary_search_by_key(&record.field, |row| row.0)
+                {
+                    next.offspring = Some(maturations.rows[index].1.clone());
+                }
+                next
+            })
+            .collect();
+        Ok(Self {
+            plantings: Arc::new(plantings),
+            profiles: Arc::clone(&self.profiles),
+            genetics: Some(genetics),
+        })
+    }
     /// None is an unconfigured person; Some(None) is a personal refusal.
     pub(crate) fn choose(&self, person: u64) -> Option<Option<u64>> {
         let index = self
@@ -121,8 +173,33 @@ impl Provenance {
             else {
                 return true;
             };
+            let reproduction = self
+                .genetics
+                .as_ref()
+                .and_then(|genetics| genetics.reproduction);
+            let offspring_invalid = match (&record.offspring, reproduction) {
+                (None, Some(_)) if field.phase == Phase::Ripe => true,
+                (Some(_), None) => true,
+                (Some(rows), Some(_)) => {
+                    field.phase != Phase::Ripe
+                        || rows.windows(2).any(|pair| pair[0].batch >= pair[1].batch)
+                        || rows.iter().any(|row| {
+                            row.quantity == 0
+                                || self
+                                    .genetics
+                                    .as_ref()
+                                    .and_then(|genetics| genetics.descendant(row.batch))
+                                    .is_none_or(|lineage| {
+                                        lineage.parent != row.parent
+                                            || lineage.alleles != row.alleles
+                                    })
+                        })
+                }
+                _ => false,
+            };
             record.tick > now
                 || field.phase == Phase::Fallow
+                || offspring_invalid
                 || record.seeds.is_empty()
                 || record.seeds.iter().any(|lot| {
                     lot.good != crop.seed
@@ -197,6 +274,7 @@ impl Provenance {
                         field,
                         tick: events.tick,
                         seeds: receipt.movement.lots.to_vec(),
+                        offspring: None,
                     }),
                 ))
             })

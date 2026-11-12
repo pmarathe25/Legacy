@@ -484,6 +484,210 @@ fn language_topics_arise_from_personally_chosen_physical_demonstrations() {
 }
 
 #[test]
+fn clonal_seed_offspring_mutate_once_and_survive_failed_harvests() {
+    use game_economy::core_interval::CoreHost;
+    use game_economy_agriculture::Phase;
+    use game_lots::Place;
+    fn run(workers: usize) -> serde_json::Value {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let root = root();
+                let opening = game_economy_cli::core_scenario(
+                    &root.join("content/scenarios/economy-core-seed-reproduction.toml"),
+                    &root.join("content"),
+                )
+                .unwrap()
+                .snapshot();
+                assert_eq!(opening.core.physical.custody.next_batch, Some(12));
+                let crop = opening
+                    .agriculture
+                    .as_ref()
+                    .unwrap()
+                    .crops
+                    .iter()
+                    .find(|crop| crop.id == opening.agriculture.as_ref().unwrap().fields[0].crop)
+                    .unwrap()
+                    .clone();
+                let mut host = CoreHost::resume(opening).unwrap();
+                assert_eq!(host.advance_continuous(900_001, &[]).unwrap().failure, None);
+                for _ in 0..100 {
+                    if host.snapshot().agriculture.as_ref().unwrap().fields[0].phase == Phase::Ripe
+                    {
+                        break;
+                    }
+                    assert_eq!(host.advance_continuous(900_000, &[]).unwrap().failure, None);
+                }
+                let mut ripe = host.snapshot();
+                assert_eq!(
+                    ripe.agriculture.as_ref().unwrap().fields[0].phase,
+                    Phase::Ripe
+                );
+                assert_eq!(ripe.core.physical.custody.next_batch, Some(13));
+                let children = ripe
+                    .agriculture
+                    .as_ref()
+                    .unwrap()
+                    .provenance
+                    .as_ref()
+                    .unwrap()
+                    .plantings[0]
+                    .offspring
+                    .clone()
+                    .unwrap();
+                assert_eq!(children.len(), 1);
+                assert_eq!(
+                    (children[0].batch, children[0].parent, children[0].quantity),
+                    (12, Some(11), 10)
+                );
+                assert_ne!(children[0].alleles, Some([500, 500]));
+                ripe.core
+                    .physical
+                    .custody
+                    .containers
+                    .iter_mut()
+                    .find(|row| {
+                        row.place
+                            == Place::Stock {
+                                region: 1,
+                                good: crop.seed,
+                            }
+                    })
+                    .unwrap()
+                    .capacity = 1;
+                let mut blocked = CoreHost::resume(ripe).unwrap();
+                for _ in 0..2 {
+                    assert_eq!(
+                        blocked.advance_continuous(900_000, &[]).unwrap().failure,
+                        None
+                    );
+                    let failed = blocked.snapshot();
+                    assert_eq!(failed.core.physical.custody.next_batch, Some(13));
+                    assert_eq!(
+                        failed
+                            .agriculture
+                            .as_ref()
+                            .unwrap()
+                            .provenance
+                            .as_ref()
+                            .unwrap()
+                            .plantings[0]
+                            .offspring
+                            .as_ref()
+                            .unwrap(),
+                        &children
+                    );
+                    assert_eq!(
+                        failed
+                            .core
+                            .physical
+                            .custody
+                            .containers
+                            .iter()
+                            .find(|row| row.place
+                                == Place::Stock {
+                                    region: 1,
+                                    good: crop.seed
+                                })
+                            .unwrap()
+                            .used,
+                        0
+                    );
+                    assert_eq!(
+                        failed
+                            .core
+                            .physical
+                            .custody
+                            .containers
+                            .iter()
+                            .find(|row| row.place
+                                == Place::Stock {
+                                    region: 1,
+                                    good: crop.output
+                                })
+                            .unwrap()
+                            .used,
+                        0
+                    );
+                }
+                let mut retry = blocked.snapshot();
+                retry
+                    .core
+                    .physical
+                    .custody
+                    .containers
+                    .iter_mut()
+                    .find(|row| {
+                        row.place
+                            == Place::Stock {
+                                region: 1,
+                                good: crop.seed,
+                            }
+                    })
+                    .unwrap()
+                    .capacity = 1000;
+                let mut host = CoreHost::resume(
+                    serde_json::from_str(&serde_json::to_string(&retry).unwrap()).unwrap(),
+                )
+                .unwrap();
+                assert_eq!(host.advance_continuous(900_000, &[]).unwrap().failure, None);
+                let harvested = host.snapshot();
+                assert_eq!(
+                    harvested.agriculture.as_ref().unwrap().fields[0].phase,
+                    Phase::Fallow
+                );
+                let seed_stock = harvested
+                    .core
+                    .physical
+                    .custody
+                    .containers
+                    .iter()
+                    .find(|row| {
+                        row.place
+                            == Place::Stock {
+                                region: 1,
+                                good: crop.seed,
+                            }
+                    })
+                    .unwrap();
+                assert_eq!(
+                    seed_stock
+                        .lots
+                        .iter()
+                        .map(|lot| (lot.batch, lot.quantity))
+                        .collect::<Vec<_>>(),
+                    vec![(Some(12), 10)]
+                );
+                assert_eq!(host.advance_continuous(900_000, &[]).unwrap().failure, None);
+                let second = host.snapshot();
+                let farm = second.agriculture.as_ref().unwrap();
+                assert_eq!(farm.fields[0].phase, Phase::Growing);
+                let planting = &farm.provenance.as_ref().unwrap().plantings[0];
+                assert_eq!(planting.seeds[0].batch, Some(12));
+                assert_eq!(
+                    farm.provenance
+                        .as_ref()
+                        .unwrap()
+                        .genetics
+                        .as_ref()
+                        .unwrap()
+                        .alleles(12),
+                    children[0].alleles
+                );
+                let restored = CoreHost::resume(
+                    serde_json::from_str(&serde_json::to_string(&second).unwrap()).unwrap(),
+                )
+                .unwrap();
+                assert_eq!(second, restored.snapshot());
+                serde_json::to_value(second).unwrap()
+            })
+    }
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
 fn actual_seed_genotypes_change_physical_growth_without_deciding_for_the_farmer() {
     use game_economy::core_interval::CoreHost;
     use game_economy_agriculture::Phase;

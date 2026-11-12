@@ -2165,7 +2165,8 @@ fn scenario_with_options_inner(
             let genetics = state
                 .seed_genetics
                 .map(|mut genetics| {
-                    genetics.strains.sort_unstable_by_key(|row| row.batch);
+                    std::sync::Arc::make_mut(&mut genetics.strains)
+                        .sort_unstable_by_key(|row| row.batch);
                     genetics.validate().map_err(str::to_owned)?;
                     Ok::<_, String>(std::sync::Arc::new(genetics))
                 })
@@ -2482,6 +2483,12 @@ fn scenario_with_options_inner(
             .par_iter()
             .flat_map_iter(|container| container.lots.iter().filter_map(|lot| lot.batch))
             .chain(genetics.strains.par_iter().map(|strain| strain.batch))
+            .chain(
+                genetics
+                    .descendants
+                    .par_iter()
+                    .flat_map_iter(|chunk| chunk.iter().map(|row| row.batch)),
+            )
             .max();
         custody.next_batch = Some(highest.map_or(Ok(1), |id| {
             id.checked_add(1).ok_or("batch identity overflow")

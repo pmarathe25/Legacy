@@ -4,6 +4,7 @@ pub mod content;
 pub mod genetics;
 pub mod irrigation;
 pub mod provenance;
+pub mod reproduction;
 pub mod requests;
 pub mod soil;
 use game_economy_person::Person;
@@ -336,6 +337,7 @@ pub struct Plan {
     pub changes: Vec<(u64, u64, Phase, u32)>,
     requests: Option<requests::Prepared>,
     track_seeds: bool,
+    maturations: Option<reproduction::Maturations>,
 }
 pub fn append_planting(plan: &mut Option<Plan>, actions: &mut Vec<Transaction>) -> Vec<u64> {
     plan.as_mut().map_or_else(Vec::new, |plan| {
@@ -645,32 +647,66 @@ impl Context<'_> {
                         Phase::Growing,
                         crop.growth_ticks,
                     ),
-                    Phase::Ripe => (
-                        None,
-                        Some(Transaction {
-                            id: action,
-                            movements: vec![],
-                            creations: vec![
-                                catalog.creation(
+                    Phase::Ripe => {
+                        let mut creations = vec![
+                            catalog.creation(
+                                action,
+                                Place::Stock {
+                                    region: field.region,
+                                    good: crop.output,
+                                },
+                                crop.output,
+                                self.agriculture
+                                    .soil
+                                    .as_ref()
+                                    .map_or(crop.output_quantity, |soil| {
+                                        soil.yield_quantity(field.id, crop.output_quantity)
+                                    }),
+                                self.tick,
+                            )?,
+                        ];
+                        if let Some(owner) = &self.agriculture.provenance
+                            && owner
+                                .genetics
+                                .as_ref()
+                                .is_some_and(|genetics| genetics.reproduction.is_some())
+                        {
+                            let planting = owner
+                                .plantings
+                                .binary_search_by_key(&field.id, |row| row.field)
+                                .ok()
+                                .map(|index| &owner.plantings[index])
+                                .ok_or("missing mature seed provenance")?;
+                            let offspring = planting
+                                .offspring
+                                .as_ref()
+                                .ok_or("missing mature seed offspring")?;
+                            for child in offspring {
+                                let mut creation = catalog.creation(
                                     action,
                                     Place::Stock {
                                         region: field.region,
-                                        good: crop.output,
+                                        good: crop.seed,
                                     },
-                                    crop.output,
-                                    self.agriculture
-                                        .soil
-                                        .as_ref()
-                                        .map_or(crop.output_quantity, |soil| {
-                                            soil.yield_quantity(field.id, crop.output_quantity)
-                                        }),
+                                    crop.seed,
+                                    child.quantity,
                                     self.tick,
-                                )?,
-                            ],
-                        }),
-                        Phase::Fallow,
-                        0,
-                    ),
+                                )?;
+                                creation.lot.batch = Some(child.batch);
+                                creations.push(creation);
+                            }
+                        }
+                        (
+                            None,
+                            Some(Transaction {
+                                id: action,
+                                movements: vec![],
+                                creations,
+                            }),
+                            Phase::Fallow,
+                            0,
+                        )
+                    }
                     Phase::Growing => return Err("growing field selected".into()),
                 };
                 Ok((worker, field.id, action, phase, remaining, plant, harvest))
@@ -743,6 +779,7 @@ impl Context<'_> {
                 });
         Ok(Plan {
             track_seeds: self.agriculture.provenance.is_some(),
+            maturations: None,
             actors,
             requesters: requested
                 .as_ref()
@@ -757,6 +794,29 @@ impl Context<'_> {
     }
 }
 impl Plan {
+    /// Preview maturing seed cohorts without allocating or publishing IDs.
+    pub fn prepare_maturation(
+        &self,
+        owner: &Agriculture,
+        seed: u64,
+    ) -> Result<Option<reproduction::MaturationDraft>, String> {
+        let Some(provenance) = &owner.provenance else {
+            return Ok(None);
+        };
+        reproduction::prepare_maturation(&self.fields, provenance, seed)
+    }
+    /// Attach the identity range reserved by the physical boundary owner.
+    pub fn stage_maturation(
+        &mut self,
+        draft: reproduction::MaturationDraft,
+        start: Option<u64>,
+    ) -> Result<(), String> {
+        if self.maturations.is_some() {
+            return Err("seed maturation already staged".into());
+        }
+        self.maturations = Some(reproduction::assign(draft, start)?);
+        Ok(())
+    }
     /// Growth uses committed opening moisture; watering takes effect next boundary.
     pub fn gate_dry_growth(&mut self, owner: &Agriculture, irrigation: &irrigation::Irrigation) {
         let mut opening: Vec<_> = owner.fields.par_iter().collect();
@@ -795,6 +855,11 @@ impl Plan {
             .as_ref()
             .map(|provenance| provenance.stage(&self.changes, events, &decisions))
             .transpose()?;
+        let provenance = match (provenance, self.maturations) {
+            (Some(owner), Some(maturations)) => Some(owner.mature(maturations)?),
+            (None, Some(_)) => return Err("missing seed provenance owner".into()),
+            (owner, None) => owner,
+        };
         let mut changes = self.changes;
         if changes.par_windows(2).any(|p| p[0].0 > p[1].0) {
             changes.par_sort_unstable_by_key(|row| row.0);

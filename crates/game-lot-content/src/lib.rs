@@ -228,13 +228,14 @@ pub fn validate_growth(
 ) -> Result<(), String> {
     if actions.par_iter().any(|action| {
         !action.movements.is_empty()
-            || action.creations.len() != 1
+            || action.creations.is_empty()
             || action.creations.iter().any(|row| {
-                !matches!(row.to, Place::Stock { good, .. } if good == row.lot.good)
+                row.lot.batch == Some(0)
+                    || !matches!((action.creations[0].to, row.to), (Place::Stock { region: first, .. }, Place::Stock { region, good }) if first == region && good == row.lot.good)
                     || catalog
                         .fresh(row.lot.good, row.lot.quantity, tick)
                         .ok()
-                        .is_none_or(|lot| lot != row.lot)
+                        .is_none_or(|mut lot| { lot.batch = row.lot.batch; lot != row.lot })
             })
     }) {
         return Err("invalid environmental output".into());

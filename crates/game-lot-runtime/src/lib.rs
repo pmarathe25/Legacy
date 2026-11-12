@@ -97,6 +97,9 @@ impl Runtime {
     pub fn tick(&self) -> u64 {
         self.store.tick()
     }
+    pub fn next_batch(&self) -> Option<u64> {
+        self.store.next_batch()
+    }
     /// Enable durable batch allocation at an idle physical boundary.
     pub fn enable_batch_allocator(&mut self, minimum: u64) -> Result<u64, String> {
         self.ensure_no_work_interval()?;

@@ -14,8 +14,10 @@ game-environment = { path = "../game-environment" }
 game-economy-person = { path = "../game-economy-person" }
 game-economy-claims = { path = "../game-economy-claims" }
 game-families = { path = "../game-families" }
+game-genetics = { path = "../game-genetics" }
 game-lot-content = { path = "../game-lot-content" }
 game-lot-runtime = { path = "../game-lot-runtime" }
+game-lot-planning = { path = "../game-lot-planning" }
 game-lots = { path = "../game-lots" }
 game-opinions = { path = "../game-opinions" }
 game-production-model = { path = "../game-production-model" }

@@ -5,8 +5,7 @@ People choose field work according to their own preferences and pressures. Plant
 Set `track_seed_batches = true` in a cultivation scenario to retain the exact
 seed cohorts actually consumed when a field is planted. These records are
 prepared from accepted physical receipts, persist while a crop grows or a
-harvest fails, and are removed on successful harvest. They do not yet cause
-plant inheritance or put batch identities on harvests. Without tracking,
+harvest fails, and are removed on successful harvest. Without tracking,
 planting retains the compact consumption path. See
 `content/scenarios/economy-core-seed-provenance.toml`.
 That scenario also uses `[[cultivation.seed_batches]]` entries with a region,
@@ -30,9 +29,19 @@ to batch IDs and defines a signed effect and bounds for physical growth
 duration. The field's duration uses a quantity-weighted expression of the
 seed cohorts actually consumed; an unrecognized batch contributes neutral
 expression. This does not give a farmer access to genetic values. It is a
-physical growth slice only: offspring, mutation, environmental genetic
-selection and genetic harvests are still missing. See
+physical growth slice. See
 `content/scenarios/economy-core-seed-genetics.toml`.
+
+Optional `[cultivation.seed_genetics.reproduction]` defines `seed_per_thousand`,
+`mutation_per_million`, and `mutation_step`. At maturation, each planted seed
+cohort produces a clonal descendant, with deterministic mutations to known
+alleles; unknown genetics remain unknown. The physical batch identity and
+lineage are reserved at maturation and survive save/load and failed harvests.
+An accepted harvest creates its food and seed cohorts in one physical
+transaction. The farmer still chooses whether to cultivate or harvest.
+This slice does not yet model sexual recombination or selection among
+individual plants within a cohort. See
+`content/scenarios/economy-core-seed-reproduction.toml`.
 
 Optional `[cultivation.soil]` content specifies `capacity`, `loss_per_harvest`, `recovery_per_fallow`, and sorted `fields = [{ field, fertility }, ...]`. A configured field's harvest yields its crop's ordinary output multiplied by fertility over capacity, rounded down with a minimum of one unit. A successful physical harvest depletes fertility; a field that starts a boundary fallow recovers up to capacity. Failed harvests cause no depletion. Fields without a soil record keep their ordinary yield. This is a basic fertility model, not a complete treatment of soils or nutrients.
 

@@ -259,6 +259,9 @@ impl Store {
     pub fn revision(&self) -> u64 {
         self.state.revision
     }
+    pub fn next_batch(&self) -> Option<u64> {
+        self.state.next_batch
+    }
     /// Enable durable generated batch IDs. Existing drafts become stale.
     pub fn enable_batch_allocator(&mut self, minimum: u64) -> Result<u64, String> {
         if minimum == 0 {

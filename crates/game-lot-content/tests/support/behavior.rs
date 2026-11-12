@@ -199,3 +199,28 @@ fn fractional_days_round_expiry_up_and_overflow_is_rejected() {
     assert!(Catalog::from_tick_millis(&goods(), 0).is_err());
     assert!(Catalog::compile(&goods(), u64::MAX).is_err());
 }
+
+#[test]
+fn one_harvest_can_create_fresh_tagged_cohorts_only_in_its_region() {
+    let catalog = Catalog::compile(&goods(), 10).unwrap();
+    let mut seed = catalog
+        .creation(2, Place::Stock { region: 1, good: 2 }, 2, 3, 7)
+        .unwrap();
+    seed.lot.batch = Some(42);
+    let mut action = Transaction {
+        id: 1,
+        movements: vec![],
+        creations: vec![
+            catalog
+                .creation(1, Place::Stock { region: 1, good: 1 }, 1, 4, 7)
+                .unwrap(),
+            seed,
+        ],
+    };
+    assert!(validate_growth(&catalog, &[action.clone()], 7).is_ok());
+    action.creations[1].to = Place::Stock { region: 2, good: 2 };
+    assert!(validate_growth(&catalog, &[action.clone()], 7).is_err());
+    action.creations[1].to = Place::Stock { region: 1, good: 2 };
+    action.creations[0].lot.expires_at = Some(99);
+    assert!(validate_growth(&catalog, &[action], 7).is_err());
+}

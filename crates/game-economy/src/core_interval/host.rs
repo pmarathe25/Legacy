@@ -951,6 +951,30 @@ impl CoreHost {
         if let Some(owner) = &agriculture {
             let view = core.physical.view(core.physical.tick())?;
             owner.validate(&core.people, core.physical.goods(), &view)?;
+            if let Some(genetics) = owner
+                .provenance
+                .as_ref()
+                .and_then(|provenance| provenance.genetics.as_ref())
+                && genetics.reproduction.is_some()
+                && core.physical.next_batch().is_none_or(|next| {
+                    genetics
+                        .highest_batch()
+                        .is_some_and(|highest| highest >= next)
+                        || owner.provenance.as_ref().is_some_and(|provenance| {
+                            provenance.plantings.par_iter().any(|record| {
+                                record
+                                    .seeds
+                                    .iter()
+                                    .any(|lot| lot.batch.is_some_and(|batch| batch >= next))
+                            })
+                        })
+                })
+            {
+                return Err(
+                    "seed reproduction requires a batch allocator above all retained lineages"
+                        .into(),
+                );
+            }
         }
         if let Some(owner) = &irrigation {
             let agriculture = agriculture
@@ -2070,6 +2094,27 @@ impl CoreHost {
         let mut cultivation = self.plan_cultivation(occupied, base)?;
         let compact = game_economy_agriculture::append_planting(&mut cultivation, &mut actions);
         let irrigation_plan = self.plan_irrigation(occupied, &mut cultivation, &mut actions)?;
+        let mut seed_allocation = None;
+        if let (Some(plan), Some(owner)) = (&mut cultivation, &self.agriculture)
+            && let Some(maturation) = plan.prepare_maturation(owner, self.core.seed)?
+        {
+            let count = maturation.count();
+            let start = if count == 0 {
+                None
+            } else {
+                let allocation = self.core.physical.plan_batches(&[game_lots::BatchCount {
+                    owner: game_economy_agriculture::reproduction::BATCH_OWNER,
+                    count,
+                }])?;
+                let start = allocation
+                    .range(game_economy_agriculture::reproduction::BATCH_OWNER)
+                    .ok_or("missing seed batch range")?
+                    .start;
+                seed_allocation = Some(allocation);
+                Some(start)
+            };
+            plan.stage_maturation(maturation, start)?;
+        }
         let gathering_base = if self.gathering.is_some() {
             let changes = cultivation
                 .as_ref()
@@ -2197,6 +2242,11 @@ impl CoreHost {
         let mut draft = self
             .core
             .prepare_settlement_with_growth(&actions, growth, config)?;
+        if let Some(allocation) = seed_allocation {
+            self.core
+                .physical
+                .attach_interval_batch_allocation(&mut draft.physical, allocation)?;
+        }
         let tick = draft.events().tick;
         let finished_for_purpose = self
             .purpose
