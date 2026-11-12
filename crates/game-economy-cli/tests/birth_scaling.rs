@@ -10,9 +10,15 @@ fn newborn_choices_with_physical_births_benchmark() {
         .map(|value| value.parse().expect("invalid birth count"))
         .unwrap_or(5_000);
     assert!((1..=100_000).contains(&count));
+    let signals = std::env::var_os("LEGACY_BIRTH_SIGNALS").is_some();
+    let signal_baseline = std::env::var_os("LEGACY_BIRTH_SIGNALS_BASELINE").is_some();
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let mut snapshot = game_economy_cli::core_scenario(
-        &root.join("content/scenarios/economy-core-birth-choices.toml"),
+        &root.join(if signals {
+            "content/scenarios/economy-core-birth-signals.toml"
+        } else {
+            "content/scenarios/economy-core-birth-choices.toml"
+        }),
         &root.join("content"),
     )
     .unwrap()
@@ -64,6 +70,16 @@ fn newborn_choices_with_physical_births_benchmark() {
     if baseline {
         snapshot.schedule.as_mut().unwrap().birth_choices = None;
     }
+    if signals && signal_baseline {
+        snapshot
+            .social
+            .as_mut()
+            .unwrap()
+            .signals
+            .as_mut()
+            .unwrap()
+            .birth_profile = None;
+    }
     let mut initial = CoreHost::resume(snapshot).unwrap();
     assert_eq!(
         initial.advance_continuous(3_599_999, &[]).unwrap().failure,
@@ -94,6 +110,17 @@ fn newborn_choices_with_physical_births_benchmark() {
                 .as_ref()
                 .unwrap();
             assert_eq!(choices.len() as u64, if baseline { 0 } else { count });
+            if signals {
+                let owner = state.social.as_ref().unwrap().signals.as_ref().unwrap();
+                assert_eq!(
+                    owner.minds.len() as u64,
+                    if signal_baseline { 1 } else { count + 1 }
+                );
+                assert_eq!(
+                    owner.events.len() as u64,
+                    if signal_baseline { 0 } else { count }
+                );
+            }
             if let Some(expected) = &reference {
                 assert_eq!(&state, expected);
             } else {
@@ -104,7 +131,11 @@ fn newborn_choices_with_physical_births_benchmark() {
         eprintln!(
             "{workers} workers: {:?} median for {count} physical births ({})",
             times[1],
-            if baseline {
+            if signals && signal_baseline {
+                "signals baseline"
+            } else if signals {
+                "newborn signals and choices"
+            } else if baseline {
                 "baseline"
             } else {
                 "personal choices"

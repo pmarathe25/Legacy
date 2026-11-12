@@ -85,6 +85,48 @@ pub struct GiftOpportunity {
     pub value: i64,
 }
 
+/// An authored inclination for an actual newborn; it does not define a shared meaning.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BirthExpression {
+    pub form: u32,
+    #[serde(default)]
+    pub intended: Option<u32>,
+    #[serde(default)]
+    pub direct_to_mother: bool,
+    pub enabled: bool,
+    #[serde(default)]
+    pub hunger_at_least: Option<u32>,
+    pub value: i64,
+    #[serde(default)]
+    pub hunger_weight: i32,
+    #[serde(default)]
+    pub locus: Option<u8>,
+    #[serde(default)]
+    pub genetic_bias: i32,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BirthProfile {
+    pub idle: i64,
+    #[serde(default)]
+    pub act_on_tie: bool,
+    pub attention: u16,
+    #[serde(default)]
+    pub remember: bool,
+    #[serde(default)]
+    pub capacity: usize,
+    pub expressions: Vec<BirthExpression>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Newborn {
+    pub person: u64,
+    pub mother: u64,
+    pub genes: [u16; 4],
+}
+
 /// A listener's own recollection, without access to the sender's intention.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -140,6 +182,8 @@ pub struct Event {
 #[serde(deny_unknown_fields)]
 pub struct Signals {
     pub catalog: Catalog,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub birth_profile: Option<BirthProfile>,
     #[serde(default)]
     pub minds: Vec<Mind>,
     #[serde(default)]
@@ -150,6 +194,7 @@ impl Clone for Signals {
     fn clone(&self) -> Self {
         Self {
             catalog: self.catalog.clone(),
+            birth_profile: self.birth_profile.clone(),
             minds: self.minds.par_iter().cloned().collect(),
             events: self.events.par_iter().copied().collect(),
         }
@@ -235,8 +280,24 @@ impl Signals {
             .is_ok()
     }
 
+    fn valid_birth_profile(&self) -> bool {
+        self.birth_profile.as_ref().is_none_or(|profile| {
+            profile.attention <= 1000
+                && !profile.expressions.windows(2).any(|rows| {
+                    (rows[0].form, rows[0].direct_to_mother)
+                        >= (rows[1].form, rows[1].direct_to_mother)
+                })
+                && !profile.expressions.iter().any(|row| {
+                    !self.valid_form(row.form)
+                        || row.intended.is_some_and(|id| !self.valid_meaning(id))
+                        || row.locus.is_some_and(|locus| locus >= 4)
+                })
+        })
+    }
+
     fn valid_state(&self, now: u64) -> bool {
         self.valid_catalog()
+            && self.valid_birth_profile()
             && !self
                 .minds
                 .par_windows(2)
@@ -343,6 +404,85 @@ impl Signals {
                 .collect();
         }
         targets
+    }
+
+    /// Add independent minds for actual births, with no inherited interpretations or memories.
+    pub fn enroll_births(&mut self, births: &[Newborn]) -> Result<(), &'static str> {
+        let Some(profile) = &self.birth_profile else {
+            return Ok(());
+        };
+        if !self.valid_birth_profile() {
+            return Err("invalid signal birth profile");
+        }
+        let mut ids: Vec<_> = births.par_iter().map(|birth| birth.person).collect();
+        if ids.par_windows(2).any(|rows| rows[0] > rows[1]) {
+            ids.par_sort_unstable();
+        }
+        if ids.par_windows(2).any(|rows| rows[0] == rows[1])
+            || births.par_iter().any(|birth| {
+                birth.person == 0
+                    || birth.mother == 0
+                    || birth.person == birth.mother
+                    || birth.genes.iter().any(|gene| *gene > 1000)
+            })
+        {
+            return Err("invalid signal birth");
+        }
+        let added: Vec<_> = births
+            .par_iter()
+            .filter(|birth| self.mind(birth.person).is_none())
+            .map(|birth| {
+                let mut expressions: Vec<_> = profile
+                    .expressions
+                    .iter()
+                    .map(|row| {
+                        let gene = row
+                            .locus
+                            .and_then(|locus| birth.genes.get(usize::from(locus)))
+                            .copied()
+                            .unwrap_or(500);
+                        let value = i128::from(row.value)
+                            + i128::from(row.genetic_bias) * (i128::from(gene) - 500) / 1000;
+                        Expression {
+                            form: row.form,
+                            intended: row.intended,
+                            recipient: row.direct_to_mother.then_some(birth.mother),
+                            enabled: row.enabled,
+                            hunger_at_least: row.hunger_at_least,
+                            value: value.clamp(i128::from(i64::MIN), i128::from(i64::MAX)) as i64,
+                            hunger_weight: row.hunger_weight,
+                        }
+                    })
+                    .collect();
+                expressions.sort_unstable_by_key(|row| (row.form, row.recipient));
+                Mind {
+                    person: birth.person,
+                    idle: profile.idle,
+                    act_on_tie: profile.act_on_tie,
+                    attention: profile.attention,
+                    expressions,
+                    interpretations: vec![],
+                    reactions: vec![],
+                    gift_preferences: vec![],
+                    gift_idle: 0,
+                    gift_on_tie: false,
+                    remember: profile.remember,
+                    capacity: profile.capacity,
+                    observations: vec![],
+                }
+            })
+            .collect();
+        if !added.is_empty() {
+            self.minds.par_extend(added.into_par_iter());
+            if self
+                .minds
+                .par_windows(2)
+                .any(|rows| rows[0].person > rows[1].person)
+            {
+                self.minds.par_sort_unstable_by_key(|mind| mind.person);
+            }
+        }
+        Ok(())
     }
 
     /// Interpret only noticed events, using each observer's own preferences.
@@ -589,6 +729,7 @@ impl Signals {
         });
         Ok(Self {
             catalog: self.catalog.clone(),
+            birth_profile: self.birth_profile.clone(),
             minds,
             events,
         })

@@ -6,6 +6,7 @@ use std::collections::HashSet;
 
 fn initial() -> Signals {
     Signals {
+        birth_profile: None,
         catalog: Catalog {
             forms: vec![
                 Named {
@@ -73,6 +74,84 @@ fn initial() -> Signals {
         ],
         events: vec![],
     }
+}
+
+#[test]
+fn newborns_choose_personal_signals_without_inheriting_meanings_or_memories() {
+    use game_signals::{BirthExpression, BirthProfile, Newborn};
+    let mut state = initial();
+    state.birth_profile = Some(BirthProfile {
+        idle: 0,
+        act_on_tie: false,
+        attention: 1000,
+        remember: true,
+        capacity: 4,
+        expressions: vec![BirthExpression {
+            form: 1,
+            intended: Some(1),
+            direct_to_mother: true,
+            enabled: true,
+            hunger_at_least: None,
+            value: 0,
+            hunger_weight: 0,
+            locus: Some(2),
+            genetic_bias: 1000,
+        }],
+    });
+    let births = [
+        Newborn {
+            person: 3,
+            mother: 2,
+            genes: [500, 500, 100, 500],
+        },
+        Newborn {
+            person: 4,
+            mother: 2,
+            genes: [500, 500, 900, 500],
+        },
+    ];
+    let mut invalid = state.clone();
+    assert!(invalid.enroll_births(&[births[0], births[0]]).is_err());
+    assert_eq!(invalid, state);
+    assert!(
+        invalid
+            .enroll_births(&[births[1], births[0], births[1]])
+            .is_err()
+    );
+    assert_eq!(invalid, state);
+    state.enroll_births(&births).unwrap();
+    assert_eq!(state.minds[2].expressions[0].value, -400);
+    assert_eq!(state.minds[3].expressions[0].value, 400);
+    assert!(
+        state.minds[2..]
+            .iter()
+            .all(|mind| mind.interpretations.is_empty() && mind.observations.is_empty())
+    );
+    let events = state
+        .prepare_with_directed(
+            &[],
+            &[
+                Directed {
+                    actor: 3,
+                    observer: 2,
+                    hunger: 0,
+                },
+                Directed {
+                    actor: 4,
+                    observer: 2,
+                    hunger: 0,
+                },
+            ],
+            7,
+            1,
+        )
+        .unwrap()
+        .events;
+    assert_eq!(events.len(), 1);
+    assert_eq!(
+        (events[0].actor, events[0].observer, events[0].interpreted),
+        (4, 2, Some(2))
+    );
 }
 
 #[test]
@@ -335,6 +414,7 @@ fn sparse_person_ids_use_the_same_personal_interpretations() {
 fn disjoint_personal_signal_choices_match_across_workers() {
     let template = initial();
     let mut state = Signals {
+        birth_profile: None,
         catalog: template.catalog,
         minds: vec![],
         events: vec![],
@@ -368,6 +448,7 @@ fn disjoint_personal_signal_choices_match_across_workers() {
 fn directed_signals_need_no_meeting_and_fan_in_keeps_bounded_personal_memory() {
     let template = initial();
     let mut state = Signals {
+        birth_profile: None,
         catalog: template.catalog,
         minds: vec![],
         events: vec![],
@@ -428,6 +509,7 @@ fn independent_signals_benchmark() {
     assert!(count > 0 && count.is_multiple_of(2));
     let template = initial();
     let mut state = Signals {
+        birth_profile: None,
         catalog: template.catalog,
         minds: vec![],
         events: vec![],
@@ -481,6 +563,7 @@ fn concentrated_signals_benchmark() {
     assert!(count > 0);
     let template = initial();
     let mut state = Signals {
+        birth_profile: None,
         catalog: template.catalog,
         minds: vec![],
         events: vec![],

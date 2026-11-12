@@ -17,12 +17,21 @@ impl CoreHost {
         else {
             return;
         };
+        let needs_members = self.schedule.as_ref().is_some_and(|schedule| {
+            schedule.birth_choices.is_some() && schedule.personal_choices.is_some()
+        }) || self
+            .social
+            .as_ref()
+            .and_then(|social| social.signals.as_ref())
+            .is_some_and(|signals| signals.birth_profile.is_some());
+        let members = needs_members.then(|| {
+            game_family_index::MemberIndex::new(&family.members).expect("validated family")
+        });
         if let Some(schedule) = &mut self.schedule
             && let Some(profile) = &schedule.birth_choices
             && let Some(people) = &mut schedule.personal_choices
         {
-            let members =
-                game_family_index::MemberIndex::new(&family.members).expect("validated family");
+            let members = members.as_ref().expect("newborn choice index");
             let births: Vec<_> = newborns
                 .par_iter()
                 .filter_map(|person| {
@@ -47,6 +56,28 @@ impl CoreHost {
                     people.par_sort_unstable_by_key(|row| row.id);
                 }
             }
+        }
+        if let Some(signals) = self
+            .social
+            .as_mut()
+            .and_then(|social| social.signals.as_mut())
+            && signals.birth_profile.is_some()
+        {
+            let members = members.as_ref().expect("newborn signal index");
+            let births: Vec<_> = newborns
+                .par_iter()
+                .map(|person| {
+                    let member = members.get(person).expect("known newborn");
+                    game_signals::Newborn {
+                        person: *person,
+                        mother: *member.parents.first().expect("newborn has a mother"),
+                        genes: std::array::from_fn(|locus| member.genome.expressed(locus)),
+                    }
+                })
+                .collect();
+            signals
+                .enroll_births(&births)
+                .expect("validated signal births");
         }
         if let Some(social) = self
             .social

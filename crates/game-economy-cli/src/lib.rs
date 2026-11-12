@@ -859,6 +859,8 @@ struct LanguageTopic {
 struct SignalsConfig {
     catalog: String,
     #[serde(default)]
+    birth_profile: Option<game_signals::BirthProfile>,
+    #[serde(default)]
     minds: Vec<game_signals::Mind>,
     #[serde(default)]
     gifts: Vec<SignalGift>,
@@ -1106,6 +1108,7 @@ pub fn core_scenario_with_options(
             .ok_or("signals require social encounters")?
             .signals = Some(game_signals::Signals {
             catalog,
+            birth_profile: signals.birth_profile,
             minds: signals.minds,
             events: vec![],
         });

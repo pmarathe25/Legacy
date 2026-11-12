@@ -2909,6 +2909,67 @@ fn actual_newborns_receive_personal_genetic_inclinations() {
 }
 
 #[test]
+fn newborns_can_direct_personal_signals_without_a_social_meeting() {
+    use game_economy::core_interval::{CoreHost, CoreRunEvent};
+    fn run(workers: usize, enabled: bool) -> serde_json::Value {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let root = root();
+                let mut snapshot = game_economy_cli::core_scenario(
+                    &root.join("content/scenarios/economy-core-birth-signals.toml"),
+                    &root.join("content"),
+                )
+                .unwrap()
+                .snapshot();
+                if !enabled {
+                    snapshot
+                        .social
+                        .as_mut()
+                        .unwrap()
+                        .signals
+                        .as_mut()
+                        .unwrap()
+                        .birth_profile = None;
+                }
+                let mut host = CoreHost::resume(snapshot).unwrap();
+                let result = host.advance_continuous(3_600_001, &[]).unwrap();
+                assert_eq!(result.failure, None);
+                assert!(!result.events.iter().any(
+                    |event| matches!(event, CoreRunEvent::Meetings(rows) if !rows.is_empty())
+                ));
+                let state = host.snapshot();
+                let signals = state.social.as_ref().unwrap().signals.as_ref().unwrap();
+                let child = signals.minds.iter().find(|mind| mind.person == 3);
+                if enabled {
+                    let child = child.unwrap();
+                    assert!(child.interpretations.is_empty());
+                    assert!(child.observations.is_empty());
+                    assert_eq!(child.expressions[0].recipient, Some(2));
+                    assert_eq!(child.expressions[0].intended, Some(1));
+                    assert!(signals.events.iter().any(|event| event.actor == 3
+                        && event.observer == 2
+                        && event.interpreted == Some(2)));
+                } else {
+                    assert!(child.is_none());
+                    assert!(signals.events.is_empty());
+                }
+                let saved = serde_json::to_string(&state).unwrap();
+                let mut restored = CoreHost::resume(serde_json::from_str(&saved).unwrap()).unwrap();
+                assert_eq!(host.advance_continuous(1, &[]).unwrap().failure, None);
+                assert_eq!(restored.advance_continuous(1, &[]).unwrap().failure, None);
+                assert_eq!(host.snapshot(), restored.snapshot());
+                serde_json::to_value(host.snapshot()).unwrap()
+            })
+    }
+    for enabled in [false, true] {
+        assert_eq!(run(1, enabled), run(4, enabled));
+    }
+}
+
+#[test]
 fn authored_personality_is_inherited_only_at_real_births() {
     fn run(workers: usize) -> serde_json::Value {
         rayon::ThreadPoolBuilder::new()

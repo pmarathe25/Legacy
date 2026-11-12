@@ -26,8 +26,12 @@ actual custody, capacity, reach and competing activities. No actual hunger,
 request or agreement is inferred, and the giver may prefer idleness. This
 currently uses the giving scheduler's fixed priority rather than the general
 cross-domain choice round. Learning new interpretations and additional physical
-responses remain to be implemented. Only configured minds participate; newborns
-are not yet enrolled through heredity or upbringing.
+responses remain to be implemented. An optional data-defined birth profile can
+enroll actual newborns with individual, genetically adjusted expression
+inclinations; it does not give them another person's interpretations,
+relationships or memories. A newborn can be configured to direct a signal at
+their actual mother, subject to physical reach and their own inclination.
+The interval host enrolls them only when family birth enrollment is enabled.
 
 Scenarios can author `[[signals.gifts]]` with a person, named catalog meaning,
 named good, quantity, and personal value. These resolve to runtime identifiers
