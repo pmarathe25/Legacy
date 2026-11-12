@@ -179,7 +179,7 @@ impl CoreHost {
                         .prepare(&rows, self.core.seed, tick)
                         .map_err(str::to_owned);
                 }
-                let topics = |person: u64, region: u64| {
+                let topics = |person: u64, other: u64, region: u64| {
                     let mut topics = vec![game_language::Meaning::Place(region)];
                     let policy = language
                         .minds
@@ -210,6 +210,19 @@ impl CoreHost {
                             }
                         }
                     }
+                    if let Some(policy) = policy {
+                        topics.extend(policy.preferences.iter().filter_map(|preference| {
+                            match preference.meaning {
+                                game_language::Meaning::Person(target)
+                                    if preference.enabled
+                                        && (target == person || target == other) =>
+                                {
+                                    Some(preference.meaning)
+                                }
+                                _ => None,
+                            }
+                        }));
+                    }
                     topics
                 };
                 let rows: Vec<_> = meetings
@@ -217,8 +230,8 @@ impl CoreHost {
                     .map(|meeting| game_language::GroundedMeeting {
                         a: meeting.a,
                         b: meeting.b,
-                        a_topics: topics(meeting.a, meeting.region),
-                        b_topics: topics(meeting.b, meeting.region),
+                        a_topics: topics(meeting.a, meeting.b, meeting.region),
+                        b_topics: topics(meeting.b, meeting.a, meeting.region),
                     })
                     .collect();
                 language

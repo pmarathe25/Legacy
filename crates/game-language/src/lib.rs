@@ -58,6 +58,8 @@ pub enum Meaning {
     Place(u64),
     Object(u32),
     Need(u32),
+    /// A personally identified person, grounded in an actual encounter.
+    Person(u64),
 }
 
 impl Meaning {
@@ -66,13 +68,22 @@ impl Meaning {
             Self::Place(id) => random(id ^ 1),
             Self::Object(id) => random(u64::from(id) ^ 2),
             Self::Need(id) => random(u64::from(id) ^ 3),
+            Self::Person(id) => random(id ^ 4),
         }
     }
     fn valid(self) -> bool {
         match self {
-            Self::Place(id) => id != 0,
+            Self::Place(id) | Self::Person(id) => id != 0,
             Self::Object(id) | Self::Need(id) => id != 0,
         }
+    }
+
+    fn known(self, people: &HashSet<u64>) -> bool {
+        self.valid()
+            && match self {
+                Self::Person(id) => people.contains(&id),
+                _ => true,
+            }
     }
 }
 
@@ -384,11 +395,11 @@ impl Language {
                             || policy
                                 .preferences
                                 .iter()
-                                .any(|topic| !topic.meaning.valid())
+                                .any(|topic| !topic.meaning.known(people))
                     })
                     || m.words.windows(2).any(|w| w[0].meaning >= w[1].meaning)
                     || m.words.iter().any(|w| {
-                        !w.meaning.valid()
+                        !w.meaning.known(people)
                             || w.sounds.is_empty()
                             || w.sounds.len() > 16
                             || w.sounds.iter().any(|s| usize::from(*s) >= r.sounds.len())
@@ -398,7 +409,8 @@ impl Language {
                 e.tick > now
                     || !people.contains(&e.speaker)
                     || !people.contains(&e.listener)
-                    || !e.meaning.valid()
+                    || !e.meaning.known(people)
+                    || e.interpreted.is_some_and(|meaning| !meaning.known(people))
                     || e.speaker == e.listener
                     || e.sounds.is_empty()
                     || e.sounds.iter().any(|s| usize::from(*s) >= r.sounds.len())

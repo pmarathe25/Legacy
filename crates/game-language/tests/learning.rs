@@ -16,6 +16,64 @@ fn language() -> Language {
 }
 
 #[test]
+fn people_can_choose_and_share_personal_sound_forms_for_a_person() {
+    let mut state = language();
+    state
+        .configure_topics(&[
+            (
+                1,
+                TopicPolicy {
+                    idle: 0,
+                    act_on_tie: false,
+                    preferences: vec![TopicPreference {
+                        meaning: Meaning::Person(2),
+                        enabled: true,
+                        value: 10,
+                    }],
+                },
+            ),
+            (
+                2,
+                TopicPolicy {
+                    idle: 0,
+                    act_on_tie: false,
+                    preferences: vec![],
+                },
+            ),
+        ])
+        .unwrap();
+    for mind in &mut state.minds {
+        mind.initiative = 1000;
+        mind.adoption = 1000;
+    }
+    let meeting = GroundedMeeting {
+        a: 1,
+        b: 2,
+        a_topics: vec![Meaning::Place(7), Meaning::Person(2)],
+        b_topics: vec![Meaning::Place(7)],
+    };
+    let spoken = state
+        .prepare_grounded(std::slice::from_ref(&meeting), 7, 1)
+        .unwrap();
+    assert_eq!(
+        (spoken.events[0].speaker, spoken.events[0].meaning),
+        (1, Meaning::Person(2))
+    );
+    assert!(spoken.events[0].learned);
+    assert_eq!(spoken.minds[0].words[0].meaning, Meaning::Person(2));
+    assert_eq!(spoken.minds[1].words[0].meaning, Meaning::Person(2));
+    let mut refuses = state.clone();
+    refuses.minds[1].learn = false;
+    assert!(!refuses.prepare_grounded(&[meeting], 7, 1).unwrap().events[0].learned);
+    assert!(spoken.validate(&HashSet::from([1, 2]), 1).is_ok());
+    assert!(spoken.validate(&HashSet::from([1]), 1).is_err());
+    assert_eq!(
+        serde_json::from_str::<Language>(&serde_json::to_string(&spoken).unwrap()).unwrap(),
+        spoken
+    );
+}
+
+#[test]
 fn grounded_topic_choices_preserve_the_actual_speakers_preferences() {
     let mut state = language();
     let policy = |meaning| TopicPolicy {
@@ -201,6 +259,7 @@ fn grounded_topics_respect_coining_and_are_worker_invariant() {
 #[test]
 #[ignore = "personal topic scaling benchmark"]
 fn parallel_personally_chosen_topics_benchmark() {
+    let person_topics = std::env::var_os("LEGACY_LANGUAGE_PERSON_TOPICS").is_some();
     let people: u64 = std::env::var("LEGACY_LANGUAGE_PEOPLE")
         .ok()
         .map(|value| value.parse().expect("invalid population"))
@@ -215,7 +274,11 @@ fn parallel_personally_chosen_topics_benchmark() {
                     idle: 0,
                     act_on_tie: false,
                     preferences: vec![TopicPreference {
-                        meaning: Meaning::Object(10),
+                        meaning: if person_topics {
+                            Meaning::Person(person)
+                        } else {
+                            Meaning::Object(10)
+                        },
                         enabled: true,
                         value: 10,
                     }],
@@ -232,8 +295,22 @@ fn parallel_personally_chosen_topics_benchmark() {
         .map(|index| GroundedMeeting {
             a: index * 2 + 1,
             b: index * 2 + 2,
-            a_topics: vec![Meaning::Place(1), Meaning::Object(10)],
-            b_topics: vec![Meaning::Place(1), Meaning::Object(10)],
+            a_topics: vec![
+                Meaning::Place(1),
+                if person_topics {
+                    Meaning::Person(index * 2 + 1)
+                } else {
+                    Meaning::Object(10)
+                },
+            ],
+            b_topics: vec![
+                Meaning::Place(1),
+                if person_topics {
+                    Meaning::Person(index * 2 + 2)
+                } else {
+                    Meaning::Object(10)
+                },
+            ],
         })
         .collect();
     let mut reference = None;

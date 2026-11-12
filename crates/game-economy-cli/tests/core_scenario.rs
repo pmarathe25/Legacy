@@ -482,6 +482,111 @@ fn language_topics_arise_from_personally_chosen_physical_demonstrations() {
 }
 
 #[test]
+fn personal_names_emerge_from_chosen_sounds_in_real_encounters() {
+    use game_economy::core_interval::CoreHost;
+    use game_language::Meaning;
+    fn run(workers: usize) -> serde_json::Value {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let root = root();
+                let opening = game_economy_cli::core_scenario(
+                    &root.join("content/scenarios/economy-core-person-names.toml"),
+                    &root.join("content"),
+                )
+                .unwrap()
+                .snapshot();
+                let mut unobserved = opening.clone();
+                unobserved
+                    .social
+                    .as_mut()
+                    .unwrap()
+                    .language
+                    .as_mut()
+                    .unwrap()
+                    .minds[0]
+                    .topic_policy
+                    .as_mut()
+                    .unwrap()
+                    .preferences[0]
+                    .meaning = Meaning::Person(3);
+                let mut unobserved = CoreHost::resume(unobserved).unwrap();
+                assert_eq!(
+                    unobserved.advance_continuous(900_001, &[]).unwrap().failure,
+                    None
+                );
+                assert!(
+                    unobserved
+                        .snapshot()
+                        .social
+                        .unwrap()
+                        .language
+                        .unwrap()
+                        .events
+                        .is_empty()
+                );
+                let mut unknown = opening.clone();
+                unknown
+                    .social
+                    .as_mut()
+                    .unwrap()
+                    .language
+                    .as_mut()
+                    .unwrap()
+                    .minds[0]
+                    .topic_policy
+                    .as_mut()
+                    .unwrap()
+                    .preferences[0]
+                    .meaning = Meaning::Person(999);
+                assert!(CoreHost::resume(unknown).is_err());
+                let mut refusal = opening.clone();
+                refusal
+                    .social
+                    .as_mut()
+                    .unwrap()
+                    .language
+                    .as_mut()
+                    .unwrap()
+                    .minds[1]
+                    .learn = false;
+                let mut refusal = CoreHost::resume(refusal).unwrap();
+                assert_eq!(
+                    refusal.advance_continuous(900_001, &[]).unwrap().failure,
+                    None
+                );
+                assert!(!refusal.snapshot().social.unwrap().language.unwrap().events[0].learned);
+                let mut host = CoreHost::resume(opening).unwrap();
+                assert_eq!(host.advance_continuous(900_001, &[]).unwrap().failure, None);
+                let state = host.snapshot();
+                let language = state.social.as_ref().unwrap().language.as_ref().unwrap();
+                let event = &language.events[0];
+                assert_eq!(
+                    (event.speaker, event.listener, event.meaning),
+                    (1, 2, Meaning::Person(2))
+                );
+                assert!(event.learned);
+                assert_eq!(language.minds[0].words[0].meaning, Meaning::Person(2));
+                assert_eq!(language.minds[1].words[0].meaning, Meaning::Person(2));
+                let mut restored = CoreHost::resume(
+                    serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap(),
+                )
+                .unwrap();
+                assert_eq!(host.advance_continuous(900_000, &[]).unwrap().failure, None);
+                assert_eq!(
+                    restored.advance_continuous(900_000, &[]).unwrap().failure,
+                    None
+                );
+                assert_eq!(host.snapshot(), restored.snapshot());
+                serde_json::to_value(host.snapshot()).unwrap()
+            })
+    }
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
 fn self_treatment_is_chosen_and_revalidated_individually() {
     use game_economy::core_interval::{CoreChoiceOutcome, CoreHost, CoreRunEvent, DecisionPhase};
     fn run(workers: usize) -> serde_json::Value {

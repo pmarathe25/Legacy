@@ -850,6 +850,8 @@ struct LanguageTopic {
     object: Option<String>,
     #[serde(default)]
     place: Option<u64>,
+    #[serde(default)]
+    person: Option<u64>,
     enabled: bool,
     value: i64,
 }
@@ -1027,19 +1029,32 @@ pub fn core_scenario_with_options(
             .map(|good| (good.name.as_str(), good.id))
             .collect();
         let mut profiles = Vec::with_capacity(language_topic_profiles.len());
+        let people: HashSet<_> = snapshot
+            .core
+            .people
+            .iter()
+            .map(|person| person.id)
+            .collect();
         for profile in language_topic_profiles {
             let mut preferences = Vec::with_capacity(profile.preferences.len());
             for topic in profile.preferences {
-                let meaning = match (topic.object.as_deref(), topic.place) {
-                    (Some(name), None) => game_language::Meaning::Object(
+                let meaning = match (topic.object.as_deref(), topic.place, topic.person) {
+                    (Some(name), None, None) => game_language::Meaning::Object(
                         *goods
                             .get(name)
                             .ok_or_else(|| format!("unknown language topic object {name}"))?,
                     ),
-                    (None, Some(region)) if regions.contains(&region) => {
+                    (None, Some(region), None) if regions.contains(&region) => {
                         game_language::Meaning::Place(region)
                     }
-                    _ => return Err("language topic requires one known object or place".into()),
+                    (None, None, Some(person)) if people.contains(&person) => {
+                        game_language::Meaning::Person(person)
+                    }
+                    _ => {
+                        return Err(
+                            "language topic requires one known object, place or person".into()
+                        );
+                    }
                 };
                 preferences.push(game_language::TopicPreference {
                     meaning,

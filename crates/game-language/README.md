@@ -16,5 +16,9 @@ the speaker voluntarily demonstrating it to the listener. One speaker is
 admitted per disjoint encounter, and the listener's hearing and learning
 remain independent. Without a topic policy the earlier place-only behavior is
 retained. Need referents require a host able to establish an actual signal;
-private hunger is not automatically shared. Grammar, names, richer nonverbal
-communication and transmission of general factual claims remain incomplete.
+private hunger is not automatically shared. A speaker may also choose a
+present participant as a topic, coin a personal sound form for that person,
+and share it; the listener can independently refuse or adopt the form. These
+are personal associations, not mandatory or globally unique names. Naming
+absent people, selecting forms based on admiration and confusion, grammar,
+and transmission of general factual claims remain incomplete.

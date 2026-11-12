@@ -10,6 +10,7 @@ fn hosted_personal_topics_benchmark() {
         .map(|value| value.parse().expect("invalid population"))
         .unwrap_or(20_000);
     assert!(count > 1 && count.is_multiple_of(2));
+    let person_topics = std::env::var_os("LEGACY_LANGUAGE_PERSON_TOPICS").is_some();
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let mut text = String::from(
         r#"seed = 7
@@ -47,7 +48,11 @@ familiarity_max = 10
             "[[language.minds]]\nperson = {id}\ninitiative = 1000\nadoption = 1000"
         )
         .unwrap();
-        writeln!(text, "[[language_topic_profiles]]\nperson = {id}\nidle = 0\npreferences = [{{ object = \"grain\", enabled = true, value = 10 }}]").unwrap();
+        if person_topics {
+            writeln!(text, "[[language_topic_profiles]]\nperson = {id}\nidle = 0\npreferences = [{{ person = {id}, enabled = true, value = 10 }}]").unwrap();
+        } else {
+            writeln!(text, "[[language_topic_profiles]]\nperson = {id}\nidle = 0\npreferences = [{{ object = \"grain\", enabled = true, value = 10 }}]").unwrap();
+        }
         writeln!(
             text,
             "[[dynamics.social.participants]]\nperson = {id}\nwilling = true"
@@ -116,11 +121,12 @@ familiarity_max = 10
                 .unwrap()
                 .events;
             assert!(!events.is_empty());
-            assert!(
-                events
-                    .iter()
-                    .all(|event| event.meaning == game_language::Meaning::Object(grain))
-            );
+            assert!(events.iter().all(|event| event.meaning
+                == if person_topics {
+                    game_language::Meaning::Person(event.speaker)
+                } else {
+                    game_language::Meaning::Object(grain)
+                }));
             if let Some(expected) = &reference {
                 assert_eq!(&state, expected);
             } else {
