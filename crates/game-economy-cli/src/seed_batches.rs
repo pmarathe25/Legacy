@@ -121,6 +121,7 @@ mod tests {
             expires_at: Some(4),
         };
         let mut state = State {
+            next_batch: None,
             tick: 0,
             revision: 0,
             containers: vec![

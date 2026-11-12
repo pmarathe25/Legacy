@@ -289,6 +289,7 @@ mod tests {
             .unwrap(),
         );
         let state = State {
+            next_batch: None,
             tick: 0,
             revision: 0,
             containers,

@@ -35,6 +35,7 @@ fn fixture(count: u64) -> (State, Vec<SimpleTransfer>) {
         .collect();
     (
         State {
+            next_batch: None,
             tick: 0,
             revision: 0,
             containers,

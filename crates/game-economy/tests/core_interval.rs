@@ -29,6 +29,7 @@ fn fixture() -> CoreSnapshot {
     };
     let mut runtime = Runtime::compile(Snapshot {
         custody: State {
+            next_batch: None,
             tick: 0,
             revision: 0,
             containers: vec![

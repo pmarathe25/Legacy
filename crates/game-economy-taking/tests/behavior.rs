@@ -52,6 +52,7 @@ fn policy(person: u64, target: u64) -> Policy {
 fn runtime(capacity: u64, stock: u64) -> Runtime {
     Runtime::compile(Snapshot {
         custody: State {
+            next_batch: None,
             tick: 0,
             revision: 0,
             containers: vec![

@@ -35,6 +35,7 @@ fn fixture() -> (State, Vec<Transaction>) {
         .collect();
     (
         State {
+            next_batch: None,
             tick: 0,
             revision: 0,
             containers,

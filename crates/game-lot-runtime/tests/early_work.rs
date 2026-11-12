@@ -160,6 +160,7 @@ fn fixture(perishable: bool, output_quantity: u64) -> Runtime {
     };
     let mut runtime = Runtime::compile(Snapshot {
         custody: State {
+            next_batch: None,
             tick: 0,
             revision: 0,
             containers: vec![stock(1, 4), stock(2, 0)],

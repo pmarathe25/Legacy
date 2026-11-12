@@ -28,6 +28,7 @@ fn transfer(id: u64, from: u64, to: u64, quantity: u64) -> Transaction {
 #[test]
 fn generic_transfers_preserve_batch_through_split_merge_and_resume() {
     let mut store = Store::compile(State {
+        next_batch: None,
         tick: 0,
         revision: 0,
         containers: vec![
@@ -67,6 +68,7 @@ fn generic_transfers_preserve_batch_through_split_merge_and_resume() {
 #[test]
 fn rejected_transfer_and_expiry_do_not_reassign_batches() {
     let initial = State {
+        next_batch: None,
         tick: 0,
         revision: 0,
         containers: vec![
@@ -106,6 +108,7 @@ fn shared_source_arbitration_keeps_actual_cohorts_with_each_winner() {
             .unwrap()
             .install(|| {
                 let mut store = Store::compile(State {
+                    next_batch: None,
                     tick: 0,
                     revision: 0,
                     containers: vec![
@@ -174,6 +177,7 @@ fn invalid_batch_cannot_be_created_or_combined_with_a_unique_item() {
     };
     assert!(Container::new(Place::Person(1), 10, vec![mixed.clone()]).is_err());
     let store = Store::compile(State {
+        next_batch: None,
         tick: 0,
         revision: 0,
         containers: vec![Container::new(Place::Person(1), 10, vec![]).unwrap()],
@@ -196,6 +200,7 @@ fn invalid_batch_cannot_be_created_or_combined_with_a_unique_item() {
 #[test]
 fn batch_creation_is_published_only_with_the_atomic_physical_action() {
     let initial = State {
+        next_batch: None,
         tick: 0,
         revision: 0,
         containers: vec![
@@ -259,6 +264,7 @@ fn batch_provenance_scaling() {
         (1..=count).map(|id| Container::new(Place::Person(count + id), 10, vec![]).unwrap()),
     );
     let initial = State {
+        next_batch: None,
         tick: 0,
         revision: 0,
         containers,
@@ -297,6 +303,7 @@ fn batch_provenance_scaling() {
 #[test]
 fn concurrent_fan_in_keeps_different_batches_separate() {
     let mut store = Store::compile(State {
+        next_batch: None,
         tick: 0,
         revision: 0,
         containers: vec![
@@ -325,6 +332,7 @@ fn concurrent_fan_in_keeps_different_batches_separate() {
 #[test]
 fn exact_batch_selection_draws_only_requested_cohorts_and_can_span_expiries() {
     let initial = State {
+        next_batch: None,
         tick: 0,
         revision: 0,
         containers: vec![
@@ -364,6 +372,7 @@ fn exact_batch_selection_draws_only_requested_cohorts_and_can_span_expiries() {
 #[test]
 fn generic_and_targeted_batch_claims_compete_in_seeded_order() {
     let initial = State {
+        next_batch: None,
         tick: 0,
         revision: 0,
         containers: vec![
@@ -421,6 +430,7 @@ fn generic_and_targeted_batch_claims_compete_in_seeded_order() {
 #[test]
 fn targeted_batch_rejects_missing_insufficient_or_invalid_requests() {
     let initial = State {
+        next_batch: None,
         tick: 0,
         revision: 0,
         containers: vec![
@@ -488,6 +498,7 @@ fn independent_targeted_fast_path_matches_general_arbiter() {
         (1..=count).map(|id| Container::new(Place::Person(count + id), 10, vec![]).unwrap()),
     );
     let initial = State {
+        next_batch: None,
         tick: 0,
         revision: 0,
         containers,
@@ -544,6 +555,7 @@ fn concentrated_distinct_batch_scaling() {
     containers
         .extend((2..=count + 1).map(|id| Container::new(Place::Person(id), 2, vec![]).unwrap()));
     let initial = State {
+        next_batch: None,
         tick: 0,
         revision: 0,
         containers,
@@ -606,6 +618,7 @@ fn parallel_batch_groups_match_ordered_reference_for_contested_and_missing_batch
     containers
         .extend((2..=count + 2).map(|id| Container::new(Place::Person(id), 10, vec![]).unwrap()));
     let initial = State {
+        next_batch: None,
         tick: 0,
         revision: 0,
         containers,
@@ -668,6 +681,7 @@ fn large_exact_source_update_preserves_unselected_and_expires_old_batches() {
         }
     }
     let mut store = Store::compile(State {
+        next_batch: None,
         tick: 0,
         revision: 0,
         containers,

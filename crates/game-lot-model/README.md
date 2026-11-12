@@ -8,3 +8,5 @@ the lot model only preserves the opaque identifier. Unique item IDs and batch
 IDs cannot be combined on one lot.
 Movements may specify one batch or leave it unspecified for FEFO selection;
 batch selection and unique-item selection are mutually exclusive.
+An optional `next_batch` persists the physical owner's allocation high-water
+mark; older serialized states may omit it.

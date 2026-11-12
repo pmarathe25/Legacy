@@ -15,6 +15,7 @@ fn container(place: Place, capacity: u64, lots: Vec<Lot>) -> Container {
 fn store(mut containers: Vec<Container>) -> Store {
     containers.sort_unstable_by_key(|row| row.place);
     Store::compile(State {
+        next_batch: None,
         tick: 0,
         revision: 0,
         containers,
@@ -44,6 +45,7 @@ fn unpartitioned(
         additions,
         retire: Vec::new(),
         item_updates: Vec::new(),
+        batch_next: None,
     }
 }
 fn quantity(state: &State, place: Place, good: u32, expiry: Option<u64>) -> u64 {
@@ -3728,6 +3730,7 @@ fn disjoint_transform_commit_matches_general_plan_and_rejects_stale_draft() {
         containers.push(container(Place::JobOutput(id), 2, vec![]));
     }
     let state = State {
+        next_batch: None,
         tick: 0,
         revision: 0,
         containers,

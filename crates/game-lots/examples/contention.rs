@@ -51,6 +51,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         containers[0].capacity = count / 2;
     }
     let state = State {
+        next_batch: None,
         tick: 0,
         revision: 0,
         containers,
@@ -108,6 +109,7 @@ fn recipes(workers: usize, count: u64, repeats: usize) -> Result<(), Box<dyn std
     let source = Place::Stock { region: 1, good: 1 };
     let destination = Place::Stock { region: 1, good: 2 };
     let state = State {
+        next_batch: None,
         tick: 0,
         revision: 0,
         containers: vec![

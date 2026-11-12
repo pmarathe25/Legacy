@@ -324,6 +324,7 @@ mod tests {
         }
         (
             State {
+                next_batch: None,
                 tick: 0,
                 revision: 0,
                 containers,

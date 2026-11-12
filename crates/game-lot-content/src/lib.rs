@@ -351,6 +351,7 @@ impl Catalog {
             return Err("duplicate stock custody".into());
         }
         Ok(State {
+            next_batch: None,
             tick,
             revision: 0,
             containers,

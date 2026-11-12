@@ -15,6 +15,21 @@ Biological interpretation and lineage remain outside this owner. The ignored
 `batch_provenance_scaling` and `concentrated_distinct_batch_scaling` tests
 measure independent and shared-source requests.
 
+An optional persisted batch allocator coordinates newly generated identities.
+`enable_batch_allocator` starts above live batch IDs and a caller-supplied
+minimum that must also cover identities retained outside physical custody.
+`plan_batches` gives each owner a disjoint range in stable owner order without
+changing state. A planned allocation is tied to the store instance and
+revision, and can be attached to a transaction draft, including a draft with
+new custody and compact consumption. Committing advances the saved high-water
+mark past the reserved ranges; dropping or rejecting a stale draft does not.
+If a committed draft contains rejected actions, unused IDs remain gaps. Once
+enabled, a creation with a new ID must use a range assigned to that action's
+owner. Lower IDs are treated as references to existing identities; the
+feature owning their metadata must validate their meaning. The allocator is
+opt-in, so older snapshots retain the unallocated format. The ignored
+`independent_batch_creation_scaling` test measures allocation and creation.
+
 Lots can optionally carry a stable physical item ID. An identified lot contains exactly one nonexpiring item; IDs are unique among live custody and survive ordinary transfers. The custody owner tracks them through staged changes even when receipt details are omitted. A movement can request a particular item or use normal FEFO selection. Mixed requests at one source reserve cohorts in deterministic order; rejected transactions do not reassign their reserved cohorts during that boundary. Transactions touching an identified item use the general arbiter; unrelated fungible transfers can use the specialized paths. The ignored `independent_identified_transfers_benchmark` in `tests/identified_items.rs` measures batches with `LEGACY_ITEMS` and `LEGACY_WORKERS`; set `LEGACY_EXACT=1` to select each item explicitly.
 
 `stock_view` returns only regional stock at the requested current or next boundary, using the same expiry rules and revision as a full view. Observation systems that need regional totals can avoid materializing every person's custody.

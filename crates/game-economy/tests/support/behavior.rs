@@ -72,6 +72,7 @@ fn fixture() -> State {
         seed: 7,
         physical: Physical {
             custody: Custody {
+                next_batch: None,
                 tick: 0,
                 revision: 0,
                 containers: vec![
@@ -35944,6 +35945,7 @@ fn concentrated(count: u64) -> State {
         .unwrap()
     }));
     state.physical.custody = Custody {
+        next_batch: None,
         tick: 0,
         revision: 0,
         containers,

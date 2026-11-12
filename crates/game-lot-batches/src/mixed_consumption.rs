@@ -183,6 +183,7 @@ mod tests {
         containers.push(Container::new(Place::Person(999), 100, vec![]).unwrap());
         containers.sort_unstable_by_key(|row| row.place);
         let state = State {
+            next_batch: None,
             tick: 0,
             revision: 0,
             containers,

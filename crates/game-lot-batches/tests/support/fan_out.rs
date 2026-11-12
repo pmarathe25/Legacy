@@ -35,6 +35,7 @@ fn fixture() -> (State, Vec<Transaction>) {
         .collect();
     (
         State {
+            next_batch: None,
             tick: 0,
             revision: 0,
             containers,
@@ -103,6 +104,7 @@ fn shared_source_path_resolves_shortage_and_declines_other_topologies() {
 fn new_empty_destinations_match_general_arbitration_and_expiry() {
     let source = Place::Stock { region: 1, good: 1 };
     let state = State {
+        next_batch: None,
         tick: 0,
         revision: 0,
         containers: vec![
@@ -202,6 +204,7 @@ fn new_empty_destinations_match_general_arbitration_and_expiry() {
 fn added_destinations_can_sort_before_the_existing_source() {
     let source = Place::Stock { region: 1, good: 1 };
     let state = State {
+        next_batch: None,
         tick: 0,
         revision: 0,
         containers: vec![

@@ -1,6 +1,8 @@
 //! Person- and location-owned physical lots with staged expiry and movement.
+mod batch_allocation;
 mod compose;
 mod view;
+pub use batch_allocation::{BatchAllocation, BatchCount, BatchRange};
 pub use compose::{Composed, compose};
 pub use game_lot_model::{
     Container, Creation, Lot, LotList, Movement, Outcome, OutcomeBatch, OutcomeHeader, OutcomeRef,
@@ -72,6 +74,7 @@ pub struct Draft {
     additions: Vec<Container>,
     retire: Vec<Place>,
     item_updates: Vec<(u64, Option<Place>)>,
+    batch_next: Option<u64>,
 }
 impl Draft {
     /// Staged item custody updates; `None` means the item was consumed.
@@ -124,6 +127,17 @@ impl Store {
             })
         {
             return Err("invalid lot state".into());
+        }
+        if state.next_batch.is_some_and(|next| {
+            next == 0
+                || state.containers.par_iter().any(|container| {
+                    container
+                        .lots
+                        .iter()
+                        .any(|lot| lot.batch.is_some_and(|batch| batch >= next))
+                })
+        }) {
+            return Err("invalid batch allocation high-water mark".into());
         }
         let mut items: Vec<_> = state
             .containers
@@ -244,6 +258,67 @@ impl Store {
     /// Generation of committed custody changes.
     pub fn revision(&self) -> u64 {
         self.state.revision
+    }
+    /// Enable durable generated batch IDs. Existing drafts become stale.
+    pub fn enable_batch_allocator(&mut self, minimum: u64) -> Result<u64, String> {
+        if minimum == 0 {
+            return Err("invalid batch allocator minimum".into());
+        }
+        if self.state.next_batch.is_some() {
+            return Err("batch allocator already enabled".into());
+        }
+        let highest = self
+            .state
+            .containers
+            .par_iter()
+            .flat_map_iter(|container| container.lots.iter().filter_map(|lot| lot.batch))
+            .max();
+        let next = match highest {
+            Some(id) => minimum.max(id.checked_add(1).ok_or("batch identity overflow")?),
+            None => minimum,
+        };
+        let revision = self
+            .state
+            .revision
+            .checked_add(1)
+            .ok_or("lot revision overflow")?;
+        self.state.next_batch = Some(next);
+        self.state.revision = revision;
+        Ok(next)
+    }
+
+    /// Assign speculative, disjoint ranges in stable owner order without mutation.
+    pub fn plan_batches(&self, counts: &[BatchCount]) -> Result<BatchAllocation, String> {
+        let opening = self
+            .state
+            .next_batch
+            .ok_or("batch allocator is not enabled")?;
+        let mut counts = counts.to_vec();
+        counts.sort_unstable_by_key(|row| row.owner);
+        if counts.iter().any(|row| row.owner == 0 || row.count == 0)
+            || counts.windows(2).any(|rows| rows[0].owner == rows[1].owner)
+        {
+            return Err("invalid batch allocation counts".into());
+        }
+        let mut next = opening;
+        let mut ranges = Vec::with_capacity(counts.len());
+        for row in counts {
+            ranges.push(BatchRange {
+                owner: row.owner,
+                start: next,
+                count: row.count,
+            });
+            next = next
+                .checked_add(row.count)
+                .ok_or("batch identity overflow")?;
+        }
+        Ok(BatchAllocation {
+            instance: self.instance,
+            revision: self.state.revision,
+            opening,
+            next,
+            ranges,
+        })
     }
     /// Borrow the ordered committed custody without copying it.
     pub fn containers(&self) -> &[Container] {
@@ -436,7 +511,57 @@ impl Store {
             additions,
             retire: Vec::new(),
             item_updates,
+            batch_next: None,
         })
+    }
+    fn validate_batch_creations(
+        &self,
+        transactions: &[Transaction],
+        allocation: Option<(&BatchAllocation, &[u32])>,
+    ) -> Result<(), String> {
+        let Some(opening) = self.state.next_batch else {
+            return if allocation.is_some() {
+                Err("batch allocator is not enabled".into())
+            } else {
+                Ok(())
+            };
+        };
+        if let Some((plan, owners)) = allocation {
+            if plan.instance != self.instance
+                || plan.revision != self.state.revision
+                || plan.opening != opening
+                || owners.len() != transactions.len()
+                || owners.par_iter().any(|owner| *owner == 0)
+            {
+                return Err("stale or invalid batch allocation".into());
+            }
+            if transactions
+                .par_iter()
+                .zip(owners.par_iter())
+                .any(|(transaction, &owner)| {
+                    transaction
+                        .creations
+                        .iter()
+                        .filter_map(|creation| creation.lot.batch)
+                        .any(|id| {
+                            id >= opening
+                                && plan.range(owner).is_none_or(|range| {
+                                    id < range.start || id - range.start >= range.count
+                                })
+                        })
+                })
+            {
+                return Err("new batch is outside its owner's allocation".into());
+            }
+        } else if transactions.par_iter().any(|transaction| {
+            transaction
+                .creations
+                .iter()
+                .any(|creation| creation.lot.batch.is_some_and(|id| id >= opening))
+        }) {
+            return Err("new batch requires an allocation".into());
+        }
+        Ok(())
     }
     fn check_creations(&self, transactions: &[Transaction]) -> Result<bool, String> {
         let large = transactions.len() < 64
@@ -505,14 +630,34 @@ impl Store {
         seed: u64,
         transactions: &[Transaction],
     ) -> Result<Draft, String> {
-        self.prepare_batch(seed, transactions, true, Vec::new())
+        self.prepare_batch(seed, transactions, true, Vec::new(), None)
     }
     pub fn prepare_transactions_now(
         &self,
         seed: u64,
         transactions: &[Transaction],
     ) -> Result<Draft, String> {
-        self.prepare_batch(seed, transactions, false, Vec::new())
+        self.prepare_batch(seed, transactions, false, Vec::new(), None)
+    }
+    /// Attach a speculative allocation to one physical draft. Only commit
+    /// advances the persisted high-water mark; stale or dropped drafts do not.
+    pub fn prepare_transactions_with_batches(
+        &self,
+        seed: u64,
+        transactions: &[Transaction],
+        advance: bool,
+        allocation: BatchAllocation,
+        owners: &[u32],
+    ) -> Result<Draft, String> {
+        let mut draft = self.prepare_batch(
+            seed,
+            transactions,
+            advance,
+            Vec::new(),
+            Some((&allocation, owners)),
+        )?;
+        draft.batch_next = Some(allocation.next);
+        Ok(draft)
     }
     /// Prepare new empty custody and actions without mutating the store.
     pub fn prepare_with_empty(
@@ -522,7 +667,7 @@ impl Store {
         containers: Vec<Container>,
         advance: bool,
     ) -> Result<Draft, String> {
-        self.prepare_batch(seed, transactions, advance, containers)
+        self.prepare_batch(seed, transactions, advance, containers, None)
     }
     /// Suppress lot detail for selected consuming transactions; acceptance is retained.
     pub fn prepare_with_empty_compact(
@@ -533,6 +678,43 @@ impl Store {
         compact: &[u64],
         advance: bool,
     ) -> Result<Draft, String> {
+        self.prepare_compact_inner(seed, transactions, containers, compact, advance, None)
+    }
+    /// Prepare a composed boundary with staged empty custody, compact receipts,
+    /// and one revision-bound allocation shared by its owners.
+    #[allow(clippy::too_many_arguments)]
+    pub fn prepare_with_empty_compact_and_batches(
+        &self,
+        seed: u64,
+        transactions: &[Transaction],
+        containers: Vec<Container>,
+        compact: &[u64],
+        advance: bool,
+        allocation: BatchAllocation,
+        owners: &[u32],
+    ) -> Result<Draft, String> {
+        let mut draft = self.prepare_compact_inner(
+            seed,
+            transactions,
+            containers,
+            compact,
+            advance,
+            Some((&allocation, owners)),
+        )?;
+        draft.batch_next = Some(allocation.next);
+        Ok(draft)
+    }
+    #[allow(clippy::too_many_arguments)]
+    fn prepare_compact_inner(
+        &self,
+        seed: u64,
+        transactions: &[Transaction],
+        containers: Vec<Container>,
+        compact: &[u64],
+        advance: bool,
+        allocation: Option<(&BatchAllocation, &[u32])>,
+    ) -> Result<Draft, String> {
+        self.validate_batch_creations(transactions, allocation)?;
         let check_items = self.check_creations(transactions)?;
         if check_items
             && containers.is_empty()
@@ -580,7 +762,9 @@ impl Store {
         transactions: &[Transaction],
         advance: bool,
         additions: Vec<Container>,
+        allocation: Option<(&BatchAllocation, &[u32])>,
     ) -> Result<Draft, String> {
+        self.validate_batch_creations(transactions, allocation)?;
         let check_items = self.check_creations(transactions)?;
         if !check_items
             && !advance
@@ -657,6 +841,7 @@ impl Store {
             additions: Vec::new(),
             retire: Vec::new(),
             item_updates: Vec::new(),
+            batch_next: None,
         }))
     }
     /// Attempt a flat batch with exclusive and contested transfer partitions.
@@ -687,6 +872,7 @@ impl Store {
             additions: Vec::new(),
             retire: Vec::new(),
             item_updates: Vec::new(),
+            batch_next: None,
         }))
     }
     /// Attempt a shared-source batch into newly staged empty custody.
@@ -718,6 +904,7 @@ impl Store {
             additions,
             retire: Vec::new(),
             item_updates: Vec::new(),
+            batch_next: None,
         }))
     }
     /// Check this owner before publishing any part of a composed generation.
@@ -794,6 +981,7 @@ impl Store {
             mut additions,
             retire,
             item_updates,
+            batch_next,
         } = draft;
         let revision = self
             .state
@@ -825,6 +1013,9 @@ impl Store {
         }
         self.state.tick = draft.next_tick;
         self.state.revision = revision;
+        if let Some(next) = batch_next {
+            self.state.next_batch = Some(next);
+        }
         if !item_updates.is_empty() {
             self.items = merge_item_updates(&self.items, &item_updates);
             self.item_places = item_places(&self.items);

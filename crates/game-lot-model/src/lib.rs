@@ -195,6 +195,9 @@ pub struct Outcome {
 pub struct State {
     pub tick: u64,
     pub revision: u64,
+    /// Persisted high-water mark when generated batch IDs are enabled.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_batch: Option<u64>,
     pub containers: Vec<Container>,
 }
 
