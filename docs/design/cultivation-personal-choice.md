@@ -8,6 +8,8 @@ prematurely, its owner needs a separate candidate and admission path.
   candidate identifies the worker, field, observed phase and crop, and the
   exact planting movement and personally chosen seed batch when applicable.
   Candidate generation must not reserve stock or publish work.
+  `game-economy-agriculture::opportunities::discover` now implements this
+  bounded discovery, but it is not yet connected to the choice scheduler.
 * Let the person's ordinary choice profile compare that candidate with other
   activities and idleness. Preserve the exact selected intent and its actor and
   field reservations through partial intervals and save/load. A queued choice

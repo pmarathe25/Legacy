@@ -3,6 +3,7 @@ pub mod amendment;
 pub mod content;
 pub mod genetics;
 pub mod irrigation;
+pub mod opportunities;
 pub mod provenance;
 pub mod reproduction;
 pub mod requests;
