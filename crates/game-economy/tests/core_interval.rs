@@ -5559,8 +5559,8 @@ fn irrigation_consumes_contested_water_and_gates_next_growth() {
         };
         let irrigation = Irrigation {water: 3, capacity: 2, minimum_growth: 1, evaporation: 0,
             moisture: vec![Moisture {field: 1, amount: 0}, Moisture {field: 2, amount: 0}],
-            choices: vec![Choice {person: 2, field: 1, quantity: 1, willing: false, pressured_by: Some(1), fear_at_least: Some(1), obligation_at_least: None, disregard_claims: false},
-                Choice {person: 3, field: 2, quantity: 1, willing: true, pressured_by: None, fear_at_least: None, obligation_at_least: None, disregard_claims: false}], events: vec![]};
+            choices: vec![Choice {person: 2, field: 1, quantity: 1, willing: false, hunger_limit: None, pressured_by: Some(1), fear_at_least: Some(1), obligation_at_least: None, disregard_claims: false},
+                Choice {person: 3, field: 2, quantity: 1, willing: true, hunger_limit: None, pressured_by: None, fear_at_least: None, obligation_at_least: None, disregard_claims: false}], events: vec![]};
         let rules = serde_json::from_value(serde_json::json!({"minimum":-10,"maximum":10,"initial":0,"fulfilled_gain":1,"default_loss":1})).unwrap();
         let opinions = game_opinions::Opinions {rules, sensitivities: Default::default(), records: vec![game_opinions::Opinion {observer: 2, target: 1, trust: 0, fear: 2, obligation: 0, affinity: 0}], events: vec![]};
         let snapshot = CoreHostSnapshot { work_capabilities: None, mechanics: None,core: initial, autowork: None, tool_wear: None, tool_requirements: vec![], paused_work_rates: vec![],
@@ -6782,6 +6782,7 @@ fn core_host_cultivation_benchmark() {
                 .collect(),
             choices: (2..=count)
                 .map(|person| game_economy_agriculture::irrigation::Choice {
+                        hunger_limit: None,
                     person,
                     field: person - 1,
                     quantity: 1,

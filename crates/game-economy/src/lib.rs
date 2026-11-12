@@ -6087,7 +6087,6 @@ impl Economy {
                 if !actor.controlled
                     || actor.health == 0
                     || actor.region.is_none()
-                    || actor.hunger > self.rules.max_work_hunger
                     || resting.binary_search(&person).is_ok()
                     || held.binary_search(&person).is_ok()
                     || self.family.as_ref().is_some_and(|family| {
@@ -6110,6 +6109,7 @@ impl Economy {
                     return Err("person cannot improve that field now".into());
                 }
                 Some(game_economy_agriculture::amendment::Choice {
+                    hunger_limit: None,
                     person,
                     field,
                     willing: true,
@@ -6184,7 +6184,6 @@ impl Economy {
                 if !actor.controlled
                     || actor.health == 0
                     || actor.region.is_none()
-                    || actor.hunger > self.rules.max_work_hunger
                     || quantity == 0
                     || resting.binary_search(&person).is_ok()
                     || held.binary_search(&person).is_ok()
@@ -6206,6 +6205,7 @@ impl Economy {
                     return Err("person cannot water that field now".into());
                 }
                 Some(WaterChoice {
+                    hunger_limit: None,
                     person,
                     field,
                     quantity,

@@ -18,8 +18,9 @@ the person declines ordinary farming above that level. With no such limit,
 hunger alone does not prevent their choice. Requests use the recipient's own
 response preferences, and a controlled person may choose regardless of hunger.
 The older cultivation-wide `max_hunger` field remains loadable but does not
-govern cultivation or requests. Irrigation and soil amendment have separate
-eligibility rules that have not yet been migrated.
+govern cultivation or requests. Irrigation and soil amendment choices can
+likewise specify their own optional `hunger_limit`; controlled actions bypass
+these personal limits because the person has explicitly chosen the action.
 
 An optional `[[cultivation.seed_profiles]]` entry gives one person a signed
 value for each named batch and a personal value for idleness. For an ordinary
@@ -54,6 +55,9 @@ individual plants within a cohort. See
 Optional `[cultivation.soil]` content specifies `capacity`, `loss_per_harvest`, `recovery_per_fallow`, and sorted `fields = [{ field, fertility }, ...]`. A configured field's harvest yields its crop's ordinary output multiplied by fertility over capacity, rounded down with a minimum of one unit. A successful physical harvest depletes fertility; a field that starts a boundary fallow recovers up to capacity. Failed harvests cause no depletion. Fields without a soil record keep their ordinary yield. This is a basic fertility model, not a complete treatment of soils or nutrients.
 
 An optional `[cultivation.soil.amendment]` supplies a material good ID, `quantity`, `fertility_gain`, and individual `choices` naming a person and field. A willing, available person at the stock endpoint may spend a real quantity to improve that field; they can choose to disregard claims. Concurrent people targeting the same field are selected deterministically, and those targeting shared material compete through ordinary physical transactions. Only a successful receipt adds fertility; latest-boundary events record accepted and failed attempts.
+
+Soil amendment currently runs in the composed `Economy` path; the interval
+host loads its state but does not yet execute amendment choices.
 
 An individual's amendment choice may instead name `pressured_by` and their own `fear_at_least` or `obligation_at_least`. Their directed feelings determine whether that pressure motivates the action; no general obligation or consent is imposed.
 

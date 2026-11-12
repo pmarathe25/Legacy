@@ -38905,6 +38905,7 @@ fn controlled_person_improves_soil_with_actual_material() {
     };
     let mut initial = field_workload(2);
     initial.people[0].controlled = true;
+    initial.people[0].hunger = initial.rules.max_work_hunger + 1;
     let farm = initial.agriculture.as_mut().unwrap();
     farm.fields.truncate(1);
     farm.soil = Some(Soil {
@@ -39025,6 +39026,7 @@ fn soil_improvement_consumes_real_material_and_arbitrates_competing_people() {
             fertility_gain: 20,
             choices: vec![
                 Choice {
+                    hunger_limit: None,
                     person: 1,
                     field: 1,
                     willing: true,
@@ -39034,6 +39036,7 @@ fn soil_improvement_consumes_real_material_and_arbitrates_competing_people() {
                     disregard_claims: false,
                 },
                 Choice {
+                    hunger_limit: None,
                     person: 2,
                     field: 2,
                     willing: true,
@@ -40239,6 +40242,7 @@ fn concentrated_field_benchmark() {
                 fertility_gain: 20,
                 choices: (1..=count)
                     .map(|person| Choice {
+                        hunger_limit: None,
                         person,
                         field: person,
                         willing: !amendment_pressure,
@@ -58075,6 +58079,7 @@ fn irrigation_fixture() -> State {
             .collect(),
         choices: (1..=3)
             .map(|person| crate::WaterChoice {
+                hunger_limit: None,
                 person,
                 field: person,
                 quantity: 1,
@@ -58246,6 +58251,7 @@ fn irrigation_boundary_benchmark() {
             .collect(),
         choices: (1..=count)
             .map(|person| crate::WaterChoice {
+                hunger_limit: None,
                 person,
                 field: person,
                 quantity: 1,
@@ -59161,9 +59167,11 @@ fn writing_advances_tool_identity_cursor_and_round_trips_with_no_tool_production
 fn controlled_watering_uses_real_stock_and_preserves_field_autonomy() {
     let mut initial = irrigation_fixture();
     initial.people[0].controlled = true;
+    initial.people[0].hunger = initial.rules.max_work_hunger + 1;
     let owner = initial.irrigation.as_mut().unwrap();
     owner.choices = vec![
         crate::WaterChoice {
+            hunger_limit: None,
             person: 2,
             field: 1,
             quantity: 1,
@@ -59174,6 +59182,7 @@ fn controlled_watering_uses_real_stock_and_preserves_field_autonomy() {
             disregard_claims: false,
         },
         crate::WaterChoice {
+            hunger_limit: None,
             person: 3,
             field: 2,
             quantity: 1,

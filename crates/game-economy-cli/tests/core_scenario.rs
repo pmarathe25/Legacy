@@ -484,6 +484,60 @@ fn language_topics_arise_from_personally_chosen_physical_demonstrations() {
 }
 
 #[test]
+fn hungry_people_choose_watering_individually() {
+    use game_economy::core_interval::CoreHost;
+    use game_economy_agriculture::Phase;
+    fn run(limit: Option<u32>, workers: usize) -> serde_json::Value {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let root = root();
+                let mut state = game_economy_cli::core_scenario(
+                    &root.join("content/scenarios/economy-irrigation.toml"),
+                    &root.join("content"),
+                )
+                .unwrap()
+                .snapshot();
+                for person in &mut state.core.people {
+                    person.hunger = 35;
+                }
+                let farm = state.agriculture.as_mut().unwrap();
+                farm.policies.clear();
+                for field in &mut farm.fields {
+                    field.phase = Phase::Growing;
+                    field.remaining = 5;
+                }
+                let irrigation = state.irrigation.as_mut().unwrap();
+                irrigation.choices.truncate(1);
+                irrigation.choices[0].hunger_limit = limit;
+                let mut host = CoreHost::resume(
+                    serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap(),
+                )
+                .unwrap();
+                assert_eq!(host.advance_continuous(900_001, &[]).unwrap().failure, None);
+                let result = host.snapshot();
+                let accepted = result
+                    .irrigation
+                    .as_ref()
+                    .unwrap()
+                    .events
+                    .iter()
+                    .any(|event| event.accepted);
+                assert_eq!(
+                    accepted,
+                    limit.is_none_or(|value| value >= 35),
+                    "limit={limit:?}"
+                );
+                serde_json::to_value(result).unwrap()
+            })
+    }
+    for limit in [None, Some(20), Some(40)] {
+        assert_eq!(run(limit, 1), run(limit, 4));
+    }
+}
+#[test]
 fn hungry_people_can_ask_for_and_choose_cultivation_help() {
     use game_economy::core_interval::CoreHost;
     use game_economy_agriculture::Phase;

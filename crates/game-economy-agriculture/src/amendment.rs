@@ -14,6 +14,8 @@ pub struct Choice {
     pub person: u64,
     pub field: u64,
     pub willing: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hunger_limit: Option<u32>,
     #[serde(default)]
     pub pressured_by: Option<u64>,
     #[serde(default)]
@@ -116,7 +118,7 @@ impl Amendment {
             claims,
             opinions,
             view,
-            max_hunger,
+            max_hunger: _,
             seed,
             tick,
             manual,
@@ -172,7 +174,10 @@ impl Amendment {
                         .is_some_and(|threshold| obligation >= threshold))
                     || (person.controlled && !manually_selected)
                     || person.health == 0
-                    || person.hunger > max_hunger
+                    || (!manually_selected
+                        && choice
+                            .hunger_limit
+                            .is_some_and(|limit| person.hunger > limit))
                     || person.region != Some(field.region)
                     || (!manually_selected && busy.binary_search(&person.id).is_ok())
                     || nonstock.binary_search(&person.id).is_ok()

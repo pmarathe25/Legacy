@@ -21,6 +21,8 @@ pub struct Choice {
     pub field: u64,
     pub quantity: u64,
     pub willing: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hunger_limit: Option<u32>,
     #[serde(default)]
     pub pressured_by: Option<u64>,
     #[serde(default)]
@@ -157,7 +159,7 @@ impl Irrigation {
             claims,
             opinions,
             view,
-            max_hunger,
+            max_hunger: _,
             manual,
             seed,
             tick,
@@ -218,7 +220,10 @@ impl Irrigation {
                         .is_some_and(|threshold| obligation >= threshold))
                     || (person.controlled && !manually_selected)
                     || person.health == 0
-                    || person.hunger > max_hunger
+                    || (!manually_selected
+                        && choice
+                            .hunger_limit
+                            .is_some_and(|limit| person.hunger > limit))
                     || (!manually_selected && busy.binary_search(&person.id).is_ok())
                     || person.region != Some(field.region)
                     || field.phase != Phase::Growing
