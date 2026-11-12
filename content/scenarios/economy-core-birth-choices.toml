@@ -220,4 +220,4 @@ practice_each_tick = true
 
 [birth_choices]
 idle = 0
-preferences = [{ domain = 7, enabled = true, bias = 100, locus = 2, genetic_bias = 1000 }]
+preferences = [{ domain = 4, enabled = true, bias = -100 }, { domain = 7, enabled = true, bias = 100, locus = 2, genetic_bias = 1000 }]

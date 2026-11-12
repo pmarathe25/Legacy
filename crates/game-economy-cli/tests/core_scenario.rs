@@ -2790,6 +2790,7 @@ fn actual_newborns_receive_personal_genetic_inclinations() {
                         .seek_meals,
                     enabled
                 );
+                assert_eq!(state.core.people.iter().find(|person| person.id == 3).unwrap().willing_to_work, enabled);
                 let choices = state
                     .schedule
                     .as_ref()
@@ -2801,7 +2802,7 @@ fn actual_newborns_receive_personal_genetic_inclinations() {
                 if enabled {
                     let preference = preference.unwrap();
                     let expected = 100 + (i64::from(child.genome.expressed(2)) - 500);
-                    assert_eq!(preference.preferences[0].bias, expected);
+                    assert_eq!(preference.preferences.iter().find(|row| row.domain == 7).unwrap().bias, expected);
                     assert!(preference.actions.is_empty());
                     let mut meal_state = state.clone();
                     meal_state.schedule.as_mut().unwrap().next_decision_millis = Some(0);
@@ -2816,13 +2817,38 @@ fn actual_newborns_receive_personal_genetic_inclinations() {
                     assert_eq!(declined_run.failure, None);
                     assert!(!declined_run.events.iter().any(|event| matches!(event, game_economy::core_interval::CoreRunEvent::Meals(rows) if rows.iter().any(|row| row.0 == 3))));
                     let people = std::sync::Arc::make_mut(meal_state.schedule.as_mut().unwrap().personal_choices.as_mut().unwrap());
-                    people.iter_mut().find(|person| person.id == 3).unwrap().preferences[0].bias = 100;
+                    people.iter_mut().find(|person| person.id == 3).unwrap().preferences.iter_mut().find(|row| row.domain == 7).unwrap().bias = 100;
                     let mut willing = CoreHost::resume(meal_state).unwrap();
                     let (preview, idle) = willing.preview_personal_choices(&[]).unwrap();
                     assert!(preview.iter().any(|intent| intent.actor == 3), "preview={preview:?}, idle={idle:?}");
                     let willing_run = willing.advance_continuous(1, &[]).unwrap();
                     assert_eq!(willing_run.failure, None);
                     assert!(willing_run.events.iter().any(|event| matches!(event, game_economy::core_interval::CoreRunEvent::Meals(rows) if rows.iter().any(|row| row.0 == 3))), "events={:?}, schedule={:?}", willing_run.events, state.schedule);
+                    let mut work_state = state.clone();
+                    work_state.schedule.as_mut().unwrap().next_decision_millis = Some(0);
+                    work_state.work_capabilities = Some(game_work_capability::Capabilities {
+                        growth: vec![game_work_capability::GrowthPoint { age: 0, strength: 0 }],
+                        vigor_base: 1000, vigor_weight: 0, default_strength: 0, missing_strength: None, requirements: vec![],
+                    });
+                    let grain = work_state.core.physical.goods.iter().find(|good| good.name == "grain").unwrap().id;
+                    let recipe = work_state.core.physical.recipes.iter().map(|row| row.id).max().unwrap_or(0) + 1;
+                    work_state.core.physical.recipes.push(game_production::Recipe {
+                        id: recipe, name: "child opportunity".into(), ticks: 2,
+                        inputs: vec![game_production::Amount { good: grain, quantity: 1 }],
+                        outputs: vec![game_production::Amount { good, quantity: 1 }],
+                    });
+                    work_state.autowork = Some(game_autowork::Autowork {
+                        next_id: 1, policies: vec![game_autowork::Policy { person: 3, recipe, enabled: true, disregard_claims: false }], requests: None,
+                    });
+                    let idle = CoreHost::resume(work_state.clone()).unwrap();
+                    assert!(!idle.preview_personal_choices(&[]).unwrap().0.iter().any(|intent| intent.actor == 3 && intent.key.domain == 4));
+                    let people = std::sync::Arc::make_mut(work_state.schedule.as_mut().unwrap().personal_choices.as_mut().unwrap());
+                    people.iter_mut().find(|person| person.id == 3).unwrap().preferences.iter_mut().find(|row| row.domain == 4).unwrap().bias = 100;
+                    let mut worker = CoreHost::resume(work_state).unwrap();
+                    assert!(worker.preview_personal_choices(&[]).unwrap().0.iter().any(|intent| intent.actor == 3 && intent.key.domain == 4));
+                    let work_run = worker.advance_continuous(1, &[]).unwrap();
+                    assert_eq!(work_run.failure, None);
+                    assert!(worker.snapshot().core.physical.work.iter().any(|job| job.job.worker == 3));
                 } else {
                     assert!(preference.is_none());
                 }
@@ -2839,6 +2865,47 @@ fn actual_newborns_receive_personal_genetic_inclinations() {
     for enabled in [false, true] {
         assert_eq!(run(1, enabled), run(4, enabled));
     }
+    let root = root();
+    let mut snapshot = game_economy_cli::core_scenario(
+        &root.join("content/scenarios/economy-core-birth-choices.toml"),
+        &root.join("content"),
+    )
+    .unwrap()
+    .snapshot();
+    snapshot
+        .core
+        .people
+        .iter_mut()
+        .find(|person| person.id == 2)
+        .unwrap()
+        .willing_to_work = true;
+    snapshot
+        .schedule
+        .as_mut()
+        .unwrap()
+        .birth_choices
+        .as_mut()
+        .unwrap()
+        .preferences
+        .iter_mut()
+        .find(|row| row.domain == 4)
+        .unwrap()
+        .enabled = false;
+    let mut host = CoreHost::resume(snapshot).unwrap();
+    assert_eq!(
+        host.advance_continuous(3_600_000, &[]).unwrap().failure,
+        None
+    );
+    assert!(
+        !host
+            .snapshot()
+            .core
+            .people
+            .iter()
+            .find(|person| person.id == 3)
+            .unwrap()
+            .willing_to_work
+    );
 }
 
 #[test]

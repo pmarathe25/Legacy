@@ -157,6 +157,22 @@ impl CoreHost {
                         .iter()
                         .any(|row| row.domain == personal_choice::MEAL)
                 });
+        let personal_work = owner
+            .rules
+            .enroll_births
+            .then(|| {
+                self.schedule
+                    .as_ref()
+                    .and_then(|schedule| schedule.birth_choices.as_ref())
+                    .and_then(|profile| {
+                        profile
+                            .preferences
+                            .iter()
+                            .find(|row| row.domain == personal_choice::WORK)
+                    })
+                    .map(|row| row.enabled)
+            })
+            .flatten();
         let next = game_economy_family::advance_validated_with_context(
             owner,
             &mut draft.people.people,
@@ -167,6 +183,18 @@ impl CoreHost {
             None,
             Some(&feelings),
         )?;
+        if let Some(available) = personal_work
+            && !next.newborns.is_empty()
+        {
+            let newborns: std::collections::HashSet<_> =
+                next.newborns.par_iter().copied().collect();
+            draft
+                .people
+                .people
+                .par_iter_mut()
+                .filter(|person| newborns.contains(&person.id))
+                .for_each(|person| person.willing_to_work = available);
+        }
         let newborns: Vec<_> = next
             .newborns
             .par_iter()

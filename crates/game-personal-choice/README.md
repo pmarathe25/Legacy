@@ -21,6 +21,9 @@ rules; genetic effects and refusal are configured rather than universal.
 For a newborn enrolled with a meal-domain profile, the interval host enables
 meal consideration even without a configured dependent-care owner. The
 individual profile still decides whether a meal wins over idleness.
+When the profile explicitly includes work, its enabled setting initializes
+the newborn's work-readiness flag rather than copying the mother's flag; the
+newborn's own choice still decides whether to pursue a work opportunity.
 
 The interval host can opt in to using this selection for construction,
 local carrying, site maintenance and starting work. This is not yet a common chooser for the other activities;
