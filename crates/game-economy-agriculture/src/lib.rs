@@ -1,6 +1,7 @@
 //! Parallel cultivation over real seed and dated harvest custody.
 pub mod amendment;
 pub mod content;
+pub mod genetics;
 pub mod irrigation;
 pub mod provenance;
 pub mod requests;
@@ -208,7 +209,17 @@ impl Agriculture {
                             })
                             .is_none()
                         || match f.phase {
-                            Phase::Growing => f.remaining == 0 || f.remaining > c.growth_ticks,
+                            Phase::Growing => {
+                                f.remaining == 0
+                                    || f.remaining
+                                        > self
+                                            .provenance
+                                            .as_ref()
+                                            .and_then(|owner| owner.genetics.as_ref())
+                                            .map_or(c.growth_ticks, |genetics| {
+                                                genetics.maximum_duration(c.growth_ticks)
+                                            })
+                            }
                             _ => f.remaining != 0,
                         }
                 })
@@ -821,6 +832,18 @@ impl Plan {
                     if decision.accepted {
                         field.phase = phase;
                         field.remaining = remaining;
+                        if phase == Phase::Growing
+                            && let Some(owner) = &provenance
+                            && let Some(genetics) = &owner.genetics
+                        {
+                            let planting = owner
+                                .plantings
+                                .binary_search_by_key(&field.id, |row| row.field)
+                                .ok()
+                                .map(|index| &owner.plantings[index])
+                                .ok_or("missing planted seed provenance")?;
+                            field.remaining = genetics.duration(remaining, &planting.seeds);
+                        }
                     }
                 }
                 Ok(field)

@@ -747,6 +747,8 @@ struct Cultivation {
     #[serde(default)]
     seed_profiles: Vec<game_economy_agriculture::provenance::SeedProfile>,
     #[serde(default)]
+    seed_genetics: Option<game_economy_agriculture::genetics::Genetics>,
+    #[serde(default)]
     soil: Option<game_economy_agriculture::soil::Soil>,
     #[serde(default)]
     inherit_births: bool,
@@ -2150,14 +2152,24 @@ fn scenario_with_options_inner(
     let agriculture = scenario
         .cultivation
         .map(|state| -> Result<_, String> {
-            if !state.track_seed_batches && !state.seed_profiles.is_empty() {
-                return Err("personal seed preferences require seed tracking".into());
+            if !state.track_seed_batches
+                && (!state.seed_profiles.is_empty() || state.seed_genetics.is_some())
+            {
+                return Err("seed preferences and genetics require seed tracking".into());
             }
             let mut seed_profiles = state.seed_profiles;
             seed_profiles.sort_unstable_by_key(|row| row.person);
             for profile in &mut seed_profiles {
                 profile.preferences.sort_unstable_by_key(|row| row.batch);
             }
+            let genetics = state
+                .seed_genetics
+                .map(|mut genetics| {
+                    genetics.strains.sort_unstable_by_key(|row| row.batch);
+                    genetics.validate().map_err(str::to_owned)?;
+                    Ok::<_, String>(std::sync::Arc::new(genetics))
+                })
+                .transpose()?;
             let crops = crop_content::load(
                 &content.join("agriculture"),
                 &production.goods,
@@ -2184,6 +2196,7 @@ fn scenario_with_options_inner(
                 provenance: state.track_seed_batches.then(|| {
                     game_economy_agriculture::provenance::Provenance {
                         profiles: std::sync::Arc::new(seed_profiles),
+                        genetics,
                         ..Default::default()
                     }
                 }),

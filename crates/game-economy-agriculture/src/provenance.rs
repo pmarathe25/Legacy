@@ -44,6 +44,9 @@ pub struct Provenance {
     /// Optional personal batch preferences, sorted by person.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub profiles: Arc<Vec<SeedProfile>>,
+    /// Optional physical growth genetics, never exposed as a decision input.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub genetics: Option<Arc<crate::genetics::Genetics>>,
 }
 
 impl Provenance {
@@ -74,6 +77,9 @@ impl Provenance {
         people: &std::collections::HashSet<u64>,
         now: u64,
     ) -> Result<(), String> {
+        if let Some(genetics) = &self.genetics {
+            genetics.validate().map_err(str::to_owned)?;
+        }
         if self
             .profiles
             .par_windows(2)
@@ -217,6 +223,7 @@ impl Provenance {
         Ok(Self {
             plantings: Arc::new(plantings),
             profiles: Arc::clone(&self.profiles),
+            genetics: self.genetics.clone(),
         })
     }
 }

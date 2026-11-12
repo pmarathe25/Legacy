@@ -484,6 +484,57 @@ fn language_topics_arise_from_personally_chosen_physical_demonstrations() {
 }
 
 #[test]
+fn actual_seed_genotypes_change_physical_growth_without_deciding_for_the_farmer() {
+    use game_economy::core_interval::CoreHost;
+    use game_economy_agriculture::Phase;
+    fn run(workers: usize, batch: u64) -> serde_json::Value {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let root = root();
+                let mut opening = game_economy_cli::core_scenario(
+                    &root.join("content/scenarios/economy-core-seed-genetics.toml"),
+                    &root.join("content"),
+                )
+                .unwrap()
+                .snapshot();
+                let profile = &mut std::sync::Arc::make_mut(
+                    &mut opening
+                        .agriculture
+                        .as_mut()
+                        .unwrap()
+                        .provenance
+                        .as_mut()
+                        .unwrap()
+                        .profiles,
+                )[0];
+                profile.preferences[0].batch = batch;
+                let mut host = CoreHost::resume(opening).unwrap();
+                assert_eq!(host.advance_continuous(900_001, &[]).unwrap().failure, None);
+                let state = host.snapshot();
+                let farm = state.agriculture.as_ref().unwrap();
+                assert_eq!(farm.fields[0].phase, Phase::Growing);
+                assert_eq!(farm.fields[0].remaining, if batch == 11 { 48 } else { 144 });
+                assert_eq!(
+                    farm.provenance.as_ref().unwrap().plantings[0].seeds[0].batch,
+                    Some(batch)
+                );
+                let restored = CoreHost::resume(
+                    serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap(),
+                )
+                .unwrap();
+                assert_eq!(state, restored.snapshot());
+                serde_json::to_value(state).unwrap()
+            })
+    }
+    for batch in [11, 12] {
+        assert_eq!(run(1, batch), run(4, batch));
+    }
+}
+
+#[test]
 fn people_can_choose_a_seed_batch_decline_or_be_wrong_about_stock() {
     use game_economy::core_interval::CoreHost;
     use game_economy_agriculture::Phase;

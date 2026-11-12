@@ -1,0 +1,65 @@
+seed = 7
+tick_millis = 900000
+stock_capacity = 1000
+food_relief_divisor = 20
+
+[rules]
+hunger_per_tick = 0
+meal_threshold = 5
+starvation_threshold = 50
+starvation_damage = 1
+max_health = 100
+carrying_capacity = 100
+max_work_hunger = 20
+
+[[regions]]
+id = 1
+stock = { grain-seed = 20 }
+
+[[people]]
+id = 1
+region = 1
+health = 100
+hunger = 0
+willing_to_work = true
+seek_meals = false
+
+[cultivation]
+max_hunger = 20
+track_seed_batches = true
+policies = [{ person = 1, willing = true }]
+
+[[cultivation.fields]]
+id = 1
+region = 1
+crop = "grain"
+
+[[cultivation.seed_batches]]
+region = 1
+good = "grain-seed"
+batch = 11
+quantity = 10
+
+[[cultivation.seed_batches]]
+region = 1
+good = "grain-seed"
+batch = 12
+quantity = 10
+
+[[cultivation.seed_profiles]]
+person = 1
+idle = 0
+preferences = [{ batch = 12, enabled = true, value = 10 }]
+
+[cultivation.seed_genetics]
+growth_weight = 1000
+min_factor = 500
+max_factor = 1500
+
+[[cultivation.seed_genetics.strains]]
+batch = 11
+alleles = [0, 0]
+
+[[cultivation.seed_genetics.strains]]
+batch = 12
+alleles = [1000, 1000]

@@ -10,7 +10,9 @@ fn concentrated_seed_provenance_scaling() {
         .unwrap_or(10_000);
     let tracking = std::env::var_os("LEGACY_SEED_BASELINE").is_none();
     let personal = std::env::var_os("LEGACY_SEED_PERSONAL").is_some();
+    let genetic = std::env::var_os("LEGACY_SEED_GENETIC").is_some();
     assert!(!personal || tracking);
+    assert!(!genetic || tracking);
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let capacity = count * 10 + 100;
     let mut text = format!(
@@ -35,6 +37,13 @@ track_seed_batches = {tracking}
 "#,
         count * 10
     );
+    if genetic {
+        writeln!(
+            text,
+            "[cultivation.seed_genetics]\ngrowth_weight = 1000\nmin_factor = 500\nmax_factor = 1500"
+        )
+        .unwrap();
+    }
     for id in 1..=count {
         writeln!(text, "[[people]]\nid = {id}\nregion = 1\nhealth = 100\nhunger = 0\nwilling_to_work = true\nseek_meals = false").unwrap();
         writeln!(
@@ -49,6 +58,10 @@ track_seed_batches = {tracking}
         .unwrap();
         if personal {
             writeln!(text, "[[cultivation.seed_profiles]]\nperson = {id}\nidle = 0\npreferences = [{{ batch = {id}, enabled = true, value = 10 }}]").unwrap();
+        }
+        if genetic {
+            let allele = id % 1001;
+            writeln!(text, "[[cultivation.seed_genetics.strains]]\nbatch = {id}\nalleles = [{allele}, {allele}]").unwrap();
         }
     }
     let path = std::env::temp_dir().join(format!(
@@ -137,7 +150,7 @@ track_seed_batches = {tracking}
         }
         times.sort_unstable();
         eprintln!(
-            "{workers} workers: {:?} median for {count} fields; tracking={tracking}; personal={personal}",
+            "{workers} workers: {:?} median for {count} fields; tracking={tracking}; personal={personal}; genetic={genetic}",
             times[1]
         );
     }

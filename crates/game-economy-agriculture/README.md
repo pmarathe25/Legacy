@@ -25,6 +25,15 @@ response paths. These authored preferences do not yet learn from harvest
 experience or compare seed choice with the general cross-domain choice round;
 see `content/scenarios/economy-core-seed-choice.toml`.
 
+An optional `[cultivation.seed_genetics]` assigns diploid growth-trait alleles
+to batch IDs and defines a signed effect and bounds for physical growth
+duration. The field's duration uses a quantity-weighted expression of the
+seed cohorts actually consumed; an unrecognized batch contributes neutral
+expression. This does not give a farmer access to genetic values. It is a
+physical growth slice only: offspring, mutation, environmental genetic
+selection and genetic harvests are still missing. See
+`content/scenarios/economy-core-seed-genetics.toml`.
+
 Optional `[cultivation.soil]` content specifies `capacity`, `loss_per_harvest`, `recovery_per_fallow`, and sorted `fields = [{ field, fertility }, ...]`. A configured field's harvest yields its crop's ordinary output multiplied by fertility over capacity, rounded down with a minimum of one unit. A successful physical harvest depletes fertility; a field that starts a boundary fallow recovers up to capacity. Failed harvests cause no depletion. Fields without a soil record keep their ordinary yield. This is a basic fertility model, not a complete treatment of soils or nutrients.
 
 An optional `[cultivation.soil.amendment]` supplies a material good ID, `quantity`, `fertility_gain`, and individual `choices` naming a person and field. A willing, available person at the stock endpoint may spend a real quantity to improve that field; they can choose to disregard claims. Concurrent people targeting the same field are selected deterministically, and those targeting shared material compete through ordinary physical transactions. Only a successful receipt adds fertility; latest-boundary events record accepted and failed attempts.
