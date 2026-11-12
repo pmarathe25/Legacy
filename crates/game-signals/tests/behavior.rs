@@ -7,6 +7,7 @@ use std::collections::HashSet;
 fn initial() -> Signals {
     Signals {
         birth_profile: None,
+        learning_events: vec![],
         catalog: Catalog {
             forms: vec![
                 Named {
@@ -49,6 +50,9 @@ fn initial() -> Signals {
                 gift_preferences: vec![],
                 gift_idle: 0,
                 gift_on_tie: false,
+                learning_rules: vec![],
+                learning_idle: 0,
+                learn_on_tie: false,
                 remember: false,
                 capacity: 0,
                 observations: vec![],
@@ -67,6 +71,9 @@ fn initial() -> Signals {
                 gift_preferences: vec![],
                 gift_idle: 0,
                 gift_on_tie: false,
+                learning_rules: vec![],
+                learning_idle: 0,
+                learn_on_tie: false,
                 remember: true,
                 capacity: 2,
                 observations: vec![],
@@ -151,6 +158,101 @@ fn newborns_choose_personal_signals_without_inheriting_meanings_or_memories() {
     assert_eq!(
         (events[0].actor, events[0].observer, events[0].interpreted),
         (4, 2, Some(2))
+    );
+}
+
+#[test]
+fn listeners_can_infer_or_refuse_a_meaning_from_a_real_later_gift() {
+    use game_signals::{GiftEvidence, LearningRule};
+    let mut opening = initial();
+    opening.minds[1].interpretations.clear();
+    opening.minds[1].learning_rules = vec![LearningRule {
+        good: 7,
+        meaning: 2,
+        enabled: true,
+        value: 10,
+        replace: false,
+    }];
+    let contact = [Contact {
+        a: 1,
+        b: 2,
+        a_hunger: 0,
+        b_hunger: 0,
+    }];
+    let observed = opening.prepare(&contact, 7, 1).unwrap();
+    let gift = [GiftEvidence {
+        actor: 1,
+        observer: 2,
+        good: 7,
+    }];
+    assert!(observed.learn_from_gifts(&gift, 3).unwrap().is_none());
+    assert!(
+        observed
+            .learn_from_gifts(&[GiftEvidence { good: 8, ..gift[0] }], 2)
+            .unwrap()
+            .is_none()
+    );
+    let learned = observed.learn_from_gifts(&gift, 2).unwrap().unwrap();
+    let draft = observed.prepare_gift_learning(&gift, 2).unwrap().unwrap();
+    assert!(observed.minds[1].interpretations.is_empty());
+    let mut committed = observed.clone();
+    draft.apply_validated(&mut committed);
+    assert_eq!(committed, learned);
+    assert_eq!(
+        learned.minds[1].interpretations,
+        vec![Interpretation {
+            form: 1,
+            meaning: 2
+        }]
+    );
+    assert_eq!(learned.minds[0].expressions[0].intended, Some(1));
+    assert_eq!(learned.learning_events[0].previous, None);
+    assert_eq!(learned.learning_events[0].meaning, 2);
+    assert!(
+        serde_json::to_value(learned.learning_events[0])
+            .unwrap()
+            .get("intended")
+            .is_none()
+    );
+    let current = learned.prepare(&contact, 7, 2).unwrap();
+    assert_eq!(current.learning_events.len(), 1);
+    assert!(
+        current
+            .prepare(&contact, 7, 3)
+            .unwrap()
+            .learning_events
+            .is_empty()
+    );
+    let mut refused = observed.clone();
+    refused.minds[1].learning_idle = 10;
+    assert!(refused.learn_from_gifts(&gift, 2).unwrap().is_none());
+    refused.minds[1].learn_on_tie = true;
+    assert!(refused.learn_from_gifts(&gift, 2).unwrap().is_some());
+    let mut ignored = opening;
+    ignored.minds[1].attention = 0;
+    assert!(
+        ignored
+            .prepare(&contact, 7, 1)
+            .unwrap()
+            .learn_from_gifts(&gift, 2)
+            .unwrap()
+            .is_none()
+    );
+    let mut retained = observed;
+    retained.minds[1].interpretations.push(Interpretation {
+        form: 1,
+        meaning: 1,
+    });
+    assert!(retained.learn_from_gifts(&gift, 2).unwrap().is_none());
+    retained.minds[1].learning_rules[0].replace = true;
+    assert_eq!(
+        retained
+            .learn_from_gifts(&gift, 2)
+            .unwrap()
+            .unwrap()
+            .learning_events[0]
+            .previous,
+        Some(1)
     );
 }
 
@@ -415,6 +517,7 @@ fn disjoint_personal_signal_choices_match_across_workers() {
     let template = initial();
     let mut state = Signals {
         birth_profile: None,
+        learning_events: vec![],
         catalog: template.catalog,
         minds: vec![],
         events: vec![],
@@ -449,6 +552,7 @@ fn directed_signals_need_no_meeting_and_fan_in_keeps_bounded_personal_memory() {
     let template = initial();
     let mut state = Signals {
         birth_profile: None,
+        learning_events: vec![],
         catalog: template.catalog,
         minds: vec![],
         events: vec![],
@@ -510,6 +614,7 @@ fn independent_signals_benchmark() {
     let template = initial();
     let mut state = Signals {
         birth_profile: None,
+        learning_events: vec![],
         catalog: template.catalog,
         minds: vec![],
         events: vec![],
@@ -564,6 +669,7 @@ fn concentrated_signals_benchmark() {
     let template = initial();
     let mut state = Signals {
         birth_profile: None,
+        learning_events: vec![],
         catalog: template.catalog,
         minds: vec![],
         events: vec![],

@@ -864,6 +864,8 @@ struct SignalsConfig {
     minds: Vec<game_signals::Mind>,
     #[serde(default)]
     gifts: Vec<SignalGift>,
+    #[serde(default)]
+    learning: Vec<SignalLearning>,
 }
 
 #[derive(Deserialize)]
@@ -874,6 +876,18 @@ struct SignalGift {
     good: String,
     quantity: u64,
     value: i64,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SignalLearning {
+    person: u64,
+    good: String,
+    meaning: String,
+    enabled: bool,
+    value: i64,
+    #[serde(default)]
+    replace: bool,
 }
 
 #[derive(Deserialize)]
@@ -1096,11 +1110,42 @@ pub fn core_scenario_with_options(
                     value: gift.value,
                 });
         }
+        for learning in signals.learning {
+            let meaning = catalog
+                .meanings
+                .iter()
+                .find(|row| row.name == learning.meaning)
+                .ok_or_else(|| format!("unknown signal meaning {}", learning.meaning))?
+                .id;
+            let good = snapshot
+                .core
+                .physical
+                .goods
+                .iter()
+                .find(|row| row.name == learning.good)
+                .ok_or_else(|| format!("unknown signal learning good {}", learning.good))?
+                .id;
+            let index = signals
+                .minds
+                .binary_search_by_key(&learning.person, |mind| mind.person)
+                .map_err(|_| "signal learning requires a personal signal mind")?;
+            signals.minds[index]
+                .learning_rules
+                .push(game_signals::LearningRule {
+                    good,
+                    meaning,
+                    enabled: learning.enabled,
+                    value: learning.value,
+                    replace: learning.replace,
+                });
+        }
         for mind in &mut signals.minds {
             mind.expressions
                 .sort_unstable_by_key(|row| (row.form, row.recipient));
             mind.interpretations.sort_unstable_by_key(|row| row.form);
             mind.reactions.sort_unstable_by_key(|row| row.meaning);
+            mind.learning_rules
+                .sort_unstable_by_key(|row| (row.good, row.meaning));
         }
         snapshot
             .social
@@ -1111,6 +1156,7 @@ pub fn core_scenario_with_options(
             birth_profile: signals.birth_profile,
             minds: signals.minds,
             events: vec![],
+            learning_events: vec![],
         });
     }
     if let Some(mut mechanics) = mechanics {

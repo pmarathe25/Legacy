@@ -701,16 +701,26 @@ impl CoreHost {
                 signals
                     .validate(&people, core.physical.tick())
                     .map_err(str::to_owned)?;
+                let goods: HashSet<_> = core
+                    .physical
+                    .goods()
+                    .par_iter()
+                    .map(|good| good.id)
+                    .collect();
                 if signals.minds.par_iter().any(|mind| {
-                    mind.gift_preferences.iter().any(|preference| {
-                        !core
-                            .physical
-                            .goods()
+                    mind.gift_preferences
+                        .iter()
+                        .any(|preference| !goods.contains(&preference.good))
+                        || mind
+                            .learning_rules
                             .iter()
-                            .any(|good| good.id == preference.good)
-                    })
-                }) {
-                    return Err("unknown signal gift good".into());
+                            .any(|rule| !goods.contains(&rule.good))
+                }) || signals
+                    .learning_events
+                    .par_iter()
+                    .any(|event| !goods.contains(&event.good))
+                {
+                    return Err("unknown signal good".into());
                 }
                 if signals
                     .events
@@ -2297,6 +2307,36 @@ impl CoreHost {
         let giving_help = giving
             .as_ref()
             .map_or_else(Vec::new, |frame| frame.plan.help(draft.events()));
+        let signal_learning = if let (Some(signals), Some(frame)) = (
+            self.social
+                .as_ref()
+                .and_then(|social| social.signals.as_ref()),
+            giving.as_ref(),
+        ) {
+            if signals
+                .minds
+                .par_iter()
+                .any(|mind| !mind.learning_rules.is_empty())
+            {
+                let gifts: Vec<_> = frame
+                    .plan
+                    .practice_gifts(draft.events())
+                    .into_par_iter()
+                    .map(|(_, actor, observer, good, _)| game_signals::GiftEvidence {
+                        actor,
+                        observer,
+                        good,
+                    })
+                    .collect();
+                signals
+                    .prepare_gift_learning(&gifts, draft.events().tick)
+                    .map_err(str::to_owned)?
+            } else {
+                None
+            }
+        } else {
+            None
+        };
         let mut contacts = medical_resolved
             .as_ref()
             .map_or_else(Vec::new, |resolved| resolved.contacts());
@@ -2514,6 +2554,16 @@ impl CoreHost {
         });
         self.core.validate_settlement(&draft)?;
         let events = self.core.commit_settlement(draft)?;
+        if let Some(learning) = signal_learning {
+            learning.apply_validated(
+                self.social
+                    .as_mut()
+                    .expect("signal owner")
+                    .signals
+                    .as_mut()
+                    .expect("signal state"),
+            );
+        }
         if let Some(owner) = &mut self.local_transport {
             owner.events.clear();
         }

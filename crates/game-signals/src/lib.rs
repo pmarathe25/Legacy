@@ -2,6 +2,8 @@
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
+mod learning;
+pub use learning::{GiftEvidence, LearningDraft, LearningEvent, LearningRule};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -159,6 +161,12 @@ pub struct Mind {
     #[serde(default)]
     pub gift_on_tie: bool,
     #[serde(default)]
+    pub learning_rules: Vec<LearningRule>,
+    #[serde(default)]
+    pub learning_idle: i64,
+    #[serde(default)]
+    pub learn_on_tie: bool,
+    #[serde(default)]
     pub remember: bool,
     #[serde(default)]
     pub capacity: usize,
@@ -188,6 +196,8 @@ pub struct Signals {
     pub minds: Vec<Mind>,
     #[serde(default)]
     pub events: Vec<Event>,
+    #[serde(default)]
+    pub learning_events: Vec<LearningEvent>,
 }
 
 impl Clone for Signals {
@@ -197,6 +207,7 @@ impl Clone for Signals {
             birth_profile: self.birth_profile.clone(),
             minds: self.minds.par_iter().cloned().collect(),
             events: self.events.par_iter().copied().collect(),
+            learning_events: self.learning_events.par_iter().copied().collect(),
         }
     }
 }
@@ -324,6 +335,13 @@ impl Signals {
                     || mind.gift_preferences.iter().any(|row| {
                         !self.valid_meaning(row.meaning) || row.good == 0 || row.quantity == 0
                     })
+                    || mind.learning_rules.windows(2).any(|rows| {
+                        (rows[0].good, rows[0].meaning) >= (rows[1].good, rows[1].meaning)
+                    })
+                    || mind
+                        .learning_rules
+                        .iter()
+                        .any(|row| row.good == 0 || !self.valid_meaning(row.meaning))
                     || mind
                         .observations
                         .windows(2)
@@ -354,6 +372,16 @@ impl Signals {
                     || event.interpreted.is_some_and(|id| !self.valid_meaning(id))
                     || (!event.noticed && event.interpreted.is_some())
             })
+            && !self.learning_events.par_iter().any(|event| {
+                event.tick > now
+                    || event.observer == 0
+                    || event.actor == 0
+                    || event.actor == event.observer
+                    || event.good == 0
+                    || !self.valid_form(event.form)
+                    || !self.valid_meaning(event.meaning)
+                    || event.previous.is_some_and(|id| !self.valid_meaning(id))
+            })
     }
 
     pub fn validate(&self, people: &HashSet<u64>, now: u64) -> Result<(), &'static str> {
@@ -371,6 +399,10 @@ impl Signals {
             })
             || self
                 .events
+                .par_iter()
+                .any(|event| !people.contains(&event.actor) || !people.contains(&event.observer))
+            || self
+                .learning_events
                 .par_iter()
                 .any(|event| !people.contains(&event.actor) || !people.contains(&event.observer))
         {
@@ -466,6 +498,9 @@ impl Signals {
                     gift_preferences: vec![],
                     gift_idle: 0,
                     gift_on_tie: false,
+                    learning_rules: vec![],
+                    learning_idle: 0,
+                    learn_on_tie: false,
                     remember: profile.remember,
                     capacity: profile.capacity,
                     observations: vec![],
@@ -732,6 +767,12 @@ impl Signals {
             birth_profile: self.birth_profile.clone(),
             minds,
             events,
+            learning_events: self
+                .learning_events
+                .par_iter()
+                .filter(|event| event.tick == tick)
+                .copied()
+                .collect(),
         })
     }
 }

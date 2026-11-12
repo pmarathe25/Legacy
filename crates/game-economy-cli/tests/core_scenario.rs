@@ -155,6 +155,132 @@ fn directed_nonverbal_signals_are_personal_and_need_no_meeting() {
 }
 
 #[test]
+fn observed_signal_and_real_gift_can_lead_to_a_personal_inference() {
+    use game_economy::core_interval::CoreHost;
+    use game_lots::{Container, Lot, Place};
+    fn run(workers: usize, attention: u16, stock: u64, learn: bool) -> serde_json::Value {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let root = root();
+                let mut initial = game_economy_cli::core_scenario(
+                    &root.join("content/scenarios/economy-core-signal-learning.toml"),
+                    &root.join("content"),
+                )
+                .unwrap()
+                .snapshot();
+                let listener = &mut initial
+                    .social
+                    .as_mut()
+                    .unwrap()
+                    .signals
+                    .as_mut()
+                    .unwrap()
+                    .minds[1];
+                listener.attention = attention;
+                listener.learning_rules[0].enabled = learn;
+                let mut host = CoreHost::resume(initial).unwrap();
+                assert_eq!(host.advance_continuous(900_001, &[]).unwrap().failure, None);
+                let mut opening = host.snapshot();
+                let good = opening
+                    .core
+                    .physical
+                    .goods
+                    .iter()
+                    .find(|good| good.name == "bread")
+                    .unwrap()
+                    .id;
+                let bag = opening
+                    .core
+                    .physical
+                    .custody
+                    .containers
+                    .iter_mut()
+                    .find(|row| row.place == Place::Person(1))
+                    .unwrap();
+                *bag = Container::new(
+                    Place::Person(1),
+                    100,
+                    if stock == 0 {
+                        vec![]
+                    } else {
+                        vec![Lot {
+                            item: None,
+                            good,
+                            quantity: stock,
+                            expires_at: None,
+                        }]
+                    },
+                )
+                .unwrap();
+                opening.giving = Some(
+                    serde_json::from_value(serde_json::json!({"policies":[{
+                        "person":1, "recipient":2, "good":good, "quantity":1,
+                        "recipient_hunger_at_least":0, "willing":true
+                    }]}))
+                    .unwrap(),
+                );
+                let mut host = CoreHost::resume(opening.clone()).unwrap();
+                let mut restored = CoreHost::resume(
+                    serde_json::from_str(&serde_json::to_string(&opening).unwrap()).unwrap(),
+                )
+                .unwrap();
+                assert_eq!(host.advance_continuous(900_000, &[]).unwrap().failure, None);
+                assert_eq!(
+                    restored.advance_continuous(900_000, &[]).unwrap().failure,
+                    None
+                );
+                let state = host.snapshot();
+                assert_eq!(state, restored.snapshot());
+                let signals = state.social.as_ref().unwrap().signals.as_ref().unwrap();
+                let learned = attention == 1000 && stock > 0 && learn;
+                assert_eq!(
+                    signals.minds[1]
+                        .interpretations
+                        .iter()
+                        .any(|row| row.form == 1 && row.meaning == 2),
+                    learned
+                );
+                assert_eq!(signals.learning_events.len(), usize::from(learned));
+                if learned {
+                    let event = signals.learning_events[0];
+                    assert_eq!(
+                        (
+                            event.observer,
+                            event.actor,
+                            event.form,
+                            event.good,
+                            event.meaning
+                        ),
+                        (2, 1, 1, good, 2)
+                    );
+                    assert!(
+                        serde_json::to_value(event)
+                            .unwrap()
+                            .get("intended")
+                            .is_none()
+                    );
+                    assert_eq!(signals.minds[0].expressions[0].intended, Some(1));
+                }
+                serde_json::to_value(state).unwrap()
+            })
+    }
+    for (attention, stock, learn) in [
+        (1000, 1, true),
+        (0, 1, true),
+        (1000, 0, true),
+        (1000, 1, false),
+    ] {
+        assert_eq!(
+            run(1, attention, stock, learn),
+            run(4, attention, stock, learn)
+        );
+    }
+}
+
+#[test]
 fn perceived_signals_can_motivate_voluntary_physical_gifts() {
     use game_economy::core_interval::CoreHost;
     use game_lots::{Container, Lot, Place};

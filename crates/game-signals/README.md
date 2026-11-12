@@ -25,8 +25,12 @@ that choice during the following physical interval. The giving owner checks
 actual custody, capacity, reach and competing activities. No actual hunger,
 request or agreement is inferred, and the giver may prefer idleness. This
 currently uses the giving scheduler's fixed priority rather than the general
-cross-domain choice round. Learning new interpretations and additional physical
-responses remain to be implemented. An optional data-defined birth profile can
+cross-domain choice round. An observer can also choose to associate a noticed
+form with a personally configured meaning after receiving a real gift from the
+signaler in the following interval. This is a fallible inference: the observer
+can refuse or retain an existing mapping, and the sender's intention is never
+consulted. Other learning evidence and physical responses remain unfinished.
+An optional data-defined birth profile can
 enroll actual newborns with individual, genetically adjusted expression
 inclinations; it does not give them another person's interpretations,
 relationships or memories. A newborn can be configured to direct a signal at
@@ -37,3 +41,7 @@ Scenarios can author `[[signals.gifts]]` with a person, named catalog meaning,
 named good, quantity, and personal value. These resolve to runtime identifiers
 when the scenario is loaded; each preference belongs to that person's signal
 mind. A configured giving owner is required to execute gifts.
+`[[signals.learning]]` similarly names a listener, good and proposed meaning,
+with an enabled preference, value and optional replacement permission. Only a
+successfully transferred good supplies evidence; a proposed or failed gift does
+not teach a mapping.

@@ -210,9 +210,19 @@ fn run(
                 .social
                 .as_ref()
                 .and_then(|social| social.signals.as_ref())
-                && !signals.events.is_empty()
             {
-                yearly_observations.push(json!({"kind":"signal_events", "events":signals.events}));
+                if !signals.events.is_empty() {
+                    yearly_observations
+                        .push(json!({"kind":"signal_events", "events":signals.events}));
+                }
+                let learning: Vec<_> = signals
+                    .learning_events
+                    .iter()
+                    .filter(|event| event.tick == tick_snapshot.core.physical.custody.tick)
+                    .collect();
+                if !learning.is_empty() {
+                    yearly_observations.push(json!({"kind":"signal_learning", "events":learning}));
+                }
             }
             if ticks_per_year > 1 {
                 if let Some(family) = &tick_snapshot.family
@@ -444,6 +454,54 @@ mod tests {
         fs::remove_file(scenario).unwrap();
         fs::remove_file(&output).unwrap();
         fs::remove_file(output.with_extension("year-1.json")).unwrap();
+    }
+
+    #[test]
+    fn subjective_signal_learning_is_archived_without_private_intent() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let token = format!(
+            "legacy-signal-learning-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+        let scenario = std::env::temp_dir().join(format!("{token}.toml"));
+        let output = std::env::temp_dir().join(format!("{token}.ndjson"));
+        let source =
+            fs::read_to_string(root.join("content/scenarios/economy-core-signal-learning.toml"))
+                .unwrap()
+                .replace("tick_millis = 900000", "tick_millis = 31536000000")
+                .replace("good = \"bread\"", "good = \"timber\"")
+                .replacen(
+                    "seek_meals = false",
+                    "seek_meals = false\ngoods = { timber = 1 }",
+                    1,
+                );
+        let source = format!(
+            "{source}\n[giving]\n[[giving.policies]]\nperson = 1\nrecipient = 2\ngood = \"timber\"\nquantity = 1\nrecipient_hunger_at_least = 2\nwilling = true\n"
+        );
+        fs::write(&scenario, source).unwrap();
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(1)
+            .build()
+            .unwrap()
+            .install(|| run(&root, &scenario, &output, 2, 1, false))
+            .unwrap();
+        let rows = records(&output);
+        let event = rows
+            .iter()
+            .filter(|row| row["kind"] == "year")
+            .flat_map(|row| row["observations"].as_array().unwrap())
+            .find(|event| event["kind"] == "signal_learning")
+            .unwrap();
+        assert_eq!(event["events"][0]["observer"], 2);
+        assert_eq!(event["events"][0]["meaning"], 2);
+        assert!(event["events"][0].get("intended").is_none());
+        fs::remove_file(scenario).unwrap();
+        fs::remove_file(&output).unwrap();
+        fs::remove_file(output.with_extension("year-2.json")).unwrap();
     }
 
     #[test]
