@@ -225,6 +225,7 @@ pub fn prepare(
             Transaction {
                 id,
                 movements: vec![Movement {
+                    batch: None,
                     item: None,
                     id,
                     from,

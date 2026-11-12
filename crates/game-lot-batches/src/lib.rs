@@ -20,6 +20,13 @@ pub fn prepare_disjoint_transformations(
     instance: u64,
     transactions: &[Transaction],
 ) -> Result<Option<Draft>, String> {
+    if transactions.par_iter().any(|row| {
+        row.movements
+            .iter()
+            .any(|movement| movement.batch.is_some())
+    }) {
+        return Ok(None);
+    }
     disjoint_transform::prepare(state, instance, transactions)
 }
 
@@ -31,6 +38,13 @@ pub fn prepare_local_creations(
     transactions: &[Transaction],
     advance: bool,
 ) -> Result<Option<Draft>, String> {
+    if transactions.par_iter().any(|row| {
+        row.movements
+            .iter()
+            .any(|movement| movement.batch.is_some())
+    }) {
+        return Ok(None);
+    }
     local_creation::prepare(state, instance, transactions, advance)
 }
 
@@ -43,9 +57,11 @@ pub fn prepare_independent_items(
     advance: bool,
 ) -> Result<Option<Draft>, String> {
     if transactions.len() < 128
-        || transactions
-            .par_iter()
-            .any(|row| row.movements.iter().any(|movement| movement.item.is_some()))
+        || transactions.par_iter().any(|row| {
+            row.movements
+                .iter()
+                .any(|movement| movement.item.is_some() || movement.batch.is_some())
+        })
     {
         return Ok(None);
     }
@@ -116,6 +132,9 @@ pub fn prepare_partitioned_flat_fungible(
     transfers: &[SimpleTransfer],
     advance: bool,
 ) -> Result<Option<Draft>, String> {
+    if transfers.par_iter().any(|row| row.movement.batch.is_some()) {
+        return Ok(None);
+    }
     partitioned::prepare(state, instance, seed, transfers, advance)
 }
 
@@ -131,6 +150,9 @@ pub fn prepare_fan_out_flat_with_empty_fungible(
     mut additions: Vec<Container>,
     advance: bool,
 ) -> Result<Option<(Draft, Vec<Container>)>, String> {
+    if transfers.par_iter().any(|row| row.movement.batch.is_some()) {
+        return Ok(None);
+    }
     additions.par_sort_unstable_by_key(|row| row.place);
     if additions
         .par_windows(2)
@@ -281,6 +303,12 @@ fn prepare_impl(
     compact: &[u64],
     partition: bool,
 ) -> Result<(Draft, Vec<Container>), String> {
+    let targeted_batch = transactions.par_iter().any(|row| {
+        row.movements
+            .iter()
+            .any(|movement| movement.batch.is_some())
+    });
+    let partition = partition && !targeted_batch;
     #[cfg(feature = "profile")]
     let mut phase = game_diagnostics::span("physical.batches.validate");
     additions.par_sort_unstable_by_key(|row| row.place);
@@ -330,6 +358,13 @@ fn prepare_impl(
     {
         drop(phase);
         phase = game_diagnostics::span("physical.batches.partition");
+    }
+    if targeted_batch
+        && additions.is_empty()
+        && compact.is_empty()
+        && let Some(draft) = independent_transfer::prepare(state, instance, transactions, advance)?
+    {
+        return Ok((draft, additions));
     }
     if partition
         && additions.is_empty()

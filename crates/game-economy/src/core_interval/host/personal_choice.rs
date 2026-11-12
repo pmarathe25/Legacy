@@ -478,6 +478,7 @@ impl CoreHost {
                     .into_par_iter()
                     .map(|opportunity| {
                         let retained = (opportunity.salvage > 0).then_some(game_lots::Movement {
+                            batch: None,
                             id: 0,
                             from: opportunity.source,
                             to: Some(game_lots::Place::Site(0)),
@@ -487,6 +488,7 @@ impl CoreHost {
                         });
                         let consumed = (opportunity.salvage < opportunity.quantity).then(|| {
                             game_lots::Movement {
+                                batch: None,
                                 id: 0,
                                 from: opportunity.source,
                                 to: None,
@@ -549,6 +551,7 @@ impl CoreHost {
                             action: u64::from(opportunity.good),
                         },
                         movement: Some(game_lots::Movement {
+                            batch: None,
                             id: 0,
                             from: opportunity.from,
                             to: Some(opportunity.to),
@@ -597,6 +600,7 @@ impl CoreHost {
                         action: opportunity.site,
                     },
                     movement: Some(game_lots::Movement {
+                        batch: None,
                         id: 0,
                         from: game_lots::Place::Person(opportunity.person),
                         to: None,
@@ -724,6 +728,7 @@ impl CoreHost {
                             action: u64::from(opportunity.good),
                         },
                         movement: Some(game_lots::Movement {
+                            batch: None,
                             id: 0,
                             from: game_lots::Place::Person(opportunity.person),
                             to: None,
@@ -825,6 +830,7 @@ impl CoreHost {
                         action: u64::from(opportunity.good),
                     },
                     movement: Some(game_lots::Movement {
+                        batch: None,
                         id: 0,
                         from: game_lots::Place::Stock {
                             region: opportunity.region,
@@ -880,6 +886,7 @@ impl CoreHost {
                     action: u64::from(opportunity.medicine),
                 },
                 movement: Some(game_lots::Movement {
+                    batch: None,
                     id: 0,
                     from: game_lots::Place::Person(opportunity.person),
                     to: None,

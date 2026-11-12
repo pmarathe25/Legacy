@@ -12,6 +12,7 @@ fn interval_construction_is_identical_for_ordered_and_reversed_batches() {
             .map(|id| game_lots::Transaction {
                 id,
                 movements: vec![game_lots::Movement {
+                    batch: None,
                     id,
                     from: Place::Stock { region: 1, good: 1 },
                     to: Some(Place::Site(id + 10)),
@@ -59,6 +60,7 @@ fn interval_fan_out_matches_ordinary_transactions_under_shared_stock_contention(
         .map(|id| game_lots::Transaction {
             id,
             movements: vec![game_lots::Movement {
+                batch: None,
                 id,
                 from: Place::Stock { region: 1, good: 1 },
                 to: Some(Place::Person(id)),
@@ -91,6 +93,7 @@ fn interval_construction_fan_out_matches_general_custody_staging() {
         .map(|id| game_lots::Transaction {
             id,
             movements: vec![game_lots::Movement {
+                batch: None,
                 id,
                 from: Place::Stock { region: 1, good: 1 },
                 to: Some(Place::Site(id + 10)),
@@ -644,6 +647,7 @@ fn interval_transfer_invalidates_completion_drafts_and_keeps_work_live() {
     let action = game_lots::Transaction {
         id: 1,
         movements: vec![game_lots::Movement {
+            batch: None,
             id: 1,
             from: Place::Stock { region: 1, good: 1 },
             to: Some(Place::Person(2)),
@@ -697,6 +701,7 @@ fn interval_consumption_draft_expires_when_time_moves_without_work_rates() {
     let action = game_lots::Transaction {
         id: 1,
         movements: vec![game_lots::Movement {
+            batch: None,
             id: 1,
             from: Place::Person(2),
             to: None,

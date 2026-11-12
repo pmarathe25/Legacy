@@ -304,6 +304,7 @@ fn mechanical_experiments_require_real_carried_parts_and_survive_reload() {
                 let action = game_lots::Transaction {
                     id: 1,
                     movements: vec![game_lots::Movement {
+                        batch: None,
                         id: 1,
                         from: Place::Person(2),
                         to: Some(Place::Person(1)),
@@ -1784,7 +1785,7 @@ fn personal_food_acquisition_contends_for_real_stock_then_eats() {
         manual.progress(1).unwrap();
         let taking = game_lots::Transaction {
             id: 99,
-            movements: vec![game_lots::Movement {id: 99, from: Place::Stock {region: 1, good: 2}, to: Some(Place::Person(2)), good: 2, quantity: 1, item: None}],
+            movements: vec![game_lots::Movement { batch: None,id: 99, from: Place::Stock {region: 1, good: 2}, to: Some(Place::Person(2)), good: 2, quantity: 1, item: None}],
             creations: vec![],
         };
         assert!(manual.transfer_goods(&[taking]).unwrap().transactions[0].accepted);
@@ -2045,6 +2046,7 @@ fn interval_shared_transfer_benchmark() {
         .map(|id| game_lots::Transaction {
             id,
             movements: vec![game_lots::Movement {
+                batch: None,
                 id,
                 from: Place::Stock { region: 1, good: 1 },
                 to: Some(Place::Person(id)),
@@ -2891,6 +2893,7 @@ fn local_interval_transfer_moves_real_custody_and_preserves_inflight_work() {
                 let action = game_lots::Transaction {
                     id: 1,
                     movements: vec![game_lots::Movement {
+                        batch: None,
                         id: 1,
                         from: Place::Person(1),
                         to: Some(Place::Person(2)),
@@ -9710,6 +9713,7 @@ fn work_pauses_when_a_required_tool_moves_and_resumes_after_its_return() {
                 let transfer = |from, to| game_lots::Transaction {
                     id: 1,
                     movements: vec![game_lots::Movement {
+                        batch: None,
                         id: 1,
                         from: Place::Person(from),
                         to: Some(Place::Person(to)),
@@ -10285,6 +10289,7 @@ fn core_host_site_admission_benchmark() {
                     .map(|person| game_lots::Transaction {
                         id: person - 1,
                         movements: vec![game_lots::Movement {
+                            batch: None,
                             id: person - 1,
                             from: Place::Person(person),
                             to: Some(Place::Person(1)),
@@ -10909,6 +10914,7 @@ fn core_host_physical_taking_preserves_item_identity_without_implied_permission(
     let action = game_lots::Transaction {
         id: 1,
         movements: vec![game_lots::Movement {
+            batch: None,
             id: 1,
             from: Place::Person(2),
             to: Some(Place::Person(1)),
@@ -15073,6 +15079,7 @@ fn text_pages_require_real_materials_and_readers_keep_their_own_memories() {
                 let action = game_lots::Transaction {
                     id: 1,
                     movements: vec![game_lots::Movement {
+                        batch: None,
                         id: 1,
                         from: Place::Person(2),
                         to: Some(Place::Person(3)),
@@ -15486,7 +15493,7 @@ fn written_claims_can_lie_and_readers_independently_accept_the_author() {
             let mut restored = CoreHost::resume(serde_json::from_str(&serde_json::to_string(&written).unwrap()).unwrap()).unwrap();
             assert_eq!(host.progress(250).unwrap(),250);
             assert_eq!(restored.progress(250).unwrap(),250);
-            let transfer = game_lots::Transaction { id:1, movements:vec![game_lots::Movement {id:1,from:Place::Person(2),to:Some(Place::Person(3)),good:5,quantity:1,item:Some(1)}],creations:vec![] };
+            let transfer = game_lots::Transaction { id:1, movements:vec![game_lots::Movement { batch: None,id:1,from:Place::Person(2),to:Some(Place::Person(3)),good:5,quantity:1,item:Some(1)}],creations:vec![] };
             assert_eq!(host.transfer_goods(std::slice::from_ref(&transfer)).unwrap().transactions, restored.transfer_goods(&[transfer]).unwrap().transactions);
             assert_eq!(host.read_texts_autonomously(&[]).unwrap().items,vec![1]);
             assert_eq!(restored.read_texts_autonomously(&[]).unwrap().items,vec![1]);

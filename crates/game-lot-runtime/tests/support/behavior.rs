@@ -894,6 +894,7 @@ fn physical_transfers_and_consumption_use_the_same_lots_as_production() {
     let take = Transaction {
         id: 1,
         movements: vec![Movement {
+            batch: None,
             item: None,
             id: 1,
             from: Place::Stock { region: 1, good: 1 },
@@ -908,6 +909,7 @@ fn physical_transfers_and_consumption_use_the_same_lots_as_production() {
     let consume = Transaction {
         id: 2,
         movements: vec![Movement {
+            batch: None,
             item: None,
             id: 2,
             from: Place::Person(1),
@@ -963,6 +965,7 @@ fn external_taking_remains_physical_and_cannot_create_goods() {
     let theft = Transaction {
         id: 1,
         movements: vec![Movement {
+            batch: None,
             item: None,
             id: 1,
             from: Place::JobInput(1),
@@ -1003,6 +1006,7 @@ fn people_keep_possessions_until_they_are_physically_recovered() {
     let take = Transaction {
         id: 1,
         movements: vec![Movement {
+            batch: None,
             item: None,
             id: 1,
             from: Place::Stock { region: 1, good: 1 },
@@ -1017,6 +1021,7 @@ fn people_keep_possessions_until_they_are_physically_recovered() {
     let recover = Transaction {
         id: 2,
         movements: vec![Movement {
+            batch: None,
             item: None,
             id: 2,
             from: Place::Person(1),
@@ -1052,6 +1057,7 @@ fn external_taking_and_job_completion_compete_for_the_same_snapshot() {
     let action = Transaction {
         id: 31,
         movements: vec![Movement {
+            batch: None,
             item: None,
             id: 97,
             from: Place::JobInput(1),
@@ -1093,6 +1099,7 @@ fn external_receipts_keep_original_ids_across_parallel_chunks_and_compact_action
         .map(|id| Transaction {
             id,
             movements: vec![Movement {
+                batch: None,
                 item: None,
                 id: 10000 - id,
                 from: Place::Stock { region: 1, good: 1 },
@@ -1204,6 +1211,7 @@ fn flat_transfers_match_general_runtime_and_rollback() {
         transfers.push(SimpleTransfer {
             action: id * 2,
             movement: Movement {
+                batch: None,
                 item: None,
                 id: 10_000 - id,
                 from: Place::Person(id),
@@ -1394,6 +1402,7 @@ fn shared_source_flat_runtime_matches_general_arbitration() {
         .map(|id| SimpleTransfer {
             action: id * 3,
             movement: Movement {
+                batch: None,
                 item: None,
                 id: 9000 - id,
                 from: source,
@@ -1497,6 +1506,7 @@ fn shared_destination_flat_runtime_matches_general_arbitration() {
         .map(|id| SimpleTransfer {
             action: id * 3,
             movement: Movement {
+                batch: None,
                 item: None,
                 id: 9000 - id,
                 from: Place::Person(id),
@@ -1638,6 +1648,7 @@ fn grouped_sources_match_general_runtime_with_expiry_and_capacity() {
             SimpleTransfer {
                 action: id * 3,
                 movement: Movement {
+                    batch: None,
                     item: None,
                     id: 9000 - id,
                     from: Place::Inventory(source),
@@ -1726,6 +1737,7 @@ fn packed_receipts_outlive_the_runtime_and_can_be_owned() {
         transfers.push(SimpleTransfer {
             action: id,
             movement: Movement {
+                batch: None,
                 item: None,
                 id,
                 from: Place::Person(id),
@@ -1777,6 +1789,7 @@ fn ordered_single_leg_receipts_match_general_merge_with_other_work() {
         .map(|id| Transaction {
             id,
             movements: vec![Movement {
+                batch: None,
                 item: None,
                 id: 10_000 - id,
                 from: Place::Stock { region: 1, good: 1 },
@@ -1849,6 +1862,7 @@ fn detached_generation_rolls_back_and_abandonment_invalidates_it() {
     let action = Transaction {
         id: 10,
         movements: vec![Movement {
+            batch: None,
             item: None,
             id: 12,
             from: Place::Stock { region: 1, good: 1 },
@@ -1904,6 +1918,7 @@ fn starts_and_other_actions_arbitrate_together_and_rejected_custody_disappears()
     let action = Transaction {
         id: 7,
         movements: vec![Movement {
+            batch: None,
             item: None,
             id: 8,
             from: Place::Stock { region: 1, good: 1 },
@@ -2045,6 +2060,7 @@ fn authored_recipe_produces_real_dated_food_and_it_expires_after_transport_and_r
     let pickup = Transaction {
         id: 1,
         movements: vec![Movement {
+            batch: None,
             item: None,
             id: 1,
             from: Place::Stock {

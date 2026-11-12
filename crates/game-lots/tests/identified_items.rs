@@ -28,6 +28,7 @@ fn transfer(id: u64, to: Option<Place>) -> Transaction {
     Transaction {
         id,
         movements: vec![Movement {
+            batch: None,
             item: None,
             id,
             from: Place::Person(1),
@@ -84,6 +85,7 @@ fn independent_consumption_preserves_identified_item_tracking() {
         .map(|id| Transaction {
             id,
             movements: vec![Movement {
+                batch: None,
                 id,
                 from: Place::Person(id),
                 to: None,
@@ -345,6 +347,7 @@ fn full_custody_can_replace_a_consumed_item_atomically() {
     let action = Transaction {
         id: 1,
         movements: vec![Movement {
+            batch: None,
             item: None,
             id: 1,
             from: Place::Person(1),
@@ -380,6 +383,7 @@ fn independent_items(count: u64) -> (State, Vec<Transaction>) {
         actions.push(Transaction {
             id,
             movements: vec![Movement {
+                batch: None,
                 item: None,
                 id,
                 from: source,
@@ -448,6 +452,7 @@ fn unrelated_fungible_transfers_keep_the_fast_path_in_a_world_with_items() {
         transfers.push(SimpleTransfer {
             action: id,
             movement: Movement {
+                batch: None,
                 item: None,
                 id,
                 from: source,

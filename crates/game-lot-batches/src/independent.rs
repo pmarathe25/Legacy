@@ -298,6 +298,7 @@ mod tests {
             .map(|id| Transaction {
                 id,
                 movements: vec![Movement {
+                    batch: None,
                     id,
                     from: Place::Person(id),
                     to: None,

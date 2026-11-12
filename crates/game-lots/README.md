@@ -6,9 +6,14 @@ Fungible lots can optionally carry an opaque, nonzero `batch` identifier.
 Different batches remain distinct even when their good and expiry match; generic
 FEFO transfers preserve the identity through splits, receipts, merges and
 serialization. A batch is not a unique item and may contain any positive
-quantity. Callers still cannot select a specific batch: generic movements use
-FEFO. Biological interpretation and lineage remain outside this owner. The
-ignored `batch_provenance_scaling` test measures independent batched transfers.
+quantity. A movement can request a particular batch across its live expiry
+cohorts, or leave the batch unspecified for ordinary FEFO selection. Specific
+and generic requests against one source use the same seeded ordering. Disjoint
+transfers and different specifically requested batches can be prepared in
+parallel; shared claims within a batch retain their ordered arbitration.
+Biological interpretation and lineage remain outside this owner. The ignored
+`batch_provenance_scaling` and `concentrated_distinct_batch_scaling` tests
+measure independent and shared-source requests.
 
 Lots can optionally carry a stable physical item ID. An identified lot contains exactly one nonexpiring item; IDs are unique among live custody and survive ordinary transfers. The custody owner tracks them through staged changes even when receipt details are omitted. A movement can request a particular item or use normal FEFO selection. Mixed requests at one source reserve cohorts in deterministic order; rejected transactions do not reassign their reserved cohorts during that boundary. Transactions touching an identified item use the general arbiter; unrelated fungible transfers can use the specialized paths. The ignored `independent_identified_transfers_benchmark` in `tests/identified_items.rs` measures batches with `LEGACY_ITEMS` and `LEGACY_WORKERS`; set `LEGACY_EXACT=1` to select each item explicitly.
 

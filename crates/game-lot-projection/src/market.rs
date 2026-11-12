@@ -275,6 +275,7 @@ impl Context<'_> {
                     .enumerate()
                     .map(|(index, (from, to, item))| {
                         Ok(Movement {
+                            batch: None,
                             item: None,
                             id: u64::try_from(index)
                                 .map_err(|_| "trade leg overflow")?

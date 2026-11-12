@@ -312,6 +312,7 @@ impl ToolWear {
                     Transaction {
                         id: base + i as u64,
                         movements: vec![Movement {
+                            batch: None,
                             id: 1,
                             from: Place::Person(person),
                             to: None,
@@ -366,6 +367,7 @@ impl ToolWear {
             Transaction {
                 id: action,
                 movements: vec![Movement {
+                    batch: None,
                     id: 1,
                     from: Place::Person(person),
                     to: None,

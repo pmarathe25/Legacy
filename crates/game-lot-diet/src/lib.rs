@@ -183,6 +183,7 @@ impl Plan {
                     .ok_or("missing meal receipt")?;
                 if receipt.request
                     != (Movement {
+                        batch: None,
                         item: None,
                         id,
                         from: Place::Person(record.meal.person),
@@ -292,6 +293,7 @@ pub fn plan(meals: &[Meal], goods: &[Good]) -> Result<Plan, String> {
         .map(|record| Transaction {
             id: record.meal.action,
             movements: vec![Movement {
+                batch: None,
                 item: None,
                 id: record.meal.action,
                 from: Place::Person(record.meal.person),

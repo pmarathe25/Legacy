@@ -274,6 +274,7 @@ mod tests {
                 id,
                 movements: vec![
                     Movement {
+                        batch: None,
                         id: id * 3 - 2,
                         from: place,
                         to: None,
@@ -282,6 +283,7 @@ mod tests {
                         item: None,
                     },
                     Movement {
+                        batch: None,
                         id: id * 3 - 1,
                         from: place,
                         to: None,
@@ -410,6 +412,7 @@ mod tests {
             actions.push(Transaction {
                 id,
                 movements: vec![Movement {
+                    batch: None,
                     id,
                     from: source,
                     to: Some(destination),

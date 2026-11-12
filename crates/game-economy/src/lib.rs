@@ -6863,6 +6863,7 @@ impl Economy {
                     Transaction {
                         id,
                         movements: vec![game_lots::Movement {
+                            batch: None,
                             item: None,
                             id,
                             from: game_lots::Place::Person(person),
@@ -6929,6 +6930,7 @@ impl Economy {
                         id: action,
                         movements: vec![
                             game_lots::Movement {
+                                batch: None,
                                 id: 1,
                                 from: game_lots::Place::Person(person),
                                 to: None,
@@ -6937,6 +6939,7 @@ impl Economy {
                                 item: None,
                             },
                             game_lots::Movement {
+                                batch: None,
                                 id: 2,
                                 from: game_lots::Place::Person(person),
                                 to: None,
@@ -7092,6 +7095,7 @@ impl Economy {
                     manual_page_action = Some(Transaction {
                         id: action,
                         movements: vec![game_lots::Movement {
+                            batch: None,
                             id: 1,
                             from: game_lots::Place::Person(person),
                             to: Some(game_lots::Place::Person(recipient)),
@@ -7206,6 +7210,7 @@ impl Economy {
                             id,
                             movements: vec![
                                 game_lots::Movement {
+                                    batch: None,
                                     id: 1,
                                     from: game_lots::Place::Person(person),
                                     to: None,
@@ -7214,6 +7219,7 @@ impl Economy {
                                     item: None,
                                 },
                                 game_lots::Movement {
+                                    batch: None,
                                     id: 2,
                                     from: game_lots::Place::Person(person),
                                     to: None,

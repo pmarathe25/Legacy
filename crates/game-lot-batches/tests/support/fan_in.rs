@@ -22,6 +22,7 @@ fn fixture() -> (State, Vec<Transaction>) {
         .map(|id| Transaction {
             id,
             movements: vec![Movement {
+                batch: None,
                 item: None,
                 id,
                 from: Place::Person(id),

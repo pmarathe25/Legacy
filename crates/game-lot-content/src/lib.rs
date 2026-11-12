@@ -106,6 +106,7 @@ pub fn prepare_writing(
                 id: p.action,
                 movements: vec![
                     game_lot_model::Movement {
+                        batch: None,
                         id: 1,
                         from: place,
                         to: None,
@@ -114,6 +115,7 @@ pub fn prepare_writing(
                         item: None,
                     },
                     game_lot_model::Movement {
+                        batch: None,
                         id: 2,
                         from: place,
                         to: None,

@@ -144,6 +144,7 @@ impl Plan {
         self.actions.push(Transaction {
             id,
             movements: vec![Movement {
+                batch: None,
                 item: None,
                 id: 1,
                 from: Place::Person(row.debtor),
@@ -338,6 +339,7 @@ impl Context<'_> {
                     Transaction {
                         id: action,
                         movements: vec![Movement {
+                            batch: None,
                             item: None,
                             id: 1,
                             from: Place::Person(contract.debtor),

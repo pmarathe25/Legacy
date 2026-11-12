@@ -34,6 +34,70 @@ fn live(lot: &Lot, tick: u64) -> bool {
     lot.expires_at.is_none_or(|at| at > tick)
 }
 
+// When every claim names a batch, different batches share no units. Preserve
+// rank order within each batch while resolving those independent groups in parallel.
+fn reserve_distinct_batches(
+    group: &[Claim],
+    lots: &[Lot],
+    first: usize,
+    last: usize,
+    tick: u64,
+    admitted: &[AtomicBool],
+) -> Vec<(usize, Vec<(usize, u64)>)> {
+    let mut requests: Vec<_> = group.par_iter().collect();
+    requests.par_sort_unstable_by_key(|claim| {
+        (claim.movement.batch.expect("targeted batch"), claim.sorted)
+    });
+    let mut cohorts: Vec<_> = (first..last)
+        .into_par_iter()
+        .filter_map(|index| {
+            let lot = &lots[index];
+            (live(lot, tick))
+                .then_some(lot.batch)
+                .flatten()
+                .map(|batch| (batch, index))
+        })
+        .collect();
+    cohorts.par_sort_unstable();
+    requests
+        .par_chunk_by(|a, b| a.movement.batch == b.movement.batch)
+        .flat_map_iter(|rows| {
+            let batch = rows[0].movement.batch.expect("targeted batch");
+            let start = cohorts.partition_point(|row| row.0 < batch);
+            let end = cohorts.partition_point(|row| row.0 <= batch);
+            let mut available: u64 = cohorts[start..end]
+                .iter()
+                .map(|row| lots[row.1].quantity)
+                .sum();
+            let mut index = start;
+            let mut used = 0;
+            let mut outcomes = Vec::new();
+            for claim in rows {
+                if claim.movement.quantity > available {
+                    continue;
+                }
+                let mut needed = claim.movement.quantity;
+                let mut parts = Vec::new();
+                while needed > 0 {
+                    let lot_index = cohorts[index].1;
+                    let quantity = needed.min(lots[lot_index].quantity - used);
+                    parts.push((lot_index, quantity));
+                    needed -= quantity;
+                    used += quantity;
+                    if used == lots[lot_index].quantity {
+                        index += 1;
+                        used = 0;
+                    }
+                }
+                available -= claim.movement.quantity;
+                admitted[claim.sorted].store(true, Ordering::Relaxed);
+                outcomes.push((claim.sorted, parts));
+            }
+            outcomes
+        })
+        .collect()
+}
+
 pub fn prepare(
     state: &State,
     instance: u64,
@@ -138,6 +202,8 @@ pub fn prepare(
                     .to
                     .is_some_and(|place| !place.accepts(movement.good))
                 || movement.quantity == 0
+                || movement.batch == Some(0)
+                || (movement.batch.is_some() && movement.item.is_some())
                 || movement
                     .item
                     .is_some_and(|id| id == 0 || movement.quantity != 1)
@@ -274,15 +340,30 @@ pub fn prepare(
                 }
             });
     };
-    let mut frozen: Vec<_> = if moves.par_iter().any(|movement| movement.item.is_some()) {
+    let mut frozen: Vec<_> = if moves
+        .par_iter()
+        .any(|movement| movement.item.is_some() || movement.batch.is_some())
+    {
         claims
             .par_chunk_by(|a, b| (a.source, a.movement.good) == (b.source, b.movement.good))
             .flat_map_iter(|group| {
                 let lots = &containers[group[0].source].lots;
                 let first = lots.partition_point(|lot| lot.good < group[0].movement.good);
                 let last = lots.partition_point(|lot| lot.good <= group[0].movement.good);
-                if group.iter().any(|claim| claim.movement.item.is_some()) {
-                    if let [claim] = group {
+                if group
+                    .iter()
+                    .any(|claim| claim.movement.item.is_some() || claim.movement.batch.is_some())
+                {
+                    if group.len() >= 128
+                        && group.iter().all(|claim| claim.movement.batch.is_some())
+                    {
+                        return reserve_distinct_batches(
+                            group, lots, first, last, next, &source_ok,
+                        );
+                    }
+                    if let [claim] = group
+                        && claim.movement.item.is_some()
+                    {
                         let item = claim.movement.item.expect("exact item group");
                         if let Some(i) = lots[first..last]
                             .iter()
@@ -290,6 +371,30 @@ pub fn prepare(
                         {
                             source_ok[claim.sorted].store(true, Ordering::Relaxed);
                             return vec![(claim.sorted, vec![(first + i, 1u64)])];
+                        }
+                        return Vec::new();
+                    }
+                    if let [claim] = group
+                        && let Some(batch) = claim.movement.batch
+                    {
+                        let mut needed = claim.movement.quantity;
+                        let mut pieces = Vec::new();
+                        for (offset, lot) in lots[first..last].iter().enumerate() {
+                            if lot.batch != Some(batch) || !live(lot, next) {
+                                continue;
+                            }
+                            let quantity = needed.min(lot.quantity);
+                            if quantity > 0 {
+                                pieces.push((first + offset, quantity));
+                                needed -= quantity;
+                            }
+                            if needed == 0 {
+                                break;
+                            }
+                        }
+                        if needed == 0 {
+                            source_ok[claim.sorted].store(true, Ordering::Relaxed);
+                            return vec![(claim.sorted, pieces)];
                         }
                         return Vec::new();
                     }
@@ -302,6 +407,14 @@ pub fn prepare(
                         .enumerate()
                         .filter_map(|(i, lot)| lot.item.map(|id| (id, i)))
                         .collect();
+                    let mut batch_indices: HashMap<u64, Vec<usize>> = HashMap::new();
+                    let mut batch_available: HashMap<u64, u64> = HashMap::new();
+                    for (i, lot) in lots[first..last].iter().enumerate() {
+                        if let Some(batch) = lot.batch {
+                            batch_indices.entry(batch).or_default().push(i);
+                            *batch_available.entry(batch).or_default() += remaining[i];
+                        }
+                    }
                     let mut available: u64 = remaining.iter().sum();
                     let mut cursor = 0;
                     let mut allocations = Vec::new();
@@ -317,8 +430,37 @@ pub fn prepare(
                             }
                             continue;
                         }
+                        if let Some(batch) = claim.movement.batch {
+                            let total = batch_available.get(&batch).copied().unwrap_or(0);
+                            if claim.movement.quantity > total {
+                                continue;
+                            }
+                            let mut needed = claim.movement.quantity;
+                            let mut pieces = Vec::new();
+                            for &i in batch_indices.get(&batch).expect("available batch") {
+                                let take = needed.min(remaining[i]);
+                                if take > 0 {
+                                    pieces.push((first + i, take));
+                                    remaining[i] -= take;
+                                    needed -= take;
+                                }
+                                if needed == 0 {
+                                    break;
+                                }
+                            }
+                            debug_assert_eq!(needed, 0);
+                            *batch_available.get_mut(&batch).expect("available batch") -=
+                                claim.movement.quantity;
+                            available -= claim.movement.quantity;
+                            source_ok[claim.sorted].store(true, Ordering::Relaxed);
+                            allocations.push((claim.sorted, pieces));
+                            continue;
+                        }
                         if claim.movement.quantity > available {
                             remaining.fill(0);
+                            for total in batch_available.values_mut() {
+                                *total = 0;
+                            }
                             available = 0;
                             continue;
                         }
@@ -329,6 +471,9 @@ pub fn prepare(
                                 cursor += 1;
                             }
                             let take = needed.min(remaining[cursor]);
+                            if let Some(batch) = lots[first + cursor].batch {
+                                *batch_available.get_mut(&batch).expect("known batch") -= take;
+                            }
                             pieces.push((first + cursor, take));
                             remaining[cursor] -= take;
                             needed -= take;
@@ -511,7 +656,42 @@ pub fn prepare(
     let groups: Vec<_> = claims
         .par_chunk_by(|a, b| (a.source, a.movement.good) == (b.source, b.movement.good))
         .map(|group| {
-            if group.iter().any(|claim| claim.movement.item.is_some()) {
+            if group
+                .iter()
+                .any(|claim| claim.movement.item.is_some() || claim.movement.batch.is_some())
+            {
+                if group.len() >= 128 {
+                    let rows: Vec<_> = group
+                        .par_iter()
+                        .filter(|claim| accepted[claim.sorted].load(Ordering::Relaxed))
+                        .map(|claim| {
+                            let allocations = &frozen[frozen
+                                .binary_search_by_key(&claim.sorted, |row| row.0)
+                                .expect("admitted precise allocation")]
+                            .1;
+                            let precise: Vec<_> = allocations
+                                .iter()
+                                .map(|&(index, quantity)| (claim.source, index, quantity))
+                                .collect();
+                            let lots = if claim.compact {
+                                Vec::new()
+                            } else {
+                                allocations
+                                    .iter()
+                                    .map(|&(index, quantity)| {
+                                        let mut lot = containers[claim.source].lots[index].clone();
+                                        lot.quantity = quantity;
+                                        lot
+                                    })
+                                    .collect()
+                            };
+                            ((claim.original, claim.destination, lots), precise)
+                        })
+                        .collect();
+                    let (pieces, allocations): (Vec<_>, Vec<_>) = rows.into_iter().unzip();
+                    let precise = allocations.into_iter().flatten().collect();
+                    return (group[0].source, group[0].movement.good, 0, pieces, precise);
+                }
                 let mut pieces = Vec::new();
                 let mut precise = Vec::new();
                 for claim in group

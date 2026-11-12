@@ -106,6 +106,7 @@ mod tests {
         let physical_movements = (2..=count)
             .map(|id| {
                 let request = Movement {
+                    batch: None,
                     item: None,
                     id,
                     from: Place::Person(1),

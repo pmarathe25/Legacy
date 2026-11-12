@@ -400,6 +400,7 @@ impl Context<'_> {
             .map(|&(id, c)| Transaction {
                 id,
                 movements: vec![Movement {
+                    batch: None,
                     item: None,
                     id,
                     from: Place::Person(c.actor),

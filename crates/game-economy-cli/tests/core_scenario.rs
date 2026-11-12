@@ -2114,6 +2114,7 @@ fn stale_saved_carrying_intention_is_reported_without_substituting_an_action() {
                 action: u64::from(grain),
             },
             movement: Some(game_lots::Movement {
+                batch: None,
                 id: 0,
                 from: game_lots::Place::Stock {
                     region: 1,

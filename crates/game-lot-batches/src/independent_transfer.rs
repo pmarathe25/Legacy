@@ -18,14 +18,25 @@ pub(crate) fn after(
     container: &Container,
     tick: u64,
     good: u32,
+    debit: u64,
+    incoming: &[Lot],
+) -> Container {
+    after_selected(container, tick, good, debit, None, incoming)
+}
+
+fn after_selected(
+    container: &Container,
+    tick: u64,
+    good: u32,
     mut debit: u64,
+    batch: Option<u64>,
     incoming: &[Lot],
 ) -> Container {
     let surviving = container.lots.iter().filter_map(|lot| {
         if lot.expires_at.is_some_and(|at| at <= tick) {
             return None;
         }
-        let consumed = if lot.good == good {
+        let consumed = if lot.good == good && batch.is_none_or(|id| lot.batch == Some(id)) {
             debit.min(lot.quantity)
         } else {
             0
@@ -95,6 +106,8 @@ pub fn prepare(
                 let m = t.movements[0];
                 m.id == 0
                     || m.quantity == 0
+                    || m.item.is_some()
+                    || m.batch == Some(0)
                     || !m.from.accepts(m.good)
                     || m.to.is_none_or(|to| to == m.from || !to.accepts(m.good))
             }
@@ -165,6 +178,8 @@ fn prepare_flat_impl(
             let m = row.movement;
             m.id == 0
                 || m.quantity == 0
+                || m.item.is_some()
+                || m.batch == Some(0)
                 || !m.from.accepts(m.good)
                 || m.to.is_none_or(|to| to == m.from || !to.accepts(m.good))
         })
@@ -358,7 +373,9 @@ fn prepare_rows(
                     .lots
                     .iter()
                     .filter(|lot| {
-                        lot.good == row.movement.good && lot.expires_at.is_none_or(|at| at > next)
+                        lot.good == row.movement.good
+                            && row.movement.batch.is_none_or(|id| lot.batch == Some(id))
+                            && lot.expires_at.is_none_or(|at| at > next)
                     })
                     .map(|lot| lot.quantity)
                     .sum();
@@ -370,7 +387,10 @@ fn prepare_rows(
                     if remaining == 0 {
                         break;
                     }
-                    if lot.good == row.movement.good && lot.expires_at.is_none_or(|at| at > next) {
+                    if lot.good == row.movement.good
+                        && row.movement.batch.is_none_or(|id| lot.batch == Some(id))
+                        && lot.expires_at.is_none_or(|at| at > next)
+                    {
                         let quantity = remaining.min(lot.quantity);
                         lots.push(Lot {
                             batch: lot.batch,
@@ -387,11 +407,12 @@ fn prepare_rows(
                 if accepted || source.next_expiry.is_some_and(|at| at <= next) {
                     sources.push((
                         row.source,
-                        after(
+                        after_selected(
                             source,
                             next,
                             row.movement.good,
                             if accepted { row.movement.quantity } else { 0 },
+                            row.movement.batch,
                             &[],
                         ),
                     ));

@@ -158,6 +158,7 @@ pub fn start(requests: &[Start], recipes: &[Recipe]) -> Result<Starts, String> {
                 .enumerate()
                 .map(|(n, amount)| {
                     Ok(Movement {
+                        batch: None,
                         item: None,
                         id: offsets[index]
                             .checked_add(n as u64)
@@ -242,6 +243,7 @@ pub fn start_flat(requests: &[Start], recipes: &[Recipe]) -> Result<Option<FlatS
                     Container::new(Place::JobOutput(job.id), capacity(&job.outputs)?, vec![])?;
                 let amount = &job.reserved[0];
                 let movement = Movement {
+                    batch: None,
                     item: None,
                     id: u64::try_from(index)
                         .map_err(|_| "operation identity overflow")?
@@ -373,6 +375,7 @@ fn finish_ready(
                 .enumerate()
                 .map(|(n, item)| {
                     Ok(Movement {
+                        batch: None,
                         item: None,
                         id: id(n)?,
                         from: Place::JobInput(job.id),
@@ -486,6 +489,7 @@ fn return_custody(
                 .enumerate()
                 .map(|(n, item)| {
                     Ok(Movement {
+                        batch: None,
                         item: None,
                         id: offsets[index]
                             .checked_add(n as u64)

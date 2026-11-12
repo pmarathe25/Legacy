@@ -80,6 +80,7 @@ fn small_custody_combines_dated_incoming_after_atomic_debits() {
         Transaction {
             id: 1,
             movements: vec![Movement {
+                batch: None,
                 item: None,
                 id: 1,
                 from: first,
@@ -92,6 +93,7 @@ fn small_custody_combines_dated_incoming_after_atomic_debits() {
         Transaction {
             id: 2,
             movements: vec![Movement {
+                batch: None,
                 item: None,
                 id: 2,
                 from: second,
@@ -105,6 +107,7 @@ fn small_custody_combines_dated_incoming_after_atomic_debits() {
             id: 3,
             movements: vec![
                 Movement {
+                    batch: None,
                     item: None,
                     id: 3,
                     from: first,
@@ -113,6 +116,7 @@ fn small_custody_combines_dated_incoming_after_atomic_debits() {
                     quantity: 1,
                 },
                 Movement {
+                    batch: None,
                     item: None,
                     id: 4,
                     from: second,
@@ -190,6 +194,7 @@ fn large_dated_receipt_preserves_neighboring_receipts() {
         Transaction {
             id: 1,
             movements: vec![Movement {
+                batch: None,
                 item: None,
                 id: 9,
                 from: Place::Inventory(1),
@@ -202,6 +207,7 @@ fn large_dated_receipt_preserves_neighboring_receipts() {
         Transaction {
             id: 2,
             movements: vec![Movement {
+                batch: None,
                 item: None,
                 id: 3,
                 from: Place::Inventory(2),
@@ -249,6 +255,7 @@ fn large_general_receipts_preserve_atomicity_compaction_and_dated_lots() {
         .map(|id| Transaction {
             id,
             movements: vec![Movement {
+                batch: None,
                 item: None,
                 id: 10000 - id,
                 from: source,
@@ -263,6 +270,7 @@ fn large_general_receipts_preserve_atomicity_compaction_and_dated_lots() {
         id: 5000,
         movements: vec![
             Movement {
+                batch: None,
                 item: None,
                 id: 20001,
                 from: source,
@@ -271,6 +279,7 @@ fn large_general_receipts_preserve_atomicity_compaction_and_dated_lots() {
                 quantity: 1,
             },
             Movement {
+                batch: None,
                 item: None,
                 id: 20002,
                 from: Place::Person(9999),
@@ -367,6 +376,7 @@ fn compact_consumption_keeps_mixed_fefo_arbitration_and_atomic_state() {
         .map(|id| Transaction {
             id,
             movements: vec![Movement {
+                batch: None,
                 item: None,
                 id,
                 from: source,
@@ -427,6 +437,7 @@ fn independent_compact_consumption_matches_general_planning_with_expiry() {
         .map(|id| Transaction {
             id,
             movements: vec![Movement {
+                batch: None,
                 item: None,
                 id: 1000 - id,
                 from: Place::Person(id),
@@ -516,6 +527,7 @@ fn shared_source_keeps_many_distinct_expiry_cohorts() {
         .map(|id| Transaction {
             id,
             movements: vec![Movement {
+                batch: None,
                 item: None,
                 id,
                 from: source,
@@ -574,6 +586,7 @@ fn shared_source_transfers_match_general_fefo_and_capacity_arbitration() {
         actions.push(Transaction {
             id,
             movements: vec![Movement {
+                batch: None,
                 item: None,
                 id: 1000 - id,
                 from: source,
@@ -669,6 +682,7 @@ fn shared_destination_transfers_match_general_planning_and_preserve_receipts() {
         actions.push(Transaction {
             id,
             movements: vec![Movement {
+                batch: None,
                 item: None,
                 id: 1000 - id,
                 from: Place::Person(id),
@@ -788,6 +802,7 @@ fn shared_source_arbitration_benchmark() {
         .map(|id| Transaction {
             id,
             movements: vec![Movement {
+                batch: None,
                 item: None,
                 id,
                 from: source,
@@ -856,6 +871,7 @@ fn shared_destination_arbitration_benchmark() {
         .map(|id| Transaction {
             id,
             movements: vec![Movement {
+                batch: None,
                 item: None,
                 id,
                 from: Place::Person(id),
@@ -930,6 +946,7 @@ fn independent_transfers_match_general_transactions_with_expiry_and_capacity() {
         actions.push(Transaction {
             id,
             movements: vec![Movement {
+                batch: None,
                 item: None,
                 id: 1000 - id,
                 from: Place::Person(id),
@@ -1080,6 +1097,7 @@ fn ordered_disjoint_ranges_and_interleaved_endpoints_match_general_arbitration()
             transfers.push(crate::SimpleTransfer {
                 action: id,
                 movement: Movement {
+                    batch: None,
                     item: None,
                     id: 1000 - id,
                     from: Place::Person(source),
@@ -1168,6 +1186,7 @@ fn many_cohort_transfers(count: u64, cohorts: u64) -> (Vec<Container>, Vec<crate
         transfers.push(crate::SimpleTransfer {
             action: person,
             movement: Movement {
+                batch: None,
                 item: None,
                 id: person,
                 from: Place::Person(person),
@@ -1315,6 +1334,7 @@ fn mixed_atomic_actions_match_general_arbitration() {
         id: 1000,
         movements: vec![
             Movement {
+                batch: None,
                 item: None,
                 id: 1000,
                 from: Place::Person(1),
@@ -1323,6 +1343,7 @@ fn mixed_atomic_actions_match_general_arbitration() {
                 quantity: 2,
             },
             Movement {
+                batch: None,
                 item: None,
                 id: 1001,
                 from: Place::Person(3),
@@ -1340,6 +1361,7 @@ fn mixed_atomic_actions_match_general_arbitration() {
     actions.push(Transaction {
         id: 1003,
         movements: vec![Movement {
+            batch: None,
             item: None,
             id: 1003,
             from: Place::Person(6),
@@ -1352,6 +1374,7 @@ fn mixed_atomic_actions_match_general_arbitration() {
     actions.push(Transaction {
         id: 1004,
         movements: vec![Movement {
+            batch: None,
             item: None,
             id: 1004,
             from: Place::Person(600),
@@ -1376,6 +1399,7 @@ fn mixed_atomic_actions_match_general_arbitration() {
                     actions.push(Transaction {
                         id: 1006,
                         movements: vec![Movement {
+                            batch: None,
                             item: None,
                             id: 1006,
                             from: Place::Person(10),
@@ -1539,6 +1563,7 @@ fn shared_stock_to_new_custody_matches_general_commit_and_stale_checks() {
                 .map(|id| Transaction {
                     id,
                     movements: vec![Movement {
+                        batch: None,
                         id,
                         item: None,
                         from: source,
@@ -1665,6 +1690,7 @@ fn mixed_atomic_action_benchmark() {
         holders.push(container(Place::Person(id), 10, vec![lot(1, 2, Some(5))]));
         holders.push(container(Place::Person(count + id), 10, vec![]));
         let mut movements = vec![Movement {
+            batch: None,
             item: None,
             id,
             from: Place::Person(id),
@@ -1674,6 +1700,7 @@ fn mixed_atomic_action_benchmark() {
         }];
         if complex_stride != 0 && id.is_multiple_of(complex_stride) {
             movements.push(Movement {
+                batch: None,
                 item: None,
                 id: count + 2 + id,
                 from: Place::Person(id),
@@ -1705,6 +1732,7 @@ fn mixed_atomic_action_benchmark() {
     actions.push(Transaction {
         id: count + 1,
         movements: vec![Movement {
+            batch: None,
             item: None,
             id: count + 1,
             from: Place::Person(1),
@@ -1815,6 +1843,7 @@ fn late_empty_holders_do_not_shift_planned_physical_changes() {
         .prepare(
             7,
             &[Movement {
+                batch: None,
                 item: None,
                 id: 1,
                 from: Place::Person(1),
@@ -1848,6 +1877,7 @@ fn a_partially_consumed_single_lot_retains_its_expiry_until_it_spoils() {
         .prepare(
             1,
             &[Movement {
+                batch: None,
                 item: None,
                 id: 1,
                 from: person,
@@ -1891,6 +1921,7 @@ fn single_source_move_preserves_expiry_order_and_rejects_an_overfull_destination
                     .prepare(
                         42,
                         &[Movement {
+                            batch: None,
                             item: None,
                             id: 1,
                             from: source,
@@ -1916,6 +1947,7 @@ fn single_source_move_preserves_expiry_order_and_rejects_an_overfull_destination
         .prepare(
             42,
             &[Movement {
+                batch: None,
                 item: None,
                 id: 1,
                 from: source,
@@ -1950,6 +1982,7 @@ fn earliest_food_moves_first_and_expires_in_its_new_custody() {
             42,
             &[
                 Movement {
+                    batch: None,
                     item: None,
                     id: 1,
                     from: source,
@@ -1958,6 +1991,7 @@ fn earliest_food_moves_first_and_expires_in_its_new_custody() {
                     quantity: 5,
                 },
                 Movement {
+                    batch: None,
                     item: None,
                     id: 2,
                     from: source,
@@ -2016,6 +2050,7 @@ fn capacity_rejection_does_not_lose_source_lots_or_prevent_other_transfers() {
                     7,
                     &[
                         Movement {
+                            batch: None,
                             item: None,
                             id: 1,
                             from: source,
@@ -2024,6 +2059,7 @@ fn capacity_rejection_does_not_lose_source_lots_or_prevent_other_transfers() {
                             quantity: 3,
                         },
                         Movement {
+                            batch: None,
                             item: None,
                             id: 2,
                             from: source,
@@ -2063,6 +2099,7 @@ fn movements_use_one_snapshot_and_expired_waiting_output_is_not_refreshed() {
                     1,
                     &[
                         Movement {
+                            batch: None,
                             item: None,
                             id: 1,
                             from: a,
@@ -2071,6 +2108,7 @@ fn movements_use_one_snapshot_and_expired_waiting_output_is_not_refreshed() {
                             quantity: 1,
                         },
                         Movement {
+                            batch: None,
                             item: None,
                             id: 2,
                             from: b,
@@ -2079,6 +2117,7 @@ fn movements_use_one_snapshot_and_expired_waiting_output_is_not_refreshed() {
                             quantity: 1,
                         },
                         Movement {
+                            batch: None,
                             item: None,
                             id: 3,
                             from: job,
@@ -2110,6 +2149,7 @@ fn rejected_and_stale_drafts_leave_every_lot_unchanged() {
         container(target, 10, vec![]),
     ]);
     let movement = Movement {
+        batch: None,
         item: None,
         id: 1,
         from: source,
@@ -2174,6 +2214,7 @@ fn concentrated_sources_and_destinations_conserve_lots_across_workers_and_input_
         let initial = store(containers).export();
         let movements: Vec<_> = (1..=count)
             .map(|person| Movement {
+                batch: None,
                 item: None,
                 id: person,
                 from: if hot_source {
@@ -2236,6 +2277,7 @@ fn recipe_transaction_reserves_all_inputs_and_creates_output_once() {
         id: 1,
         movements: vec![
             Movement {
+                batch: None,
                 item: None,
                 id: 1,
                 from: ingredients,
@@ -2244,6 +2286,7 @@ fn recipe_transaction_reserves_all_inputs_and_creates_output_once() {
                 quantity: 2,
             },
             Movement {
+                batch: None,
                 item: None,
                 id: 2,
                 from: ingredients,
@@ -2301,6 +2344,7 @@ fn invalid_creation_or_duplicate_leg_does_not_change_the_snapshot() {
     let mut action = Transaction {
         id: 1,
         movements: vec![Movement {
+            batch: None,
             item: None,
             id: 1,
             from: source,
@@ -2335,6 +2379,7 @@ fn competing_recipes_are_atomic_and_deterministic_across_workers_and_order() {
         .map(|id| Transaction {
             id,
             movements: vec![Movement {
+                batch: None,
                 item: None,
                 id,
                 from: input,
@@ -2395,6 +2440,7 @@ fn a_draft_cannot_be_committed_to_a_different_store_at_the_same_revision() {
         .prepare(
             1,
             &[Movement {
+                batch: None,
                 item: None,
                 id: 1,
                 from: a,
@@ -2424,6 +2470,7 @@ fn custody_lifecycle_is_atomic_and_invalidates_prepared_actions() {
         .prepare(
             1,
             &[Movement {
+                batch: None,
                 item: None,
                 id: 1,
                 from: stock,
@@ -2439,6 +2486,7 @@ fn custody_lifecycle_is_atomic_and_invalidates_prepared_actions() {
         .prepare(
             1,
             &[Movement {
+                batch: None,
                 item: None,
                 id: 2,
                 from: job,
@@ -2470,6 +2518,7 @@ fn independently_limited_stock_cannot_receive_a_different_good() {
             .prepare(
                 1,
                 &[Movement {
+                    batch: None,
                     item: None,
                     id: 1,
                     from: other,
@@ -2504,6 +2553,7 @@ fn reserved_ingredients_can_spoil_and_cancellation_returns_only_surviving_lots()
         container(output, 10, vec![]),
     ]);
     let reserve = Movement {
+        batch: None,
         item: None,
         id: 1,
         from: stock,
@@ -2516,6 +2566,7 @@ fn reserved_ingredients_can_spoil_and_cancellation_returns_only_surviving_lots()
     let finish = Transaction {
         id: 2,
         movements: vec![Movement {
+            batch: None,
             item: None,
             id: 2,
             from: reserved,
@@ -2540,6 +2591,7 @@ fn reserved_ingredients_can_spoil_and_cancellation_returns_only_surviving_lots()
         .prepare(
             5,
             &[Movement {
+                batch: None,
                 item: None,
                 id: 4,
                 from: reserved,
@@ -2566,6 +2618,7 @@ fn staged_new_custody_rolls_back_with_the_rest_of_a_failed_generation() {
         let tx = Transaction {
             id: 1,
             movements: vec![Movement {
+                batch: None,
                 item: None,
                 id: 1,
                 from: stock,
@@ -2587,6 +2640,7 @@ fn staged_new_custody_rolls_back_with_the_rest_of_a_failed_generation() {
     let tx = Transaction {
         id: 1,
         movements: vec![Movement {
+            batch: None,
             item: None,
             id: 1,
             from: stock,
@@ -2614,6 +2668,7 @@ fn a_discarded_stage_draft_cannot_commit_during_a_later_stage() {
         let action = Transaction {
             id: 1,
             movements: vec![Movement {
+                batch: None,
                 item: None,
                 id: 1,
                 from: stock,
@@ -2640,6 +2695,7 @@ fn immediate_actions_preserve_time_and_still_invalidate_old_drafts() {
     ]);
     let old = store.prepare(1, &[]).unwrap();
     let transfer = Movement {
+        batch: None,
         item: None,
         id: 1,
         from: stock,
@@ -2670,6 +2726,7 @@ fn independent_owners_can_compose_colliding_action_and_leg_ids() {
     let action = |from, good| Transaction {
         id: 1,
         movements: vec![Movement {
+            batch: None,
             item: None,
             id: 1,
             from,
@@ -2699,6 +2756,7 @@ fn detached_new_custody_is_invisible_until_commit_and_uses_merged_indices() {
     let action = Transaction {
         id: 1,
         movements: vec![Movement {
+            batch: None,
             item: None,
             id: 1,
             from: source,
@@ -2738,6 +2796,7 @@ fn detached_new_custody_is_discarded_on_stale_commit() {
     let action = Transaction {
         id: 1,
         movements: vec![Movement {
+            batch: None,
             item: None,
             id: 1,
             from: stock,
@@ -2767,6 +2826,7 @@ fn rejected_starts_can_retire_temporary_custody_in_the_same_boundary() {
     let action = Transaction {
         id: 1,
         movements: vec![Movement {
+            batch: None,
             item: None,
             id: 1,
             from: stock,
@@ -2801,6 +2861,7 @@ fn retirement_checks_the_resulting_lots_before_any_publication() {
         container(stock, 5, vec![]),
     ]);
     let transfer = Movement {
+        batch: None,
         item: None,
         id: 1,
         from: input,
@@ -2831,6 +2892,7 @@ fn a_single_action_cannot_overfill_a_destination_with_multiple_legs() {
         id: 1,
         movements: vec![
             Movement {
+                batch: None,
                 item: None,
                 id: 1,
                 from: a,
@@ -2839,6 +2901,7 @@ fn a_single_action_cannot_overfill_a_destination_with_multiple_legs() {
                 quantity: 1,
             },
             Movement {
+                batch: None,
                 item: None,
                 id: 2,
                 from: b,
@@ -2870,6 +2933,7 @@ fn a_two_way_exchange_fits_full_bags_and_keeps_original_expiry() {
         id: 1,
         movements: vec![
             Movement {
+                batch: None,
                 item: None,
                 id: 1,
                 from: a,
@@ -2878,6 +2942,7 @@ fn a_two_way_exchange_fits_full_bags_and_keeps_original_expiry() {
                 quantity: 1,
             },
             Movement {
+                batch: None,
                 item: None,
                 id: 2,
                 from: b,
@@ -2907,6 +2972,7 @@ fn one_action_cannot_spend_another_actions_outgoing_capacity() {
     let leave = Transaction {
         id: 1,
         movements: vec![Movement {
+            batch: None,
             item: None,
             id: 1,
             from: a,
@@ -2919,6 +2985,7 @@ fn one_action_cannot_spend_another_actions_outgoing_capacity() {
     let enter = Transaction {
         id: 2,
         movements: vec![Movement {
+            batch: None,
             item: None,
             id: 2,
             from: b,
@@ -2959,6 +3026,7 @@ fn overlapping_full_container_exchanges_conserve_every_good_across_workers() {
                 id,
                 movements: vec![
                     Movement {
+                        batch: None,
                         item: None,
                         id: id * 2 - 1,
                         from: a,
@@ -2967,6 +3035,7 @@ fn overlapping_full_container_exchanges_conserve_every_good_across_workers() {
                         quantity: 1,
                     },
                     Movement {
+                        batch: None,
                         item: None,
                         id: id * 2,
                         from: b,
@@ -3099,6 +3168,7 @@ fn moving_receipts_out_of_a_draft_preserves_commit_and_stale_validation() {
     let action = Transaction {
         id: 7,
         movements: vec![Movement {
+            batch: None,
             item: None,
             id: 8,
             from: source,
@@ -3187,6 +3257,7 @@ fn independent_transfer_benchmark() {
         actions.push(Transaction {
             id,
             movements: vec![Movement {
+                batch: None,
                 item: None,
                 id,
                 from: Place::Person(id),
@@ -3243,6 +3314,7 @@ fn partitioned_transfer_benchmark() {
         actions.push(Transaction {
             id,
             movements: vec![Movement {
+                batch: None,
                 item: None,
                 id,
                 from: Place::Person(if id == 2 { 1 } else { id }),
@@ -3316,6 +3388,7 @@ fn shared_compact_consumption_matches_general_arbitration_and_expiry() {
         .map(|id| Transaction {
             id,
             movements: vec![Movement {
+                batch: None,
                 id: 1000 - id,
                 from: source,
                 to: None,
@@ -3383,6 +3456,7 @@ fn shared_compact_consumption_falls_back_for_identified_items_and_rejects_stale_
         .map(|id| Transaction {
             id,
             movements: vec![Movement {
+                batch: None,
                 id: 1000 - id,
                 from: source,
                 to: None,
@@ -3429,6 +3503,7 @@ fn shared_compact_matches_general_for_empty_scarce_and_abundant_stock() {
                 .map(|id| Transaction {
                     id,
                     movements: vec![Movement {
+                        batch: None,
                         id: 900 - id,
                         from: source,
                         to: None,
@@ -3485,6 +3560,7 @@ fn large_identified_transfer_preserves_every_item_and_receipt_across_workers() {
     let action = Transaction {
         id: 1,
         movements: vec![Movement {
+            batch: None,
             id: 1,
             from: source,
             to: Some(target),
@@ -3633,6 +3709,7 @@ fn disjoint_transform_commit_matches_general_plan_and_rejects_stale_draft() {
         actions.push(Transaction {
             id,
             movements: vec![Movement {
+                batch: None,
                 id: id * 2 - 1,
                 from: Place::JobInput(id),
                 to: None,

@@ -29,6 +29,7 @@ fn gift_receipts_match_when_physical_results_are_aligned_or_reordered() {
             .map(|id| Transaction {
                 id,
                 movements: vec![Movement {
+                    batch: None,
                     item: None,
                     id,
                     from: Place::Person(id - 10),

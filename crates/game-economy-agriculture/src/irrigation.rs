@@ -285,6 +285,7 @@ impl Irrigation {
                     Transaction {
                         id,
                         movements: vec![Movement {
+                            batch: None,
                             id: 1,
                             from: Place::Stock {
                                 region,

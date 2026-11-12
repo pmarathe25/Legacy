@@ -132,6 +132,9 @@ pub struct Movement {
     pub to: Option<Place>,
     pub good: u32,
     pub quantity: u64,
+    /// Request a particular divisible batch rather than generic FEFO stock.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub batch: Option<u64>,
     /// Request a particular identified item instead of generic FEFO selection.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub item: Option<u64>,

@@ -192,6 +192,7 @@ mod tests {
             .map(|id| Transaction {
                 id,
                 movements: vec![Movement {
+                    batch: None,
                     id,
                     from: Place::Person(id),
                     to: None,
@@ -205,6 +206,7 @@ mod tests {
         actions.push(Transaction {
             id: 300,
             movements: vec![Movement {
+                batch: None,
                 id: 300,
                 from: Place::Person(1),
                 to: Some(Place::Person(999)),

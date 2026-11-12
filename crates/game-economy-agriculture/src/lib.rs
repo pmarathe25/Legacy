@@ -583,6 +583,7 @@ impl Context<'_> {
                         Some(Transaction {
                             id: action,
                             movements: vec![Movement {
+                                batch: None,
                                 item: None,
                                 id: action,
                                 from: Place::Stock {

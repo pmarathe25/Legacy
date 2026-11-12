@@ -490,6 +490,7 @@ impl Context<'_> {
                 Transaction {
                     id,
                     movements: vec![Movement {
+                        batch: None,
                         item: None,
                         id,
                         from: Place::Person(c.person),

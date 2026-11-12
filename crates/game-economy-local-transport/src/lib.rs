@@ -442,6 +442,7 @@ fn finish(mut rows: Vec<Choice>, base: u64, claims: Option<&Claims<'_>>) -> Resu
             Transaction {
                 id,
                 movements: vec![Movement {
+                    batch: None,
                     item: None,
                     id,
                     from: row.from,

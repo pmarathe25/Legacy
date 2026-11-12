@@ -213,6 +213,7 @@ impl AcquisitionContext<'_> {
                 game_lots::Transaction {
                     id,
                     movements: vec![game_lots::Movement {
+                        batch: None,
                         item: None,
                         id,
                         from: Place::Stock { region, good },

@@ -285,6 +285,7 @@ mod tests {
             transactions.push(Transaction {
                 id,
                 movements: vec![Movement {
+                    batch: None,
                     id: id * 2 - 1,
                     from: source,
                     to: None,

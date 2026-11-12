@@ -515,6 +515,7 @@ impl CoreHost {
                     id: index as u64 + 1,
                     movements: vec![
                         game_lots::Movement {
+                            batch: None,
                             id: movement,
                             from: game_lots::Place::Person(person),
                             to: None,
@@ -523,6 +524,7 @@ impl CoreHost {
                             item: None,
                         },
                         game_lots::Movement {
+                            batch: None,
                             id: movement + 1,
                             from: game_lots::Place::Person(person),
                             to: None,

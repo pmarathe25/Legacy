@@ -206,6 +206,7 @@ impl CoreHost {
             .map(|(delivery, transfer)| game_lots::Transaction {
                 id: delivery.contract,
                 movements: vec![game_lots::Movement {
+                    batch: None,
                     id: delivery.contract,
                     from: game_lots::Place::Person(transfer.debtor),
                     to: Some(game_lots::Place::Person(transfer.creditor)),

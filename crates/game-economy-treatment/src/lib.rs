@@ -316,6 +316,7 @@ pub fn prepare_at(
             Transaction {
                 id,
                 movements: vec![Movement {
+                    batch: None,
                     item: None,
                     id,
                     from: Place::Person(p.person),
