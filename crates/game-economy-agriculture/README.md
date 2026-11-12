@@ -56,8 +56,10 @@ Optional `[cultivation.soil]` content specifies `capacity`, `loss_per_harvest`, 
 
 An optional `[cultivation.soil.amendment]` supplies a material good ID, `quantity`, `fertility_gain`, and individual `choices` naming a person and field. A willing, available person at the stock endpoint may spend a real quantity to improve that field; they can choose to disregard claims. Concurrent people targeting the same field are selected deterministically, and those targeting shared material compete through ordinary physical transactions. Only a successful receipt adds fertility; latest-boundary events record accepted and failed attempts.
 
-Soil amendment currently runs in the composed `Economy` path; the interval
-host loads its state but does not yet execute amendment choices.
+The interval host stages these choices with cultivation and irrigation,
+reserves the people involved, and applies fertility only after accepted
+physical receipts. Workers sharing material compete through the same
+transaction boundary.
 
 An individual's amendment choice may instead name `pressured_by` and their own `fear_at_least` or `obligation_at_least`. Their directed feelings determine whether that pressure motivates the action; no general obligation or consent is imposed.
 

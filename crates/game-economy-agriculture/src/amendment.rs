@@ -305,6 +305,9 @@ impl Plan {
     pub fn actors(&self) -> impl Iterator<Item = u64> + '_ {
         self.rows.iter().map(|row| row.0)
     }
+    pub fn parallel_actors(&self) -> impl ParallelIterator<Item = u64> + '_ {
+        self.rows.par_iter().map(|row| row.0)
+    }
     pub fn actions(&self) -> impl ParallelIterator<Item = &Transaction> {
         self.rows.par_iter().map(|row| &row.2)
     }

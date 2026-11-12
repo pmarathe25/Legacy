@@ -2094,6 +2094,23 @@ impl CoreHost {
         let mut cultivation = self.plan_cultivation(occupied, base)?;
         let compact = game_economy_agriculture::append_planting(&mut cultivation, &mut actions);
         let irrigation_plan = self.plan_irrigation(occupied, &mut cultivation, &mut actions)?;
+        let amendment_plan = self.plan_soil_amendment(
+            occupied,
+            &mut cultivation,
+            irrigation_plan.as_ref(),
+            &mut actions,
+        )?;
+        let amendment_busy = amendment_plan
+            .as_ref()
+            .filter(|plan| !plan.is_empty())
+            .map(|plan| {
+                let mut busy = occupied.to_vec();
+                busy.par_extend(plan.parallel_actors());
+                busy.par_sort_unstable();
+                busy.dedup();
+                busy
+            });
+        let occupied = amendment_busy.as_deref().unwrap_or(occupied);
         let mut seed_allocation = None;
         if let (Some(plan), Some(owner)) = (&mut cultivation, &self.agriculture)
             && let Some(maturation) = plan.prepare_maturation(owner, self.core.seed)?
@@ -2445,8 +2462,21 @@ impl CoreHost {
         let care_uses = dependent
             .as_ref()
             .map_or(&[][..], |plan| plan.uses.as_slice());
-        let (agriculture, mut claims) =
+        let (mut agriculture, mut claims) =
             self.stage_cultivation(cultivation, draft.events(), care_uses)?;
+        if let Some(plan) = amendment_plan {
+            let soil = agriculture
+                .as_mut()
+                .and_then(|farm| farm.soil.as_mut())
+                .ok_or("missing staged soil")?;
+            let amendment = self
+                .agriculture
+                .as_ref()
+                .and_then(|farm| farm.soil.as_ref())
+                .and_then(|soil| soil.amendment.as_ref())
+                .ok_or("missing soil amendment owner")?;
+            amendment.publish(soil, plan, draft.events(), draft.events().tick);
+        }
         let mut medical_opinions = None;
         let mut help = medical_resolved
             .as_ref()

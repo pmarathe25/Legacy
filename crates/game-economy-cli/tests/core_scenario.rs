@@ -484,6 +484,98 @@ fn language_topics_arise_from_personally_chosen_physical_demonstrations() {
 }
 
 #[test]
+fn soil_amendment_choices_settle_atomically_in_the_interval_host() {
+    use game_economy::core_interval::CoreHost;
+    use game_economy_agriculture::soil::FieldSoil;
+    use game_lots::{Container, Place};
+
+    fn run(second_limit: Option<u32>, second_willing: bool, workers: usize) -> serde_json::Value {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let root = root();
+                let mut state = game_economy_cli::core_scenario(
+                    &root.join("content/scenarios/economy-soil-improvement.toml"),
+                    &root.join("content"),
+                )
+                .unwrap()
+                .snapshot();
+                for person in &mut state.core.people {
+                    person.hunger = 35;
+                }
+                let farm = state.agriculture.as_mut().unwrap();
+                farm.requests = None;
+                let mut field = farm.fields[0].clone();
+                field.id = 2;
+                farm.fields.push(field);
+                let soil = farm.soil.as_mut().unwrap();
+                soil.fields.push(FieldSoil {
+                    field: 2,
+                    fertility: 50,
+                });
+                let amendment = soil.amendment.as_mut().unwrap();
+                let mut choice = amendment.choices[0].clone();
+                choice.person = 2;
+                choice.field = 2;
+                choice.hunger_limit = second_limit;
+                choice.willing = second_willing;
+                amendment.choices.push(choice);
+                let good = amendment.good;
+                let stock = state
+                    .core
+                    .physical
+                    .custody
+                    .containers
+                    .iter_mut()
+                    .find(|row| row.place == Place::Stock { region: 1, good })
+                    .unwrap();
+                let mut lot = stock.lots[0].clone();
+                lot.quantity = 10;
+                *stock = Container::new(stock.place, stock.capacity, vec![lot]).unwrap();
+                let mut host = CoreHost::resume(
+                    serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap(),
+                )
+                .unwrap();
+                assert_eq!(host.advance_continuous(900_001, &[]).unwrap().failure, None);
+                let result = host.snapshot();
+                let soil = result.agriculture.as_ref().unwrap().soil.as_ref().unwrap();
+                let events = &soil.amendment.as_ref().unwrap().events;
+                let second_attempts =
+                    second_willing && second_limit.is_none_or(|limit| limit >= 35);
+                assert_eq!(events.len(), if second_attempts { 2 } else { 1 });
+                assert_eq!(events.iter().filter(|event| event.accepted).count(), 1);
+                assert_eq!(
+                    soil.fields.iter().map(|row| row.fertility).sum::<u64>(),
+                    135
+                );
+                assert_eq!(
+                    result
+                        .core
+                        .physical
+                        .custody
+                        .containers
+                        .iter()
+                        .find(|row| row.place == Place::Stock { region: 1, good })
+                        .unwrap()
+                        .used,
+                    0
+                );
+                let restored = CoreHost::resume(
+                    serde_json::from_str(&serde_json::to_string(&result).unwrap()).unwrap(),
+                )
+                .unwrap();
+                assert_eq!(result, restored.snapshot());
+                serde_json::to_value(result).unwrap()
+            })
+    }
+    for (limit, willing) in [(None, true), (Some(20), true), (None, false)] {
+        assert_eq!(run(limit, willing, 1), run(limit, willing, 4));
+    }
+}
+
+#[test]
 fn hungry_people_choose_watering_individually() {
     use game_economy::core_interval::CoreHost;
     use game_economy_agriculture::Phase;

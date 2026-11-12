@@ -3,6 +3,91 @@ use super::*;
 type CultivationClaims = Option<(game_economy_claims::Claims, Option<game_opinions::Opinions>)>;
 
 impl CoreHost {
+    /// Stage individually chosen soil work with the same physical boundary.
+    pub(super) fn plan_soil_amendment(
+        &self,
+        occupied: &[u64],
+        cultivation: &mut Option<game_economy_agriculture::Plan>,
+        irrigation: Option<&game_economy_agriculture::irrigation::Plan>,
+        actions: &mut Vec<game_lots::Transaction>,
+    ) -> Result<Option<game_economy_agriculture::amendment::Plan>, String> {
+        let Some((agriculture, soil, amendment)) = self.agriculture.as_ref().and_then(|farm| {
+            farm.soil
+                .as_ref()
+                .and_then(|soil| soil.amendment.as_ref().map(|owner| (farm, soil, owner)))
+        }) else {
+            return Ok(None);
+        };
+        let farm = cultivation
+            .as_mut()
+            .ok_or("soil improvement needs a cultivation plan")?;
+        let mut busy = occupied.to_vec();
+        busy.par_extend(farm.actors.par_iter().copied());
+        busy.par_extend(farm.requesters.par_iter().copied());
+        if let Some(irrigation) = irrigation {
+            busy.par_extend(irrigation.parallel_actors());
+        }
+        if let Some(family) = &self.family {
+            busy.par_extend(game_economy_work::underage(family));
+        }
+        busy.par_extend(
+            self.core
+                .physical
+                .work()
+                .par_iter()
+                .filter(|row| row.phase == game_lot_runtime::Phase::Working)
+                .map(|row| row.job.worker),
+        );
+        busy.par_sort_unstable();
+        busy.dedup();
+        let mut fields: Vec<_> = farm.changes.par_iter().map(|row| row.0).collect();
+        fields.par_sort_unstable();
+        fields.dedup();
+        // Irrigation also allocates IDs for failed attempts which have no
+        // physical action. Leave room for all of them before assigning soil IDs.
+        let last = actions
+            .par_iter()
+            .map(|action| action.id)
+            .chain(farm.changes.par_iter().map(|row| row.1))
+            .max()
+            .unwrap_or(0);
+        let reserved = u64::try_from(irrigation.map_or(0, |plan| plan.len()))
+            .map_err(|_| "soil action overflow")?;
+        let base = last
+            .checked_add(reserved)
+            .and_then(|id| id.checked_add(1))
+            .ok_or("soil action overflow")?;
+        let tick = self
+            .core
+            .physical
+            .tick()
+            .checked_add(1)
+            .ok_or("tick overflow")?;
+        let view = self.core.physical.view(tick)?;
+        let claims = self.claims.as_ref().map(game_economy_claims::Claims::index);
+        let plan = amendment.prepare(
+            game_economy_agriculture::amendment::Context {
+                soil,
+                agriculture,
+                people: &self.core.people,
+                busy: &busy,
+                nonstock: &[],
+                occupied_fields: &fields,
+                claims: claims.as_ref(),
+                opinions: self.opinions.as_ref(),
+                view: &view,
+                max_hunger: self.core.rules.max_work_hunger,
+                seed: self.core.seed,
+                tick,
+                manual: None,
+            },
+            base,
+        )?;
+        actions.par_extend(plan.actions().cloned());
+        farm.uses.par_extend(plan.uses());
+        Ok(Some(plan))
+    }
+
     pub(super) fn plan_irrigation(
         &self,
         occupied: &[u64],
