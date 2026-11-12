@@ -534,6 +534,7 @@ pub fn farming(seed: u64, profiles: &[Profile]) -> Vec<game_economy::FarmPolicy>
             (0..profile.count).into_par_iter().map(move |offset| {
                 let person = profile.start_id + offset;
                 game_economy::FarmPolicy {
+                    hunger_limit: None,
                     person,
                     willing: game_genetics::random(seed, person, 3) % 100 < u64::from(rate),
                     pressured_by: None,

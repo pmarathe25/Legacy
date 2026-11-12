@@ -13,6 +13,14 @@ named seed good, nonzero batch ID and quantity. Loading these entries assigns
 tags to existing regional stock; their combined quantities cannot exceed that
 stock. Unassigned seed remains untagged.
 
+An ordinary cultivation policy can optionally give its person a `hunger_limit`;
+the person declines ordinary farming above that level. With no such limit,
+hunger alone does not prevent their choice. Requests use the recipient's own
+response preferences, and a controlled person may choose regardless of hunger.
+The older cultivation-wide `max_hunger` field remains loadable but does not
+govern cultivation or requests. Irrigation and soil amendment have separate
+eligibility rules that have not yet been migrated.
+
 An optional `[[cultivation.seed_profiles]]` entry gives one person a signed
 value for each named batch and a personal value for idleness. For an ordinary
 autonomous planting, that person chooses an enabled batch above their idle

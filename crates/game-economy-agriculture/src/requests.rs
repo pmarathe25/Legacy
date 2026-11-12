@@ -321,8 +321,7 @@ pub fn prepare(
             return Err("person cannot respond to this cultivation request".into());
         }
         if accept
-            && (worker.hunger > context.agriculture.max_hunger
-                || worker.region != Some(f.region)
+            && (worker.region != Some(f.region)
                 || context.season.is_some_and(|s| match f.phase {
                     Phase::Fallow => !s.planting_allowed,
                     Phase::Ripe => !s.harvest_allowed,
@@ -478,7 +477,6 @@ pub fn prepare(
                 } else if context.tick <= request.created_at
                     || (worker.controlled && response.is_none())
                     || worker.health == 0
-                    || worker.hunger > context.agriculture.max_hunger
                     || worker.region != Some(f.region)
                     || (unavailable(worker.id) && response.is_none())
                     || (withdrawal_actors.binary_search(&worker.id).is_ok() && response.is_none())
@@ -615,7 +613,6 @@ pub fn prepare(
                 || waiting(a.person)
                 || asker.controlled
                 || asker.health == 0
-                || asker.hunger > context.agriculture.max_hunger
                 || worker.health == 0
                 || asker.region != Some(f.region)
                 || worker.region != Some(f.region)
@@ -663,7 +660,6 @@ pub fn prepare(
                 || waiting(a.person)
                 || asker.controlled
                 || asker.health == 0
-                || asker.hunger > context.agriculture.max_hunger
                 || unavailable(a.person)
                 || reserved.binary_search(&a.person).is_ok()
             {

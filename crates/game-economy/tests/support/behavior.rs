@@ -13505,6 +13505,7 @@ fn cultivation_retries_another_person_and_observes_claimed_seed_use() {
         }],
         policies: (1..=2)
             .map(|person| FarmPolicy {
+                hunger_limit: None,
                 person,
                 willing: true,
                 pressured_by: None,
@@ -16923,12 +16924,14 @@ fn newborn_farming_inclinations_are_optional_and_do_not_inherit_pressure() {
         }],
         policies: vec![
             FarmPolicy {
+                hunger_limit: None,
                 person: 1,
                 willing: false,
                 pressured_by: Some(2),
                 pressure_threshold: Some(3),
             },
             FarmPolicy {
+                hunger_limit: None,
                 person: 2,
                 willing: false,
                 pressured_by: None,
@@ -35793,6 +35796,7 @@ fn crops_consume_seed_grow_without_labor_and_harvest_only_from_personal_choice()
             remaining: 0,
         }],
         policies: vec![FarmPolicy {
+            hunger_limit: None,
             person: 2,
             willing: false,
             pressured_by: Some(1),
@@ -36222,6 +36226,7 @@ fn field_workload(count: u64) -> State {
             .collect(),
         policies: (1..=count)
             .map(|person| FarmPolicy {
+                hunger_limit: None,
                 person,
                 willing: true,
                 pressured_by: None,
@@ -36843,6 +36848,7 @@ fn farming_and_gathering_share_one_atomic_stock_boundary() {
             remaining: 0,
         }],
         policies: vec![FarmPolicy {
+            hunger_limit: None,
             person: 2,
             willing: true,
             pressured_by: None,

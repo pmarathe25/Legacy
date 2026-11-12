@@ -484,6 +484,117 @@ fn language_topics_arise_from_personally_chosen_physical_demonstrations() {
 }
 
 #[test]
+fn hungry_people_can_ask_for_and_choose_cultivation_help() {
+    use game_economy::core_interval::CoreHost;
+    use game_economy_agriculture::Phase;
+
+    fn run(help_value: i64, workers: usize) -> serde_json::Value {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let root = root();
+                let mut state = game_economy_cli::core_scenario(
+                    &root.join("content/scenarios/economy-cultivation-requests.toml"),
+                    &root.join("content"),
+                )
+                .unwrap()
+                .snapshot();
+                for person in &mut state.core.people {
+                    person.hunger = 35;
+                }
+                state
+                    .agriculture
+                    .as_mut()
+                    .unwrap()
+                    .requests
+                    .as_mut()
+                    .unwrap()
+                    .preferences[0]
+                    .help_value = help_value;
+                let mut host = CoreHost::resume(state).unwrap();
+                assert_eq!(host.advance_continuous(900_001, &[]).unwrap().failure, None);
+                assert_eq!(
+                    host.snapshot()
+                        .agriculture
+                        .as_ref()
+                        .unwrap()
+                        .requests
+                        .as_ref()
+                        .unwrap()
+                        .pending
+                        .len(),
+                    1
+                );
+                assert_eq!(host.advance_continuous(900_000, &[]).unwrap().failure, None);
+                let result = host.snapshot();
+                assert_eq!(
+                    result.agriculture.as_ref().unwrap().fields[0].phase,
+                    if help_value >= 1 {
+                        Phase::Growing
+                    } else {
+                        Phase::Fallow
+                    }
+                );
+                serde_json::to_value(result).unwrap()
+            })
+    }
+    for value in [0, 1] {
+        assert_eq!(run(value, 1), run(value, 4));
+    }
+}
+
+#[test]
+fn hungry_farmers_follow_their_own_inclination() {
+    use game_economy::core_interval::CoreHost;
+    use game_economy_agriculture::Phase;
+
+    fn run(limit: Option<u32>, willing: bool, workers: usize) -> serde_json::Value {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let root = root();
+                let mut state = game_economy_cli::core_scenario(
+                    &root.join("content/scenarios/economy-core-seed-reproduction.toml"),
+                    &root.join("content"),
+                )
+                .unwrap()
+                .snapshot();
+                state.core.people[0].hunger = 40;
+                let farm = state.agriculture.as_mut().unwrap();
+                assert_eq!(farm.max_hunger, 20);
+                farm.policies[0].hunger_limit = limit;
+                farm.policies[0].willing = willing;
+                let mut host = CoreHost::resume(
+                    serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap(),
+                )
+                .unwrap();
+                assert_eq!(host.advance_continuous(900_001, &[]).unwrap().failure, None);
+                let result = host.snapshot();
+                let phase = result.agriculture.as_ref().unwrap().fields[0].phase;
+                let expected = if willing && limit.is_none_or(|value| value >= 40) {
+                    Phase::Growing
+                } else {
+                    Phase::Fallow
+                };
+                assert_eq!(phase, expected);
+                serde_json::to_value(result).unwrap()
+            })
+    }
+    for (limit, willing) in [
+        (None, true),
+        (Some(20), true),
+        (Some(40), true),
+        (None, false),
+    ] {
+        assert_eq!(run(limit, willing, 1), run(limit, willing, 4));
+    }
+}
+
+#[test]
 fn clonal_seed_offspring_mutate_once_and_survive_failed_harvests() {
     use game_economy::core_interval::CoreHost;
     use game_economy_agriculture::Phase;

@@ -5276,6 +5276,7 @@ fn boundary_cultivation_uses_real_seeds_grows_and_harvests_after_reload() {
                         .collect(),
                     policies: (2..=3)
                         .map(|person| Policy {
+                            hunger_limit: None,
                             person,
                             willing: true,
                             pressured_by: None,
@@ -6502,6 +6503,7 @@ fn core_host_cultivation_benchmark() {
             .collect(),
         policies: (2..=count)
             .map(|person| Policy {
+                hunger_limit: None,
                 person,
                 willing: true,
                 pressured_by: None,
@@ -13265,7 +13267,7 @@ fn family_birth_custody_and_worker_death_commit_atomically() {
                         output: 2, output_quantity: 1, growth_ticks: 1 }],
                     fields: vec![game_economy_agriculture::Field { id: 1, region: 1, crop: 1,
                         phase: game_economy_agriculture::Phase::Fallow, remaining: 0 }],
-                    policies: vec![game_economy_agriculture::Policy { person: 1, willing: true,
+                    policies: vec![game_economy_agriculture::Policy { person: 1, willing: true, hunger_limit: None,
                         pressured_by: None, pressure_threshold: None }], max_hunger: 10,
                 });
                 caring.claims = Some(serde_json::from_value(serde_json::json!({
@@ -13369,7 +13371,7 @@ fn family_birth_custody_and_worker_death_commit_atomically() {
                     output: 2, output_quantity: 1, growth_ticks: 1 }],
                 fields: vec![game_economy_agriculture::Field { id: 1, region: 1, crop: 1,
                     phase: game_economy_agriculture::Phase::Fallow, remaining: 0 }],
-                policies: vec![game_economy_agriculture::Policy { person: 2, willing: true,
+                policies: vec![game_economy_agriculture::Policy { person: 2, willing: true, hunger_limit: None,
                     pressured_by: Some(1), pressure_threshold: Some(1) }], max_hunger: 10,
             });
             inherited.claims = Some(serde_json::from_value(serde_json::json!({
@@ -13515,7 +13517,7 @@ fn family_birth_custody_and_worker_death_commit_atomically() {
                     output: 2, output_quantity: 1, growth_ticks: 1 }],
                 fields: vec![game_economy_agriculture::Field { id: 1, region: 1, crop: 1,
                     phase: game_economy_agriculture::Phase::Fallow, remaining: 0 }],
-                policies: vec![game_economy_agriculture::Policy { person: 3, willing: true,
+                policies: vec![game_economy_agriculture::Policy { person: 3, willing: true, hunger_limit: None,
                     pressured_by: None, pressure_threshold: None }], max_hunger: 10,
             });
             let mut farming = CoreHost::begin(farming, &[]).unwrap();

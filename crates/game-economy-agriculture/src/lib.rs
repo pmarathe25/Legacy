@@ -48,6 +48,9 @@ pub struct Field {
 pub struct Policy {
     pub person: u64,
     pub willing: bool,
+    /// Optional personal inclination to stop ordinary farming above this hunger.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hunger_limit: Option<u32>,
     #[serde(default)]
     pub pressured_by: Option<u64>,
     #[serde(default)]
@@ -70,6 +73,8 @@ pub struct Agriculture {
     pub crops: Vec<Crop>,
     pub fields: Vec<Field>,
     pub policies: Vec<Policy>,
+    /// Retained for loading older content; ordinary cultivation and requests
+    /// no longer use a shared hunger cutoff.
     pub max_hunger: u32,
 }
 impl Clone for Agriculture {
@@ -127,6 +132,7 @@ pub fn enroll(
             Some(Policy {
                 person: member.id,
                 willing: parent.willing,
+                hunger_limit: parent.hunger_limit,
                 pressured_by: None,
                 pressure_threshold: None,
             })
@@ -156,6 +162,7 @@ impl Agriculture {
             next.policies.push(Policy {
                 person,
                 willing,
+                hunger_limit: None,
                 pressured_by: None,
                 pressure_threshold: None,
             });
@@ -409,7 +416,6 @@ impl Context<'_> {
             if !person.controlled
                 || person.health == 0
                 || person.region != Some(field.region)
-                || person.hunger > self.agriculture.max_hunger
                 || field.phase == Phase::Growing
                 || self.season.is_some_and(|season| match field.phase {
                     Phase::Fallow => !season.planting_allowed,
@@ -450,7 +456,6 @@ impl Context<'_> {
             .filter_map(|person| {
                 if person.controlled
                     || person.health == 0
-                    || person.hunger > self.agriculture.max_hunger
                     || self.busy.binary_search(&person.id).is_ok()
                     || requested
                         .as_ref()
@@ -462,6 +467,12 @@ impl Context<'_> {
                     .binary_search_by_key(&person.id, |p| p.person)
                     .ok()
                     .map(|i| policies[i])?;
+                if policy
+                    .hunger_limit
+                    .is_some_and(|limit| person.hunger > limit)
+                {
+                    return None;
+                }
                 let pressured = policy
                     .pressured_by
                     .zip(policy.pressure_threshold)
