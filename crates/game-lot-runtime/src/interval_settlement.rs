@@ -84,6 +84,19 @@ impl Runtime {
         result
     }
 
+    /// Reserve owner batch IDs alongside an unpublished interval settlement.
+    pub fn attach_interval_batch_allocation(
+        &mut self,
+        draft: &mut IntervalSettlementDraft,
+        allocation: game_lots::BatchAllocation,
+    ) -> Result<(), String> {
+        self.validate_interval_settlement(draft)?;
+        let interval = self.work_interval.take().expect("validated interval");
+        let result = self.attach_batch_allocation(&mut draft.advance, allocation);
+        self.work_interval = Some(interval);
+        result
+    }
+
     /// Stage newborn custody and interrupt deceased workers in this boundary.
     pub fn stage_interval_people(
         &mut self,

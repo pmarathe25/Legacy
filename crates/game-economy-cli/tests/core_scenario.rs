@@ -500,6 +500,7 @@ fn actual_seed_genotypes_change_physical_growth_without_deciding_for_the_farmer(
                 )
                 .unwrap()
                 .snapshot();
+                assert_eq!(opening.core.physical.custody.next_batch, Some(13));
                 let profile = &mut std::sync::Arc::make_mut(
                     &mut opening
                         .agriculture

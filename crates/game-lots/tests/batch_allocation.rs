@@ -237,3 +237,39 @@ fn independent_batch_creation_scaling() {
         );
     }
 }
+
+#[test]
+fn batch_reservation_can_join_a_prepared_boundary_without_early_publication() {
+    let mut store = owner();
+    store.enable_batch_allocator(1).unwrap();
+    let counts = [BatchCount { owner: 7, count: 2 }];
+    let allocation = store.plan_batches(&counts).unwrap();
+    let reserved = allocation.range(7).unwrap();
+    let movement = game_lots::Movement {
+        id: 1,
+        from: Place::Person(1),
+        to: Some(Place::Person(2)),
+        good: 1,
+        quantity: 1,
+        item: None,
+        batch: Some(5),
+    };
+    let mut draft = store.prepare_now(7, &[movement]).unwrap();
+    store
+        .attach_batch_allocation(&mut draft, allocation)
+        .unwrap();
+    assert_eq!(reserved.start, 6);
+    assert_eq!(store.export().next_batch, Some(6));
+    let duplicate = store.plan_batches(&counts).unwrap();
+    assert!(
+        store
+            .attach_batch_allocation(&mut draft, duplicate)
+            .is_err()
+    );
+    store.commit(draft).unwrap();
+    assert_eq!(store.export().next_batch, Some(8));
+    assert_eq!(
+        store.container(Place::Person(2)).unwrap().lots[0].batch,
+        Some(5)
+    );
+}

@@ -97,6 +97,21 @@ impl Runtime {
     pub fn tick(&self) -> u64 {
         self.store.tick()
     }
+    /// Enable durable batch allocation at an idle physical boundary.
+    pub fn enable_batch_allocator(&mut self, minimum: u64) -> Result<u64, String> {
+        self.ensure_no_work_interval()?;
+        let epoch = self.epoch.checked_add(1).ok_or("physical epoch overflow")?;
+        let next = self.store.enable_batch_allocator(minimum)?;
+        self.epoch = epoch;
+        Ok(next)
+    }
+    /// Plan disjoint owner ranges without changing physical state.
+    pub fn plan_batches(
+        &self,
+        counts: &[game_lots::BatchCount],
+    ) -> Result<game_lots::BatchAllocation, String> {
+        self.store.plan_batches(counts)
+    }
     /// Current custody of a unique physical item.
     pub fn item_place(&self, id: u64) -> Option<Place> {
         self.store.item_place(id)

@@ -2,6 +2,12 @@
 
 A physical production owner executes dated input reservation, person-directed work, interruption, output delivery, expiry, and save/load. The economy composes it with personal decisions and other feature owners. No social agreement obliges a worker to continue.
 
+An enabled physical batch allocator can plan disjoint owner ranges and attach
+one plan to an already prepared boundary or completed interval settlement.
+The saved high-water mark advances only when that physical draft commits;
+dropping the draft leaves it unchanged. The coordinating feature must stage
+and validate its own metadata before committing alongside physical state.
+
 `prepare_with_growth` accepts harvest actions from a trusted environmental owner. It checks that output is freshly dated and enters regional stock, then arbitrates those actions with all other custody changes. Ordinary external transfers cannot create goods; callers must derive harvest quantities and timing from validated environmental state.
 
 The same typed growth input accepts validated writing actions, which atomically consume paper and ink and create an identified page. The writing owner supplies the page's content separately and commits it only after physical acceptance.

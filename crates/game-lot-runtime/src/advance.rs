@@ -70,6 +70,16 @@ impl AdvanceDraft {
     }
 }
 impl Runtime {
+    /// Reserve owner identities in an existing unpublished physical boundary.
+    pub fn attach_batch_allocation(
+        &self,
+        draft: &mut AdvanceDraft,
+        allocation: game_lots::BatchAllocation,
+    ) -> Result<(), String> {
+        self.validate_advance(draft)?;
+        self.store
+            .attach_batch_allocation(&mut draft.custody, allocation)
+    }
     /// Preserve eligible unfinished work when its worker becomes incapacitated.
     /// Eligibility is decided by the site owner; completed work is never reopened.
     pub fn suspend_workers_in(

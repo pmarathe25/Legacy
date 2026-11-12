@@ -1075,3 +1075,33 @@ fn early_work_completion_benchmark() {
             }
         });
 }
+
+#[test]
+fn completed_interval_stages_batch_allocation_with_its_physical_commit() {
+    let mut world = fixture(false, 1);
+    world.enable_batch_allocator(10).unwrap();
+    world.begin_work_interval(&[(1, 1)]).unwrap();
+    world.progress_work_interval(1000).unwrap();
+    let allocation = world
+        .plan_batches(&[game_lots::BatchCount { owner: 5, count: 2 }])
+        .unwrap();
+    let mut draft = world.prepare_interval_settlement(7, None).unwrap();
+    world
+        .attach_interval_batch_allocation(&mut draft, allocation)
+        .unwrap();
+    assert_eq!(world.snapshot().custody.next_batch, Some(10));
+    drop(draft);
+    assert_eq!(world.snapshot().custody.next_batch, Some(10));
+    let allocation = world
+        .plan_batches(&[game_lots::BatchCount { owner: 5, count: 2 }])
+        .unwrap();
+    let mut draft = world.prepare_interval_settlement(7, None).unwrap();
+    world
+        .attach_interval_batch_allocation(&mut draft, allocation)
+        .unwrap();
+    world.commit_interval_settlement(draft).unwrap();
+    let saved = world.snapshot();
+    assert_eq!(saved.custody.next_batch, Some(12));
+    let restored: Snapshot = serde_json::from_str(&serde_json::to_string(&saved).unwrap()).unwrap();
+    assert_eq!(Runtime::compile(restored).unwrap().snapshot(), saved);
+}

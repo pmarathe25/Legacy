@@ -2602,3 +2602,31 @@ fn incapacitation_preserves_unfinished_work_until_its_site_is_destroyed() {
     world.commit_advance(draft).unwrap();
     assert_eq!(world.advance(&[], 1).unwrap().returned, vec![1]);
 }
+
+#[test]
+fn physical_boundary_can_reserve_batch_ranges_without_early_publication() {
+    let mut world = runtime();
+    let stale = world.prepare_advance(&[], &[], 7).unwrap();
+    assert_eq!(world.enable_batch_allocator(10).unwrap(), 10);
+    assert!(world.commit_advance(stale).is_err());
+    let counts = [game_lots::BatchCount { owner: 3, count: 2 }];
+    let allocation = world.plan_batches(&counts).unwrap();
+    assert_eq!(allocation.range(3).unwrap().start, 10);
+    let mut draft = world.prepare_advance(&[], &[], 7).unwrap();
+    world
+        .attach_batch_allocation(&mut draft, allocation)
+        .unwrap();
+    assert_eq!(world.snapshot().custody.next_batch, Some(10));
+    drop(draft);
+    assert_eq!(world.snapshot().custody.next_batch, Some(10));
+    let allocation = world.plan_batches(&counts).unwrap();
+    let mut draft = world.prepare_advance(&[], &[], 7).unwrap();
+    world
+        .attach_batch_allocation(&mut draft, allocation)
+        .unwrap();
+    world.commit_advance(draft).unwrap();
+    let saved = world.snapshot();
+    assert_eq!(saved.custody.next_batch, Some(12));
+    let loaded: Snapshot = serde_json::from_str(&serde_json::to_string(&saved).unwrap()).unwrap();
+    assert_eq!(Runtime::compile(loaded).unwrap().snapshot(), saved);
+}

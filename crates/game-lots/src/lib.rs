@@ -320,6 +320,25 @@ impl Store {
             ranges,
         })
     }
+    /// Attach identities for owner state staged alongside an already prepared
+    /// physical draft. The caller must publish that owner state atomically with
+    /// this draft; no creation in the draft may use the reserved range.
+    pub fn attach_batch_allocation(
+        &self,
+        draft: &mut Draft,
+        allocation: BatchAllocation,
+    ) -> Result<(), String> {
+        self.validate_commit(draft)?;
+        if draft.batch_next.is_some()
+            || allocation.instance != self.instance
+            || allocation.revision != self.state.revision
+            || self.state.next_batch != Some(allocation.opening)
+        {
+            return Err("stale or duplicate batch allocation".into());
+        }
+        draft.batch_next = Some(allocation.next);
+        Ok(())
+    }
     /// Borrow the ordered committed custody without copying it.
     pub fn containers(&self) -> &[Container] {
         &self.state.containers

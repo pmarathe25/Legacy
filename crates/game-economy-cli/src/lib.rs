@@ -2472,6 +2472,21 @@ fn scenario_with_options_inner(
     if local_transport.is_some() {
         custody.containers.par_sort_unstable_by_key(|row| row.place);
     }
+    if let Some(genetics) = agriculture
+        .as_ref()
+        .and_then(|farm| farm.provenance.as_ref())
+        .and_then(|owner| owner.genetics.as_ref())
+    {
+        let highest = custody
+            .containers
+            .par_iter()
+            .flat_map_iter(|container| container.lots.iter().filter_map(|lot| lot.batch))
+            .chain(genetics.strains.par_iter().map(|strain| strain.batch))
+            .max();
+        custody.next_batch = Some(highest.map_or(Ok(1), |id| {
+            id.checked_add(1).ok_or("batch identity overflow")
+        })?);
+    }
     Economy::compile(State {
         seed: scenario.seed,
         physical: Snapshot {
