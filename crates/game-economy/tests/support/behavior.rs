@@ -9491,6 +9491,7 @@ fn seasons_gate_planting_and_grow_crops_at_authored_rate() {
     }
     initial.people[1].controlled = true;
     initial.agriculture = Some(Agriculture {
+        provenance: None,
         soil: None,
         inherit_births: false,
         requests: None,
@@ -13482,6 +13483,7 @@ fn cultivation_retries_another_person_and_observes_claimed_seed_use() {
         claims: Some(Claims::default()),
     });
     initial.agriculture = Some(Agriculture {
+        provenance: None,
         soil: None,
         inherit_births: false,
         requests: None,
@@ -16898,6 +16900,7 @@ fn newborn_farming_inclinations_are_optional_and_do_not_inherit_pressure() {
         person.seek_meals = false;
     }
     initial.agriculture = Some(Agriculture {
+        provenance: None,
         soil: None,
         inherit_births: true,
         requests: None,
@@ -35769,6 +35772,7 @@ fn crops_consume_seed_grow_without_labor_and_harvest_only_from_personal_choice()
         affinity: 0,
     }];
     initial.agriculture = Some(Agriculture {
+        provenance: None,
         soil: None,
         inherit_births: false,
         requests: None,
@@ -36193,6 +36197,7 @@ fn field_workload(count: u64) -> State {
     )
     .unwrap();
     initial.agriculture = Some(Agriculture {
+        provenance: None,
         soil: None,
         inherit_births: false,
         requests: None,
@@ -36815,6 +36820,7 @@ fn farming_and_gathering_share_one_atomic_stock_boundary() {
         p.seek_meals = false;
     }
     initial.agriculture = Some(Agriculture {
+        provenance: None,
         soil: None,
         inherit_births: false,
         requests: None,
@@ -58027,6 +58033,7 @@ fn irrigation_fixture() -> State {
         person.hunger = 0;
     }
     state.agriculture = Some(Agriculture {
+        provenance: None,
         soil: None,
         inherit_births: false,
         requests: None,
@@ -58197,6 +58204,7 @@ fn irrigation_boundary_benchmark() {
     )
     .unwrap();
     state.agriculture = Some(Agriculture {
+        provenance: None,
         soil: None,
         inherit_births: false,
         requests: None,

@@ -2,6 +2,7 @@
 pub mod amendment;
 pub mod content;
 pub mod irrigation;
+pub mod provenance;
 pub mod requests;
 pub mod soil;
 use game_economy_person::Person;
@@ -53,6 +54,9 @@ pub struct Policy {
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Agriculture {
+    /// Optional physical seed history for currently planted fields.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provenance: Option<provenance::Provenance>,
     /// Founders may pass on a personal inclination, not social pressure.
     #[serde(default)]
     pub inherit_births: bool,
@@ -69,6 +73,7 @@ pub struct Agriculture {
 impl Clone for Agriculture {
     fn clone(&self) -> Self {
         Self {
+            provenance: self.provenance.clone(),
             inherit_births: self.inherit_births,
             requests: self.requests.clone(),
             soil: self.soil.clone(),
@@ -227,6 +232,9 @@ impl Agriculture {
                 amendment.validate(&ids, &goods, soil)?;
             }
         }
+        if let Some(provenance) = &self.provenance {
+            provenance.validate(&self.fields, &self.crops, view.boundary)?;
+        }
         Ok(())
     }
 }
@@ -316,10 +324,15 @@ pub struct Plan {
     fields: Vec<Field>,
     pub changes: Vec<(u64, u64, Phase, u32)>,
     requests: Option<requests::Prepared>,
+    track_seeds: bool,
 }
 pub fn append_planting(plan: &mut Option<Plan>, actions: &mut Vec<Transaction>) -> Vec<u64> {
     plan.as_mut().map_or_else(Vec::new, |plan| {
-        let compact = plan.plant.par_iter().map(|row| row.id).collect();
+        let compact = if plan.track_seeds {
+            Vec::new()
+        } else {
+            plan.plant.par_iter().map(|row| row.id).collect()
+        };
         actions.append(&mut plan.plant);
         compact
     })
@@ -697,6 +710,7 @@ impl Context<'_> {
                     _ => unreachable!("each cultivation action has exactly one transaction"),
                 });
         Ok(Plan {
+            track_seeds: self.agriculture.provenance.is_some(),
             actors,
             requesters: requested
                 .as_ref()
@@ -744,6 +758,11 @@ impl Plan {
         {
             return Err("duplicate cultivation outcome".into());
         }
+        let provenance = owner
+            .provenance
+            .as_ref()
+            .map(|provenance| provenance.stage(&self.changes, events, &decisions))
+            .transpose()?;
         let mut changes = self.changes;
         if changes.par_windows(2).any(|p| p[0].0 > p[1].0) {
             changes.par_sort_unstable_by_key(|row| row.0);
@@ -791,6 +810,7 @@ impl Plan {
             .map(|prepared| prepared.publish(&changes, &decisions))
             .transpose()?;
         Ok(Agriculture {
+            provenance,
             inherit_births: owner.inherit_births,
             requests,
             soil,

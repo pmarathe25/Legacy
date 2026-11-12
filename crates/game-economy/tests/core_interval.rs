@@ -5252,6 +5252,7 @@ fn boundary_cultivation_uses_real_seeds_grows_and_harvests_after_reload() {
                 )
                 .unwrap();
                 let agriculture = Agriculture {
+                    provenance: None,
                     inherit_births: false,
                     requests: None,
                     soil: None,
@@ -5550,7 +5551,7 @@ fn irrigation_consumes_contested_water_and_gates_next_growth() {
         initial.physical.goods.push(Good {id: 3, name: "water".into(), food: None});
         initial.physical.custody.containers.push(Container::new(Place::Stock {region: 1, good: 3}, 10, vec![Lot { batch: None,item: None, good: 3, quantity: 1, expires_at: None}]).unwrap());
         initial.physical.custody.containers.sort_by_key(|row| row.place);
-        let agriculture = Agriculture {
+        let agriculture = Agriculture { provenance: None,
             inherit_births: false, requests: None, soil: None, crops: vec![Crop {id: 1, seed: 1, seed_quantity: 1, output: 2, output_quantity: 1, growth_ticks: 1}],
             fields: (1..=2).map(|id| Field {id, region: 1, crop: 1, phase: Phase::Growing, remaining: 1}).collect(), policies: vec![], max_hunger: 10,
         };
@@ -6473,6 +6474,7 @@ fn core_host_cultivation_benchmark() {
     )
     .unwrap();
     let mut agriculture = Agriculture {
+        provenance: None,
         inherit_births: false,
         requests: None,
         soil: None,
@@ -13256,7 +13258,7 @@ fn family_birth_custody_and_worker_death_commit_atomically() {
                 caring.family.as_mut().unwrap().members[0].age = 3;
                 caring.core.physical.recipes[0].ticks = 1;
                 caring.core.physical.work[0].job.remaining = 1;
-                caring.agriculture = Some(game_economy_agriculture::Agriculture {
+                caring.agriculture = Some(game_economy_agriculture::Agriculture { provenance: None,
                     inherit_births: false, requests: None, soil: None,
                     crops: vec![game_economy_agriculture::Crop { id: 1, seed: 1, seed_quantity: 1,
                         output: 2, output_quantity: 1, growth_ticks: 1 }],
@@ -13360,7 +13362,7 @@ fn family_birth_custody_and_worker_death_commit_atomically() {
                     capacity: 1, regrowth: 0, seasonal: false, yield_per_action: 1 }],
                 policies: vec![game_economy::GatherPolicy { person: 2, node: 1, willing: true,
                     pressured_by: Some(1), pressure_threshold: Some(1) }] });
-            inherited.agriculture = Some(game_economy_agriculture::Agriculture {
+            inherited.agriculture = Some(game_economy_agriculture::Agriculture { provenance: None,
                 inherit_births: true, requests: None, soil: None,
                 crops: vec![game_economy_agriculture::Crop { id: 1, seed: 1, seed_quantity: 1,
                     output: 2, output_quantity: 1, growth_ticks: 1 }],
@@ -13506,7 +13508,7 @@ fn family_birth_custody_and_worker_death_commit_atomically() {
             *seed = Container::new(seed.place, 10, vec![Lot { batch: None,
                 item: None, good: 1, quantity: 1, expires_at: None,
             }]).unwrap();
-            farming.agriculture = Some(game_economy_agriculture::Agriculture {
+            farming.agriculture = Some(game_economy_agriculture::Agriculture { provenance: None,
                 inherit_births: false, requests: None, soil: None,
                 crops: vec![game_economy_agriculture::Crop { id: 1, seed: 1, seed_quantity: 1,
                     output: 2, output_quantity: 1, growth_ticks: 1 }],

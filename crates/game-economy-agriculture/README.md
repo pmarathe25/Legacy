@@ -2,6 +2,14 @@
 
 People choose field work according to their own preferences and pressures. Planting consumes actual seed; crops grow while the worker is free; harvest creates dated goods only if physical storage admits them. Fields are physical state, not an institution or employer.
 
+Set `track_seed_batches = true` in a cultivation scenario to retain the exact
+seed cohorts actually consumed when a field is planted. These records are
+prepared from accepted physical receipts, persist while a crop grows or a
+harvest fails, and are removed on successful harvest. They do not yet cause
+plant inheritance or put batch identities on harvests. Without tracking,
+planting retains the compact consumption path. See
+`content/scenarios/economy-core-seed-provenance.toml`.
+
 Optional `[cultivation.soil]` content specifies `capacity`, `loss_per_harvest`, `recovery_per_fallow`, and sorted `fields = [{ field, fertility }, ...]`. A configured field's harvest yields its crop's ordinary output multiplied by fertility over capacity, rounded down with a minimum of one unit. A successful physical harvest depletes fertility; a field that starts a boundary fallow recovers up to capacity. Failed harvests cause no depletion. Fields without a soil record keep their ordinary yield. This is a basic fertility model, not a complete treatment of soils or nutrients.
 
 An optional `[cultivation.soil.amendment]` supplies a material good ID, `quantity`, `fertility_gain`, and individual `choices` naming a person and field. A willing, available person at the stock endpoint may spend a real quantity to improve that field; they can choose to disregard claims. Concurrent people targeting the same field are selected deterministically, and those targeting shared material compete through ordinary physical transactions. Only a successful receipt adds fertility; latest-boundary events record accepted and failed attempts.

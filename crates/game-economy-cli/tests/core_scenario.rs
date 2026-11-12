@@ -484,6 +484,182 @@ fn language_topics_arise_from_personally_chosen_physical_demonstrations() {
 }
 
 #[test]
+fn planting_records_actual_seed_batches_and_retains_them_until_harvest() {
+    use game_economy::core_interval::CoreHost;
+    use game_economy_agriculture::Phase;
+    use game_lots::{Container, Lot, Place};
+    fn run(workers: usize) -> serde_json::Value {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let root = root();
+                let mut opening = game_economy_cli::core_scenario(
+                    &root.join("content/scenarios/economy-core-seed-provenance.toml"),
+                    &root.join("content"),
+                )
+                .unwrap()
+                .snapshot();
+                let crop = opening
+                    .agriculture
+                    .as_ref()
+                    .unwrap()
+                    .crops
+                    .iter()
+                    .find(|crop| crop.id == opening.agriculture.as_ref().unwrap().fields[0].crop)
+                    .unwrap()
+                    .clone();
+                let stock = opening
+                    .core
+                    .physical
+                    .custody
+                    .containers
+                    .iter_mut()
+                    .find(|row| {
+                        row.place
+                            == Place::Stock {
+                                region: 1,
+                                good: crop.seed,
+                            }
+                    })
+                    .unwrap();
+                *stock = Container::new(
+                    stock.place,
+                    stock.capacity,
+                    vec![
+                        Lot {
+                            good: crop.seed,
+                            quantity: 4,
+                            batch: Some(11),
+                            item: None,
+                            expires_at: None,
+                        },
+                        Lot {
+                            good: crop.seed,
+                            quantity: 16,
+                            batch: Some(12),
+                            item: None,
+                            expires_at: None,
+                        },
+                    ],
+                )
+                .unwrap();
+                let mut host = CoreHost::resume(opening).unwrap();
+                assert_eq!(host.advance_continuous(900_001, &[]).unwrap().failure, None);
+                let first = host.snapshot();
+                let agriculture = first.agriculture.as_ref().unwrap();
+                assert_eq!(agriculture.fields[0].phase, Phase::Growing);
+                let planting = &agriculture.provenance.as_ref().unwrap().plantings[0];
+                assert_eq!(
+                    planting
+                        .seeds
+                        .iter()
+                        .map(|lot| (lot.batch, lot.quantity))
+                        .collect::<Vec<_>>(),
+                    vec![(Some(11), 4), (Some(12), 6)]
+                );
+                let mut restored = CoreHost::resume(
+                    serde_json::from_str(&serde_json::to_string(&first).unwrap()).unwrap(),
+                )
+                .unwrap();
+                for _ in 0..100 {
+                    if host.snapshot().agriculture.as_ref().unwrap().fields[0].phase == Phase::Ripe
+                    {
+                        break;
+                    }
+                    assert_eq!(host.advance_continuous(900_000, &[]).unwrap().failure, None);
+                    assert_eq!(
+                        restored.advance_continuous(900_000, &[]).unwrap().failure,
+                        None
+                    );
+                }
+                let mut ripe = host.snapshot();
+                assert_eq!(ripe, restored.snapshot());
+                assert_eq!(
+                    ripe.agriculture.as_ref().unwrap().fields[0].phase,
+                    Phase::Ripe
+                );
+                let output = ripe
+                    .core
+                    .physical
+                    .custody
+                    .containers
+                    .iter_mut()
+                    .find(|row| {
+                        row.place
+                            == Place::Stock {
+                                region: 1,
+                                good: crop.output,
+                            }
+                    })
+                    .unwrap();
+                output.capacity = 1;
+                let mut blocked = CoreHost::resume(ripe).unwrap();
+                assert_eq!(
+                    blocked.advance_continuous(900_000, &[]).unwrap().failure,
+                    None
+                );
+                let mut failed = blocked.snapshot();
+                assert_eq!(
+                    failed.agriculture.as_ref().unwrap().fields[0].phase,
+                    Phase::Ripe
+                );
+                assert_eq!(
+                    failed
+                        .agriculture
+                        .as_ref()
+                        .unwrap()
+                        .provenance
+                        .as_ref()
+                        .unwrap()
+                        .plantings
+                        .len(),
+                    1
+                );
+                failed
+                    .core
+                    .physical
+                    .custody
+                    .containers
+                    .iter_mut()
+                    .find(|row| {
+                        row.place
+                            == Place::Stock {
+                                region: 1,
+                                good: crop.output,
+                            }
+                    })
+                    .unwrap()
+                    .capacity = 1000;
+                let mut resumed = CoreHost::resume(failed).unwrap();
+                assert_eq!(
+                    resumed.advance_continuous(900_000, &[]).unwrap().failure,
+                    None
+                );
+                let harvested = resumed.snapshot();
+                assert_eq!(
+                    harvested.agriculture.as_ref().unwrap().fields[0].phase,
+                    Phase::Fallow
+                );
+                assert!(
+                    harvested
+                        .agriculture
+                        .as_ref()
+                        .unwrap()
+                        .provenance
+                        .as_ref()
+                        .unwrap()
+                        .plantings
+                        .is_empty()
+                );
+                serde_json::to_value(harvested).unwrap()
+            })
+    }
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
 fn observed_signals_can_become_personally_chosen_spoken_topics() {
     use game_economy::core_interval::CoreHost;
     use game_language::Meaning;

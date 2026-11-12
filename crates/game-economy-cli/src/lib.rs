@@ -740,6 +740,8 @@ struct MedicalPolicyConfig {
 struct Cultivation {
     max_hunger: u32,
     #[serde(default)]
+    track_seed_batches: bool,
+    #[serde(default)]
     soil: Option<game_economy_agriculture::soil::Soil>,
     #[serde(default)]
     inherit_births: bool,
@@ -2162,6 +2164,7 @@ fn scenario_with_options_inner(
                 })
                 .collect::<Result<Vec<_>, String>>()?;
             Ok(Agriculture {
+                provenance: state.track_seed_batches.then(Default::default),
                 inherit_births: state.inherit_births,
                 requests: state.requests,
                 soil: state.soil,
