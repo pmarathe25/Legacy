@@ -14,6 +14,17 @@ named seed good, nonzero batch ID and quantity. Loading these entries assigns
 tags to existing regional stock; their combined quantities cannot exceed that
 stock. Unassigned seed remains untagged.
 
+An optional `[[cultivation.seed_profiles]]` entry gives one person a signed
+value for each named batch and a personal value for idleness. For an ordinary
+autonomous planting, that person chooses an enabled batch above their idle
+value or declines. The preference is a personal disposition, not a guarantee
+that stock exists: physical arbitration can reject an insufficient or absent
+batch, without substituting another. Ties between batches use their IDs for a
+stable result. Controlled and requested cultivation still use their existing
+response paths. These authored preferences do not yet learn from harvest
+experience or compare seed choice with the general cross-domain choice round;
+see `content/scenarios/economy-core-seed-choice.toml`.
+
 Optional `[cultivation.soil]` content specifies `capacity`, `loss_per_harvest`, `recovery_per_fallow`, and sorted `fields = [{ field, fertility }, ...]`. A configured field's harvest yields its crop's ordinary output multiplied by fertility over capacity, rounded down with a minimum of one unit. A successful physical harvest depletes fertility; a field that starts a boundary fallow recovers up to capacity. Failed harvests cause no depletion. Fields without a soil record keep their ordinary yield. This is a basic fertility model, not a complete treatment of soils or nutrients.
 
 An optional `[cultivation.soil.amendment]` supplies a material good ID, `quantity`, `fertility_gain`, and individual `choices` naming a person and field. A willing, available person at the stock endpoint may spend a real quantity to improve that field; they can choose to disregard claims. Concurrent people targeting the same field are selected deterministically, and those targeting shared material compete through ordinary physical transactions. Only a successful receipt adds fertility; latest-boundary events record accepted and failed attempts.

@@ -745,6 +745,8 @@ struct Cultivation {
     #[serde(default)]
     seed_batches: Vec<seed_batches::SeedBatch>,
     #[serde(default)]
+    seed_profiles: Vec<game_economy_agriculture::provenance::SeedProfile>,
+    #[serde(default)]
     soil: Option<game_economy_agriculture::soil::Soil>,
     #[serde(default)]
     inherit_births: bool,
@@ -2148,6 +2150,14 @@ fn scenario_with_options_inner(
     let agriculture = scenario
         .cultivation
         .map(|state| -> Result<_, String> {
+            if !state.track_seed_batches && !state.seed_profiles.is_empty() {
+                return Err("personal seed preferences require seed tracking".into());
+            }
+            let mut seed_profiles = state.seed_profiles;
+            seed_profiles.sort_unstable_by_key(|row| row.person);
+            for profile in &mut seed_profiles {
+                profile.preferences.sort_unstable_by_key(|row| row.batch);
+            }
             let crops = crop_content::load(
                 &content.join("agriculture"),
                 &production.goods,
@@ -2171,7 +2181,12 @@ fn scenario_with_options_inner(
                 })
                 .collect::<Result<Vec<_>, String>>()?;
             Ok(Agriculture {
-                provenance: state.track_seed_batches.then(Default::default),
+                provenance: state.track_seed_batches.then(|| {
+                    game_economy_agriculture::provenance::Provenance {
+                        profiles: std::sync::Arc::new(seed_profiles),
+                        ..Default::default()
+                    }
+                }),
                 inherit_births: state.inherit_births,
                 requests: state.requests,
                 soil: state.soil,

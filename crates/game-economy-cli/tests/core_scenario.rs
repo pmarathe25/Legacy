@@ -484,6 +484,94 @@ fn language_topics_arise_from_personally_chosen_physical_demonstrations() {
 }
 
 #[test]
+fn people_can_choose_a_seed_batch_decline_or_be_wrong_about_stock() {
+    use game_economy::core_interval::CoreHost;
+    use game_economy_agriculture::Phase;
+    fn run(workers: usize, batch: u64, value: i64) -> serde_json::Value {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let root = root();
+                let mut opening = game_economy_cli::core_scenario(
+                    &root.join("content/scenarios/economy-core-seed-choice.toml"),
+                    &root.join("content"),
+                )
+                .unwrap()
+                .snapshot();
+                let profile = &mut std::sync::Arc::make_mut(
+                    &mut opening
+                        .agriculture
+                        .as_mut()
+                        .unwrap()
+                        .provenance
+                        .as_mut()
+                        .unwrap()
+                        .profiles,
+                )[0];
+                profile.preferences[0].batch = batch;
+                profile.preferences[0].value = value;
+                let mut host = CoreHost::resume(opening).unwrap();
+                assert_eq!(host.advance_continuous(900_001, &[]).unwrap().failure, None);
+                let state = host.snapshot();
+                let farm = state.agriculture.as_ref().unwrap();
+                if batch == 12 && value > 0 {
+                    assert_eq!(farm.fields[0].phase, Phase::Growing);
+                    assert_eq!(
+                        farm.provenance.as_ref().unwrap().plantings[0]
+                            .seeds
+                            .iter()
+                            .map(|lot| (lot.batch, lot.quantity))
+                            .collect::<Vec<_>>(),
+                        vec![(Some(12), 10)]
+                    );
+                } else {
+                    assert_eq!(farm.fields[0].phase, Phase::Fallow);
+                    assert!(farm.provenance.as_ref().unwrap().plantings.is_empty());
+                    let seed = farm
+                        .crops
+                        .iter()
+                        .find(|crop| crop.id == farm.fields[0].crop)
+                        .unwrap()
+                        .seed;
+                    let stock = state
+                        .core
+                        .physical
+                        .custody
+                        .containers
+                        .iter()
+                        .find(|row| {
+                            row.place
+                                == game_lots::Place::Stock {
+                                    region: 1,
+                                    good: seed,
+                                }
+                        })
+                        .unwrap();
+                    assert_eq!(
+                        stock
+                            .lots
+                            .iter()
+                            .map(|lot| (lot.batch, lot.quantity))
+                            .collect::<Vec<_>>(),
+                        vec![(Some(11), 4), (Some(12), 16)]
+                    );
+                }
+                let restored = CoreHost::resume(
+                    serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap(),
+                )
+                .unwrap();
+                assert_eq!(state, restored.snapshot());
+                serde_json::to_value(state).unwrap()
+            })
+    }
+    for (batch, value) in [(12, 10), (11, 10), (999, 10), (12, 0)] {
+        assert_eq!(run(1, batch, value), run(4, batch, value));
+    }
+}
+
+#[test]
 fn planting_records_actual_seed_batches_and_retains_them_until_harvest() {
     use game_economy::core_interval::CoreHost;
     use game_economy_agriculture::Phase;

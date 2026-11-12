@@ -233,7 +233,7 @@ impl Agriculture {
             }
         }
         if let Some(provenance) = &self.provenance {
-            provenance.validate(&self.fields, &self.crops, view.boundary)?;
+            provenance.validate(&self.fields, &self.crops, &ids, view.boundary)?;
         }
         Ok(())
     }
@@ -575,6 +575,27 @@ impl Context<'_> {
                 (field, attempt.worker)
             }));
         }
+        // An authored personal profile can choose a particular batch or
+        // decline an ordinary planting. Controlled and requested actions
+        // retain their existing independent response paths.
+        let seed_choice = |field: &Field, worker: u64| {
+            if field.phase != Phase::Fallow
+                || manual.is_some_and(|(_, person)| person == worker)
+                || requested
+                    .as_ref()
+                    .is_some_and(|plan| plan.fields.binary_search(&field.id).is_ok())
+            {
+                return None;
+            }
+            self.agriculture
+                .provenance
+                .as_ref()
+                .and_then(|owner| owner.choose(worker))
+        };
+        picked = picked
+            .into_par_iter()
+            .filter(|(field, worker)| seed_choice(field, *worker) != Some(None))
+            .collect();
         #[cfg(feature = "profile")]
         {
             drop(phase);
@@ -596,7 +617,7 @@ impl Context<'_> {
                         Some(Transaction {
                             id: action,
                             movements: vec![Movement {
-                                batch: None,
+                                batch: seed_choice(field, worker).flatten(),
                                 item: None,
                                 id: action,
                                 from: Place::Stock {

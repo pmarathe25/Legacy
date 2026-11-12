@@ -9,6 +9,8 @@ fn concentrated_seed_provenance_scaling() {
         .and_then(|row| row.parse::<u64>().ok())
         .unwrap_or(10_000);
     let tracking = std::env::var_os("LEGACY_SEED_BASELINE").is_none();
+    let personal = std::env::var_os("LEGACY_SEED_PERSONAL").is_some();
+    assert!(!personal || tracking);
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let capacity = count * 10 + 100;
     let mut text = format!(
@@ -45,6 +47,9 @@ track_seed_batches = {tracking}
             "[[cultivation.policies]]\nperson = {id}\nwilling = true"
         )
         .unwrap();
+        if personal {
+            writeln!(text, "[[cultivation.seed_profiles]]\nperson = {id}\nidle = 0\npreferences = [{{ batch = {id}, enabled = true, value = 10 }}]").unwrap();
+        }
     }
     let path = std::env::temp_dir().join(format!(
         "legacy-seed-provenance-{}-{}.toml",
@@ -132,7 +137,7 @@ track_seed_batches = {tracking}
         }
         times.sort_unstable();
         eprintln!(
-            "{workers} workers: {:?} median for {count} fields; tracking={tracking}",
+            "{workers} workers: {:?} median for {count} fields; tracking={tracking}; personal={personal}",
             times[1]
         );
     }

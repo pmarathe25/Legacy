@@ -6,6 +6,26 @@ use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SeedPreference {
+    pub batch: u64,
+    pub enabled: bool,
+    pub value: i64,
+}
+
+/// A person's stated preferences, not an observation of actual stock.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SeedProfile {
+    pub person: u64,
+    pub idle: i64,
+    #[serde(default)]
+    pub act_on_tie: bool,
+    #[serde(default)]
+    pub preferences: Vec<SeedPreference>,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Planting {
@@ -21,10 +41,54 @@ pub struct Provenance {
     /// Sorted by field; records are removed only on successful harvest.
     #[serde(default)]
     pub plantings: Arc<Vec<Planting>>,
+    /// Optional personal batch preferences, sorted by person.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub profiles: Arc<Vec<SeedProfile>>,
 }
 
 impl Provenance {
-    pub fn validate(&self, fields: &[Field], crops: &[Crop], now: u64) -> Result<(), String> {
+    /// None is an unconfigured person; Some(None) is a personal refusal.
+    pub(crate) fn choose(&self, person: u64) -> Option<Option<u64>> {
+        let index = self
+            .profiles
+            .binary_search_by_key(&person, |row| row.person)
+            .ok()?;
+        let profile = &self.profiles[index];
+        Some(
+            profile
+                .preferences
+                .iter()
+                .filter(|row| {
+                    row.enabled
+                        && (row.value > profile.idle
+                            || (row.value == profile.idle && profile.act_on_tie))
+                })
+                .max_by_key(|row| (row.value, std::cmp::Reverse(row.batch)))
+                .map(|row| row.batch),
+        )
+    }
+    pub fn validate(
+        &self,
+        fields: &[Field],
+        crops: &[Crop],
+        people: &std::collections::HashSet<u64>,
+        now: u64,
+    ) -> Result<(), String> {
+        if self
+            .profiles
+            .par_windows(2)
+            .any(|rows| rows[0].person >= rows[1].person)
+            || self.profiles.par_iter().any(|profile| {
+                !people.contains(&profile.person)
+                    || profile.preferences.iter().any(|row| row.batch == 0)
+                    || profile
+                        .preferences
+                        .windows(2)
+                        .any(|rows| rows[0].batch >= rows[1].batch)
+            })
+        {
+            return Err("invalid personal seed preferences".into());
+        }
         if self
             .plantings
             .par_windows(2)
@@ -152,6 +216,7 @@ impl Provenance {
         plantings.par_sort_unstable_by_key(|row| row.field);
         Ok(Self {
             plantings: Arc::new(plantings),
+            profiles: Arc::clone(&self.profiles),
         })
     }
 }
