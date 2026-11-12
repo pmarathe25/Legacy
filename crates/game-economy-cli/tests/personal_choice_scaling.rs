@@ -173,6 +173,7 @@ capacity = 10000
                     Place::Person(id),
                     10,
                     vec![Lot {
+                        batch: None,
                         item: None,
                         good: medicine,
                         quantity: 1,
@@ -283,12 +284,14 @@ capacity = 10000
                     10,
                     vec![
                         Lot {
+                            batch: None,
                             item: None,
                             good: grain,
                             quantity: 1,
                             expires_at: None,
                         },
                         Lot {
+                            batch: None,
                             item: Some(1_000_000 + id),
                             good: tool,
                             quantity: 1,
@@ -370,6 +373,7 @@ capacity = 10000
                     Place::Person(id),
                     10,
                     vec![Lot {
+                        batch: None,
                         item: None,
                         good,
                         quantity: 10,
@@ -417,6 +421,7 @@ capacity = 10000
                     Place::Person(id),
                     10,
                     vec![Lot {
+                        batch: None,
                         item: None,
                         good,
                         quantity: 1,

@@ -20,6 +20,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     let inventory = Place::Inventory(1);
     let item = || Lot {
+        batch: None,
         item: None,
         good: 1,
         quantity: 1,
@@ -113,6 +114,7 @@ fn recipes(workers: usize, count: u64, repeats: usize) -> Result<(), Box<dyn std
                 source,
                 count,
                 vec![Lot {
+                    batch: None,
                     item: None,
                     good: 1,
                     quantity: count / 2,
@@ -137,6 +139,7 @@ fn recipes(workers: usize, count: u64, repeats: usize) -> Result<(), Box<dyn std
                 id: count + id,
                 to: destination,
                 lot: Lot {
+                    batch: None,
                     item: None,
                     good: 2,
                     quantity: 1,

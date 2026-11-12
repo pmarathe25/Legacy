@@ -42,12 +42,14 @@ fn personal_work_decisions_use_expiry_aware_projection_and_physical_admission() 
                     1,
                     vec![
                         Lot {
+                            batch: None,
                             item: None,
                             good: 1,
                             quantity: 1,
                             expires_at: Some(1),
                         },
                         Lot {
+                            batch: None,
                             item: None,
                             good: 1,
                             quantity: 1,
@@ -145,6 +147,7 @@ fn fear_can_motivate_cooperation_but_only_actual_transfer_resolves_the_offer() {
                     Place::Person(2),
                     2,
                     vec![Lot {
+                        batch: None,
                         item: None,
                         good: 1,
                         quantity: 1,
@@ -296,6 +299,7 @@ fn promises_do_not_compel_delivery_but_fear_can_change_a_personal_choice() {
                     Place::Person(2),
                     2,
                     vec![Lot {
+                        batch: None,
                         item: None,
                         good: 1,
                         quantity: 1,
@@ -442,6 +446,7 @@ fn many_individual_promises_can_deliver_to_one_busy_recipient() {
             Place::Person(person),
             1,
             vec![Lot {
+                batch: None,
                 item: None,
                 good: 1,
                 quantity: 1,
@@ -556,6 +561,7 @@ fn concentrated_promise_delivery_benchmark() {
             Place::Person(person),
             1,
             vec![Lot {
+                batch: None,
                 item: None,
                 good: 1,
                 quantity: 1,

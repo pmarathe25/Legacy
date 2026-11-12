@@ -479,6 +479,7 @@ mod tests {
             ),
         };
         let lot = |id| game_lots::Lot {
+            batch: None,
             item: Some(id),
             good: 1,
             quantity: 1,

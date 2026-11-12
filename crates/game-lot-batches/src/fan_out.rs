@@ -422,6 +422,7 @@ fn prepare_rows(
                         let quantity = (lot_end.min(end) - lot_offsets[index].max(offset)) as u64;
                         if quantity > 0 {
                             arena.push(Lot {
+                                batch: lot.batch,
                                 item: lot.item,
                                 good: lot.good,
                                 quantity,

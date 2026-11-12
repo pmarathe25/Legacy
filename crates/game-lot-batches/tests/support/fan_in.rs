@@ -7,6 +7,7 @@ fn fixture() -> (State, Vec<Transaction>) {
                 Place::Person(id),
                 10,
                 vec![Lot {
+                    batch: None,
                     item: None,
                     good: 1,
                     quantity: 1,
@@ -94,6 +95,7 @@ fn total_incoming_capacity_is_checked_without_overflow() {
             Place::Person(index as u64 + 1),
             u64::MAX,
             vec![Lot {
+                batch: None,
                 item: None,
                 good: 1,
                 quantity: u64::MAX,
@@ -118,6 +120,7 @@ fn interleaved_but_disjoint_source_and_destination_ranges_are_supported() {
             Place::Person(2000),
             10,
             vec![Lot {
+                batch: None,
                 item: None,
                 good: 1,
                 quantity: 1,

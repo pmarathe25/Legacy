@@ -34,6 +34,7 @@ pub fn prepare(
                 || !movement.from.accepts(movement.good)
                 || creation.id == 0
                 || creation.lot.item.is_some()
+                || creation.lot.batch == Some(0)
                 || creation.lot.quantity == 0
                 || creation.lot.expires_at.is_some()
                 || !creation.to.accepts(creation.lot.good)
@@ -264,12 +265,14 @@ mod tests {
                     10,
                     vec![
                         Lot {
+                            batch: None,
                             good: 1,
                             quantity: 1,
                             item: None,
                             expires_at: Some(10),
                         },
                         Lot {
+                            batch: None,
                             good: 1,
                             quantity: 2,
                             item: None,
@@ -293,6 +296,7 @@ mod tests {
                     id: id * 2,
                     to: Place::JobOutput(id),
                     lot: Lot {
+                        batch: None,
                         good: 2,
                         quantity: if id % 4 == 1 { 5 } else { 1 },
                         item: None,
@@ -307,6 +311,7 @@ mod tests {
                     Place::JobOutput(id),
                     5,
                     vec![Lot {
+                        batch: None,
                         good: 2,
                         quantity: 1,
                         item: None,
@@ -423,6 +428,7 @@ mod tests {
             Place::JobInput(1),
             10,
             vec![Lot {
+                batch: None,
                 good: 1,
                 quantity: 1,
                 item: Some(5),

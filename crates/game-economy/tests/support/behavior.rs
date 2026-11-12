@@ -40,6 +40,7 @@ fn fixture() -> State {
                 vec![]
             } else {
                 vec![Lot {
+                    batch: None,
                     item: None,
                     good,
                     quantity,
@@ -57,6 +58,7 @@ fn fixture() -> State {
                 vec![]
             } else {
                 vec![Lot {
+                    batch: None,
                     item: None,
                     good: 1,
                     quantity,
@@ -692,12 +694,14 @@ fn independent_authors(count: u64) -> State {
                 10,
                 vec![
                     Lot {
+                        batch: None,
                         good: 1,
                         quantity: 1,
                         item: None,
                         expires_at: None,
                     },
                     Lot {
+                        batch: None,
                         good: 2,
                         quantity: 1,
                         item: None,
@@ -1248,6 +1252,7 @@ fn independent_readers(count: u64) -> State {
                 Place::Person(id),
                 10,
                 vec![Lot {
+                    batch: None,
                     good: 3,
                     quantity: 1,
                     item: Some(id),
@@ -2008,6 +2013,7 @@ fn flexible_caregivers_choose_only_local_living_animals() {
         Place::Person(1),
         10,
         vec![Lot {
+            batch: None,
             item: None,
             good: 1,
             quantity: 2,
@@ -4624,12 +4630,14 @@ fn requested_hunting_can_supply_an_individually_chosen_alternative_food() {
         10,
         vec![
             Lot {
+                batch: None,
                 item: None,
                 good: 1,
                 quantity: 1,
                 expires_at: Some(10),
             },
             Lot {
+                batch: None,
                 item: None,
                 good: 3,
                 quantity: 1,
@@ -4867,6 +4875,7 @@ fn hunting_needs_capacity_and_yields_to_animal_feeding() {
         Place::Person(1),
         10,
         vec![Lot {
+            batch: None,
             item: None,
             good: 1,
             quantity: 10,
@@ -5397,6 +5406,7 @@ fn local_store_fixture() -> State {
             Place::Inventory(1),
             10,
             vec![Lot {
+                batch: None,
                 item: None,
                 good: 3,
                 quantity: 2,
@@ -5792,12 +5802,14 @@ fn a_person_can_repair_carried_tools_at_a_store() {
         holder.capacity,
         vec![
             Lot {
+                batch: None,
                 item: None,
                 good: 2,
                 quantity: 1,
                 expires_at: None,
             },
             Lot {
+                batch: None,
                 item: Some(88),
                 good: 3,
                 quantity: 1,
@@ -5907,6 +5919,7 @@ fn a_person_can_treat_their_wound_at_a_store() {
         holder.place,
         holder.capacity,
         vec![Lot {
+            batch: None,
             item: None,
             good: 2,
             quantity: 1,
@@ -5998,6 +6011,7 @@ fn wound_care_requires_the_patient_at_the_same_local_endpoint() {
         holder.place,
         holder.capacity,
         vec![Lot {
+            batch: None,
             item: None,
             good: 2,
             quantity: 1,
@@ -6106,6 +6120,7 @@ fn a_person_can_take_carried_medicine_at_a_store() {
         holder.place,
         holder.capacity,
         vec![Lot {
+            batch: None,
             item: None,
             good: 2,
             quantity: 1,
@@ -6245,6 +6260,7 @@ fn a_person_at_a_store_can_ask_without_compelling_a_gift() {
             holder.capacity,
             if person == 2 {
                 vec![Lot {
+                    batch: None,
                     item: None,
                     good: 1,
                     quantity: 1,
@@ -6616,6 +6632,7 @@ fn distant_store_food_is_not_acquired_without_being_there() {
         store.place,
         store.capacity,
         vec![Lot {
+            batch: None,
             item: None,
             good: 1,
             quantity: 2,
@@ -6661,6 +6678,7 @@ fn hungry_people_can_take_visible_food_at_their_local_store() {
         stock.place,
         stock.capacity,
         vec![Lot {
+            batch: None,
             item: None,
             good: 1,
             quantity: 2,
@@ -6679,6 +6697,7 @@ fn hungry_people_can_take_visible_food_at_their_local_store() {
         store.place,
         store.capacity,
         vec![Lot {
+            batch: None,
             item: None,
             good: 1,
             quantity: 1,
@@ -6776,6 +6795,7 @@ fn hungry_people_can_visit_a_known_store_without_knowing_its_food() {
                     source.capacity,
                     if stocked {
                         vec![Lot {
+                            batch: None,
                             item: None,
                             good: 1,
                             quantity: 1,
@@ -6882,6 +6902,7 @@ fn a_food_visit_respects_hunger_and_food_at_hand() {
         stock.place,
         stock.capacity,
         vec![Lot {
+            batch: None,
             item: None,
             good: 1,
             quantity: 1,
@@ -6926,6 +6947,7 @@ fn a_food_visit_respects_hunger_and_food_at_hand() {
         store.place,
         store.capacity,
         vec![Lot {
+            batch: None,
             item: None,
             good: 1,
             quantity: 1,
@@ -6975,6 +6997,7 @@ fn a_person_can_choose_to_visit_and_discover_food_without_a_carrying_task() {
         store.place,
         store.capacity,
         vec![Lot {
+            batch: None,
             item: None,
             good: 1,
             quantity: 1,
@@ -7118,6 +7141,7 @@ fn an_unreachable_visit_does_not_prevent_seeking_local_food() {
         stock.place,
         stock.capacity,
         vec![Lot {
+            batch: None,
             item: None,
             good: 1,
             quantity: 1,
@@ -7210,6 +7234,7 @@ fn hungry_people_can_choose_food_from_named_local_custody() {
         Place::Inventory(1),
         10,
         vec![Lot {
+            batch: None,
             item: None,
             good: 1,
             quantity: 2,
@@ -7410,6 +7435,7 @@ fn local_delivery_makes_real_inputs_available_for_later_work() {
         source.place,
         source.capacity,
         vec![Lot {
+            batch: None,
             item: None,
             good: 2,
             quantity: 1,
@@ -7496,6 +7522,7 @@ fn a_person_fetches_observed_local_inputs_for_their_own_work_goal() {
         source.place,
         source.capacity,
         vec![Lot {
+            batch: None,
             item: None,
             good: 2,
             quantity: 1,
@@ -7645,6 +7672,7 @@ fn goal_fetch_at_a_store_does_not_depend_on_remote_stock() {
         source.place,
         source.capacity,
         vec![Lot {
+            batch: None,
             item: None,
             good: 2,
             quantity: 1,
@@ -7668,6 +7696,7 @@ fn goal_fetch_at_a_store_does_not_depend_on_remote_stock() {
                 vec![]
             } else {
                 vec![Lot {
+                    batch: None,
                     item: None,
                     good: 2,
                     quantity: remote_quantity,
@@ -7789,6 +7818,7 @@ fn a_person_can_visit_fetch_return_and_complete_a_work_goal() {
         source.place,
         source.capacity,
         vec![Lot {
+            batch: None,
             item: None,
             good: 2,
             quantity: 1,
@@ -7899,6 +7929,7 @@ fn personal_goal_search_fixture(stocked: bool) -> State {
         source.capacity,
         if stocked {
             vec![Lot {
+                batch: None,
                 item: None,
                 good: 2,
                 quantity: 1,
@@ -7941,6 +7972,7 @@ fn multi_store_goal_search_fixture(stocked: bool) -> State {
         source.capacity,
         if stocked {
             vec![Lot {
+                batch: None,
                 item: None,
                 good: 2,
                 quantity: 1,
@@ -8273,6 +8305,7 @@ fn a_ready_local_carrying_choice_takes_priority_over_goal_search() {
         stock.place,
         stock.capacity,
         vec![Lot {
+            batch: None,
             item: None,
             good: 3,
             quantity: 1,
@@ -8335,6 +8368,7 @@ fn a_ready_local_carrying_choice_takes_priority_over_goal_return() {
         source.place,
         source.capacity,
         vec![Lot {
+            batch: None,
             item: None,
             good: 3,
             quantity: 1,
@@ -8353,6 +8387,7 @@ fn a_ready_local_carrying_choice_takes_priority_over_goal_return() {
         holder.place,
         holder.capacity,
         vec![Lot {
+            batch: None,
             item: None,
             good: 2,
             quantity: 1,
@@ -8387,6 +8422,7 @@ fn goal_search_does_not_preempt_depositing_a_carried_input() {
         holder.place,
         holder.capacity,
         vec![Lot {
+            batch: None,
             item: None,
             good: 2,
             quantity: 1,
@@ -8640,6 +8676,7 @@ fn goal_fetching_finds_inputs_for_a_real_production_chain() {
         source.place,
         source.capacity,
         vec![Lot {
+            batch: None,
             item: None,
             good: 3,
             quantity: 1,
@@ -8755,6 +8792,7 @@ fn local_store_actions_respect_location_capacity_and_expiry() {
         source.place,
         source.capacity,
         vec![Lot {
+            batch: None,
             item: None,
             good: 3,
             quantity: 1,
@@ -8811,6 +8849,7 @@ fn concentrated_local_carrying(count: u64) -> State {
             Place::Inventory(1),
             count,
             vec![Lot {
+                batch: None,
                 item: None,
                 good: 2,
                 quantity: count / 8,
@@ -8987,6 +9026,7 @@ fn concentrated_chain_fetching(count: u64) -> State {
         source.place,
         source.capacity,
         vec![Lot {
+            batch: None,
             item: None,
             good: 3,
             quantity: count / 8,
@@ -10010,6 +10050,7 @@ fn travelers_eat_only_their_own_unexpired_supplies_while_the_journey_advances() 
         holder.place,
         holder.capacity,
         vec![Lot {
+            batch: None,
             item: None,
             good: 1,
             quantity: 1,
@@ -10206,6 +10247,7 @@ fn companions_share_supplies_and_provide_care_on_the_same_journey() {
         holder.place,
         holder.capacity,
         vec![Lot {
+            batch: None,
             item: None,
             good: 2,
             quantity: 1,
@@ -10926,6 +10968,7 @@ fn hungry_person_can_ask_a_met_acquaintance_who_remains_free_to_refuse() {
                 vec![]
             } else {
                 vec![Lot {
+                    batch: None,
                     item: None,
                     good: 1,
                     quantity,
@@ -11365,6 +11408,7 @@ fn automatic_treatment_without_a_threshold_uses_visible_health_not_hidden_infect
         Place::Person(1),
         10,
         vec![Lot {
+            batch: None,
             item: None,
             good: 2,
             quantity: 1,
@@ -11513,6 +11557,7 @@ fn self_treatment_requires_personal_choice_and_actual_unexpired_medicine() {
         Place::Person(1),
         10,
         vec![Lot {
+            batch: None,
             item: None,
             good: 2,
             quantity: 2,
@@ -11632,6 +11677,7 @@ fn self_treatment_can_be_wrong_without_revealing_hidden_infection() {
         holder.place,
         10,
         vec![Lot {
+            batch: None,
             item: None,
             good: 2,
             quantity: 1,
@@ -11748,6 +11794,7 @@ fn controlled_treatment_consumes_only_unexpired_medicine() {
         Place::Person(1),
         10,
         vec![Lot {
+            batch: None,
             item: None,
             good: 2,
             quantity: 2,
@@ -11827,6 +11874,7 @@ fn controlled_treatment_consumes_only_unexpired_medicine() {
         Place::Person(1),
         10,
         vec![Lot {
+            batch: None,
             item: None,
             good: 2,
             quantity: 2,
@@ -11873,6 +11921,7 @@ fn a_caregiver_treats_with_real_medicine_and_can_catch_the_illness() {
         holder.place,
         holder.capacity,
         vec![Lot {
+            batch: None,
             item: None,
             good: 2,
             quantity: 2,
@@ -11948,6 +11997,7 @@ fn a_caregiver_treats_with_real_medicine_and_can_catch_the_illness() {
         holder.place,
         holder.capacity,
         vec![Lot {
+            batch: None,
             item: None,
             good: 3,
             quantity: 1,
@@ -12035,6 +12085,7 @@ fn a_caregiver_treats_with_real_medicine_and_can_catch_the_illness() {
         holder.place,
         holder.capacity,
         vec![Lot {
+            batch: None,
             item: None,
             good: 2,
             quantity: 2,
@@ -12085,6 +12136,7 @@ fn fear_can_motivate_a_caregiver_and_their_preference_can_change() {
         holder.place,
         holder.capacity,
         vec![Lot {
+            batch: None,
             item: None,
             good: 2,
             quantity: 1,
@@ -12187,6 +12239,7 @@ fn medical_workload(count: u64) -> State {
                 vec![]
             } else {
                 vec![Lot {
+                    batch: None,
                     item: None,
                     good: 2,
                     quantity: 1,
@@ -12531,6 +12584,7 @@ fn a_controlled_patient_can_rest_during_care_but_not_give_at_the_same_time() {
         holder.place,
         holder.capacity,
         vec![Lot {
+            batch: None,
             item: None,
             good: 3,
             quantity: 1,
@@ -12998,6 +13052,7 @@ fn conflicting_claims_are_personal_and_observed_only_after_actual_use() {
         Place::Stock { region: 1, good: 1 },
         10,
         vec![Lot {
+            batch: None,
             item: None,
             good: 1,
             quantity: 2,
@@ -13190,6 +13245,7 @@ fn hunger_can_change_one_persons_claim_choice_after_open_food_is_considered() {
         stock.place,
         stock.capacity,
         vec![Lot {
+            batch: None,
             item: None,
             good: 1,
             quantity: 2,
@@ -13235,6 +13291,7 @@ fn hunger_can_change_one_persons_claim_choice_after_open_food_is_considered() {
             Place::Stock { region: 1, good: 4 },
             10,
             vec![Lot {
+                batch: None,
                 item: None,
                 good: 4,
                 quantity: 1,
@@ -13576,6 +13633,7 @@ fn caregiver_can_choose_to_use_claimed_food_for_a_dependent() {
         Place::Stock { region: 1, good: 1 },
         10,
         vec![Lot {
+            batch: None,
             item: None,
             good: 1,
             quantity: 1,
@@ -14960,6 +15018,7 @@ fn hauling_respects_claims_and_does_not_deliver_spoiled_cargo() {
         stock.place,
         stock.capacity,
         vec![Lot {
+            batch: None,
             item: None,
             good: 1,
             quantity: 1,
@@ -15484,6 +15543,7 @@ fn travelers_can_obtain_delivery_goods_from_a_local_named_store() {
                 Place::Inventory(id),
                 10,
                 vec![Lot {
+                    batch: None,
                     item: None,
                     good: 2,
                     quantity: 3,
@@ -15632,6 +15692,7 @@ fn travelers_choose_a_known_store_for_missing_expedition_supplies() {
                         10,
                         if stocked {
                             vec![Lot {
+                                batch: None,
                                 item: None,
                                 good: 2,
                                 quantity: 2,
@@ -15879,6 +15940,7 @@ fn autonomous_delivery_remains_a_personal_choice_with_reserves_and_pressure() {
         Place::Person(1),
         10,
         vec![Lot {
+            batch: None,
             item: None,
             good: 2,
             quantity: 3,
@@ -16050,6 +16112,7 @@ fn expedition_delivery_counts_actual_gifts_and_preserves_partial_progress() {
         Place::Person(1),
         10,
         vec![Lot {
+            batch: None,
             item: None,
             good: 2,
             quantity: 4,
@@ -16777,6 +16840,7 @@ fn birth_preserves_all_prior_maternal_strains_during_treatment() {
                     .unwrap();
                 let mut lots = holder.lots.clone();
                 lots.push(Lot {
+                    batch: None,
                     good: 2,
                     quantity: 1,
                     item: None,
@@ -18604,6 +18668,7 @@ fn captives_can_request_food_through_a_physical_opening() {
         Place::Person(2),
         10,
         vec![Lot {
+            batch: None,
             item: None,
             good: 2,
             quantity: 1,
@@ -18678,6 +18743,7 @@ fn captives_can_request_food_through_a_physical_opening() {
         Place::Person(3),
         10,
         vec![Lot {
+            batch: None,
             item: None,
             good: 1,
             quantity: 1,
@@ -18932,6 +18998,7 @@ fn a_barrier_prevents_in_person_dependent_care() {
         stock.place,
         stock.capacity,
         vec![Lot {
+            batch: None,
             item: None,
             good: 1,
             quantity: 1,
@@ -20187,6 +20254,7 @@ fn a_child_eating_is_not_also_treated_or_meeting() {
         Place::Person(1),
         10,
         vec![Lot {
+            batch: None,
             item: None,
             good: 1,
             quantity: 1,
@@ -20712,6 +20780,7 @@ fn a_physical_opening_allows_real_supplies_to_reach_a_captive() {
         Place::Person(3),
         10,
         vec![Lot {
+            batch: None,
             item: None,
             good: 1,
             quantity: 1,
@@ -20958,6 +21027,7 @@ fn conscious_capture_reflects_resistance_yield_force_and_felt_pressure() {
         holder.place,
         holder.capacity,
         vec![Lot {
+            batch: None,
             item: None,
             good: 1,
             quantity: 1,
@@ -21896,6 +21966,7 @@ fn immortal_person_recovers_in_place_without_mortal_death_or_metabolism() {
             Place::Person(5),
             10,
             vec![Lot {
+                batch: None,
                 item: None,
                 good: 1,
                 quantity: 1,
@@ -22615,6 +22686,7 @@ fn controlled_and_autonomous_work_share_the_same_contested_inputs() {
         stock.place,
         10,
         vec![Lot {
+            batch: None,
             item: None,
             good: 2,
             quantity: 1,
@@ -22692,6 +22764,7 @@ fn controlled_meal_consumes_carried_food_and_applies_delayed_effects() {
         Place::Person(1),
         10,
         vec![Lot {
+            batch: None,
             item: None,
             good: 1,
             quantity: 1,
@@ -23769,6 +23842,7 @@ fn autonomous_acquisition_workload(count: u64, available: u64) -> State {
                         vec![]
                     } else {
                         vec![Lot {
+                            batch: None,
                             item: None,
                             good: 2,
                             quantity: available,
@@ -23823,6 +23897,7 @@ fn use_named_acquisition_store(state: &mut State, available: u64) {
                 vec![]
             } else {
                 vec![Lot {
+                    batch: None,
                     item: None,
                     good: 2,
                     quantity: available,
@@ -24030,6 +24105,7 @@ fn traveler_delivers_at_a_store_when_recipient_is_already_there() {
         holder.place,
         holder.capacity,
         vec![Lot {
+            batch: None,
             item: None,
             good: 2,
             quantity: 1,
@@ -24411,6 +24487,7 @@ fn a_traveler_may_return_with_supplies_due_to_personal_fear() {
         holder.place,
         holder.capacity,
         vec![Lot {
+            batch: None,
             item: None,
             good: 2,
             quantity: 1,
@@ -24601,6 +24678,7 @@ fn autonomous_delivery_workload(count: u64) -> State {
                 count + 1,
                 if person <= count {
                     vec![Lot {
+                        batch: None,
                         item: None,
                         good: 2,
                         quantity: 1,
@@ -24764,6 +24842,7 @@ fn claim_workload(count: u64) -> State {
                 container.place,
                 count * 2,
                 vec![Lot {
+                    batch: None,
                     item: None,
                     good: 1,
                     quantity: count / 2,
@@ -25348,6 +25427,7 @@ fn concentrated_disease_benchmark() {
                     holder.place,
                     holder.capacity,
                     vec![Lot {
+                        batch: None,
                         item: None,
                         good: 2,
                         quantity: 1,
@@ -25981,6 +26061,7 @@ fn controlled_person_can_offer_unbacked_work_terms_and_ask_for_the_work() {
                 Place::Person(1),
                 10,
                 vec![Lot {
+                    batch: None,
                     item: None,
                     good: 1,
                     quantity: 1,
@@ -26213,6 +26294,7 @@ fn controlled_person_can_offer_unbacked_work_terms_and_ask_for_the_work() {
         Place::Person(1),
         10,
         vec![Lot {
+            batch: None,
             item: None,
             good: 1,
             quantity: 3,
@@ -26442,6 +26524,7 @@ fn witnessed_work_and_a_real_gift_can_inspire_a_personal_work_proposal() {
         Place::Person(1),
         10,
         vec![Lot {
+            batch: None,
             item: None,
             good: 1,
             quantity: 2,
@@ -26591,6 +26674,7 @@ fn witnessed_work_and_a_real_gift_can_inspire_a_personal_work_proposal() {
         Place::Person(1),
         10,
         vec![Lot {
+            batch: None,
             item: None,
             good: 2,
             quantity: 1,
@@ -26886,6 +26970,7 @@ fn witnessed_work_and_a_real_gift_can_inspire_a_personal_work_proposal() {
                     Place::Person(1),
                     10,
                     vec![Lot {
+                        batch: None,
                         item: None,
                         good: 2,
                         quantity: 1,
@@ -27092,6 +27177,7 @@ fn people_invent_and_independently_act_on_a_conditional_food_practice() {
                 holder.place,
                 10,
                 vec![Lot {
+                    batch: None,
                     item: None,
                     good: 1,
                     quantity: 6,
@@ -27202,6 +27288,7 @@ fn people_invent_and_independently_act_on_a_conditional_food_practice() {
                         holder.place,
                         10,
                         vec![Lot {
+                            batch: None,
                             item: None,
                             good: 1,
                             quantity: 3,
@@ -27560,6 +27647,7 @@ fn people_invent_and_independently_act_on_a_conditional_food_practice() {
         holder.place,
         10,
         vec![Lot {
+            batch: None,
             item: None,
             good: 1,
             quantity: 3,
@@ -27980,6 +28068,7 @@ fn controlled_person_can_give_without_a_promise_and_only_real_delivery_counts() 
         source.place,
         source.capacity,
         vec![Lot {
+            batch: None,
             item: None,
             good: 1,
             quantity: 1,
@@ -28014,6 +28103,7 @@ fn giving_workload(count: u64) -> State {
                 vec![]
             } else {
                 vec![Lot {
+                    batch: None,
                     item: None,
                     good: 1,
                     quantity: 1,
@@ -28350,6 +28440,7 @@ fn an_unanswered_food_request_leads_to_another_known_person() {
         holder.place,
         holder.capacity,
         vec![Lot {
+            batch: None,
             item: None,
             good: 1,
             quantity: 1,
@@ -28518,6 +28609,7 @@ fn food_response_workload(count: u64) -> State {
         holder.place,
         holder.capacity,
         vec![Lot {
+            batch: None,
             item: None,
             good: 1,
             quantity: 2,
@@ -28656,6 +28748,7 @@ fn giving_nonfood_does_not_satisfy_a_food_request() {
         holder.place,
         holder.capacity,
         vec![Lot {
+            batch: None,
             item: None,
             good: 3,
             quantity: 1,
@@ -28896,6 +28989,7 @@ fn hungry_people_compete_for_local_food_and_eat_only_after_receiving_it() {
         Place::Stock { region: 1, good: 1 },
         10,
         vec![Lot {
+            batch: None,
             item: None,
             good: 1,
             quantity: 1,
@@ -28974,6 +29068,7 @@ fn journeys_keep_possessions_and_expiry_and_resume_without_teleporting() {
         Place::Person(1),
         10,
         vec![Lot {
+            batch: None,
             item: None,
             good: 1,
             quantity: 1,
@@ -29192,6 +29287,7 @@ fn hungry_person_travels_on_their_own_stale_report_and_learns_on_arrival() {
         remote.place,
         remote.capacity,
         vec![Lot {
+            batch: None,
             item: None,
             good: 1,
             quantity: 5,
@@ -30121,6 +30217,7 @@ fn food_search_follows_multiple_legs_and_remembers_its_personal_destination() {
             Place::Stock { region: 3, good: 1 },
             10,
             vec![Lot {
+                batch: None,
                 item: None,
                 good: 1,
                 quantity: 4,
@@ -30312,6 +30409,7 @@ fn newborn_gets_custody_in_the_same_generation_as_contested_food() {
         Place::Stock { region: 1, good: 1 },
         10,
         vec![Lot {
+            batch: None,
             item: None,
             good: 1,
             quantity: 1,
@@ -31374,6 +31472,7 @@ fn wound_treatment_requires_real_medicine_and_no_disease() {
                     10,
                     if medicine {
                         vec![Lot {
+                            batch: None,
                             item: None,
                             good: 2,
                             quantity: 1,
@@ -31458,6 +31557,7 @@ fn a_person_can_treat_their_own_wound_with_carried_medicine() {
                     10,
                     if medicine {
                         vec![Lot {
+                            batch: None,
                             item: None,
                             good: 2,
                             quantity: 1,
@@ -31571,6 +31671,7 @@ fn an_autonomous_person_can_choose_to_treat_their_own_wound() {
                     10,
                     if medicine {
                         vec![Lot {
+                            batch: None,
                             item: None,
                             good: 2,
                             quantity: 2,
@@ -31669,6 +31770,7 @@ fn self_care_and_external_care_compete_for_one_persons_time() {
             Place::Person(person),
             10,
             vec![Lot {
+                batch: None,
                 item: None,
                 good: 2,
                 quantity: 1,
@@ -31766,6 +31868,7 @@ fn personal_fear_can_motivate_self_care_without_willingness() {
         Place::Person(3),
         10,
         vec![Lot {
+            batch: None,
             item: None,
             good: 2,
             quantity: 1,
@@ -31842,6 +31945,7 @@ fn autonomous_wound_care_benchmark() {
                 holder.place,
                 holder.capacity,
                 vec![Lot {
+                    batch: None,
                     item: None,
                     good: 2,
                     quantity: 1,
@@ -32120,6 +32224,7 @@ fn treatment_can_reach_a_worker_whose_wound_has_paused_their_job() {
         Place::Person(1),
         10,
         vec![Lot {
+            batch: None,
             item: None,
             good: 2,
             quantity: 1,
@@ -34318,6 +34423,7 @@ fn carried_protection_reduces_actual_strikes_and_survives_reload() {
         holder.place,
         holder.capacity,
         vec![Lot {
+            batch: None,
             item: None,
             good: 3,
             quantity: 1,
@@ -34393,6 +34499,7 @@ fn carried_weapon_and_protection_change_the_real_attributed_strike() {
             holder.place,
             holder.capacity,
             vec![Lot {
+                batch: None,
                 item: None,
                 good,
                 quantity: 1,
@@ -34507,6 +34614,7 @@ fn an_immortal_can_be_incapacitated_in_ordinary_combat_and_recover() {
             Place::Person(5),
             10,
             vec![Lot {
+                batch: None,
                 item: None,
                 good: 1,
                 quantity: 1,
@@ -35198,6 +35306,7 @@ fn concentrated_protected_combat(count: u64) -> State {
         holder.place,
         holder.capacity,
         vec![Lot {
+            batch: None,
             item: None,
             good: 3,
             quantity: 1,
@@ -35241,6 +35350,7 @@ fn mixed_weapon_combat(count: u64) -> State {
                 holder.place,
                 holder.capacity,
                 vec![Lot {
+                    batch: None,
                     item: None,
                     good: 2,
                     quantity: 1,
@@ -35800,6 +35910,7 @@ fn concentrated(count: u64) -> State {
                 vec![]
             } else {
                 vec![Lot {
+                    batch: None,
                     item: None,
                     good,
                     quantity,
@@ -35816,6 +35927,7 @@ fn concentrated(count: u64) -> State {
             10,
             if id <= count / 2 {
                 vec![Lot {
+                    batch: None,
                     item: None,
                     good: 1,
                     quantity: 1,
@@ -35873,6 +35985,7 @@ fn named_food_workload(count: u64, available: u64, stores: u64) -> State {
                     vec![]
                 } else {
                     vec![Lot {
+                        batch: None,
                         item: None,
                         good: 1,
                         quantity,
@@ -36071,6 +36184,7 @@ fn field_workload(count: u64) -> State {
         stock.place,
         count * 2,
         vec![Lot {
+            batch: None,
             item: None,
             good: 2,
             quantity: count / 2,
@@ -36542,6 +36656,7 @@ fn gathering_depletes_real_sites_only_when_storage_accepts_the_output() {
         stock.place,
         10,
         vec![Lot {
+            batch: None,
             item: None,
             good: 2,
             quantity: 9,
@@ -36621,6 +36736,7 @@ fn gathered_outputs_become_personal_claims_only_after_real_delivery() {
         stock.place,
         10,
         vec![Lot {
+            batch: None,
             item: None,
             good: 2,
             quantity: 10,
@@ -37006,6 +37122,7 @@ fn travel_exhaustion_can_kill_a_traveler_and_leave_their_possessions() {
         holder.place,
         holder.capacity,
         vec![Lot {
+            batch: None,
             item: None,
             good: 2,
             quantity: 1,
@@ -37697,6 +37814,7 @@ fn cultivation_requests_follow_personal_choices_and_real_seed_receipts() {
         stock.place,
         8,
         vec![Lot {
+            batch: None,
             item: None,
             good: 2,
             quantity: 1,
@@ -39205,6 +39323,7 @@ fn soil_fertility_changes_real_harvests_and_recovers_while_fallow() {
         stock.place,
         5,
         vec![Lot {
+            batch: None,
             item: None,
             good: 3,
             quantity: 5,
@@ -40303,6 +40422,7 @@ fn concentrated_field_benchmark() {
             stock.place,
             count * 2,
             vec![Lot {
+                batch: None,
                 item: None,
                 good: 2,
                 quantity: count / 4,
@@ -42141,6 +42261,7 @@ fn personal_reports_preserve_observation_time_and_respect_directed_trust() {
         place,
         10,
         vec![Lot {
+            batch: None,
             item: None,
             good: 1,
             quantity: 3,
@@ -42585,12 +42706,14 @@ fn a_written_claim_can_guide_travel_and_receive_subjective_discrepancy_reactions
         holder.capacity,
         vec![
             Lot {
+                batch: None,
                 good: 1,
                 quantity: 1,
                 item: None,
                 expires_at: None,
             },
             Lot {
+                batch: None,
                 good: 2,
                 quantity: 1,
                 item: None,
@@ -43066,6 +43189,7 @@ fn food_responses_use_each_persons_signed_affinity_motives_and_preferences() {
                 container.place,
                 10,
                 vec![Lot {
+                    batch: None,
                     item: None,
                     good: 1,
                     quantity: 1,
@@ -43215,12 +43339,14 @@ fn actual_food_help_can_motivate_a_revocable_promise_without_creating_debt() {
         holder.capacity,
         vec![
             Lot {
+                batch: None,
                 item: None,
                 good: 1,
                 quantity: 2,
                 expires_at: None,
             },
             Lot {
+                batch: None,
                 item: None,
                 good: 3,
                 quantity: 1,
@@ -43773,12 +43899,14 @@ fn personal_sharing_value_grows_from_real_food_received_and_can_be_abandoned() {
         holder.capacity,
         vec![
             Lot {
+                batch: None,
                 item: None,
                 good: 1,
                 quantity: 2,
                 expires_at: None,
             },
             Lot {
+                batch: None,
                 item: None,
                 good: 3,
                 quantity: 1,
@@ -44082,6 +44210,7 @@ fn people_can_invent_a_reciprocal_offer_from_their_own_experience() {
         held.place,
         held.capacity,
         vec![Lot {
+            batch: None,
             item: None,
             good: 1,
             quantity: 1,
@@ -44252,6 +44381,7 @@ fn hungry_person_constructs_a_request_to_someone_who_actually_helped_them() {
         holder.place,
         holder.capacity,
         vec![Lot {
+            batch: None,
             item: None,
             good: 1,
             quantity: 2,
@@ -44535,6 +44665,7 @@ fn an_actual_nonfood_gift_can_affect_affinity_without_creating_food_obligation()
         holder.place,
         holder.capacity,
         vec![Lot {
+            batch: None,
             item: None,
             good: 3,
             quantity: 1,
@@ -44857,6 +44988,7 @@ fn a_person_may_feel_no_obligation_and_still_cooperate_out_of_fear() {
         holder.place,
         holder.capacity,
         vec![Lot {
+            batch: None,
             item: None,
             good: 1,
             quantity: 2,
@@ -45861,6 +45993,7 @@ fn autonomous_promise_offers_can_be_refused_accepted_and_later_broken() {
         holder.place,
         holder.capacity,
         vec![Lot {
+            batch: None,
             item: None,
             good: 1,
             quantity: 1,
@@ -48576,6 +48709,7 @@ fn reusable_tools_gate_work_without_blocking_an_equipped_competitor() {
         stock.place,
         stock.capacity,
         vec![Lot {
+            batch: None,
             item: None,
             good: 2,
             quantity: 1,
@@ -48594,6 +48728,7 @@ fn reusable_tools_gate_work_without_blocking_an_equipped_competitor() {
         holder.place,
         holder.capacity,
         vec![Lot {
+            batch: None,
             item: None,
             good: 3,
             quantity: 1,
@@ -48678,6 +48813,7 @@ fn work_pauses_when_a_carried_tool_expires_and_resumes_after_actual_replacement(
         holder.place,
         holder.capacity,
         vec![Lot {
+            batch: None,
             item: None,
             good: 3,
             quantity: 1,
@@ -48696,6 +48832,7 @@ fn work_pauses_when_a_carried_tool_expires_and_resumes_after_actual_replacement(
         spare.place,
         spare.capacity,
         vec![Lot {
+            batch: None,
             item: None,
             good: 3,
             quantity: 1,
@@ -48785,6 +48922,7 @@ fn concentrated_tool_workload(count: u64) -> State {
                 holder.place,
                 holder.capacity,
                 vec![Lot {
+                    batch: None,
                     item: None,
                     good: 3,
                     quantity: 1,
@@ -48876,6 +49014,7 @@ fn autonomous_workers_obtain_tools_from_real_stock_and_respect_personal_claims()
         stock.place,
         stock.capacity,
         vec![Lot {
+            batch: None,
             item: None,
             good: 3,
             quantity: 1,
@@ -49026,6 +49165,7 @@ fn tool_pickup_and_gathering_share_one_physical_boundary() {
         stock.place,
         stock.capacity,
         vec![Lot {
+            batch: None,
             item: None,
             good: 3,
             quantity: 1,
@@ -49100,6 +49240,7 @@ fn concentrated_tool_pickups(count: u64) -> State {
         stock.place,
         stock.capacity,
         vec![Lot {
+            batch: None,
             item: None,
             good: 3,
             quantity: count / 8,
@@ -49203,6 +49344,7 @@ fn an_autonomous_worker_replaces_an_expired_tool_only_if_they_continue() {
             holder.place,
             holder.capacity,
             vec![Lot {
+                batch: None,
                 item: None,
                 good: 3,
                 quantity: 1,
@@ -49346,6 +49488,7 @@ fn fear_can_motivate_a_worker_to_replace_a_tool_without_general_willingness() {
             container.place,
             container.capacity,
             vec![Lot {
+                batch: None,
                 item: None,
                 good: 3,
                 quantity: 1,
@@ -49525,6 +49668,7 @@ fn fear_can_motivate_fetching_a_tool_for_requested_work_without_consent() {
         stock.place,
         stock.capacity,
         vec![Lot {
+            batch: None,
             item: None,
             good: 3,
             quantity: 1,
@@ -49644,6 +49788,7 @@ fn a_person_can_fetch_a_tool_for_their_own_work_goal() {
         stock.place,
         stock.capacity,
         vec![Lot {
+            batch: None,
             item: None,
             good: 3,
             quantity: 1,
@@ -49760,6 +49905,7 @@ fn goal_input_planning_gets_the_tool_for_the_selected_prerequisite() {
             vec![]
         } else {
             vec![Lot {
+                batch: None,
                 item: None,
                 good,
                 quantity,
@@ -50019,6 +50165,7 @@ fn denied_physical_starts_do_not_occupy_work_sites() {
         stock.place,
         stock.capacity,
         vec![Lot {
+            batch: None,
             item: None,
             good: 2,
             quantity: 1,
@@ -50070,6 +50217,7 @@ fn multiple_work_sites_enforce_capacity_and_validate_saved_bindings() {
         stock.place,
         stock.capacity,
         vec![Lot {
+            batch: None,
             item: None,
             good: 2,
             quantity: 4,
@@ -50182,6 +50330,7 @@ fn concentrated_site_refill(count: u64) -> State {
         stock.place,
         stock.capacity,
         vec![Lot {
+            batch: None,
             item: None,
             good: 1,
             quantity: count,
@@ -50635,6 +50784,7 @@ fn site_capacity_is_reconsidered_after_virtual_material_contention() {
             stock.place,
             stock.capacity,
             vec![Lot {
+                batch: None,
                 item: None,
                 good,
                 quantity: 1,
@@ -50781,6 +50931,7 @@ fn physical_work_sites_match_local_region_and_recipe_kind() {
         stock.place,
         stock.capacity,
         vec![Lot {
+            batch: None,
             item: None,
             good: 2,
             quantity: 1,
@@ -50929,6 +51080,7 @@ fn construction_fixture() -> State {
         stock.place,
         stock.capacity,
         vec![Lot {
+            batch: None,
             item: None,
             good: 3,
             quantity: 1,
@@ -50960,6 +51112,7 @@ fn claimed_work_sites_fixture() -> State {
         stock.place,
         stock.capacity,
         vec![Lot {
+            batch: None,
             item: None,
             good: 2,
             quantity: 3,
@@ -51914,6 +52067,7 @@ fn a_person_plans_a_tool_and_kit_before_building_for_their_work_goal() {
         tools.place,
         tools.capacity,
         vec![Lot {
+            batch: None,
             item: None,
             good: 1,
             quantity: 1,
@@ -52018,6 +52172,7 @@ fn a_person_builds_an_intermediate_site_to_make_their_goal_site_kit() {
         materials.place,
         materials.capacity,
         vec![Lot {
+            batch: None,
             item: None,
             good: 2,
             quantity: 3,
@@ -52232,6 +52387,7 @@ fn a_goal_plan_can_build_two_layers_of_intermediate_sites() {
         stock.place,
         stock.capacity,
         vec![Lot {
+            batch: None,
             item: None,
             good: 2,
             quantity: 4,
@@ -52585,12 +52741,14 @@ fn site_materials_keep_real_cohorts_after_building_and_destruction() {
         stock.capacity,
         vec![
             Lot {
+                batch: None,
                 item: None,
                 good: 3,
                 quantity: 1,
                 expires_at: Some(10),
             },
             Lot {
+                batch: None,
                 item: None,
                 good: 3,
                 quantity: 1,
@@ -52619,6 +52777,7 @@ fn site_materials_keep_real_cohorts_after_building_and_destruction() {
                     assert_eq!(
                         material.lots,
                         vec![Lot {
+                            batch: None,
                             item: None,
                             good: 3,
                             quantity: 1,
@@ -52911,6 +53070,7 @@ fn witnessed_salvage_changes_affinity_only_as_each_claimant_interprets_it() {
                         holder.place,
                         holder.capacity,
                         vec![Lot {
+                            batch: None,
                             item: None,
                             good: 1,
                             quantity: holder.capacity,
@@ -53009,6 +53169,7 @@ fn expired_site_material_cannot_be_recovered() {
         stock.place,
         stock.capacity,
         vec![Lot {
+            batch: None,
             item: None,
             good: 3,
             quantity: 1,
@@ -53521,6 +53682,7 @@ fn concentrated_site_construction(count: u64) -> State {
         stock.place,
         stock.capacity,
         vec![Lot {
+            batch: None,
             item: None,
             good: 2,
             quantity: count / 8,
@@ -53563,6 +53725,7 @@ fn concentrated_site_salvage(count: u64) -> State {
         stock.place,
         stock.capacity,
         vec![Lot {
+            batch: None,
             item: None,
             good: 2,
             quantity: count / 8 - 1,
@@ -53575,6 +53738,7 @@ fn concentrated_site_salvage(count: u64) -> State {
             Place::Site(1),
             1,
             vec![Lot {
+                batch: None,
                 item: None,
                 good: 2,
                 quantity: 1,
@@ -54261,6 +54425,7 @@ fn construction_respects_personal_claims_and_expiring_materials() {
         stock.place,
         stock.capacity,
         vec![Lot {
+            batch: None,
             item: None,
             good: 3,
             quantity: 1,
@@ -54355,6 +54520,7 @@ fn controlled_construction_uses_carried_kits_without_taking_claimed_stock() {
         holder.place,
         holder.capacity,
         vec![Lot {
+            batch: None,
             item: None,
             good: 3,
             quantity: 1,
@@ -54914,6 +55080,7 @@ fn shared_work_boundary_benchmark() {
         source.place,
         leads * 2 + 10,
         vec![Lot {
+            batch: None,
             item: None,
             good: 2,
             quantity: leads + contenders,
@@ -55249,6 +55416,7 @@ fn shared_work_excludes_wounded_helpers_and_reports_spoiled_inputs() {
         stock.place,
         stock.capacity,
         vec![Lot {
+            batch: None,
             item: None,
             good: 2,
             quantity: 2,
@@ -55354,6 +55522,7 @@ fn maintenance_fixture() -> State {
         holder.place,
         holder.capacity,
         vec![Lot {
+            batch: None,
             item: None,
             good: 2,
             quantity: 1,
@@ -56040,6 +56209,7 @@ fn a_simultaneous_site_strike_can_damage_a_just_repaired_site() {
         Place::Person(4),
         10,
         vec![Lot {
+            batch: None,
             item: None,
             good: 2,
             quantity: 1,
@@ -56412,6 +56582,7 @@ fn maintenance_workload(count: u64, concentrated_site: bool) -> State {
                 container.place,
                 10,
                 vec![Lot {
+                    batch: None,
                     item: None,
                     good: 2,
                     quantity: 1,
@@ -56567,6 +56738,7 @@ fn repair_can_follow_personal_fear_without_creating_an_obligation() {
         holder.place,
         holder.capacity,
         vec![Lot {
+            batch: None,
             item: None,
             good: 2,
             quantity: 1,
@@ -57483,6 +57655,7 @@ fn identified_tool_wear_follows_custody_and_repairs_consume_material() {
         holder.place,
         holder.capacity,
         vec![Lot {
+            batch: None,
             item: Some(1001),
             good: 3,
             quantity: 1,
@@ -57501,6 +57674,7 @@ fn identified_tool_wear_follows_custody_and_repairs_consume_material() {
         recipient.place,
         recipient.capacity,
         vec![Lot {
+            batch: None,
             item: None,
             good: 2,
             quantity: 1,
@@ -57618,6 +57792,7 @@ fn identified_tool_wear_boundary_benchmark() {
         source.place,
         source.capacity,
         vec![Lot {
+            batch: None,
             good: 2,
             quantity: count,
             item: None,
@@ -57638,12 +57813,14 @@ fn identified_tool_wear_boundary_benchmark() {
                 if repair || active_repair {
                     vec![
                         Lot {
+                            batch: None,
                             good: 2,
                             quantity: 1,
                             item: None,
                             expires_at: None,
                         },
                         Lot {
+                            batch: None,
                             good: 3,
                             quantity: 1,
                             item: Some(person),
@@ -57652,6 +57829,7 @@ fn identified_tool_wear_boundary_benchmark() {
                     ]
                 } else {
                     vec![Lot {
+                        batch: None,
                         good: 3,
                         quantity: 1,
                         item: Some(person),
@@ -57766,6 +57944,7 @@ fn broken_or_unidentified_tools_cannot_enable_work_and_unfunded_repairs_fail() {
         holder.place,
         holder.capacity,
         vec![Lot {
+            batch: None,
             good: 3,
             quantity: 1,
             item: None,
@@ -57799,6 +57978,7 @@ fn broken_or_unidentified_tools_cannot_enable_work_and_unfunded_repairs_fail() {
         holder.place,
         holder.capacity,
         vec![Lot {
+            batch: None,
             good: 3,
             quantity: 1,
             item: Some(1234),
@@ -58007,6 +58187,7 @@ fn irrigation_boundary_benchmark() {
             vec![]
         } else {
             vec![Lot {
+                batch: None,
                 good: 2,
                 quantity: count / 2,
                 item: None,
@@ -58168,6 +58349,7 @@ fn tool_repair_attempts_cause_fatigue_when_material_is_present_or_absent() {
             .find(|c| c.place == Place::Person(1))
             .unwrap();
         let mut lots = vec![Lot {
+            batch: None,
             good: 3,
             quantity: 1,
             item: Some(1001),
@@ -58175,6 +58357,7 @@ fn tool_repair_attempts_cause_fatigue_when_material_is_present_or_absent() {
         }];
         if supplied {
             lots.push(Lot {
+                batch: None,
                 good: 2,
                 quantity: 1,
                 item: None,
@@ -58286,12 +58469,14 @@ fn autonomous_worker_repairs_broken_tool_without_abandoning_active_work() {
         holder.capacity,
         vec![
             Lot {
+                batch: None,
                 good: 2,
                 quantity: 1,
                 item: None,
                 expires_at: None,
             },
             Lot {
+                batch: None,
                 good: 3,
                 quantity: 1,
                 item: Some(777),
@@ -58435,12 +58620,14 @@ fn controlled_person_can_repair_carried_tool_without_losing_job() {
         holder.capacity,
         vec![
             Lot {
+                batch: None,
                 good: 2,
                 quantity: 1,
                 item: None,
                 expires_at: None,
             },
             Lot {
+                batch: None,
                 good: 3,
                 quantity: 1,
                 item: Some(777),
@@ -58539,6 +58726,7 @@ fn finished_tool_outputs_gain_unique_durable_identities_atomically() {
         other.place,
         other.capacity,
         vec![Lot {
+            batch: None,
             good: 3,
             quantity: 1,
             item: Some(5),
@@ -58709,6 +58897,7 @@ fn identified_tool_production_boundary_benchmark() {
         input.place,
         jobs.max(1),
         vec![Lot {
+            batch: None,
             good: 2,
             quantity: jobs,
             item: None,
@@ -58775,6 +58964,7 @@ fn imported_tool_identity_is_not_reused_after_consumption_and_reload() {
         stock.place,
         stock.capacity,
         vec![Lot {
+            batch: None,
             good: 3,
             quantity: 1,
             item: Some(5),
@@ -58867,12 +59057,14 @@ fn writing_advances_tool_identity_cursor_and_round_trips_with_no_tool_production
         holder.capacity,
         vec![
             Lot {
+                batch: None,
                 good: 1,
                 quantity: 1,
                 item: None,
                 expires_at: Some(10),
             },
             Lot {
+                batch: None,
                 good: 2,
                 quantity: 1,
                 item: None,

@@ -1816,6 +1816,7 @@ fn playable_project_waits_for_missing_material_then_resumes() {
                     store.place,
                     store.capacity,
                     vec![game_lots::Lot {
+                        batch: None,
                         item: None,
                         good: timber,
                         quantity: 4,
@@ -4831,6 +4832,7 @@ fn player_can_take_from_an_incapacitated_guardian_who_later_recovers() {
         holder.place,
         holder.capacity,
         vec![Lot {
+            batch: None,
             item: None,
             good: bread,
             quantity: 1,
@@ -5097,6 +5099,7 @@ fn ruler_view_excludes_remote_people_stock_and_other_minds() {
         stock.place,
         stock.capacity,
         vec![Lot {
+            batch: None,
             item: None,
             good,
             quantity: 7,
@@ -6038,6 +6041,7 @@ fn player_observes_and_recovers_local_deceased_possessions() {
         Place::Person(2),
         holder.capacity,
         vec![Lot {
+            batch: None,
             item: None,
             good,
             quantity: 1,
@@ -7535,6 +7539,7 @@ fn animal_product_refusal_and_capacity_failure_preserve_fleece() {
                 holder.place,
                 holder.capacity,
                 vec![game_lots::Lot {
+                    batch: None,
                     item: None,
                     good,
                     quantity: holder.capacity,
@@ -8192,6 +8197,7 @@ fn written_claims_respect_materials_capacity_literacy_and_custody_validation() {
         .unwrap();
     let mut lots = holder.lots.clone();
     lots.push(game_lots::Lot {
+        batch: None,
         good: paper,
         quantity: 1,
         item: Some(1),
@@ -8448,6 +8454,7 @@ fn autonomous_authors_write_private_memories_with_real_materials() {
                 let mut lots = holder.lots.clone();
                 lots.retain(|lot| lot.good != paper && lot.good != ink);
                 lots.push(game_lots::Lot {
+                    batch: None,
                     good: paper,
                     quantity: 1,
                     item: None,
@@ -8455,6 +8462,7 @@ fn autonomous_authors_write_private_memories_with_real_materials() {
                 });
                 if has_ink {
                     lots.push(game_lots::Lot {
+                        batch: None,
                         good: ink,
                         quantity: 1,
                         item: None,
@@ -9118,12 +9126,14 @@ fn invoked_memory_can_be_written_and_read_after_dismissal() {
                     .unwrap();
                 let mut lots = holder.lots.clone();
                 lots.push(game_lots::Lot {
+                    batch: None,
                     good: paper,
                     quantity: 1,
                     item: None,
                     expires_at: None,
                 });
                 lots.push(game_lots::Lot {
+                    batch: None,
                     good: ink,
                     quantity: 1,
                     item: None,

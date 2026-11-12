@@ -295,6 +295,7 @@ impl Catalog {
             })
             .transpose()?;
         Ok(Lot {
+            batch: None,
             item: None,
             good,
             quantity,

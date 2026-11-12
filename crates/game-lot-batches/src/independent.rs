@@ -28,6 +28,7 @@ fn after(container: &Container, tick: u64, good: u32, mut debit: u64) -> Contain
             };
             debit -= consumed;
             (consumed < lot.quantity).then(|| Lot {
+                batch: lot.batch,
                 item: lot.item,
                 good: lot.good,
                 quantity: lot.quantity - consumed,
@@ -248,18 +249,21 @@ mod tests {
                     10,
                     vec![
                         Lot {
+                            batch: None,
                             item: None,
                             good: 1,
                             quantity: 1,
                             expires_at: Some(1),
                         },
                         Lot {
+                            batch: None,
                             item: None,
                             good: 1,
                             quantity: 2,
                             expires_at: Some(3),
                         },
                         Lot {
+                            batch: None,
                             item: None,
                             good: 2,
                             quantity: 1,
@@ -275,6 +279,7 @@ mod tests {
                 Place::Person(999),
                 2,
                 vec![Lot {
+                    batch: None,
                     item: None,
                     good: 1,
                     quantity: 1,

@@ -7,6 +7,7 @@ fn fixture(count: u64) -> (State, Vec<SimpleTransfer>) {
                 Place::Inventory(id),
                 count,
                 vec![Lot {
+                    batch: None,
                     item: None,
                     good: 1,
                     quantity: count / 4,

@@ -32,6 +32,7 @@ pub(crate) fn after(
         };
         debit -= consumed;
         (consumed < lot.quantity).then(|| Lot {
+            batch: lot.batch,
             item: lot.item,
             good: lot.good,
             quantity: lot.quantity - consumed,
@@ -372,6 +373,7 @@ fn prepare_rows(
                     if lot.good == row.movement.good && lot.expires_at.is_none_or(|at| at > next) {
                         let quantity = remaining.min(lot.quantity);
                         lots.push(Lot {
+                            batch: lot.batch,
                             item: lot.item,
                             good: lot.good,
                             quantity,

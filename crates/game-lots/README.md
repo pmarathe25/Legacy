@@ -2,6 +2,14 @@
 
 Parallel preparation of physical lot movements and expiry. Claims are arbitrated against one boundary snapshot; accepted moves carry the exact earliest-expiring cohorts, and publication is atomic. The current economy composes this owner with its individual decisions.
 
+Fungible lots can optionally carry an opaque, nonzero `batch` identifier.
+Different batches remain distinct even when their good and expiry match; generic
+FEFO transfers preserve the identity through splits, receipts, merges and
+serialization. A batch is not a unique item and may contain any positive
+quantity. Callers still cannot select a specific batch: generic movements use
+FEFO. Biological interpretation and lineage remain outside this owner. The
+ignored `batch_provenance_scaling` test measures independent batched transfers.
+
 Lots can optionally carry a stable physical item ID. An identified lot contains exactly one nonexpiring item; IDs are unique among live custody and survive ordinary transfers. The custody owner tracks them through staged changes even when receipt details are omitted. A movement can request a particular item or use normal FEFO selection. Mixed requests at one source reserve cohorts in deterministic order; rejected transactions do not reassign their reserved cohorts during that boundary. Transactions touching an identified item use the general arbiter; unrelated fungible transfers can use the specialized paths. The ignored `independent_identified_transfers_benchmark` in `tests/identified_items.rs` measures batches with `LEGACY_ITEMS` and `LEGACY_WORKERS`; set `LEGACY_EXACT=1` to select each item explicitly.
 
 `stock_view` returns only regional stock at the requested current or next boundary, using the same expiry rules and revision as a full view. Observation systems that need regional totals can avoid materializing every person's custody.

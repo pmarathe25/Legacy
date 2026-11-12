@@ -135,7 +135,7 @@ fn main() {
             let ids: std::collections::HashSet<_> = initial.people.iter().filter(|person| person.id >= 1000 && person.region.is_some()).map(|person| person.id).collect();
             for container in &mut initial.physical.custody.containers {
                 if let Place::Person(id) = container.place && ids.contains(&id) {
-                    let lots = if id.is_multiple_of(2) { vec![Lot { item: None, good, quantity: 1, expires_at: None }] } else { vec![] };
+                    let lots = if id.is_multiple_of(2) { vec![Lot { batch: None, item: None, good, quantity: 1, expires_at: None }] } else { vec![] };
                     *container = Container::new(container.place, container.capacity, lots).unwrap();
                 }
             }

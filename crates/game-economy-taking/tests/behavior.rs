@@ -60,6 +60,7 @@ fn runtime(capacity: u64, stock: u64) -> Runtime {
                     capacity.max(1),
                     if capacity == 0 {
                         vec![Lot {
+                            batch: None,
                             item: None,
                             good: 1,
                             quantity: 1,
@@ -77,6 +78,7 @@ fn runtime(capacity: u64, stock: u64) -> Runtime {
                         vec![]
                     } else {
                         vec![Lot {
+                            batch: None,
                             item: None,
                             good: 1,
                             quantity: stock,

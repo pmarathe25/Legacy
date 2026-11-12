@@ -8,6 +8,7 @@ fn fixture() -> (State, Vec<Transaction>) {
             source,
             128,
             vec![Lot {
+                batch: None,
                 item: None,
                 good: 1,
                 quantity: 64,
@@ -109,12 +110,14 @@ fn new_empty_destinations_match_general_arbitration_and_expiry() {
                 1000,
                 vec![
                     Lot {
+                        batch: None,
                         item: None,
                         good: 1,
                         quantity: 40,
                         expires_at: Some(1),
                     },
                     Lot {
+                        batch: None,
                         item: None,
                         good: 1,
                         quantity: 180,
@@ -127,6 +130,7 @@ fn new_empty_destinations_match_general_arbitration_and_expiry() {
                 Place::Person(9001),
                 10,
                 vec![Lot {
+                    batch: None,
                     item: None,
                     good: 1,
                     quantity: 2,
@@ -203,6 +207,7 @@ fn added_destinations_can_sort_before_the_existing_source() {
                 source,
                 256,
                 vec![Lot {
+                    batch: None,
                     item: None,
                     good: 1,
                     quantity: 128,

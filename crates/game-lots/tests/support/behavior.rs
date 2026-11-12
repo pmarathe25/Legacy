@@ -2,6 +2,7 @@ use crate::{Container, Creation, Lot, Movement, Place, State, Store, Transaction
 
 fn lot(good: u32, quantity: u64, expires_at: Option<u64>) -> Lot {
     Lot {
+        batch: None,
         item: None,
         good,
         quantity,
@@ -1453,6 +1454,7 @@ fn mixed_atomic_actions_match_general_arbitration() {
         Place::Person(900),
         10,
         vec![Lot {
+            batch: None,
             item: Some(42),
             good: 1,
             quantity: 1,
@@ -1513,6 +1515,7 @@ fn shared_stock_to_new_custody_matches_general_commit_and_stale_checks() {
                     Place::Person(9002),
                     10,
                     vec![Lot {
+                        batch: None,
                         item: Some(42),
                         good: 1,
                         quantity: 1,
@@ -3367,6 +3370,7 @@ fn shared_compact_consumption_falls_back_for_identified_items_and_rejects_stale_
         500,
         vec![
             Lot {
+                batch: None,
                 good: 1,
                 quantity: 1,
                 item: Some(42),
@@ -3468,6 +3472,7 @@ fn large_identified_transfer_preserves_every_item_and_receipt_across_workers() {
             4000,
             (1..=3000)
                 .map(|id| Lot {
+                    batch: None,
                     good: 1,
                     quantity: 1,
                     item: Some(id),
@@ -3537,6 +3542,7 @@ fn large_creation_batches_preserve_transaction_ownership_and_identity() {
                         id,
                         to: if action == 1 { first } else { second },
                         lot: Lot {
+                            batch: None,
                             good: 1,
                             quantity: 1,
                             item: Some(id),
@@ -3588,6 +3594,7 @@ fn oversized_large_creation_transaction_is_rejected_atomically() {
                 id,
                 to: target,
                 lot: Lot {
+                    batch: None,
                     good: 1,
                     quantity: 1,
                     item: Some(id),

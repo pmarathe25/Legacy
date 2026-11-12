@@ -2388,6 +2388,7 @@ fn scenario_with_options_inner(
                 return Err("identified items must not be perishable".into());
             }
             lots.push(game_lots::Lot {
+                batch: None,
                 good,
                 quantity: 1,
                 item: Some(item.id),

@@ -4,6 +4,7 @@ use game_lots::{
 
 fn item(id: u64) -> Lot {
     Lot {
+        batch: None,
         good: 1,
         quantity: 1,
         item: Some(id),
@@ -434,6 +435,7 @@ fn unrelated_fungible_transfers_keep_the_fast_path_in_a_world_with_items() {
                 source,
                 1,
                 vec![Lot {
+                    batch: None,
                     good: 2,
                     quantity: 1,
                     item: None,

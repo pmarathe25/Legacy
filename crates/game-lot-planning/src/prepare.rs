@@ -198,6 +198,8 @@ pub fn prepare(
             if creation.id == 0
                 || !creation.to.accepts(creation.lot.good)
                 || creation.lot.quantity == 0
+                || creation.lot.batch == Some(0)
+                || (creation.lot.batch.is_some() && creation.lot.item.is_some())
                 || creation.lot.item.is_some_and(|id| {
                     id == 0 || creation.lot.quantity != 1 || creation.lot.expires_at.is_some()
                 })
@@ -526,6 +528,7 @@ pub fn prepare(
                         if !claim.compact {
                             let original = &containers[claim.source].lots[index];
                             lots.push(Lot {
+                                batch: original.batch,
                                 item: original.item,
                                 good: original.good,
                                 quantity,
@@ -571,6 +574,7 @@ pub fn prepare(
                                 .min(u128::from(lot.quantity))
                                 as u64;
                             (quantity > 0).then_some(Lot {
+                                batch: lot.batch,
                                 item: lot.item,
                                 good: lot.good,
                                 quantity,
@@ -595,6 +599,7 @@ pub fn prepare(
                     let quantity = remaining.min(lot.quantity);
                     if quantity != 0 {
                         parts.push(Lot {
+                            batch: lot.batch,
                             item: lot.item,
                             good: lot.good,
                             quantity,
@@ -671,6 +676,7 @@ pub fn prepare(
                         let right = end.min(lot_prefix[index] + u128::from(lot.quantity));
                         if right > left {
                             parts.push(Lot {
+                                batch: lot.batch,
                                 item: lot.item,
                                 good: lot.good,
                                 quantity: (right - left) as u64,
@@ -836,6 +842,7 @@ pub fn prepare(
                         .expect("validated precise debit");
                     if quantity > 0 {
                         lots.push(Lot {
+                            batch: lot.batch,
                             item: lot.item,
                             good: lot.good,
                             quantity,
@@ -887,6 +894,7 @@ pub fn prepare(
                     Vec::new()
                 } else {
                     vec![Lot {
+                        batch: lot.batch,
                         item: lot.item,
                         good: lot.good,
                         quantity,
@@ -923,6 +931,7 @@ pub fn prepare(
                     remaining -= consumed;
                     if consumed < lot.quantity {
                         lots.push(Lot {
+                            batch: lot.batch,
                             item: lot.item,
                             good: lot.good,
                             quantity: lot.quantity - consumed,
@@ -980,6 +989,7 @@ pub fn prepare(
                                 .min(u128::from(lot.quantity))
                                 as u64;
                             (consumed < lot.quantity).then(|| Lot {
+                                batch: lot.batch,
                                 item: lot.item,
                                 good: lot.good,
                                 quantity: lot.quantity - consumed,
@@ -994,6 +1004,7 @@ pub fn prepare(
             let merged: Vec<_> = lots
                 .par_chunk_by(|a, b| key(a) == key(b))
                 .map(|group| Lot {
+                    batch: group[0].batch,
                     item: group[0].item,
                     good: group[0].good,
                     expires_at: group[0].expires_at,

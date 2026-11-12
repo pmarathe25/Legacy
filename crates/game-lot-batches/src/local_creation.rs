@@ -61,6 +61,7 @@ pub fn prepare(
                 || !creation.to.accepts(creation.lot.good)
                 || creation.lot.quantity != 1
                 || creation.lot.item.is_none_or(|id| id == 0)
+                || creation.lot.batch.is_some()
                 || creation.lot.expires_at.is_some()
             {
                 return None;
@@ -240,24 +241,28 @@ mod tests {
             let place = Place::Person(id);
             let lots = vec![
                 Lot {
+                    batch: None,
                     good: 1,
                     quantity: 1,
                     item: None,
                     expires_at: Some(10),
                 },
                 Lot {
+                    batch: None,
                     good: 1,
                     quantity: 2,
                     item: None,
                     expires_at: Some(20),
                 },
                 Lot {
+                    batch: None,
                     good: 2,
                     quantity: 1,
                     item: None,
                     expires_at: None,
                 },
                 Lot {
+                    batch: None,
                     good: 3,
                     quantity: 1,
                     item: None,
@@ -289,6 +294,7 @@ mod tests {
                     id: id * 3,
                     to: place,
                     lot: Lot {
+                        batch: None,
                         good: 3,
                         quantity: 1,
                         item: Some(id + 10_000),
@@ -366,12 +372,14 @@ mod tests {
                     3,
                     vec![
                         Lot {
+                            batch: None,
                             good: 1,
                             quantity: 1,
                             item: Some(id),
                             expires_at: None,
                         },
                         Lot {
+                            batch: None,
                             good: 1,
                             quantity: 1,
                             item: None,
@@ -387,6 +395,7 @@ mod tests {
                     2,
                     if id % 5 == 0 {
                         vec![Lot {
+                            batch: None,
                             good: 2,
                             quantity: 2,
                             item: None,

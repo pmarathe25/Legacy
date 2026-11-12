@@ -155,18 +155,21 @@ mod tests {
                     10,
                     vec![
                         Lot {
+                            batch: None,
                             item: None,
                             good: 1,
                             quantity: 1,
                             expires_at: Some(1),
                         },
                         Lot {
+                            batch: None,
                             item: None,
                             good: 1,
                             quantity: 2,
                             expires_at: Some(3),
                         },
                         Lot {
+                            batch: None,
                             item: None,
                             good: 2,
                             quantity: 1,
@@ -218,6 +221,7 @@ mod tests {
                 id: 301,
                 to: Place::Person(2),
                 lot: Lot {
+                    batch: None,
                     item: None,
                     good: 1,
                     quantity: 1,

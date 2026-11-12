@@ -144,6 +144,7 @@ pub fn prepare(
                                 id: creation.id,
                                 to: creation.to,
                                 lot: Lot {
+                                    batch: None,
                                     good: creation.lot.good,
                                     quantity: 1,
                                     item: Some(item),

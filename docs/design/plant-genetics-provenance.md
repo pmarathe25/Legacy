@@ -1,12 +1,14 @@
 # Plant genetics and physical seed provenance
 
 Plant selection requires physical reproductive material to retain its history.
-The current lot identity consists of a good, expiration and optional unique item;
-the item is a single nonperishable object and cannot identify a divisible seed
-batch. Current planting also uses compact consumption receipts, so a successful
-field cannot determine which actual seed was consumed. Generic harvest outputs
-have no associated biological state. These are missing capabilities, not data
-that a farmer should be allowed to infer from an aggregate stock balance.
+The earlier lot identity consisted of a good, expiration and optional unique
+item; an item is a single nonperishable object and cannot identify a divisible
+seed batch. Lots now optionally preserve opaque divisible batch identities
+through generic movements, but movements cannot yet select a particular
+batch. Planting still uses compact consumption receipts, so a successful field
+cannot determine which actual seed was consumed. Generic harvest outputs have no
+associated biological state. These are missing capabilities, not data that a
+farmer should be allowed to infer from an aggregate stock balance.
 
 Introduce an optional opaque batch identity for divisible physical lots. Batch
 identity participates in cohort merge keys and survives splitting, transfer,

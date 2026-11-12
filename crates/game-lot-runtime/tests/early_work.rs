@@ -145,6 +145,7 @@ fn fixture(perishable: bool, output_quantity: u64) -> Runtime {
                 vec![]
             } else {
                 vec![Lot {
+                    batch: None,
                     item: None,
                     good,
                     quantity,
@@ -498,6 +499,7 @@ fn staged_boundary_allocation_skips_existing_item_identities() {
             Place::Person(9),
             1,
             vec![Lot {
+                batch: None,
                 item: Some(10),
                 good: 2,
                 quantity: 1,
@@ -679,6 +681,7 @@ fn interval_consumption_draft_expires_when_time_moves_without_work_rates() {
             Place::Person(2),
             2,
             vec![Lot {
+                batch: None,
                 item: None,
                 good: 1,
                 quantity: 1,
@@ -754,12 +757,14 @@ fn packed_interval_starts_fall_back_for_identified_source_items() {
         100,
         vec![
             Lot {
+                batch: None,
                 item: Some(41),
                 good: 1,
                 quantity: 1,
                 expires_at: None,
             },
             Lot {
+                batch: None,
                 item: Some(42),
                 good: 1,
                 quantity: 1,
@@ -894,6 +899,7 @@ fn early_completion_can_use_input_expiring_at_the_next_boundary() {
         input.place,
         input.capacity,
         vec![Lot {
+            batch: None,
             item: None,
             good: 1,
             quantity: 2,
@@ -923,6 +929,7 @@ fn expired_lots_are_rejected_before_early_work() {
         stock.place,
         stock.capacity,
         vec![Lot {
+            batch: None,
             item: None,
             good: 2,
             quantity: 1,
@@ -1000,6 +1007,7 @@ fn early_work_completion_benchmark() {
         input.place,
         count * 2,
         vec![Lot {
+            batch: None,
             item: None,
             good: 1,
             quantity: count * 2,
