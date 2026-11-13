@@ -12,8 +12,14 @@ The caller supplies actual chosen experiments and is responsible for verifying
 people's locations, effort, part custody and access. The interval host offers an
 explicit experiment API that checks actors' carried identified items and effort
 limits. The interval host can offer personally willing experiment policies in
-its opt-in choice round. Its load is still a numeric test input: it does not yet
-move a physical load, spend fatigue, or provide invention and scientific discovery.
+its opt-in choice round. The interval host also offers an explicit chosen-load
+action using data-defined force per unit of a real good. It stages physical
+access, evaluates the apparatus, and transfers the actual lot only when the
+calculated travel is sufficient. Short travel, stalled or broken apparatus,
+and unavailable stock do not transfer the whole load. Resistance and required
+travel are still scalar inputs; partial positions, fatigue, invention and
+scientific discovery are not yet modelled by this action. Autonomous load
+policies have not yet been connected to the shared personal-choice round.
 
 The ignored benchmarks compare complete state and observations across worker
 counts. On one development machine, 50,000 independent apparatus took 14.4,

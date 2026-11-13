@@ -54,6 +54,46 @@ pub struct MechanicalMaterial {
     pub good: u32,
 }
 
+/// Physical resistance per unit of an identified good.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MechanicalLoadMaterial {
+    pub good: u32,
+    pub force_per_unit: u64,
+}
+
+/// A person's exact attempt to move a local physical load with an apparatus.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MechanicalLoadRequest {
+    pub actor: u64,
+    pub apparatus: u64,
+    pub output_part: u64,
+    pub input_force: u64,
+    pub input_distance: u64,
+    pub required_travel: u64,
+    pub movement: game_lots::Movement,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MechanicalLoadOutcome {
+    Unavailable,
+    Contended,
+    Stalled,
+    Broken,
+    InsufficientTravel,
+    Moved,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MechanicalLoadResult {
+    pub actor: u64,
+    pub outcome: MechanicalLoadOutcome,
+    pub observation: Option<game_mechanics::Observation>,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct MechanicalCapability {
@@ -96,6 +136,8 @@ pub struct MechanicalMemory {
 pub struct CoreMechanics {
     pub world: game_mechanics::Snapshot,
     pub materials: Vec<MechanicalMaterial>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub load_materials: Vec<MechanicalLoadMaterial>,
     pub capabilities: Vec<MechanicalCapability>,
     #[serde(default)]
     pub policies: Vec<MechanicalPolicy>,
@@ -109,6 +151,7 @@ pub(super) struct Runtime {
     world: game_mechanics::World,
     part_ids: Vec<u64>,
     materials: Vec<MechanicalMaterial>,
+    load_materials: Vec<MechanicalLoadMaterial>,
     capabilities: Vec<MechanicalCapability>,
     policies: Vec<MechanicalPolicy>,
     memories: Vec<MechanicalMemory>,
@@ -125,6 +168,18 @@ impl CoreMechanics {
                 .materials
                 .par_windows(2)
                 .any(|rows| rows[0].component >= rows[1].component)
+            || self
+                .load_materials
+                .par_windows(2)
+                .any(|rows| rows[0].good >= rows[1].good)
+            || self.load_materials.par_iter().any(|row| {
+                row.force_per_unit == 0
+                    || core
+                        .physical
+                        .goods()
+                        .binary_search_by_key(&row.good, |good| good.id)
+                        .is_err()
+            })
             || self
                 .capabilities
                 .par_windows(2)
@@ -274,6 +329,7 @@ impl CoreMechanics {
             world,
             part_ids,
             materials: self.materials,
+            load_materials: self.load_materials,
             capabilities: self.capabilities,
             policies: self.policies,
             memories: self.memories,
@@ -290,6 +346,7 @@ impl Runtime {
         CoreMechanics {
             world: self.world.snapshot(),
             materials: self.materials.clone(),
+            load_materials: self.load_materials.clone(),
             capabilities: self.capabilities.clone(),
             policies: self.policies.clone(),
             memories: self.memories.clone(),
@@ -414,6 +471,327 @@ impl CoreHost {
             return Err("experiment requires an available person with capable effort and carried matching parts".into());
         }
         self.commit_chosen_mechanics(requests)
+    }
+
+    /// Execute personally chosen apparatus attempts against real local loads.
+    /// Physical access is staged first; unavailable loads never create a
+    /// mechanical observation. Successful travel transfers the exact lot.
+    pub fn move_mechanical_loads(
+        &mut self,
+        requests: &[MechanicalLoadRequest],
+        occupied: &[u64],
+    ) -> Result<Vec<MechanicalLoadResult>, String> {
+        if occupied.par_windows(2).any(|rows| rows[0] >= rows[1]) {
+            return Err("invalid occupied people".into());
+        }
+        if requests.is_empty() {
+            return Ok(Vec::new());
+        }
+        let tick = self.core.physical.tick();
+        let offset = self.core.elapsed_millis().ok_or("no physical interval")?;
+        if offset >= self.core.physical.tick_millis()
+            || self.core.next_deadline(None)?.after_millis == 0
+        {
+            return Err("publish pending interval events before mechanical loads".into());
+        }
+        let owner = self.mechanics.as_ref().ok_or("mechanics is not enabled")?;
+        let mut actors: Vec<_> = requests.par_iter().map(|row| row.actor).collect();
+        actors.par_sort_unstable();
+        if actors.par_windows(2).any(|rows| rows[0] == rows[1]) {
+            return Err("overlapping mechanical load actors".into());
+        }
+        let rest = self.blocked_with_rest(occupied);
+        let occupied = rest.as_deref().unwrap_or(occupied);
+        let active: HashSet<_> = self
+            .core
+            .physical
+            .work()
+            .par_iter()
+            .filter(|row| row.phase == game_lot_runtime::Phase::Working)
+            .map(|row| row.job.worker)
+            .collect();
+        let claims = self.claims.as_ref().map(game_economy_claims::Claims::index);
+        let local = |place: game_lots::Place, actor: u64, region: u64| match place {
+            game_lots::Place::Person(id) => id == actor,
+            game_lots::Place::Stock {
+                region: place_region,
+                ..
+            } => place_region == region,
+            game_lots::Place::Inventory(id) => {
+                self.local_transport.as_ref().is_some_and(|transport| {
+                    indexed(&transport.stores, id, |store| store.id)
+                        .is_some_and(|store| store.region == region)
+                })
+            }
+            _ => false,
+        };
+        let prepared: Vec<_> = requests
+            .par_iter()
+            .enumerate()
+            .map(|(index, request)| -> Result<_, String> {
+                let person = indexed(&self.core.people, request.actor, |row| row.id)
+                    .ok_or("unknown mechanical load actor")?;
+                let region = person
+                    .region
+                    .ok_or("mechanical load requires a local actor")?;
+                let movement = request.movement;
+                let destination = movement
+                    .to
+                    .ok_or("mechanical load requires a destination")?;
+                let material = indexed(&owner.load_materials, u64::from(movement.good), |row| {
+                    u64::from(row.good)
+                })
+                .ok_or("unknown mechanical load material")?;
+                let force = material
+                    .force_per_unit
+                    .checked_mul(movement.quantity)
+                    .ok_or("mechanical load force overflow")?;
+                if movement.id != 0
+                    || movement.quantity == 0
+                    || request.required_travel == 0
+                    || movement.from == destination
+                    || !local(movement.from, request.actor, region)
+                    || !local(destination, request.actor, region)
+                    || (matches!(movement.from, game_lots::Place::Stock { .. })
+                        && claims.as_ref().is_some_and(|claims| {
+                            !claims.allows(request.actor, region, movement.good)
+                        }))
+                {
+                    return Err("invalid or inaccessible mechanical load".into());
+                }
+                let experiment = game_mechanics::Experiment {
+                    actor: request.actor,
+                    apparatus: request.apparatus,
+                    output_part: request.output_part,
+                    input_force: request.input_force,
+                    input_distance: request.input_distance,
+                    load_force: force,
+                };
+                if !owner.eligible(&self.core, &experiment, occupied, &active) {
+                    return Err(
+                        "mechanical load requires an available capable actor and carried parts"
+                            .into(),
+                    );
+                }
+                let action = u64::try_from(index)
+                    .map_err(|_| "too many mechanical loads")?
+                    .checked_add(1)
+                    .ok_or("mechanical load action overflow")?;
+                let mut movement = movement;
+                movement.id = action;
+                Ok((
+                    experiment,
+                    game_lots::Transaction {
+                        id: action,
+                        movements: vec![movement],
+                        creations: vec![],
+                    },
+                    region,
+                    request.required_travel,
+                ))
+            })
+            .collect::<Result<_, String>>()?;
+        let actions: Vec<_> = prepared.par_iter().map(|row| row.1.clone()).collect();
+        let access = self
+            .core
+            .physical
+            .prepare_interval_transfer(&actions, self.core.seed)?;
+        if access
+            .item_updates()
+            .par_iter()
+            .any(|(item, _)| owner.owns_part(*item))
+        {
+            return Err("mechanical loads cannot move attached apparatus parts".into());
+        }
+        let admitted: Vec<_> = prepared
+            .par_iter()
+            .filter(|row| {
+                access
+                    .transactions()
+                    .binary_search_by_key(&row.1.id, |outcome| outcome.id)
+                    .ok()
+                    .is_some_and(|index| access.transactions()[index].accepted)
+            })
+            .map(|row| row.0)
+            .collect();
+        if admitted.is_empty() {
+            return Ok(requests
+                .par_iter()
+                .map(|request| MechanicalLoadResult {
+                    actor: request.actor,
+                    outcome: MechanicalLoadOutcome::Unavailable,
+                    observation: None,
+                })
+                .collect());
+        }
+        let mechanical = owner.world.prepare(tick, self.core.seed, &admitted)?;
+        let mut by_actor: Vec<_> = prepared.par_iter().map(|row| (row.0.actor, row)).collect();
+        by_actor.par_sort_unstable_by_key(|row| row.0);
+        let moved: Vec<_> = mechanical
+            .observations()
+            .par_iter()
+            .filter_map(|observation| {
+                let index = by_actor
+                    .binary_search_by_key(&observation.actor, |row| row.0)
+                    .ok()?;
+                let row = by_actor[index].1;
+                (observation.outcome == game_mechanics::Outcome::Moved
+                    && observation.travel >= row.3)
+                    .then(|| row.1.clone())
+            })
+            .collect();
+        let physical = if moved.is_empty() {
+            None
+        } else {
+            let draft = self
+                .core
+                .physical
+                .prepare_interval_transfer(&moved, self.core.seed)?;
+            if draft
+                .item_updates()
+                .par_iter()
+                .any(|(item, _)| owner.owns_part(*item))
+            {
+                return Err("mechanical loads cannot move attached apparatus parts".into());
+            }
+            if draft.transactions().par_iter().any(|row| !row.accepted) {
+                return Err("mechanical load reservation changed during staging".into());
+            }
+            Some(draft)
+        };
+        let uses: Vec<_> = moved
+            .par_iter()
+            .filter_map(|action| {
+                let index = usize::try_from(action.id.checked_sub(1)?).ok()?;
+                let (experiment, _, region, _) = &prepared[index];
+                let movement = action.movements.first()?;
+                matches!(movement.from, game_lots::Place::Stock { .. }).then_some(
+                    game_economy_claims::Use {
+                        action: action.id,
+                        person: experiment.actor,
+                        region: *region,
+                        good: movement.good,
+                        quantity: movement.quantity,
+                        job: false,
+                    },
+                )
+            })
+            .collect();
+        let mut claims_state = self.claims.clone().filter(|_| !uses.is_empty());
+        let mut opinions = claims_state.as_ref().map(|_| self.opinions.clone());
+        if let (Some(claims), Some(physical)) = (&mut claims_state, &physical) {
+            let events = game_lot_runtime::Events {
+                tick,
+                physical_actions: physical.transactions().par_iter().cloned().collect(),
+                started: vec![],
+                start_denied: vec![],
+                abandoned: vec![],
+                suspended: vec![],
+                adopted: vec![],
+                finished: vec![],
+                delivered: vec![],
+                output_lost: vec![],
+                interrupted: vec![],
+                returned: vec![],
+                empty_returns: vec![],
+                spoiled: vec![],
+                physical_movements: Default::default(),
+            };
+            let prior: Vec<_> = std::mem::take(&mut claims.events)
+                .into_par_iter()
+                .filter(|event| event.tick == tick)
+                .collect();
+            game_economy_claims::publish(
+                claims,
+                &uses,
+                &events,
+                &self.core.people,
+                opinions.as_mut().expect("claims stage opinions"),
+                None,
+            );
+            claims.events.par_extend(prior);
+            claims.events.par_sort_unstable_by_key(|event| {
+                (
+                    event.tick,
+                    event.claimant,
+                    event.person,
+                    event.region,
+                    event.good,
+                )
+            });
+        }
+        let results: Vec<_> = requests
+            .par_iter()
+            .map(|request| {
+                let observation =
+                    indexed(mechanical.observations(), request.actor, |row| row.actor).cloned();
+                let outcome = match observation.as_ref() {
+                    None => MechanicalLoadOutcome::Unavailable,
+                    Some(row) => match row.outcome {
+                        game_mechanics::Outcome::Contended => MechanicalLoadOutcome::Contended,
+                        game_mechanics::Outcome::Stalled => MechanicalLoadOutcome::Stalled,
+                        game_mechanics::Outcome::Broken => MechanicalLoadOutcome::Broken,
+                        game_mechanics::Outcome::Moved if row.travel < request.required_travel => {
+                            MechanicalLoadOutcome::InsufficientTravel
+                        }
+                        game_mechanics::Outcome::Moved => MechanicalLoadOutcome::Moved,
+                    },
+                };
+                MechanicalLoadResult {
+                    actor: request.actor,
+                    outcome,
+                    observation,
+                }
+            })
+            .collect();
+        let memories = (!owner.memories.is_empty()).then(|| {
+            owner
+                .memories
+                .par_iter()
+                .cloned()
+                .map(|mut memory| {
+                    if memory.retain
+                        && let Some(observation) =
+                            indexed(mechanical.observations(), memory.person, |row| row.actor)
+                    {
+                        if memory.observations.len() == memory.capacity {
+                            memory.observations.remove(0);
+                        }
+                        memory.observations.push(observation.clone());
+                    }
+                    memory
+                })
+                .collect::<Vec<_>>()
+        });
+        let tools = physical
+            .as_ref()
+            .map(|draft| self.stage_tools(&[], None, draft.item_updates()))
+            .transpose()?
+            .flatten();
+        owner.world.validate_draft(&mechanical)?;
+        if let Some(draft) = &physical {
+            self.core.physical.validate_interval_consumption(draft)?;
+        }
+        if let Some(draft) = physical {
+            self.core.physical.commit_interval_consumption(draft)?;
+        }
+        let owner = self.mechanics.as_mut().expect("owner checked");
+        let observations = owner.world.commit(mechanical)?;
+        if let Some(memories) = memories {
+            owner.memories = memories;
+        }
+        owner.observations = observations;
+        if let Some(tools) = tools {
+            self.tool_wear = Some(tools);
+        }
+        if let Some(claims) = claims_state {
+            self.claims = Some(claims);
+        }
+        if let Some(opinions) = opinions {
+            self.opinions = opinions;
+        }
+        self.work_checked_revision = None;
+        Ok(results)
     }
 
     /// The scheduler calls this immediately after exact-intent and physical

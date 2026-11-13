@@ -205,6 +205,7 @@ fn mechanical_experiments_require_real_carried_parts_and_survive_reload() {
                     serde_json::from_value(serde_json::json!({ "core": initial })).unwrap();
                 let mut host = CoreHost::begin(snapshot, &[(1, 1)]).unwrap();
                 host.enable_mechanics(CoreMechanics {
+                    load_materials: vec![],
                     world: MechanicsSnapshot {
                         catalog: Catalog {
                             components: vec![
@@ -380,6 +381,7 @@ fn independent_physical_mechanics_benchmark() {
         serde_json::from_value(serde_json::json!({ "core": initial })).unwrap();
     let mut host = CoreHost::begin(snapshot, &[(1, 1)]).unwrap();
     host.enable_mechanics(CoreMechanics {
+        load_materials: vec![],
         world: MechanicsSnapshot {
             catalog: Catalog {
                 components: vec![Component {

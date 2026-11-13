@@ -94,6 +94,7 @@ fn overload_breaks_real_part_and_stale_drafts_cannot_publish() {
     assert!(world.commit(foreign).is_err());
     assert_eq!(world.snapshot(), opening);
     let stale = world.prepare(1, 3, &[request(1, 1, 2)]).unwrap();
+    assert!(world.validate_draft(&stale).is_ok());
     let mut overload = request(2, 1, 2);
     overload.input_force = 1001;
     let draft = world.prepare(1, 3, &[overload]).unwrap();
@@ -103,6 +104,7 @@ fn overload_breaks_real_part_and_stale_drafts_cannot_publish() {
     assert_eq!(rows[0].broken_parts, vec![11]);
     assert!(!opening.apparatus[0].parts[0].broken);
     let after = world.snapshot();
+    assert!(world.validate_draft(&stale).is_err());
     assert!(world.commit(stale).is_err());
     assert_eq!(world.snapshot(), after);
     let saved = serde_json::to_string(&after).unwrap();

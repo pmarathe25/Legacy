@@ -165,6 +165,8 @@ struct MechanicsConfig {
     #[serde(default)]
     materials: Vec<MechanicsMaterialConfig>,
     #[serde(default)]
+    load_materials: Vec<MechanicsLoadMaterialConfig>,
+    #[serde(default)]
     capabilities: Vec<game_economy::core_interval::MechanicalCapability>,
     #[serde(default)]
     policies: Vec<game_economy::core_interval::MechanicalPolicy>,
@@ -177,6 +179,13 @@ struct MechanicsConfig {
 struct MechanicsMaterialConfig {
     component: u32,
     good: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct MechanicsLoadMaterialConfig {
+    good: String,
+    force_per_unit: u64,
 }
 
 fn goal_retry_interval() -> u64 {
@@ -1225,6 +1234,24 @@ pub fn core_scenario_with_options(
             })
             .collect::<Result<_, _>>()?;
         materials.sort_unstable_by_key(|row| row.component);
+        let mut load_materials: Vec<_> = mechanics
+            .load_materials
+            .into_iter()
+            .map(|row| {
+                snapshot
+                    .core
+                    .physical
+                    .goods
+                    .iter()
+                    .find(|good| good.name == row.good)
+                    .map(|good| game_economy::core_interval::MechanicalLoadMaterial {
+                        good: good.id,
+                        force_per_unit: row.force_per_unit,
+                    })
+                    .ok_or_else(|| format!("unknown mechanical load good {}", row.good))
+            })
+            .collect::<Result<_, _>>()?;
+        load_materials.sort_unstable_by_key(|row| row.good);
         mechanics
             .capabilities
             .sort_unstable_by_key(|row| row.person);
@@ -1244,6 +1271,7 @@ pub fn core_scenario_with_options(
                 last_tick: None,
             },
             materials,
+            load_materials,
             capabilities: mechanics.capabilities,
             policies: mechanics.policies,
             memories: mechanics.memories,

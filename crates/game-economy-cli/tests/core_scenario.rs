@@ -527,6 +527,249 @@ fn cultivation_is_a_personal_choice_saved_until_physical_settlement() {
 }
 
 #[test]
+fn mechanical_loads_follow_personal_claim_choices_and_record_use() {
+    use game_economy::core_interval::{CoreHost, MechanicalLoadOutcome, MechanicalLoadRequest};
+    use game_lots::{Movement, Place};
+    let root = root();
+    let initial = game_economy_cli::core_scenario(
+        &root.join("content/scenarios/economy-core-mechanical-loads.toml"),
+        &root.join("content"),
+    )
+    .unwrap()
+    .snapshot();
+    let good = initial
+        .core
+        .physical
+        .goods
+        .iter()
+        .find(|good| good.name == "timber")
+        .unwrap()
+        .id;
+    for disregard in [false, true] {
+        let mut state = initial.clone();
+        state.claims = Some(
+            serde_json::from_value(serde_json::json!({
+                "claims": [{"person": 2, "region": 1, "good": good}],
+                "preferences": [{"person": 1, "disregard_others": disregard}]
+            }))
+            .unwrap(),
+        );
+        let mut host = CoreHost::resume(state).unwrap();
+        let request = MechanicalLoadRequest {
+            actor: 1,
+            apparatus: 1,
+            output_part: 1002,
+            input_force: 100,
+            input_distance: 100,
+            required_travel: 10,
+            movement: Movement {
+                id: 0,
+                from: Place::Stock { region: 1, good },
+                to: Some(Place::Inventory(1)),
+                good,
+                quantity: 2,
+                item: None,
+                batch: None,
+            },
+        };
+        let opening = host.snapshot();
+        let result = host.move_mechanical_loads(&[request], &[]);
+        if disregard {
+            assert_eq!(result.unwrap()[0].outcome, MechanicalLoadOutcome::Moved);
+            assert!(
+                host.snapshot()
+                    .claims
+                    .unwrap()
+                    .events
+                    .iter()
+                    .any(|event| event.person == 1 && event.claimant == 2 && event.witnessed)
+            );
+        } else {
+            assert!(result.is_err());
+            assert_eq!(host.snapshot(), opening);
+        }
+    }
+}
+
+#[test]
+fn chosen_mechanical_loads_use_real_custody_and_physics() {
+    use game_economy::core_interval::{CoreHost, MechanicalLoadOutcome, MechanicalLoadRequest};
+    use game_lots::{Movement, Place};
+    fn run(case: &str, workers: usize) -> serde_json::Value {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let root = root();
+                let mut state = game_economy_cli::core_scenario(
+                    &root.join("content/scenarios/economy-core-mechanical-loads.toml"),
+                    &root.join("content"),
+                )
+                .unwrap()
+                .snapshot();
+                let good = state
+                    .core
+                    .physical
+                    .goods
+                    .iter()
+                    .find(|good| good.name == "timber")
+                    .unwrap()
+                    .id;
+                if case == "stall" {
+                    state.mechanics.as_mut().unwrap().load_materials[0].force_per_unit = 1000;
+                }
+                if case == "broken" {
+                    state.mechanics.as_mut().unwrap().world.catalog.components[0].max_input_force =
+                        50;
+                }
+                if case == "capacity" {
+                    state
+                        .core
+                        .physical
+                        .custody
+                        .containers
+                        .iter_mut()
+                        .find(|row| row.place == Place::Inventory(1))
+                        .unwrap()
+                        .capacity = 1;
+                }
+                let mut host = CoreHost::resume(state).unwrap();
+                let movement = Movement {
+                    id: 0,
+                    from: Place::Stock { region: 1, good },
+                    to: Some(Place::Inventory(1)),
+                    good,
+                    quantity: if case == "unavailable" {
+                        11
+                    } else if case == "contested" {
+                        6
+                    } else {
+                        2
+                    },
+                    item: None,
+                    batch: None,
+                };
+                let request = |actor, apparatus, output_part| MechanicalLoadRequest {
+                    actor,
+                    apparatus,
+                    output_part,
+                    input_force: 100,
+                    input_distance: 100,
+                    required_travel: if case == "short" { 100 } else { 10 },
+                    movement,
+                };
+                let requests = if case == "contested" {
+                    vec![request(1, 1, 1002), request(2, 2, 1004)]
+                } else {
+                    vec![request(1, 1, 1002)]
+                };
+                let before = host.snapshot();
+                let mut invalid = requests[0];
+                invalid.movement.to = Some(Place::Inventory(999));
+                assert!(host.move_mechanical_loads(&[invalid], &[]).is_err());
+                assert_eq!(host.snapshot(), before);
+                if case == "moved" {
+                    let mut attached = requests[0];
+                    attached.movement.from = Place::Person(1);
+                    attached.movement.quantity = 1;
+                    attached.movement.item = Some(1001);
+                    assert!(host.move_mechanical_loads(&[attached], &[]).is_err());
+                    assert_eq!(host.snapshot(), before);
+                }
+                let results = host.move_mechanical_loads(&requests, &[]).unwrap();
+                if case == "contested" {
+                    assert_eq!(
+                        results
+                            .iter()
+                            .filter(|row| row.outcome == MechanicalLoadOutcome::Moved)
+                            .count(),
+                        1
+                    );
+                    assert_eq!(
+                        results
+                            .iter()
+                            .filter(|row| row.outcome == MechanicalLoadOutcome::Unavailable)
+                            .count(),
+                        1
+                    );
+                } else {
+                    let expected = match case {
+                        "moved" => MechanicalLoadOutcome::Moved,
+                        "stall" => MechanicalLoadOutcome::Stalled,
+                        "broken" => MechanicalLoadOutcome::Broken,
+                        "short" => MechanicalLoadOutcome::InsufficientTravel,
+                        _ => MechanicalLoadOutcome::Unavailable,
+                    };
+                    assert_eq!(results[0].outcome, expected);
+                }
+                let state = host.snapshot();
+                let moved = if case == "moved" {
+                    2
+                } else if case == "contested" {
+                    6
+                } else {
+                    0
+                };
+                assert_eq!(
+                    state
+                        .core
+                        .physical
+                        .custody
+                        .containers
+                        .iter()
+                        .find(|row| row.place == Place::Stock { region: 1, good })
+                        .unwrap()
+                        .used,
+                    10 - moved
+                );
+                assert_eq!(
+                    state
+                        .core
+                        .physical
+                        .custody
+                        .containers
+                        .iter()
+                        .find(|row| row.place == Place::Inventory(1))
+                        .unwrap()
+                        .used,
+                    moved
+                );
+                let mechanics = state.mechanics.as_ref().unwrap();
+                if case == "unavailable" || case == "capacity" {
+                    assert!(mechanics.observations.is_empty());
+                    assert_eq!(mechanics.world, before.mechanics.as_ref().unwrap().world);
+                } else {
+                    assert_eq!(mechanics.observations.len(), 1);
+                }
+                if case == "moved" {
+                    assert_eq!(mechanics.observations[0].load_force, 20);
+                }
+                if case == "broken" {
+                    assert!(mechanics.world.apparatus[0].parts[0].broken);
+                }
+                let restored = CoreHost::resume(
+                    serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap(),
+                )
+                .unwrap();
+                assert_eq!(state, restored.snapshot());
+                serde_json::to_value(state).unwrap()
+            })
+    }
+    for case in [
+        "moved",
+        "stall",
+        "broken",
+        "short",
+        "unavailable",
+        "capacity",
+        "contested",
+    ] {
+        assert_eq!(run(case, 1), run(case, 4));
+    }
+}
+
+#[test]
 fn planted_seed_cohorts_can_cross_and_preserve_both_lineages() {
     use game_economy::core_interval::CoreHost;
     use game_economy_agriculture::Phase;

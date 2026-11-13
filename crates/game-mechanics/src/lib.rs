@@ -362,18 +362,24 @@ impl World {
         })
     }
 
-    pub fn commit(&mut self, draft: Draft) -> Result<Vec<Observation>, String> {
+    /// Validate before another owner commits an independently staged draft.
+    pub fn validate_draft(&self, draft: &Draft) -> Result<(), String> {
         if draft.instance != self.instance
             || draft.revision != self.state.revision
             || self.state.last_tick.is_some_and(|last| draft.tick < last)
         {
             return Err("stale mechanical experiment draft".into());
         }
-        let revision = self
-            .state
+        self.state
             .revision
             .checked_add(1)
             .ok_or("mechanics revision overflow")?;
+        Ok(())
+    }
+
+    pub fn commit(&mut self, draft: Draft) -> Result<Vec<Observation>, String> {
+        self.validate_draft(&draft)?;
+        let revision = self.state.revision + 1;
         let prior = std::mem::replace(&mut self.state.apparatus, draft.apparatus);
         self.state.last_tick = Some(draft.tick);
         self.state.revision = revision;

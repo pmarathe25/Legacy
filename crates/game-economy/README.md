@@ -50,6 +50,14 @@ Optional `CoreSites` adds site capacity and maintenance to the limited host. Sit
 
 Optional agriculture stages individual cultivation choices, seed consumption, field growth, and physical harvests at quantum boundaries. Competing plantings use the shared physical arbiter; only accepted actions change fields. Existing field and stock claims inform personal choices, and witnessed field use can affect individual affinity. Optional irrigation consumes real regional water; opening moisture controls growth, while accepted watering affects the following boundary. A data-defined environment can restrict planting, tending, and harvest by season and apply regional exposure with limited shelter. Cultivation and watering currently occur at boundaries without fractional activity time. `settle_with_occupied` accepts exclusions from external owners; `advance_continuous` carries its exclusions into settlement.
 
+`move_mechanical_loads` stages explicitly chosen local load movements with
+apparatus physics. Material resistance is data-defined; physical custody,
+apparatus outcomes, personal observations and claim-use evidence are staged
+before commit. An unavailable load does not generate an experiment, and a
+stalled, broken or insufficient-travel attempt does not transfer the lot.
+The API currently requires an explicit request and does not model partial
+positions or fatigue.
+
 In the optional shared personal-choice round, domain `11` lets a person compare
 bounded local planting and harvest opportunities with other activities and
 idleness. A selected field and seed batch are saved until the boundary; the
