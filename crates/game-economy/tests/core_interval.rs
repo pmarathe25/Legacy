@@ -11,63 +11,127 @@ use game_production_model::{Amount, Good, Recipe, Start};
 #[test]
 fn a_fatal_strike_pauses_a_workers_physical_progress_and_survives_reload() {
     use game_economy::core_interval::PersonalStrike;
-    let mut initial = fixture();
-    initial.people[1].region = Some(1);
-    initial.travel = None;
-    initial.nutrition = None;
-    initial.pending_food.clear();
-    let snapshot: CoreHostSnapshot = serde_json::from_value(serde_json::json!({
+    for with_family in [false, true] {
+        let mut results = Vec::new();
+        for workers in [1, 4] {
+            results.push(rayon::ThreadPoolBuilder::new().num_threads(workers).build().unwrap().install(|| {
+        let mut initial = fixture();
+        initial.people[1].region = Some(1);
+        initial.travel = None;
+        initial.nutrition = None;
+        initial.pending_food.clear();
+        let mut snapshot: CoreHostSnapshot = serde_json::from_value(serde_json::json!({
         "core": initial, "personal_conflict": {"capabilities": [{"person": 2, "max_force": 100}]}
     }))
     .unwrap();
-    let mut host = CoreHost::begin(snapshot, &[(1, 1)]).unwrap();
-    let opening = host.snapshot();
-    assert!(
-        host.strike_people(
-            &[PersonalStrike {
-                actor: 2,
-                target: 1,
-                force: 101
-            }],
-            &[],
-            &[]
-        )
-        .is_err()
-    );
-    assert_eq!(opening, host.snapshot());
-    let harm = host
-        .strike_people(
-            &[PersonalStrike {
-                actor: 2,
-                target: 1,
-                force: 100,
-            }],
-            &[],
-            &[],
+        if with_family {
+            snapshot.family = Some(serde_json::from_value(serde_json::json!({
+            "rules": {"adult_age":2,"min_work_age":2,"fertile_until":10,"gestation":1,
+                "birth_spacing":1,"lifespan_min":11,"lifespan_max":11,"conception_one_in":1,
+                "minimum_health":1,"maximum_hunger":100,"newborn_health":50,
+                "mutation_per_million":0,"mutation_step":0},
+            "members": [
+                {"id":1,"age":3,"genome":{"sex":"Male","alleles":[[100,100],[100,100],[100,100],[100,100]]}},
+                {"id":2,"age":3,"genome":{"sex":"Female","alleles":[[100,100],[100,100],[100,100],[100,100]]}}
+            ],"next_id":3
+        })).unwrap());
+        }
+        let mut host = CoreHost::begin(snapshot, &[(1, 1)]).unwrap();
+        let opening = host.snapshot();
+        assert!(
+            host.strike_people(
+                &[PersonalStrike {
+                    actor: 2,
+                    target: 1,
+                    force: 101
+                }],
+                &[],
+                &[]
+            )
+            .is_err()
+        );
+        assert_eq!(opening, host.snapshot());
+        let harm = host
+            .strike_people(
+                &[PersonalStrike {
+                    actor: 2,
+                    target: 1,
+                    force: 100,
+                }],
+                &[],
+                &[],
+            )
+            .unwrap();
+        assert_eq!(harm[0].after, 0);
+        let state = host.snapshot();
+        assert!(
+            state
+                .core
+                .physical
+                .work_interval
+                .as_ref()
+                .unwrap()
+                .rates
+                .is_empty()
+        );
+        assert_eq!(state.paused_work_rates, vec![(1, 1)]);
+        assert_eq!(
+            state.personal_conflict.as_ref().unwrap().pending_deaths,
+            if with_family { vec![1] } else { vec![] }
+        );
+        if with_family {
+            let mut invalid = state.clone();
+            invalid
+                .personal_conflict
+                .as_mut()
+                .unwrap()
+                .pending_deaths
+                .clear();
+            assert!(CoreHost::resume(invalid).is_err());
+            let mut invalid = state.clone();
+            invalid
+                .personal_conflict
+                .as_mut()
+                .unwrap()
+                .pending_deaths
+                .push(2);
+            assert!(CoreHost::resume(invalid).is_err());
+        }
+        let remaining = state.core.physical.work[0].job.remaining;
+        let mut restored = CoreHost::resume(
+            serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap(),
         )
         .unwrap();
-    assert_eq!(harm[0].after, 0);
-    let state = host.snapshot();
-    assert!(
+        assert_eq!(restored.progress(100).unwrap(), 100);
+        assert_eq!(
+            restored.snapshot().core.physical.work[0].job.remaining,
+            remaining
+        );
+        assert_eq!(restored.progress(900).unwrap(), 900);
+        let events = restored.settle().unwrap();
+        assert!(events.interrupted.contains(&1));
+        let state = restored.snapshot();
+        assert!(state.paused_work_rates.is_empty());
+        assert!(
+            state
+                .personal_conflict
+                .as_ref()
+                .unwrap()
+                .pending_deaths
+                .is_empty()
+        );
+        if with_family {
+            assert!(!state.family.as_ref().unwrap().members[0].alive);
+        }
+        assert_ne!(
+            state.core.physical.work[0].phase,
+            game_lot_runtime::Phase::Working
+        );
         state
-            .core
-            .physical
-            .work_interval
-            .as_ref()
-            .unwrap()
-            .rates
-            .is_empty()
-    );
-    assert_eq!(state.paused_work_rates, vec![(1, 1)]);
-    let remaining = state.core.physical.work[0].job.remaining;
-    let mut restored =
-        CoreHost::resume(serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap())
-            .unwrap();
-    assert_eq!(restored.progress(100).unwrap(), 100);
-    assert_eq!(
-        restored.snapshot().core.physical.work[0].job.remaining,
-        remaining
-    );
+            }));
+        }
+        assert_eq!(results[0], results[1]);
+    }
 }
 
 fn fixture() -> CoreSnapshot {

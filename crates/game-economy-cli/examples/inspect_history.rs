@@ -109,6 +109,7 @@ fn inspect(path: &Path, focus: Focus) -> Result<Value, String> {
     let mut focal_signal_learning = Vec::new();
     let mut focal_choices = Vec::new();
     let mut focal_mechanics = Vec::new();
+    let mut focal_strikes = Vec::new();
     let mut previous_year = None;
     for (index, line) in input.lines().enumerate() {
         let line = line.map_err(|e| e.to_string())?;
@@ -383,6 +384,33 @@ fn inspect(path: &Path, focus: Focus) -> Result<Value, String> {
                                 }
                                 continue;
                             }
+                            if event["kind"] == "personal_strikes" {
+                                if let Focus::Person(person) = focus
+                                    && let Some(rows) = event["events"].as_array()
+                                {
+                                    let strikes: Vec<_> = rows
+                                        .iter()
+                                        .filter(|row| {
+                                            row["actor"].as_u64() == Some(person)
+                                                || row["target"].as_u64() == Some(person)
+                                        })
+                                        .cloned()
+                                        .collect();
+                                    if !strikes.is_empty() {
+                                        let harm: Vec<_> = event["harm"]
+                                            .as_array()
+                                            .into_iter()
+                                            .flatten()
+                                            .filter(|row| row["target"].as_u64() == Some(person))
+                                            .cloned()
+                                            .collect();
+                                        focal_strikes.push(
+                                            json!({"year":year,"tick":event.get("tick"),"events":strikes,"harm":harm}),
+                                        );
+                                    }
+                                }
+                                continue;
+                            }
                             if event["kind"] != "meetings" {
                                 continue;
                             }
@@ -486,7 +514,7 @@ fn inspect(path: &Path, focus: Focus) -> Result<Value, String> {
                 return Err(format!("person {person} was not found in this history"));
             }
             Ok(
-                json!({"scope":scope,"person":person,"first_observed_year":focal_first,"last_year_alive":focal_last_alive,"last_recorded_person_state":focal_person_state,"last_recorded_family_state":focal_last,"family_events":focal_events,"opinion_changes":focal_opinions,"language_events":focal_language,"signal_events":focal_signals,"signal_learning":focal_signal_learning,"personal_choices":focal_choices,"mechanical_experiments":focal_mechanics,"recorded_meetings":focal_meetings}),
+                json!({"scope":scope,"person":person,"first_observed_year":focal_first,"last_year_alive":focal_last_alive,"last_recorded_person_state":focal_person_state,"last_recorded_family_state":focal_last,"family_events":focal_events,"opinion_changes":focal_opinions,"language_events":focal_language,"signal_events":focal_signals,"signal_learning":focal_signal_learning,"personal_choices":focal_choices,"mechanical_experiments":focal_mechanics,"personal_strikes":focal_strikes,"recorded_meetings":focal_meetings}),
             )
         }
         Focus::Animal(animal) => {
@@ -555,13 +583,27 @@ mod tests {
         let mut file = File::create(&path).unwrap();
         let genome = json!({"sex":"Female","alleles":[[100,200],[200,400],[300,500],[400,600]]});
         let snapshot = |alive: bool| json!({"core":{"people":[{"id":1,"health":if alive {100} else {0}}]},"family":{"members":[{"id":1,"alive":alive,"genome":genome}],"events":if alive {vec![json!({"kind":"partnership","people":[1,2],"tick":1})]} else {vec![]},"totals":{"births":0,"deaths":if alive {0} else {1}}},"fauna":{"species":[{"id":1,"name":"grazer"}],"animals":[{"id":1,"species":1,"health":if alive {100} else {0},"genome":genome}]}});
-        for row in [
+        for mut row in [
             json!({"kind":"metadata","calendar":"annual","seed":1,"limitations":["animal parentage is not recorded by the current fauna owner"]}),
             json!({"kind":"initial","year":0,"snapshot":snapshot(true)}),
             json!({"kind":"year","year":1,"snapshot":snapshot(true),"observations":[{"kind":"meetings","events":[{"a":1,"b":2,"tick":1}]},{"kind":"opinion_changes","events":[{"observer":1,"target":2,"tick":1,"before":0,"after":1}]},{"kind":"language_events","events":[{"speaker":1,"listener":2,"tick":1,"sounds":[0]}]},{"kind":"signal_events","events":[{"actor":2,"observer":1,"tick":1,"form":1,"noticed":true,"interpreted":2}]},{"kind":"signal_learning","events":[{"actor":2,"observer":1,"tick":1,"form":1,"good":4,"meaning":2}]},{"kind":"personal_choices","events":[{"actor":1,"outcome":"accepted","tick":1}]},{"kind":"mechanical_experiments","events":[{"actor":1,"outcome":"moved","tick":1}]},{"kind":"animal_population","tick":1,"appeared":[{"id":1,"parents":[2,3]}],"inactive":[]}]}),
             json!({"kind":"year","year":2,"snapshot":snapshot(false),"observations":[]}),
             json!({"kind":"complete","years":2}),
         ] {
+            if row["kind"] == "initial" {
+                row["snapshot"]["core"]["people"]
+                    .as_array_mut()
+                    .unwrap()
+                    .push(json!({"id":2,"health":0}));
+            }
+            if row["kind"] == "year" && row["year"] == 1 {
+                row["observations"].as_array_mut().unwrap().push(json!({
+                    "kind":"personal_strikes",
+                    "events":[{"actor":1,"target":2,"force":8,"defended":2,"harm":6},
+                        {"actor":3,"target":2,"force":5,"defended":2,"harm":3}],
+                    "harm":[{"target":2,"before":10,"after":1}]
+                }));
+            }
             writeln!(file, "{}", row).unwrap();
         }
         drop(file);
@@ -601,6 +643,29 @@ mod tests {
         assert_eq!(person["signal_events"].as_array().unwrap().len(), 1);
         assert_eq!(person["signal_learning"].as_array().unwrap().len(), 1);
         assert_eq!(person["personal_choices"].as_array().unwrap().len(), 1);
+        assert_eq!(person["personal_strikes"][0]["year"], 1);
+        assert_eq!(
+            person["personal_strikes"][0]["events"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+        assert!(
+            person["personal_strikes"][0]["harm"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+        let target = inspect(&path, Focus::Person(2)).unwrap();
+        assert_eq!(
+            target["personal_strikes"][0]["events"]
+                .as_array()
+                .unwrap()
+                .len(),
+            2
+        );
+        assert_eq!(target["personal_strikes"][0]["harm"][0]["after"], 1);
         assert_eq!(
             person["mechanical_experiments"].as_array().unwrap().len(),
             1

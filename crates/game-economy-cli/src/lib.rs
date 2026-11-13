@@ -1012,6 +1012,7 @@ pub fn core_scenario_with_options(
             .sort_unstable_by_key(|row| (row.actor, row.id));
         owner.defenses.sort_unstable_by_key(|row| row.person);
         owner.capabilities.sort_unstable_by_key(|row| row.person);
+        owner.reactions.sort_unstable_by_key(|row| row.person);
     }
     snapshot.personal_conflict = personal_conflict;
     if let Some(config) = work_capabilities {

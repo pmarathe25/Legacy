@@ -648,6 +648,51 @@ fn personal_strikes_are_simultaneous_and_targets_need_not_consent() {
 }
 
 #[test]
+fn strike_reactions_follow_each_person_and_the_physical_outcome() {
+    use game_economy::core_interval::{CoreHost, PersonalStrike};
+    fn run(workers: usize, blocked: bool, reactions: bool) -> serde_json::Value {
+        rayon::ThreadPoolBuilder::new().num_threads(workers).build().unwrap().install(|| {
+            let root = root();
+            let mut state = game_economy_cli::core_scenario(
+                &root.join("content/scenarios/economy-core-personal-conflict.toml"),
+                &root.join("content"),
+            ).unwrap().snapshot();
+            state.opinions = Some(serde_json::from_value(serde_json::json!({
+                "rules":{"minimum":-10,"maximum":10,"initial":0,"fulfilled_gain":1,"default_loss":1,"affinity":{"limit":10}}
+            })).unwrap());
+            let conflict = state.personal_conflict.as_mut().unwrap();
+            if blocked { conflict.defenses[0].reduction = 100; }
+            if reactions {
+                conflict.reactions = serde_json::from_value(serde_json::json!([
+                    {"person":1,"as_actor":{"penetrated":{"affinity":3},"blocked":{"affinity":-2}}},
+                    {"person":2,"as_target":{"penetrated":{"affinity":4},"blocked":{"fear":2}}}
+                ])).unwrap();
+            }
+            let mut host = CoreHost::resume(state).unwrap();
+            let before = host.snapshot();
+            let invalid = [PersonalStrike { actor: 1, target: 2, force: 8 }, PersonalStrike { actor: 1, target: 2, force: 8 }];
+            assert!(host.strike_people(&invalid, &[], &[]).is_err());
+            assert_eq!(host.snapshot(), before);
+            let result = host.advance_continuous(1, &[]).unwrap();
+            assert_eq!(result.failure, None);
+            let state = host.snapshot();
+            let opinion = state.opinions.as_ref().unwrap().index();
+            assert_eq!(opinion.affinity(1, 2), if reactions { if blocked { -2 } else { 3 } } else { 0 });
+            assert_eq!(opinion.affinity(2, 1), if reactions && !blocked { 4 } else { 0 });
+            assert_eq!(opinion.affinity(2, 3), if reactions && !blocked { 4 } else { 0 });
+            assert_eq!(opinion.affinity(3, 2), 0);
+            assert_eq!(opinion.fear(2, 1), if reactions && blocked { 2 } else { 0 });
+            let restored = CoreHost::resume(serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap()).unwrap();
+            assert_eq!(state, restored.snapshot());
+            serde_json::to_value(state).unwrap()
+        })
+    }
+    for (blocked, reactions) in [(false, false), (false, true), (true, true)] {
+        assert_eq!(run(1, blocked, reactions), run(4, blocked, reactions));
+    }
+}
+
+#[test]
 fn saved_strike_intentions_are_not_retargeted() {
     use game_economy::core_interval::{CoreChoiceOutcome, CoreHost, CoreRunEvent, DecisionPhase};
     let root = root();

@@ -43,7 +43,7 @@ mod treatment;
 mod writing;
 pub use conflict::{
     CorePersonalConflict, PersonalAttackPolicy, PersonalDefensePolicy, PersonalHarm,
-    StrikeCapability,
+    PersonalStrikeReaction, StrikeCapability, StrikeFeeling, StrikeInterpretation,
 };
 pub use construction::CoreConstructionResults;
 pub use food_search::{CoreFoodProvision, CoreFoodSearch};
@@ -1066,9 +1066,32 @@ impl CoreHost {
             )?;
         }
         if let Some(owner) = &family {
+            let pending = personal_conflict
+                .as_ref()
+                .map_or(&[][..], |conflict| conflict.pending_deaths.as_slice());
+            if pending.par_iter().any(|id| {
+                owner
+                    .members
+                    .binary_search_by_key(id, |member| member.id)
+                    .ok()
+                    .is_none_or(|index| !owner.members[index].alive)
+            }) {
+                return Err("invalid pending family deaths".into());
+            }
+            let mut staged_people = if pending.is_empty() {
+                None
+            } else {
+                Some(core.people.clone())
+            };
+            if let Some(people) = &mut staged_people {
+                people
+                    .par_iter_mut()
+                    .filter(|person| pending.binary_search(&person.id).is_ok())
+                    .for_each(|person| person.health = 1);
+            }
             game_economy_family::validate(
                 owner,
-                &core.people,
+                staged_people.as_deref().unwrap_or(&core.people),
                 core.physical.tick(),
                 core.rules.max_health,
             )?;
@@ -1078,6 +1101,11 @@ impl CoreHost {
                     core.physical.work(),
                 )?;
             }
+        } else if personal_conflict
+            .as_ref()
+            .is_some_and(|owner| !owner.pending_deaths.is_empty())
+        {
+            return Err("pending family deaths require a family owner".into());
         }
         if let Some(capabilities) = &work_capabilities {
             let recipes: Vec<_> = core
@@ -2381,18 +2409,12 @@ impl CoreHost {
                 .filter(|work| work.phase == game_lot_runtime::Phase::Working)
                 .filter_map(|work| {
                     let id = work.job.worker;
-                    let old = self
-                        .core
-                        .people
-                        .binary_search_by_key(&id, |person| person.id)
-                        .ok()?;
                     let current = draft
                         .people
                         .people
                         .binary_search_by_key(&id, |person| person.id)
                         .ok()?;
-                    (self.core.people[old].health > 0 && draft.people.people[current].health == 0)
-                        .then_some(id)
+                    (draft.people.people[current].health == 0).then_some(id)
                 })
                 .collect();
             deceased.par_sort_unstable();
@@ -2805,6 +2827,9 @@ impl CoreHost {
                 game_economy_work::care::inherit(care, &family.owner, &family.newborns);
             }
             self.family = Some(family.owner);
+            if let Some(conflict) = &mut self.personal_conflict {
+                conflict.pending_deaths.clear();
+            }
             family.newborns
         } else {
             Vec::new()

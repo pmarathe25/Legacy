@@ -39,7 +39,7 @@ fn tracked_changes(root: &Path) -> Option<bool> {
     }
 }
 
-fn observations(events: &[CoreRunEvent]) -> Vec<Value> {
+fn observations(events: &[CoreRunEvent], current_tick: &mut u64) -> Vec<Value> {
     events.iter().filter_map(|event| match event {
         CoreRunEvent::Meetings(rows) if !rows.is_empty() => Some(json!({"kind":"meetings","events":rows})),
         CoreRunEvent::Disease(rows) if !rows.is_empty() => Some(json!({"kind":"disease","events":rows})),
@@ -57,11 +57,15 @@ fn observations(events: &[CoreRunEvent]) -> Vec<Value> {
         CoreRunEvent::Construction(rows) if !rows.is_empty() => Some(json!({"kind":"construction","events":rows})),
         CoreRunEvent::LocalCarries(rows) if !rows.is_empty() => Some(json!({"kind":"local_carrying","events":rows})),
         CoreRunEvent::PersonalChoices(rows) if !rows.is_empty() => Some(json!({"kind":"personal_choices","events":rows})),
+        CoreRunEvent::PersonalStrikes { events, harm } if !events.is_empty() => Some(json!({"kind":"personal_strikes","tick":*current_tick,"events":events,"harm":harm})),
         CoreRunEvent::MechanicalExperiments(rows) if !rows.is_empty() => Some(json!({"kind":"mechanical_experiments","events":rows})),
         CoreRunEvent::HaulingRequests(rows) if !rows.is_empty() => Some(json!({"kind":"hauling_requests","people":rows})),
         CoreRunEvent::HaulingTransfers(rows) if !rows.is_empty() => Some(json!({"kind":"hauling_transfers","outcomes":rows})),
         CoreRunEvent::WrittenPages(rows) if !rows.is_empty() => Some(json!({"kind":"written_pages","items":rows})),
-        CoreRunEvent::Boundary(row) => Some(json!({"kind":"boundary","tick":row.tick,"finished":row.finished,"delivered":row.delivered,"interrupted":row.interrupted})),
+        CoreRunEvent::Boundary(row) => {
+            *current_tick = row.tick;
+            Some(json!({"kind":"boundary","tick":row.tick,"finished":row.finished,"delivered":row.delivered,"interrupted":row.interrupted}))
+        },
         _ => None,
     }).collect()
 }
@@ -159,6 +163,7 @@ fn run(
     // The initial snapshot already contains any events restored from a save.
     // Subsequent events are archived with the year in which they occurred.
     host.take_opinion_events();
+    let mut observation_tick = initial.core.physical.custody.tick;
     let mut previous_animals = animals(&host);
     for year in start_year + 1..=end_year {
         let mut yearly_observations = Vec::new();
@@ -190,7 +195,7 @@ fn run(
                     "year {year}: unexpected elapsed time or boundary count"
                 ));
             }
-            yearly_observations.extend(observations(&result.events));
+            yearly_observations.extend(observations(&result.events, &mut observation_tick));
             let opinion_events = host.take_opinion_events();
             if !opinion_events.is_empty() {
                 yearly_observations
@@ -378,6 +383,41 @@ mod tests {
             .lines()
             .map(|line| serde_json::from_str(line).unwrap())
             .collect()
+    }
+
+    #[test]
+    fn personal_strikes_are_preserved_in_history() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let token = format!(
+            "legacy-strike-history-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+        let scenario = std::env::temp_dir().join(format!("{token}.toml"));
+        let output = std::env::temp_dir().join(format!("{token}.ndjson"));
+        let text =
+            fs::read_to_string(root.join("content/scenarios/economy-core-personal-conflict.toml"))
+                .unwrap()
+                .replace("tick_millis = 900000", "tick_millis = 31536000000");
+        fs::write(&scenario, text).unwrap();
+        run(&root, &scenario, &output, 1, 1, false).unwrap();
+        let rows = records(&output);
+        let strike = rows
+            .iter()
+            .filter(|row| row["kind"] == "year")
+            .flat_map(|row| row["observations"].as_array().unwrap())
+            .find(|event| event["kind"] == "personal_strikes")
+            .unwrap();
+        assert_eq!(strike["events"].as_array().unwrap().len(), 2);
+        assert_eq!(strike["harm"][0]["target"], 2);
+        assert_eq!(strike["harm"][0]["after"], 1);
+        assert_eq!(strike["tick"], 0);
+        fs::remove_file(scenario).unwrap();
+        fs::remove_file(&output).unwrap();
+        fs::remove_file(output.with_extension("year-1.json")).unwrap();
     }
 
     #[test]

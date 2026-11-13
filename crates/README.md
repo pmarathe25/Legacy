@@ -6,7 +6,7 @@ Individual crate READMEs describe their responsibilities and behavioral boundari
 
 [game-mechanics](game-mechanics/README.md) provides parallel apparatus experiments. The interval host supports personal design, experiments, watching, and real load movement with carried identified parts; broader discovery remains unfinished.
 
-[game-personal-conflict](game-personal-conflict/README.md) stages simultaneous individually chosen strikes and target-grouped harm. The interval host owns health consequences and personal choices.
+[game-personal-conflict](game-personal-conflict/README.md) stages simultaneous individually chosen strikes and target-grouped harm. The interval host owns health consequences, personal choices, and optional individually configured reactions to penetrating or blocked strikes.
 
 [game-signals](game-signals/README.md) owns voluntary nonverbal expressions and each observer's own interpretations, reactions and optional memories. Broader signal-driven care and learned interpretations remain unfinished.
 

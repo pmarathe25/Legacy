@@ -231,18 +231,27 @@ impl CoreHost {
             .par_iter()
             .map(|&id| (id, self.core.rules.carrying_capacity))
             .collect();
+        let working: std::collections::HashSet<_> = self
+            .core
+            .physical
+            .work()
+            .par_iter()
+            .filter(|work| work.phase == game_lot_runtime::Phase::Working)
+            .map(|work| work.job.worker)
+            .collect();
         let deceased: Vec<_> = draft
             .people
             .people
             .par_iter()
             .filter(|person| {
                 person.health == 0
-                    && self
-                        .core
-                        .people
-                        .binary_search_by_key(&person.id, |old| old.id)
-                        .ok()
-                        .is_some_and(|index| self.core.people[index].health > 0)
+                    && (working.contains(&person.id)
+                        || self
+                            .core
+                            .people
+                            .binary_search_by_key(&person.id, |old| old.id)
+                            .ok()
+                            .is_some_and(|index| self.core.people[index].health > 0))
             })
             .map(|person| person.id)
             .collect();

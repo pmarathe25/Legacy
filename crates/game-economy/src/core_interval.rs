@@ -31,7 +31,8 @@ pub use host::{
     MechanicalLoadRequest, MechanicalLoadResult, MechanicalMaterial, MechanicalMemory,
     MechanicalPolicy, MechanicalReactions, MechanicalTestimony, MechanicalWatchPolicy,
     MechanicalWitnessRequest, PersonalAttackPolicy, PersonalDefensePolicy, PersonalHarm,
-    StrikeCapability, WitnessedMechanicalResult,
+    PersonalStrikeReaction, StrikeCapability, StrikeFeeling, StrikeInterpretation,
+    WitnessedMechanicalResult,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
