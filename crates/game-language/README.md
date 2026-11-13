@@ -14,7 +14,11 @@ not jointly observable. It lets the speaker use or coin a personal sound form
 and records the listener's interpretation from their opening vocabulary, but
 never teaches the listener the speaker's intended meaning. The caller supplies
 actual disjoint contact and must treat the event's intended meaning as private
-to the speaker. This primitive is not yet wired into mechanical testimony.
+to the speaker. The interval host uses the same ungrounded semantics when a
+personally offered mechanical claim wins the meeting's topic choice; the
+listener's interpretation, rather than the speaker's intention, becomes any
+received testimony. The host does not yet let people ground and learn words
+for mechanical outcomes through witnessed trials.
 
 The ignored `parallel_ungrounded_utterance_benchmark` staged 100,000 proposals
 in median times of 52.5, 32.1, 25.5 and 21.6 ms at one, two, four and six

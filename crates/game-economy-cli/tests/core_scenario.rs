@@ -574,6 +574,7 @@ fn mechanical_testimony_follows_individual_choices_and_can_be_false() {
         receive: bool,
         lie: bool,
         pressure: Option<(u64, u64)>,
+        mapping: u8,
     ) -> serde_json::Value {
         rayon::ThreadPoolBuilder::new()
             .num_threads(workers)
@@ -630,6 +631,30 @@ fn mechanical_testimony_follows_individual_choices_and_can_be_false() {
                     language: None,
                     signals: None,
                 });
+                let claim = game_language::Meaning::MechanicalResult { apparatus: 1, outcome: u8::from(lie) };
+                if mapping != 3 {
+                    let mut language = game_language::Language {
+                        rules: game_language::Rules { sounds: vec!["a".into()], word_length: 1, capacity: 4 },
+                        minds: vec![], events: vec![],
+                    };
+                    language.configure_topics(&[(1, game_language::TopicPolicy { idle: 0, act_on_tie: false,
+                        preferences: vec![game_language::TopicPreference { meaning: claim, enabled: true, value: 10 }] }),
+                        (2, game_language::TopicPolicy { idle: 0, act_on_tie: false, preferences: vec![] })]).unwrap();
+                    language.minds[0].initiative = 1000;
+                    if mapping == 6 {
+                        language.minds[0].topic_policy.as_mut().unwrap().preferences.insert(0, game_language::TopicPreference { meaning: game_language::Meaning::Place(1), enabled: true, value: 20 });
+                    }
+                    language.minds[0].words.push(game_language::Word { meaning: claim, sounds: vec![0] });
+                    if mapping != 1 {
+                        language.minds[1].words.push(game_language::Word { meaning: if mapping == 5 { game_language::Meaning::Object(1) } else if mapping == 2 {
+                            game_language::Meaning::MechanicalResult { apparatus: 2, outcome: 1 }
+                        } else { claim }, sounds: vec![0] });
+                        if mapping == 4 {
+                            language.minds[1].words.push(game_language::Word { meaning: game_language::Meaning::MechanicalResult { apparatus: 2, outcome: 1 }, sounds: vec![0] });
+                        }
+                    }
+                    state.social.as_mut().unwrap().language = Some(language);
+                }
                 let memories = &mut state.mechanics.as_mut().unwrap().memories;
                 memories[0].communication = Some(MechanicalCommunication {
                     share,
@@ -656,20 +681,25 @@ fn mechanical_testimony_follows_individual_choices_and_can_be_false() {
                 let mut host = CoreHost::resume(state).unwrap();
                 assert_eq!(host.meet_autonomously(&[]).unwrap().len(), 1);
                 let state = host.snapshot();
+                if let Some(language) = &state.social.as_ref().unwrap().language {
+                    assert!(language.events.iter().filter(|event| matches!(event.meaning, game_language::Meaning::MechanicalResult { .. })).all(|event| !event.learned));
+                }
                 let memories = &state.mechanics.as_ref().unwrap().memories;
-                let sent = receive && (share || pressure.is_some_and(|(fear, obligation)| fear > 0 || obligation > 0));
+                let sent = mapping != 1 && mapping != 3 && mapping != 4 && mapping != 5 && mapping != 6 && receive && (share || pressure.is_some_and(|(fear, obligation)| fear > 0 || obligation > 0));
                 assert_eq!(memories[1].testimony.len(), usize::from(sent));
                 assert!(memories[1].observations.is_empty());
                 if sent {
                     assert_eq!(memories[1].testimony[0].speaker, 1);
+                    assert_eq!(memories[1].testimony[0].apparatus, if mapping == 2 { 2 } else { 1 });
                     assert_eq!(
                         memories[1].testimony[0].claimed_outcome,
-                        if lie {
+                        if lie || mapping == 2 {
                             game_mechanics::Outcome::Stalled
                         } else {
                             game_mechanics::Outcome::Moved
                         }
                     );
+                    if mapping == 0 {
                     let mut recipient = state.clone();
                     let containers = &mut recipient.core.physical.custody.containers;
                     let source = containers
@@ -719,6 +749,7 @@ fn mechanical_testimony_follows_individual_choices_and_can_be_false() {
                         persuaded.preview_personal_device_trials(&[2], &[]).unwrap()[0].value,
                         if lie { -99 } else { 101 }
                     );
+                    }
                 }
                 assert_eq!(
                     CoreHost::resume(
@@ -731,19 +762,25 @@ fn mechanical_testimony_follows_individual_choices_and_can_be_false() {
                 serde_json::to_value(state).unwrap()
             })
     }
-    for (share, receive, lie, pressure) in [
-        (true, true, false, None),
-        (true, true, true, None),
-        (false, true, false, None),
-        (true, false, false, None),
-        (false, true, false, Some((0, 0))),
-        (false, true, false, Some((2, 0))),
-        (false, true, true, Some((2, 0))),
-        (false, true, false, Some((0, 2))),
+    for (share, receive, lie, pressure, mapping) in [
+        (true, true, false, None, 0),
+        (true, true, true, None, 0),
+        (false, true, false, None, 0),
+        (true, false, false, None, 0),
+        (false, true, false, Some((0, 0)), 0),
+        (false, true, false, Some((2, 0)), 0),
+        (false, true, true, Some((2, 0)), 0),
+        (false, true, false, Some((0, 2)), 0),
+        (true, true, false, None, 1),
+        (true, true, false, None, 2),
+        (true, true, false, None, 3),
+        (true, true, false, None, 4),
+        (true, true, false, None, 5),
+        (true, true, false, None, 6),
     ] {
         assert_eq!(
-            run(1, share, receive, lie, pressure),
-            run(4, share, receive, lie, pressure)
+            run(1, share, receive, lie, pressure, mapping),
+            run(4, share, receive, lie, pressure, mapping)
         );
     }
 }

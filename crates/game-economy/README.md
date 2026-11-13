@@ -88,8 +88,12 @@ and remains distinct from firsthand memory. A listener may opt to let it
 affect their own reaction when they have no firsthand observation of that
 apparatus. An unwilling speaker can also disclose when their own configured
 fear or obligation threshold toward that listener is met; neither response is
-imposed on people without such a threshold. This slice does not yet require a
-shared language.
+imposed on people without such a threshold. A report competes with other
+topics in the meeting's language choice. The listener must hear and interpret
+the sound as a mechanical claim, and retains their own interpretation, which
+may differ from the speaker's intention. Missing, unknown, or ambiguous
+language does not convey a claim. Characters cannot yet learn mechanical
+outcome words from witnessed experiments.
 
 For example, a `[[mechanics.memories]]` entry may contain
 `communication = { share = true, receive = true, use_testimony = false, misrepresent = "stalled" }`.
@@ -97,13 +101,12 @@ The same person's `reactions = { moved = 2, stalled = -3 }` can assign their own
 signed interest to those outcomes.
 
 With `LEGACY_MECHANICAL_TESTIMONY=1 LEGACY_PEOPLE=50000`, the ignored
-`core_host_social_benchmark` measured 24,999 meetings with two retained claims
-per meeting. Samples at one, two, four and six workers took 55.4, 34.2, 21.7
-and 19.9 ms, with matching fingerprints. Setup and snapshot hashing were
-excluded; these are synthetic, sublinear measurements.
-With `LEGACY_TESTIMONY_PRESSURE=1`, both speakers respond to their own directed
-fear of the listener. A separate run took 69.6, 34.1, 21.7 and 19.6 ms at the
-same worker counts, with matching fingerprints.
+`core_host_social_benchmark` measured 24,999 meetings, each with one selected
+and interpreted claim. Samples at one, two, four and six workers took 147.9,
+70.7, 49.3 and 40.2 ms with matching fingerprints. Adding
+`LEGACY_TESTIMONY_PRESSURE=1` produced separate samples of 144.6, 76.3, 47.2
+and 49.1 ms. Setup and snapshot hashing are excluded; these synthetic workloads
+remain sublinear and do not measure a complete simulation.
 
 The ignored `mechanical_design_scaling` benchmark measured 100,000 complete
 scheduled design and assembly choices. Median times at one, two, four and six

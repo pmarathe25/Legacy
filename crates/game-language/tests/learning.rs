@@ -138,6 +138,170 @@ fn ungrounded_speakers_can_coin_or_refuse_without_teaching_listeners() {
     );
 }
 
+#[test]
+fn personal_claims_compete_with_grounded_topics_and_decode_subjectively() {
+    let intended = Meaning::MechanicalResult {
+        apparatus: 1,
+        outcome: 0,
+    };
+    let mistaken = Meaning::MechanicalResult {
+        apparatus: 2,
+        outcome: 1,
+    };
+    let mut state = language();
+    state
+        .configure_topics(&[
+            (
+                1,
+                TopicPolicy {
+                    idle: 0,
+                    act_on_tie: false,
+                    preferences: vec![
+                        TopicPreference {
+                            meaning: Meaning::Place(7),
+                            enabled: true,
+                            value: 1,
+                        },
+                        TopicPreference {
+                            meaning: intended,
+                            enabled: true,
+                            value: 10,
+                        },
+                    ],
+                },
+            ),
+            (
+                2,
+                TopicPolicy {
+                    idle: 0,
+                    act_on_tie: false,
+                    preferences: vec![],
+                },
+            ),
+        ])
+        .unwrap();
+    state.minds[0].initiative = 1000;
+    state.minds[0].words.push(Word {
+        meaning: intended,
+        sounds: vec![0, 1],
+    });
+    state.minds[1].words.push(Word {
+        meaning: mistaken,
+        sounds: vec![0, 1],
+    });
+    state.minds[1].adoption = 1000;
+    let meeting = GroundedMeeting {
+        a: 1,
+        b: 2,
+        a_topics: vec![Meaning::Place(7)],
+        b_topics: vec![Meaning::Place(7)],
+    };
+    let result = state
+        .prepare_mixed_with_affinity(
+            std::slice::from_ref(&meeting),
+            Some(&[(Some(intended), None)]),
+            7,
+            1,
+            &|_, _| 0,
+        )
+        .unwrap();
+    assert_eq!(result.events.len(), 1);
+    assert_eq!(result.events[0].meaning, intended);
+    assert_eq!(result.events[0].interpreted, Some(mistaken));
+    assert!(!result.events[0].learned);
+    assert_eq!(result.minds[1].words, state.minds[1].words);
+    let ordinary = state
+        .prepare_mixed_with_affinity(&[meeting], Some(&[(None, None)]), 7, 1, &|_, _| 0)
+        .unwrap();
+    assert_eq!(ordinary.events[0].meaning, Meaning::Place(7));
+    assert!(ordinary.events[0].learned);
+}
+
+#[test]
+fn mixed_batch_grounds_only_the_observable_meetings() {
+    let claim = Meaning::MechanicalResult {
+        apparatus: 1,
+        outcome: 0,
+    };
+    let mut state = language();
+    let preference = |meaning| TopicPolicy {
+        idle: 0,
+        act_on_tie: false,
+        preferences: vec![TopicPreference {
+            meaning,
+            enabled: true,
+            value: 10,
+        }],
+    };
+    state
+        .configure_topics(&[
+            (1, preference(claim)),
+            (
+                2,
+                TopicPolicy {
+                    idle: 0,
+                    act_on_tie: false,
+                    preferences: vec![],
+                },
+            ),
+            (3, preference(Meaning::Place(7))),
+            (
+                4,
+                TopicPolicy {
+                    idle: 0,
+                    act_on_tie: false,
+                    preferences: vec![],
+                },
+            ),
+        ])
+        .unwrap();
+    state.minds[0].initiative = 1000;
+    state.minds[2].initiative = 1000;
+    state.minds[1].adoption = 1000;
+    state.minds[3].adoption = 1000;
+    let meetings = vec![
+        GroundedMeeting {
+            a: 1,
+            b: 2,
+            a_topics: vec![Meaning::Place(7)],
+            b_topics: vec![Meaning::Place(7)],
+        },
+        GroundedMeeting {
+            a: 3,
+            b: 4,
+            a_topics: vec![Meaning::Place(7)],
+            b_topics: vec![Meaning::Place(7)],
+        },
+    ];
+    let next = state
+        .prepare_mixed_with_affinity(
+            &meetings,
+            Some(&[(Some(claim), None), (None, None)]),
+            7,
+            1,
+            &|_, _| 0,
+        )
+        .unwrap();
+    assert_eq!(next.events.len(), 2);
+    assert!(
+        !next
+            .events
+            .iter()
+            .find(|event| event.speaker == 1)
+            .unwrap()
+            .learned
+    );
+    assert!(
+        next.events
+            .iter()
+            .find(|event| event.speaker == 3)
+            .unwrap()
+            .learned
+    );
+    assert!(next.minds[1].words.is_empty());
+    assert_eq!(next.minds[3].words.len(), 1);
+}
+
 fn language() -> Language {
     Language {
         rules: Rules {

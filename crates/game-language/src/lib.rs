@@ -64,6 +64,11 @@ pub enum Meaning {
     Person(u64),
     /// An observable physical signal form, not its private intention.
     Signal(u32),
+    /// A proposition about one apparatus and a reported mechanical outcome.
+    MechanicalResult {
+        apparatus: u64,
+        outcome: u8,
+    },
 }
 
 impl Meaning {
@@ -74,12 +79,16 @@ impl Meaning {
             Self::Need(id) => random(u64::from(id) ^ 3),
             Self::Person(id) => random(id ^ 4),
             Self::Signal(id) => random(u64::from(id) ^ 5),
+            Self::MechanicalResult { apparatus, outcome } => {
+                random(apparatus ^ u64::from(outcome).rotate_left(37) ^ 6)
+            }
         }
     }
     fn valid(self) -> bool {
         match self {
             Self::Place(id) | Self::Person(id) => id != 0,
             Self::Object(id) | Self::Need(id) | Self::Signal(id) => id != 0,
+            Self::MechanicalResult { apparatus, outcome } => apparatus != 0 && outcome < 4,
         }
     }
 
@@ -349,6 +358,28 @@ impl Language {
         tick: u64,
         affinity: &F,
     ) -> Result<Self, &'static str> {
+        self.prepare_mixed_with_affinity(meetings, None, seed, tick, affinity)
+    }
+
+    /// Arbitrate grounded topics and personal assertions together.
+    pub fn prepare_mixed_with_affinity<F: Fn(u64, u64) -> i32 + Sync>(
+        &self,
+        meetings: &[GroundedMeeting],
+        claims: Option<&[(Option<Meaning>, Option<Meaning>)]>,
+        seed: u64,
+        tick: u64,
+        affinity: &F,
+    ) -> Result<Self, &'static str> {
+        if claims.is_some_and(|rows| {
+            rows.len() != meetings.len()
+                || rows.par_iter().any(|(a, b)| {
+                    [a, b].into_iter().flatten().any(|claim| {
+                        !matches!(claim, Meaning::MechanicalResult { .. }) || !claim.valid()
+                    })
+                })
+        }) {
+            return Err("invalid ungrounded claim offers");
+        }
         if meetings.par_iter().any(|meeting| {
             let valid = |topics: &[Meaning]| {
                 !topics.is_empty()
@@ -375,8 +406,10 @@ impl Language {
         }
         let selected: Vec<_> = meetings
             .par_iter()
-            .map(|meeting| {
-                let offer = |person: u64, observed: &[Meaning]| {
+            .enumerate()
+            .map(|(position, meeting)| {
+                let offered = claims.map_or((None, None), |rows| rows[position]);
+                let offer = |person: u64, observed: &[Meaning], claim: Option<Meaning>| {
                     let fresh = Mind::fresh(person);
                     let mind = self
                         .minds
@@ -390,9 +423,13 @@ impl Language {
                             && self.can_form(mind, meaning, seed, tick, affinity)
                     };
                     match &mind.topic_policy {
-                        None => observed.iter().copied().find(|meaning| {
-                            matches!(meaning, Meaning::Place(_)) && eligible(*meaning)
-                        }),
+                        None => observed
+                            .iter()
+                            .copied()
+                            .find(|meaning| {
+                                matches!(meaning, Meaning::Place(_)) && eligible(*meaning)
+                            })
+                            .map(|meaning| (meaning, true)),
                         Some(policy) => policy
                             .preferences
                             .iter()
@@ -400,7 +437,8 @@ impl Language {
                                 topic.enabled
                                     && (topic.value > policy.idle
                                         || (topic.value == policy.idle && policy.act_on_tie))
-                                    && observed.binary_search(&topic.meaning).is_ok()
+                                    && (observed.binary_search(&topic.meaning).is_ok()
+                                        || claim == Some(topic.meaning))
                                     && eligible(topic.meaning)
                             })
                             .max_by_key(|topic| {
@@ -412,21 +450,26 @@ impl Language {
                                     topic.meaning,
                                 )
                             })
-                            .map(|topic| topic.meaning),
+                            .map(|topic| {
+                                (
+                                    topic.meaning,
+                                    observed.binary_search(&topic.meaning).is_ok(),
+                                )
+                            }),
                     }
                 };
-                let a = offer(meeting.a, &meeting.a_topics);
-                let b = offer(meeting.b, &meeting.b_topics);
+                let a = offer(meeting.a, &meeting.a_topics, offered.0);
+                let b = offer(meeting.b, &meeting.b_topics, offered.1);
                 let selected = match (a, b) {
                     (None, None) => None,
-                    (Some(meaning), None) => Some((meeting.a, meaning)),
-                    (None, Some(meaning)) => Some((meeting.b, meaning)),
+                    (Some((meaning, grounded)), None) => Some((meeting.a, meaning, grounded)),
+                    (None, Some((meaning, grounded))) => Some((meeting.b, meaning, grounded)),
                     (Some(_a), Some(b))
                         if random(seed ^ tick ^ meeting.a ^ meeting.b.rotate_left(17)) & 1 != 0 =>
                     {
-                        Some((meeting.b, b))
+                        Some((meeting.b, b.0, b.1))
                     }
-                    (Some(a), Some(_)) => Some((meeting.a, a)),
+                    (Some(a), Some(_)) => Some((meeting.a, a.0, a.1)),
                 };
                 let place = meeting
                     .a_topics
@@ -441,11 +484,21 @@ impl Language {
                         meaning: selected.map_or(place, |row| row.1),
                     },
                     selected.map(|row| row.0),
+                    selected.is_none_or(|row| row.2),
                 )
             })
             .collect();
-        let (meetings, speakers): (Vec<_>, Vec<_>) = selected.into_par_iter().unzip();
-        self.prepare_internal(&meetings, Some(&speakers), seed, tick, affinity, true)
+        let meetings: Vec<_> = selected.par_iter().map(|row| row.0).collect();
+        let speakers: Vec<_> = selected.par_iter().map(|row| row.1).collect();
+        let grounded: Vec<_> = selected.par_iter().map(|row| row.2).collect();
+        self.prepare_internal(
+            &meetings,
+            Some(&speakers),
+            seed,
+            tick,
+            affinity,
+            Some(&grounded),
+        )
     }
 
     pub fn validate(&self, people: &HashSet<u64>, now: u64) -> Result<(), &'static str> {
@@ -524,7 +577,7 @@ impl Language {
         seed: u64,
         tick: u64,
     ) -> Result<Self, &'static str> {
-        self.prepare_internal(meetings, None, seed, tick, &|_, _| 0, true)
+        self.prepare_internal(meetings, None, seed, tick, &|_, _| 0, None)
     }
 
     /// Stage assertions from opening vocabularies without teaching a listener
@@ -546,7 +599,15 @@ impl Language {
             })
             .collect();
         let speakers: Vec<_> = utterances.par_iter().map(|row| Some(row.speaker)).collect();
-        self.prepare_internal(&meetings, Some(&speakers), seed, tick, &|_, _| 0, false)
+        let grounded = vec![false; meetings.len()];
+        self.prepare_internal(
+            &meetings,
+            Some(&speakers),
+            seed,
+            tick,
+            &|_, _| 0,
+            Some(&grounded),
+        )
     }
 
     fn prepare_internal<F: Fn(u64, u64) -> i32 + Sync>(
@@ -556,7 +617,7 @@ impl Language {
         seed: u64,
         tick: u64,
         affinity: &F,
-        grounded: bool,
+        grounded: Option<&[bool]>,
     ) -> Result<Self, &'static str> {
         if self.rules.sounds.is_empty()
             || self.rules.sounds.len() > 256
@@ -606,6 +667,7 @@ impl Language {
             participants.par_sort_unstable();
         }
         if tick == 0
+            || grounded.is_some_and(|rows| rows.len() != meetings.len())
             || speakers.is_some_and(|rows| {
                 rows.len() != meetings.len()
                     || rows.iter().zip(meetings).any(|(speaker, meeting)| {
@@ -749,7 +811,7 @@ impl Language {
                         };
                     }
                 }
-                let learned = grounded
+                let learned = grounded.is_none_or(|rows| rows[meeting_index])
                     && target.hear
                     && target.learn
                     && random(seed ^ tick.rotate_left(23) ^ listener ^ speaker) % 1000

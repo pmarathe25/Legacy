@@ -159,6 +159,9 @@ impl CoreHost {
             .social
             .as_ref()
             .map_or_else(Vec::new, |owner| owner.events.par_iter().cloned().collect());
+        let mechanical_claims = social
+            .and_then(|owner| owner.language.as_ref())
+            .and_then(|_| self.mechanical_claim_offers(&meetings));
         let language = social
             .and_then(|social| social.language.as_ref())
             .map(|language| {
@@ -289,7 +292,13 @@ impl CoreHost {
                         .map_or(0, |index| index.affinity(observer, target))
                 };
                 language
-                    .prepare_grounded_with_affinity(&rows, self.core.seed, tick, &affinity)
+                    .prepare_mixed_with_affinity(
+                        &rows,
+                        mechanical_claims.as_deref(),
+                        self.core.seed,
+                        tick,
+                        &affinity,
+                    )
                     .map_err(str::to_owned)
             })
             .transpose()?;
@@ -408,7 +417,9 @@ impl CoreHost {
             .social
             .as_ref()
             .and_then(|social| self.stage_skill_teaching(social, tick));
-        let mechanical_testimony = self.stage_mechanical_testimony(&meetings, tick);
+        let mechanical_testimony = language
+            .as_ref()
+            .and_then(|language| self.stage_mechanical_testimony(&language.events, tick));
         let writing = self.writing.as_ref().and_then(|opening| {
             if opening.study.is_empty() || meetings.is_empty() {
                 return None;

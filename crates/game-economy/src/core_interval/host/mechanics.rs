@@ -371,14 +371,10 @@ impl CoreMechanics {
                     || memory.testimony.iter().any(|report| {
                         report.speaker == memory.person
                             || report.tick > core.physical.tick()
+                            || report.apparatus == 0
                             || core
                                 .people
                                 .binary_search_by_key(&report.speaker, |person| person.id)
-                                .is_err()
-                            || self
-                                .world
-                                .apparatus
-                                .binary_search_by_key(&report.apparatus, |machine| machine.id)
                                 .is_err()
                     })
             })
@@ -517,11 +513,15 @@ impl Runtime {
 }
 
 impl CoreHost {
-    pub(super) fn stage_mechanical_testimony(
+    pub(super) fn mechanical_claim_offers(
         &self,
         meetings: &[game_social::Encounter],
-        tick: u64,
-    ) -> Option<Vec<MechanicalMemory>> {
+    ) -> Option<
+        Vec<(
+            Option<game_language::Meaning>,
+            Option<game_language::Meaning>,
+        )>,
+    > {
         let owner = self.mechanics.as_ref()?;
         if meetings.is_empty()
             || !owner.memories.par_iter().any(|memory| {
@@ -542,49 +542,92 @@ impl CoreHost {
         let feelings = pressured
             .then(|| self.opinions.as_ref().map(game_opinions::Opinions::index))
             .flatten();
-        let mut reports: Vec<_> = meetings
+        let offer = |speaker, recipient| {
+            let speaker_person = indexed(&self.core.people, speaker, |row| row.id)?;
+            let recipient_person = indexed(&self.core.people, recipient, |row| row.id)?;
+            if speaker_person.controlled
+                || recipient_person.controlled
+                || speaker_person.health == 0
+                || recipient_person.health == 0
+            {
+                return None;
+            }
+            let source = indexed(&owner.memories, speaker, |memory| memory.person)?;
+            let policy = source.communication?;
+            let (fear, obligation) = feelings
+                .as_ref()
+                .map_or((0, 0), |index| index.feelings(speaker, recipient));
+            if !policy.share
+                && !policy
+                    .share_fear_at_least
+                    .is_some_and(|limit| fear >= limit)
+                && !policy
+                    .share_obligation_at_least
+                    .is_some_and(|limit| obligation >= limit)
+            {
+                return None;
+            }
+            let observation = source.observations.last()?;
+            let outcome = match policy.misrepresent.unwrap_or(observation.outcome) {
+                game_mechanics::Outcome::Moved => 0,
+                game_mechanics::Outcome::Stalled => 1,
+                game_mechanics::Outcome::Broken => 2,
+                game_mechanics::Outcome::Contended => 3,
+            };
+            Some(game_language::Meaning::MechanicalResult {
+                apparatus: observation.apparatus,
+                outcome,
+            })
+        };
+        Some(
+            meetings
+                .par_iter()
+                .map(|meeting| (offer(meeting.a, meeting.b), offer(meeting.b, meeting.a)))
+                .collect(),
+        )
+    }
+
+    pub(super) fn stage_mechanical_testimony(
+        &self,
+        events: &[game_language::Event],
+        tick: u64,
+    ) -> Option<Vec<MechanicalMemory>> {
+        let owner = self.mechanics.as_ref()?;
+        let mut reports: Vec<_> = events
             .par_iter()
-            .flat_map_iter(|meeting| [(meeting.a, meeting.b), (meeting.b, meeting.a)])
-            .filter_map(|(speaker, recipient)| {
-                let speaker_person = indexed(&self.core.people, speaker, |row| row.id)?;
-                let recipient_person = indexed(&self.core.people, recipient, |row| row.id)?;
-                if speaker_person.controlled
-                    || recipient_person.controlled
-                    || speaker_person.health == 0
-                    || recipient_person.health == 0
-                {
+            .filter_map(|event| {
+                if !matches!(
+                    event.meaning,
+                    game_language::Meaning::MechanicalResult { .. }
+                ) {
                     return None;
                 }
-                let source = indexed(&owner.memories, speaker, |memory| memory.person)?;
-                let destination = indexed(&owner.memories, recipient, |memory| memory.person)?;
-                let policy = source.communication?;
-                let (fear, obligation) = feelings
-                    .as_ref()
-                    .map_or((0, 0), |index| index.feelings(speaker, recipient));
-                if !policy.share
-                    && !policy
-                        .share_fear_at_least
-                        .is_some_and(|limit| fear >= limit)
-                    && !policy
-                        .share_obligation_at_least
-                        .is_some_and(|limit| obligation >= limit)
-                {
+                let game_language::Meaning::MechanicalResult { apparatus, outcome } =
+                    event.interpreted?
+                else {
                     return None;
-                }
+                };
+                let claimed_outcome = match outcome {
+                    0 => game_mechanics::Outcome::Moved,
+                    1 => game_mechanics::Outcome::Stalled,
+                    2 => game_mechanics::Outcome::Broken,
+                    3 => game_mechanics::Outcome::Contended,
+                    _ => return None,
+                };
+                let destination = indexed(&owner.memories, event.listener, |memory| memory.person)?;
                 if !destination
                     .communication
                     .is_some_and(|policy| policy.receive)
                 {
                     return None;
                 }
-                let observation = source.observations.last()?;
                 Some((
-                    recipient,
+                    event.listener,
                     MechanicalTestimony {
-                        speaker,
+                        speaker: event.speaker,
                         tick,
-                        apparatus: observation.apparatus,
-                        claimed_outcome: policy.misrepresent.unwrap_or(observation.outcome),
+                        apparatus,
+                        claimed_outcome,
                     },
                 ))
             })
