@@ -1,5 +1,143 @@
 use game_mechanics::{Apparatus, Catalog, Experiment, Outcome, Part, Snapshot, World};
 
+#[test]
+fn assemblies_reserve_all_parts_and_reject_stale_drafts() {
+    use game_mechanics::Assembly;
+    fn run(workers: usize) -> (Snapshot, Vec<game_mechanics::AssemblyOutcome>) {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = world(1);
+                let first = machine(2);
+                let mut second = first.clone();
+                second.id = 3;
+                let requests = vec![
+                    Assembly {
+                        actor: 1,
+                        apparatus: first,
+                    },
+                    Assembly {
+                        actor: 2,
+                        apparatus: second,
+                    },
+                    Assembly {
+                        actor: 3,
+                        apparatus: machine(4),
+                    },
+                ];
+                let before = world.snapshot();
+                let stale = world.prepare_assemblies(1, 7, &requests).unwrap();
+                let draft = world.prepare_assemblies(1, 7, &requests).unwrap();
+                assert_eq!(before, world.snapshot());
+                let outcomes = world.commit_assemblies(draft).unwrap();
+                assert_eq!(outcomes.iter().filter(|row| row.accepted).count(), 2);
+                assert!(outcomes[2].accepted);
+                let after = world.snapshot();
+                assert!(world.commit_assemblies(stale).is_err());
+                assert_eq!(after, world.snapshot());
+                assert_eq!(
+                    World::compile(
+                        serde_json::from_str(&serde_json::to_string(&after).unwrap()).unwrap()
+                    )
+                    .unwrap()
+                    .snapshot(),
+                    after
+                );
+                (after, outcomes)
+            })
+    }
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
+fn invalid_or_already_used_assembly_parts_do_not_mutate_world() {
+    use game_mechanics::Assembly;
+    let mut world = world(1);
+    let before = world.snapshot();
+    let mut reused = machine(1);
+    reused.id = 2;
+    let draft = world
+        .prepare_assemblies(
+            1,
+            9,
+            &[Assembly {
+                actor: 1,
+                apparatus: reused,
+            }],
+        )
+        .unwrap();
+    assert!(!draft.outcomes()[0].accepted);
+    world.commit_assemblies(draft).unwrap();
+    assert_eq!(world.snapshot(), before);
+    let mut invalid = machine(3);
+    std::sync::Arc::make_mut(&mut invalid.parts)[1].parent = Some(999);
+    assert!(
+        world
+            .prepare_assemblies(
+                1,
+                9,
+                &[Assembly {
+                    actor: 1,
+                    apparatus: invalid
+                }]
+            )
+            .is_err()
+    );
+    assert_eq!(world.snapshot(), before);
+}
+
+#[test]
+#[ignore = "manual assembly scaling benchmark"]
+fn assembly_scaling() {
+    use game_mechanics::Assembly;
+    let count = std::env::var("LEGACY_ASSEMBLIES")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(100_000);
+    let contended = std::env::var_os("LEGACY_ASSEMBLY_CONTENDED").is_some();
+    let requests: Vec<_> = (1..=count)
+        .map(|actor| {
+            let mut apparatus = machine(if contended { 1 } else { actor });
+            apparatus.id = actor;
+            Assembly { actor, apparatus }
+        })
+        .collect();
+    let mut reference = None;
+    for workers in [1, 2, 4, 6] {
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap();
+        let mut times = Vec::new();
+        for _ in 0..3 {
+            let mut world = world(0);
+            let start = std::time::Instant::now();
+            let outcomes = pool.install(|| {
+                let draft = world.prepare_assemblies(1, 7, &requests).unwrap();
+                world.commit_assemblies(draft).unwrap()
+            });
+            times.push(start.elapsed());
+            assert_eq!(
+                outcomes.iter().filter(|row| row.accepted).count(),
+                if contended { 1 } else { count as usize }
+            );
+            let state = world.snapshot();
+            if let Some(expected) = &reference {
+                assert_eq!(&state, expected);
+            } else {
+                reference = Some(state);
+            }
+        }
+        times.sort_unstable();
+        eprintln!(
+            "{workers} workers: {:?} median for {count} assemblies; contended={contended}",
+            times[1]
+        );
+    }
+}
+
 fn catalog() -> Catalog {
     toml::from_str(include_str!("../../../content/mechanics/basic.toml")).unwrap()
 }

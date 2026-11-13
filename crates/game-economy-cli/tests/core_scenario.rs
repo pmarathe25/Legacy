@@ -566,6 +566,57 @@ fn saved_mechanical_load_intention_never_substitutes_changed_parameters() {
 }
 
 #[test]
+fn explicit_apparatus_assembly_uses_carried_parts_and_survives_reload() {
+    use game_economy::core_interval::CoreHost;
+    use game_mechanics::{Assembly, Experiment};
+    let root = root();
+    let mut state = game_economy_cli::core_scenario(
+        &root.join("content/scenarios/economy-core-mechanics.toml"),
+        &root.join("content"),
+    )
+    .unwrap()
+    .snapshot();
+    let mechanics = state.mechanics.as_mut().unwrap();
+    let apparatus = mechanics.world.apparatus.remove(0);
+    mechanics.policies.clear();
+    mechanics.load_policies.clear();
+    let request = Assembly {
+        actor: 1,
+        apparatus: apparatus.clone(),
+    };
+    let mut host = CoreHost::resume(state).unwrap();
+    let opening = host.snapshot();
+    assert!(
+        host.assemble_mechanical_apparatus(std::slice::from_ref(&request), &[1])
+            .is_err()
+    );
+    let mut absent = request.clone();
+    absent.actor = 2;
+    assert!(host.assemble_mechanical_apparatus(&[absent], &[]).is_err());
+    assert_eq!(opening, host.snapshot());
+    let outcomes = host.assemble_mechanical_apparatus(&[request], &[]).unwrap();
+    assert!(outcomes[0].accepted);
+    let saved = serde_json::to_string(&host.snapshot()).unwrap();
+    let mut restored = CoreHost::resume(serde_json::from_str(&saved).unwrap()).unwrap();
+    assert_eq!(restored.snapshot(), host.snapshot());
+    let experiment = Experiment {
+        actor: 1,
+        apparatus: apparatus.id,
+        output_part: apparatus.parts[1].id,
+        input_force: 100,
+        input_distance: 100,
+        load_force: 20,
+    };
+    assert_eq!(
+        restored
+            .experiment_mechanics(&[experiment], &[])
+            .unwrap()
+            .len(),
+        1
+    );
+}
+
+#[test]
 fn physical_mechanical_loads_compete_with_personal_activities() {
     use game_economy::core_interval::{
         CoreChoiceOutcome, CoreHost, CoreRunEvent, MechanicalLoadOutcome,

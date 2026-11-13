@@ -64,6 +64,11 @@ currently excluded when its source mixes such parts with the requested good.
 The action does not model partial positions or fatigue. The authored
 `economy-core-personal-loads.toml` demonstrates a personal load policy.
 
+`assemble_mechanical_apparatus` accepts explicit actor-chosen designs and checks
+availability and the actor's carried identified parts before staging assembly.
+The owner arbitrates shared part and apparatus identifiers atomically. It does
+not yet schedule assembly as a personal choice or generate designs.
+
 The ignored `mechanical_load_scaling` test with `LEGACY_LOAD_PERSONAL=1`
 measured complete scheduled choice and physical load processing for 100,000
 people. Median times across three runs were 815.5, 480.6, 332.9 and 298.4 ms

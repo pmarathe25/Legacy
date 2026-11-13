@@ -445,6 +445,76 @@ impl Runtime {
 }
 
 impl CoreHost {
+    /// Assemble explicitly chosen designs from the actors' actual carried
+    /// identified parts. This does not grant access or choose for anyone.
+    pub fn assemble_mechanical_apparatus(
+        &mut self,
+        requests: &[game_mechanics::Assembly],
+        occupied: &[u64],
+    ) -> Result<Vec<game_mechanics::AssemblyOutcome>, String> {
+        if occupied.par_windows(2).any(|rows| rows[0] >= rows[1]) {
+            return Err("invalid occupied people".into());
+        }
+        if requests.is_empty() {
+            return Ok(Vec::new());
+        }
+        let tick = self.core.physical.tick();
+        let offset = self.core.elapsed_millis().ok_or("no physical interval")?;
+        if offset >= self.core.physical.tick_millis()
+            || self.core.next_deadline(None)?.after_millis == 0
+        {
+            return Err("publish pending interval events before assembly".into());
+        }
+        let owner = self.mechanics.as_ref().ok_or("mechanics is not enabled")?;
+        let rest = self.blocked_with_rest(occupied);
+        let occupied = rest.as_deref().unwrap_or(occupied);
+        let active: HashSet<_> = self
+            .core
+            .physical
+            .work()
+            .par_iter()
+            .filter(|row| row.phase == game_lot_runtime::Phase::Working)
+            .map(|row| row.job.worker)
+            .collect();
+        if requests.par_iter().any(|request| {
+            indexed(&self.core.people, request.actor, |row| row.id)
+                .is_none_or(|person| person.health == 0 || person.region.is_none())
+                || occupied.binary_search(&request.actor).is_ok()
+                || active.contains(&request.actor)
+                || !carries_parts(
+                    self.core
+                        .physical
+                        .custody(game_lots::Place::Person(request.actor)),
+                    &request.apparatus,
+                    &owner.materials,
+                    tick,
+                )
+        }) {
+            return Err("assembly requires an available actor and carried identified parts".into());
+        }
+        let draft = owner
+            .world
+            .prepare_assemblies(tick, self.core.seed, requests)?;
+        let accepted: HashSet<_> = draft
+            .outcomes()
+            .par_iter()
+            .filter(|row| row.accepted)
+            .map(|row| row.actor)
+            .collect();
+        let mut part_ids = owner.part_ids.clone();
+        part_ids.par_extend(
+            requests
+                .par_iter()
+                .filter(|row| accepted.contains(&row.actor))
+                .flat_map_iter(|row| row.apparatus.parts.iter().map(|part| part.id)),
+        );
+        part_ids.par_sort_unstable();
+        let owner = self.mechanics.as_mut().expect("mechanics checked");
+        let results = owner.world.commit_assemblies(draft)?;
+        owner.part_ids = part_ids;
+        Ok(results)
+    }
+
     /// Inspect each person's willing local load policies without reserving stock.
     pub fn preview_mechanical_loads(
         &self,
