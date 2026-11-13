@@ -100,8 +100,19 @@ observers watch actual experiments without requiring the actor's permission.
 Retaining observers record the outcome and apparatus, not hidden force ratings.
 If the actor and observer both remember that same event at a later meeting,
 their personal language choices can treat the result as grounded and learn a
-sound for it. Watching is currently an explicit caller-selected action and is
-not yet part of the general autonomous choice round.
+sound for it. Optional `[[mechanics.watch_policies]]` can offer watching as
+personal choice domain `14`. The observer may instead choose another activity
+or idle, and the actor remains free not to experiment. A selected watch is
+denied if that actor does not perform a valid experiment in the same round.
+`economy-core-mechanical-watching.toml` provides an example.
+
+With `LEGACY_MECHANICS_WATCH_CHOICES=1 LEGACY_MECHANISMS=50000`, the ignored
+`independent_physical_mechanics_benchmark` includes 50,000 experiment choices
+and 50,000 watch choices. Median times at one, two, four and six workers were
+258.7, 170.8, 132.2 and 124.3 ms. With `LEGACY_WATCH_CONCENTRATED=1`, all
+watchers selected the same target and times were 270.3, 165.7, 139.5 and
+121.5 ms. States and observations matched across worker counts. These synthetic
+workloads scale sublinearly, at about 2.1–2.2 times faster on six workers.
 
 With `LEGACY_MECHANICS_WITNESSES=1 LEGACY_MECHANISMS=50000`, the ignored
 `independent_physical_mechanics_benchmark` measured 50,000 experiments and

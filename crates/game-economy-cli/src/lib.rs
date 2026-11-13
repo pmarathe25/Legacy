@@ -169,6 +169,8 @@ struct MechanicsConfig {
     #[serde(default)]
     load_policies: Vec<MechanicsLoadPolicyConfig>,
     #[serde(default)]
+    watch_policies: Vec<game_economy::core_interval::MechanicalWatchPolicy>,
+    #[serde(default)]
     capabilities: Vec<game_economy::core_interval::MechanicalCapability>,
     #[serde(default)]
     policies: Vec<game_economy::core_interval::MechanicalPolicy>,
@@ -1327,6 +1329,8 @@ pub fn core_scenario_with_options(
             })
             .collect::<Result<_, String>>()?;
         load_policies.sort_unstable_by_key(|row| (row.request.actor, row.id));
+        let mut watch_policies = mechanics.watch_policies;
+        watch_policies.sort_unstable_by_key(|row| (row.observer, row.id));
         mechanics
             .capabilities
             .sort_unstable_by_key(|row| row.person);
@@ -1348,6 +1352,7 @@ pub fn core_scenario_with_options(
             materials,
             load_materials,
             load_policies,
+            watch_policies,
             capabilities: mechanics.capabilities,
             policies: mechanics.policies,
             memories: mechanics.memories,

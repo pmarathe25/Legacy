@@ -26,7 +26,8 @@ pub use host::{
     CoreWritingResults, DecisionPhase, MechanicalCapability, MechanicalCommunication,
     MechanicalLoadMaterial, MechanicalLoadOutcome, MechanicalLoadPolicy, MechanicalLoadRequest,
     MechanicalLoadResult, MechanicalMaterial, MechanicalMemory, MechanicalPolicy,
-    MechanicalReactions, MechanicalTestimony, MechanicalWitnessRequest, WitnessedMechanicalResult,
+    MechanicalReactions, MechanicalTestimony, MechanicalWatchPolicy, MechanicalWitnessRequest,
+    WitnessedMechanicalResult,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

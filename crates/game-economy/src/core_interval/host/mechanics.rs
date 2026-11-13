@@ -186,10 +186,24 @@ pub struct WitnessedMechanicalResult {
 }
 
 /// A person's explicit choice to watch one actor's experiment.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct MechanicalWitnessRequest {
     pub observer: u64,
     pub actor: u64,
+}
+
+/// One person's optional interest in watching a particular other person.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MechanicalWatchPolicy {
+    pub id: u64,
+    pub observer: u64,
+    pub actor: u64,
+    #[serde(default)]
+    pub willing: bool,
+    #[serde(default = "default_experiment_value")]
+    pub value: i64,
 }
 
 /// A person's bounded recollection of their own actual experiments.
@@ -221,6 +235,8 @@ pub struct CoreMechanics {
     pub load_materials: Vec<MechanicalLoadMaterial>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub load_policies: Vec<MechanicalLoadPolicy>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub watch_policies: Vec<MechanicalWatchPolicy>,
     pub capabilities: Vec<MechanicalCapability>,
     #[serde(default)]
     pub policies: Vec<MechanicalPolicy>,
@@ -236,6 +252,7 @@ pub(super) struct Runtime {
     materials: Vec<MechanicalMaterial>,
     load_materials: Vec<MechanicalLoadMaterial>,
     load_policies: Vec<MechanicalLoadPolicy>,
+    watch_policies: Vec<MechanicalWatchPolicy>,
     capabilities: Vec<MechanicalCapability>,
     policies: Vec<MechanicalPolicy>,
     memories: Vec<MechanicalMemory>,
@@ -258,6 +275,24 @@ impl CoreMechanics {
                 .any(|rows| rows[0].good >= rows[1].good)
             || self.load_policies.par_windows(2).any(|rows| {
                 (rows[0].request.actor, rows[0].id) >= (rows[1].request.actor, rows[1].id)
+            })
+            || self
+                .watch_policies
+                .par_windows(2)
+                .any(|rows| (rows[0].observer, rows[0].id) >= (rows[1].observer, rows[1].id))
+            || self.watch_policies.par_iter().any(|policy| {
+                policy.id == 0
+                    || policy.observer == 0
+                    || policy.actor == 0
+                    || policy.observer == policy.actor
+                    || core
+                        .people
+                        .binary_search_by_key(&policy.observer, |person| person.id)
+                        .is_err()
+                    || core
+                        .people
+                        .binary_search_by_key(&policy.actor, |person| person.id)
+                        .is_err()
             })
             || self.load_policies.par_iter().any(|policy| {
                 let request = policy.request;
@@ -496,6 +531,7 @@ impl CoreMechanics {
             materials: self.materials,
             load_materials: self.load_materials,
             load_policies: self.load_policies,
+            watch_policies: self.watch_policies,
             capabilities: self.capabilities,
             policies: self.policies,
             memories: self.memories,
@@ -514,6 +550,7 @@ impl Runtime {
             materials: self.materials.clone(),
             load_materials: self.load_materials.clone(),
             load_policies: self.load_policies.clone(),
+            watch_policies: self.watch_policies.clone(),
             capabilities: self.capabilities.clone(),
             policies: self.policies.clone(),
             memories: self.memories.clone(),
@@ -551,6 +588,55 @@ impl Runtime {
 }
 
 impl CoreHost {
+    /// A person may consider watching another person even if that person later
+    /// chooses not to experiment; no activity is reserved by this preview.
+    pub fn preview_mechanical_watching(
+        &self,
+        occupied: &[u64],
+    ) -> Result<Vec<MechanicalWatchPolicy>, String> {
+        if occupied.par_windows(2).any(|rows| rows[0] >= rows[1]) {
+            return Err("invalid occupied people".into());
+        }
+        let Some(owner) = &self.mechanics else {
+            return Ok(Vec::new());
+        };
+        if owner.watch_policies.is_empty() {
+            return Ok(Vec::new());
+        }
+        let rest = self.blocked_with_rest(occupied);
+        let occupied = rest.as_deref().unwrap_or(occupied);
+        let active: HashSet<_> = self
+            .core
+            .physical
+            .work()
+            .par_iter()
+            .filter(|row| row.phase == game_lot_runtime::Phase::Working)
+            .map(|row| row.job.worker)
+            .collect();
+        let locations = game_economy_person::travel::Colocation::new(self.core.travel.as_ref());
+        Ok(owner
+            .watch_policies
+            .par_iter()
+            .filter(|policy| {
+                let observer = indexed(&self.core.people, policy.observer, |row| row.id);
+                let actor = indexed(&self.core.people, policy.actor, |row| row.id);
+                policy.willing
+                    && observer.is_some_and(|person| {
+                        !person.controlled && person.health > 0 && person.region.is_some()
+                    })
+                    && actor.is_some_and(|person| person.health > 0 && person.region.is_some())
+                    && occupied.binary_search(&policy.observer).is_err()
+                    && !active.contains(&policy.observer)
+                    && observer.zip(actor).is_some_and(|(observer, actor)| {
+                        locations
+                            .region((observer.id, observer.region), (actor.id, actor.region))
+                            .is_some()
+                    })
+            })
+            .copied()
+            .collect())
+    }
+
     pub(super) fn mechanical_claim_offers(
         &self,
         meetings: &[game_social::Encounter],

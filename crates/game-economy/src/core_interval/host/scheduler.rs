@@ -356,6 +356,7 @@ impl CoreSchedule {
                         || intent.cultivation.is_some()
                         || (intent.key.domain != personal_choice::MECHANICAL_LOAD && intent.mechanical_load.is_some())
                         || (intent.key.domain != personal_choice::MECHANICAL_DESIGN && intent.assembly.is_some())
+                        || (intent.key.domain != personal_choice::MECHANICAL_WATCH && intent.watch.is_some())
                         || match (
                             intent.key.domain,
                             intent.movement,
@@ -451,6 +452,12 @@ impl CoreSchedule {
                                     || intent.experiment_value.is_none() || intent.second_movement.is_some()
                                     || assembly.actor != intent.actor || assembly.apparatus.id != intent.key.action
                                     || assembly.apparatus.parts.is_empty()
+                            }
+                            (14, None, None, None) => {
+                                let Some(watch) = intent.watch else { return true; };
+                                intent.health_value.is_some() || intent.tool_damage.is_some() || intent.meal_value.is_some()
+                                    || intent.experiment_value.is_none() || intent.second_movement.is_some()
+                                    || watch.observer != intent.actor || watch.actor == 0 || watch.actor == intent.actor
                             }
                             _ => true,
                         }
@@ -1405,9 +1412,12 @@ impl CoreHost {
                                 })
                                 .is_ok()
                         });
-                        let has_experiments = intents
-                            .par_iter()
-                            .any(|intent| intent.key.domain == personal_choice::EXPERIMENT);
+                        let has_experiments = intents.par_iter().any(|intent| {
+                            matches!(
+                                intent.key.domain,
+                                personal_choice::EXPERIMENT | personal_choice::MECHANICAL_WATCH
+                            )
+                        });
                         let has_meals = intents
                             .par_iter()
                             .any(|intent| intent.key.domain == personal_choice::MEAL);
@@ -1960,9 +1970,23 @@ impl CoreHost {
                         busy.par_sort_unstable();
                         busy.dedup();
                         let people = schedule.personal_choices.as_ref().expect("choice profile");
-                        let (blocked_choice, mut choices) = attempt!('run, self.choice_blocked(
-                            &busy, people, &intents, personal_choice::EXPERIMENT
-                        ));
+                        let has_experiments = intents
+                            .par_iter()
+                            .any(|intent| intent.key.domain == personal_choice::EXPERIMENT);
+                        let has_watchers = intents
+                            .par_iter()
+                            .any(|intent| intent.key.domain == personal_choice::MECHANICAL_WATCH);
+                        let (blocked_choice, mut choices) = if has_experiments {
+                            attempt!('run, self.choice_blocked(&busy, people, &intents, personal_choice::EXPERIMENT))
+                        } else {
+                            (Vec::new(), Vec::new())
+                        };
+                        let (blocked_watch, watch_choices) = if has_watchers {
+                            attempt!('run, self.choice_blocked(&busy, people, &intents, personal_choice::MECHANICAL_WATCH))
+                        } else {
+                            (Vec::new(), Vec::new())
+                        };
+                        choices.par_extend(watch_choices);
                         let selected: Vec<_> = intents
                             .par_iter()
                             .filter(|intent| {
@@ -1971,7 +1995,28 @@ impl CoreHost {
                             })
                             .map(|intent| intent.experiment.expect("validated experiment"))
                             .collect();
-                        let observations = attempt!('run, self.commit_chosen_mechanics(&selected));
+                        let watching: Vec<_> = intents
+                            .par_iter()
+                            .filter(|intent| {
+                                intent.key.domain == personal_choice::MECHANICAL_WATCH
+                                    && blocked_watch.binary_search(&intent.actor).is_err()
+                            })
+                            .map(|intent| intent.watch.expect("validated watch"))
+                            .collect();
+                        let admitted_watchers: Vec<_> = watching
+                            .par_iter()
+                            .filter(|watch| {
+                                selected
+                                    .binary_search_by_key(&watch.actor, |row| row.actor)
+                                    .is_ok()
+                            })
+                            .copied()
+                            .collect();
+                        let observations = if admitted_watchers.is_empty() {
+                            attempt!('run, self.commit_chosen_mechanics(&selected))
+                        } else {
+                            attempt!('run, self.experiment_mechanics_witnessed(&selected, &admitted_watchers, &busy))
+                        };
                         choices.par_extend(observations.par_iter().map(|row| CoreChoiceEvent {
                             tick: self.core.physical.tick(),
                             offset_millis: offset,
@@ -1983,7 +2028,28 @@ impl CoreHost {
                                 CoreChoiceOutcome::Accepted
                             },
                         }));
+                        choices.par_extend(watching.par_iter().map(|watch| {
+                            let seen = observations
+                                .binary_search_by_key(&watch.actor, |row| row.actor)
+                                .ok()
+                                .is_some_and(|index| {
+                                    observations[index].outcome
+                                        != game_mechanics::Outcome::Contended
+                                });
+                            CoreChoiceEvent {
+                                tick: self.core.physical.tick(),
+                                offset_millis: offset,
+                                actor: watch.observer,
+                                key: personal_choice::selected_key(&intents, watch.observer),
+                                outcome: if seen {
+                                    CoreChoiceOutcome::Accepted
+                                } else {
+                                    CoreChoiceOutcome::Denied
+                                },
+                            }
+                        }));
                         meal_people.par_extend(selected.par_iter().map(|row| row.actor));
+                        meal_people.par_extend(watching.par_iter().map(|row| row.observer));
                         meal_people.par_sort_unstable();
                         meal_people.dedup();
                         if !observations.is_empty() {

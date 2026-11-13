@@ -207,6 +207,7 @@ fn mechanical_experiments_require_real_carried_parts_and_survive_reload() {
                 host.enable_mechanics(CoreMechanics {
                     load_materials: vec![],
                     load_policies: vec![],
+                    watch_policies: vec![],
                     world: MechanicsSnapshot {
                         catalog: Catalog {
                             components: vec![
@@ -340,10 +341,13 @@ fn independent_physical_mechanics_benchmark() {
         .ok()
         .and_then(|value| value.parse::<u64>().ok())
         .unwrap_or(20_000);
-    let scheduled = std::env::var_os("LEGACY_MECHANICS_CHOICES").is_some();
-    let witnesses = std::env::var_os("LEGACY_MECHANICS_WITNESSES").is_some();
+    let watch_choices = std::env::var_os("LEGACY_MECHANICS_WATCH_CHOICES").is_some();
+    let concentrated_watch = std::env::var_os("LEGACY_WATCH_CONCENTRATED").is_some();
+    assert!(!concentrated_watch || watch_choices);
+    let scheduled = std::env::var_os("LEGACY_MECHANICS_CHOICES").is_some() || watch_choices;
+    let witnesses = std::env::var_os("LEGACY_MECHANICS_WITNESSES").is_some() || watch_choices;
     let retain = std::env::var_os("LEGACY_MECHANICS_MEMORIES").is_some() || witnesses;
-    assert!(!witnesses || !scheduled);
+    assert!(!witnesses || !scheduled || watch_choices);
     let people_count = if witnesses { 2 * count + 1 } else { count + 1 };
     assert!(count > 0);
     let mut initial = fixture();
@@ -387,6 +391,19 @@ fn independent_physical_mechanics_benchmark() {
     host.enable_mechanics(CoreMechanics {
         load_materials: vec![],
         load_policies: vec![],
+        watch_policies: if watch_choices {
+            (2..=count + 1)
+                .map(|actor| game_economy::core_interval::MechanicalWatchPolicy {
+                    id: 1,
+                    observer: actor + count,
+                    actor: if concentrated_watch { 2 } else { actor },
+                    willing: true,
+                    value: 1,
+                })
+                .collect()
+        } else {
+            vec![]
+        },
         world: MechanicsSnapshot {
             catalog: Catalog {
                 components: vec![Component {
@@ -464,23 +481,37 @@ fn independent_physical_mechanics_benchmark() {
     .unwrap();
     if scheduled {
         host.enable_schedule(1000, 1).unwrap();
-        host.enable_personal_choices(
-            (2..=count + 1)
-                .map(|id| game_personal_choice::Person {
+        let mut choices: Vec<_> = (2..=count + 1)
+            .map(|id| game_personal_choice::Person {
+                id,
+                idle: 0,
+                act_on_tie: false,
+                actions: vec![],
+                preferences: vec![game_personal_choice::Preference {
+                    domain: 6,
+                    enabled: true,
+                    bias: 10,
+                    weight: 1000,
+                }],
+            })
+            .collect();
+        if watch_choices {
+            choices.extend(
+                (count + 2..=people_count).map(|id| game_personal_choice::Person {
                     id,
                     idle: 0,
                     act_on_tie: false,
                     actions: vec![],
                     preferences: vec![game_personal_choice::Preference {
-                        domain: 6,
+                        domain: 14,
                         enabled: true,
                         bias: 10,
                         weight: 1000,
                     }],
-                })
-                .collect(),
-        )
-        .unwrap();
+                }),
+            );
+        }
+        host.enable_personal_choices(choices).unwrap();
     }
     let opening = host.snapshot();
     let requests: Vec<_> = (2..=count + 1)
@@ -563,7 +594,7 @@ fn independent_physical_mechanics_benchmark() {
         }
         samples.sort_unstable();
         eprintln!(
-            "{workers} workers: {:?} median for {count} physical experiments; witnesses={witnesses}",
+            "{workers} workers: {:?} median for {count} physical experiments; witnesses={witnesses}, concentrated={concentrated_watch}",
             samples[1]
         );
     }

@@ -566,6 +566,67 @@ fn saved_mechanical_load_intention_never_substitutes_changed_parameters() {
 }
 
 #[test]
+fn saved_watching_intention_becomes_stale_when_willingness_changes() {
+    use game_economy::core_interval::{CoreChoiceOutcome, CoreHost, CoreRunEvent, DecisionPhase};
+    let root = root();
+    let host = game_economy_cli::core_scenario(
+        &root.join("content/scenarios/economy-core-mechanical-watching.toml"),
+        &root.join("content"),
+    )
+    .unwrap();
+    let (intents, _) = host.preview_personal_choices(&[]).unwrap();
+    let mut state = host.snapshot();
+    state.schedule.as_mut().unwrap().phase = DecisionPhase::ChosenExperiment {
+        meal_people: vec![],
+        intents: std::sync::Arc::new(intents),
+        remaining: 0,
+    };
+    state.mechanics.as_mut().unwrap().watch_policies[0].willing = false;
+    let mut host =
+        CoreHost::resume(serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap())
+            .unwrap();
+    let run = host.advance_continuous(1, &[]).unwrap();
+    assert_eq!(run.failure, None);
+    assert!(run.events.iter().any(|event| matches!(event, CoreRunEvent::PersonalChoices(rows) if rows.iter().any(|row| row.actor == 2 && row.outcome == CoreChoiceOutcome::Stale))));
+    assert!(
+        host.snapshot().mechanics.unwrap().memories[1]
+            .witnessed
+            .is_empty()
+    );
+}
+
+#[test]
+fn people_choose_whether_to_watch_actual_experiments() {
+    use game_economy::core_interval::{CoreChoiceOutcome, CoreHost, CoreRunEvent};
+    fn run(workers: usize, case: &str) -> serde_json::Value {
+        rayon::ThreadPoolBuilder::new().num_threads(workers).build().unwrap().install(|| {
+            let root = root();
+            let mut state = game_economy_cli::core_scenario(&root.join("content/scenarios/economy-core-mechanical-watching.toml"), &root.join("content")).unwrap().snapshot();
+            let people = std::sync::Arc::make_mut(state.schedule.as_mut().unwrap().personal_choices.as_mut().unwrap());
+            if case == "actor_idle" { people[0].idle = 100; }
+            if case == "watcher_idle" { people[1].idle = 100; }
+            let mut host = CoreHost::resume(state).unwrap();
+            let selected = host.preview_personal_choices(&[]).unwrap().0;
+            assert_eq!(selected.iter().find(|row| row.actor == 2).map(|row| row.key.domain), if case == "watcher_idle" { None } else { Some(14) });
+            let result = host.advance_continuous(1, &[]).unwrap();
+            assert_eq!(result.failure, None);
+            let state = host.snapshot();
+            let observed = &state.mechanics.as_ref().unwrap().memories[1].witnessed;
+            assert_eq!(observed.len(), usize::from(case == "watch"));
+            if case != "watcher_idle" {
+                let expected = if case == "watch" { CoreChoiceOutcome::Accepted } else { CoreChoiceOutcome::Denied };
+                assert!(result.events.iter().any(|event| matches!(event, CoreRunEvent::PersonalChoices(rows) if rows.iter().any(|row| row.actor == 2 && row.outcome == expected))));
+            }
+            assert_eq!(CoreHost::resume(serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap()).unwrap().snapshot(), state);
+            serde_json::to_value(state).unwrap()
+        })
+    }
+    for case in ["watch", "actor_idle", "watcher_idle"] {
+        assert_eq!(run(1, case), run(4, case));
+    }
+}
+
+#[test]
 fn witnessed_experiments_can_ground_personal_outcome_words() {
     use game_economy::core_interval::{CoreHost, CoreSocial, MechanicalWitnessRequest};
     fn run(workers: usize, watch: bool, actor_remembers: bool) -> serde_json::Value {
@@ -4623,6 +4684,7 @@ fn stale_saved_carrying_intention_is_reported_without_substituting_an_action() {
         remaining: None,
         meal_people: vec![],
         intents: std::sync::Arc::new(vec![CoreChoiceIntent {
+            watch: None,
             assembly: None,
             mechanical_load: None,
             cultivation: None,
