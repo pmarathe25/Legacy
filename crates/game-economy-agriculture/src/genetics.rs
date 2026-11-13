@@ -2,6 +2,9 @@
 use game_lots::Lot;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+fn is_false(value: &bool) -> bool {
+    !*value
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -17,6 +20,10 @@ pub struct Strain {
 pub struct Descendant {
     pub batch: u64,
     pub parent: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pollen_parent: Option<u64>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub recombined: bool,
     pub alleles: Option<[u16; 2]>,
 }
 
@@ -73,6 +80,10 @@ impl Genetics {
                         .parent
                         .is_some_and(|parent| parent == 0 || parent >= row.batch)
                     || row
+                        .pollen_parent
+                        .is_some_and(|parent| parent == 0 || parent >= row.batch)
+                    || (!row.recombined && row.pollen_parent.is_some())
+                    || row
                         .alleles
                         .is_some_and(|alleles| alleles.iter().any(|allele| *allele > 1000))
                 {
@@ -120,6 +131,10 @@ impl Genetics {
             || rows.iter().any(|row| {
                 row.parent
                     .is_some_and(|parent| parent == 0 || parent >= row.batch)
+                    || row
+                        .pollen_parent
+                        .is_some_and(|parent| parent == 0 || parent >= row.batch)
+                    || (!row.recombined && row.pollen_parent.is_some())
                     || row
                         .alleles
                         .is_some_and(|alleles| alleles.iter().any(|allele| *allele > 1000))
@@ -240,6 +255,8 @@ mod tests {
             .map(|batch| Descendant {
                 batch,
                 parent: None,
+                pollen_parent: None,
+                recombined: false,
                 alleles: Some([batch as u16 % 1001, 500]),
             })
             .collect();

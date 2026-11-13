@@ -13,10 +13,12 @@ fn concentrated_seed_provenance_scaling() {
     let genetic = std::env::var_os("LEGACY_SEED_GENETIC").is_some();
     let reproduction = std::env::var_os("LEGACY_SEED_REPRODUCTION").is_some();
     let learning = std::env::var_os("LEGACY_SEED_LEARNING").is_some();
+    let recombine = std::env::var_os("LEGACY_SEED_RECOMBINE").is_some();
     assert!(!personal || tracking);
     assert!(!genetic || tracking);
     assert!(!reproduction || genetic);
     assert!(!learning || (personal && reproduction));
+    assert!(!recombine || reproduction);
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let capacity = count * 100 + 100;
     let mut text = format!(
@@ -48,7 +50,7 @@ track_seed_batches = {tracking}
         )
         .unwrap();
         if reproduction {
-            writeln!(text, "[cultivation.seed_genetics.reproduction]\nseed_per_thousand = 1000\nmutation_per_million = 1000\nmutation_step = 10").unwrap();
+            writeln!(text, "[cultivation.seed_genetics.reproduction]\nseed_per_thousand = 1000\nmutation_per_million = 1000\nmutation_step = 10\nrecombine = {recombine}").unwrap();
         }
     }
     for id in 1..=count {

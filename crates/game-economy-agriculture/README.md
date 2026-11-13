@@ -58,14 +58,19 @@ physical growth slice. See
 
 Optional `[cultivation.seed_genetics.reproduction]` defines `seed_per_thousand`,
 `mutation_per_million`, and `mutation_step`. At maturation, each planted seed
-cohort produces a clonal descendant, with deterministic mutations to known
-alleles; unknown genetics remain unknown. The physical batch identity and
+cohort produces a descendant, with deterministic mutations to known alleles;
+unknown genetics remain unknown. By default this is clonal. If `recombine` is
+true, pollen is drawn from the actual planted cohorts in the same field,
+weighted by their quantities; selfing is possible. Known parents contribute
+one allele each, and unknown parent genetics remain unknown. Both lineage
+identities are retained where known. The physical batch identity and
 lineage are reserved at maturation and survive save/load and failed harvests.
 An accepted harvest creates its food and seed cohorts in one physical
 transaction. The farmer still chooses whether to cultivate or harvest.
-This slice does not yet model sexual recombination or selection among
+This slice does not yet model pollen between fields or selection among
 individual plants within a cohort. See
-`content/scenarios/economy-core-seed-reproduction.toml`.
+`content/scenarios/economy-core-seed-reproduction.toml` and
+`content/scenarios/economy-core-seed-crossing.toml`.
 
 Optional `[cultivation.soil]` content specifies `capacity`, `loss_per_harvest`, `recovery_per_fallow`, and sorted `fields = [{ field, fertility }, ...]`. A configured field's harvest yields its crop's ordinary output multiplied by fertility over capacity, rounded down with a minimum of one unit. A successful physical harvest depletes fertility; a field that starts a boundary fallow recovers up to capacity. Failed harvests cause no depletion. Fields without a soil record keep their ordinary yield. This is a basic fertility model, not a complete treatment of soils or nutrients.
 

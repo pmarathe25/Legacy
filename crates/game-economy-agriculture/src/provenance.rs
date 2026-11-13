@@ -197,6 +197,8 @@ impl Provenance {
                                     .and_then(|genetics| genetics.descendant(row.batch))
                                     .is_none_or(|lineage| {
                                         lineage.parent != row.parent
+                                            || lineage.pollen_parent != row.pollen_parent
+                                            || lineage.recombined != row.recombined
                                             || lineage.alleles != row.alleles
                                     })
                         })
