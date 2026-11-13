@@ -13,6 +13,7 @@ impl CoreHost {
         if self.tool_requirements.is_empty()
             && self.fatigue.is_none()
             && self.health.is_none()
+            && self.personal_conflict.is_none()
             && self.shared_work.as_ref().is_none_or(|owner| {
                 owner
                     .sessions

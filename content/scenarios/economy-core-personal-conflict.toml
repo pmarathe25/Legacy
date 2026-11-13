@@ -1,0 +1,77 @@
+# Individuals may choose to strike a local target; the target can defend.
+seed = 7
+tick_millis = 900000
+stock_capacity = 100
+food_relief_divisor = 20
+
+[rules]
+hunger_per_tick = 0
+meal_threshold = 5
+starvation_threshold = 50
+starvation_damage = 1
+max_health = 100
+carrying_capacity = 10
+max_work_hunger = 20
+
+[[regions]]
+id = 1
+stock = {}
+
+[[people]]
+id = 1
+region = 1
+health = 100
+hunger = 0
+willing_to_work = false
+seek_meals = false
+
+[[people]]
+id = 2
+region = 1
+health = 10
+hunger = 0
+willing_to_work = false
+seek_meals = false
+
+[[people]]
+id = 3
+region = 1
+health = 100
+hunger = 0
+willing_to_work = false
+seek_meals = false
+
+[personal_conflict]
+[[personal_conflict.capabilities]]
+person = 1
+max_force = 10
+[[personal_conflict.capabilities]]
+person = 3
+max_force = 10
+[[personal_conflict.attacks]]
+id = 1
+actor = 1
+target = 2
+force = 8
+willing = true
+value = 10
+[[personal_conflict.attacks]]
+id = 1
+actor = 3
+target = 2
+force = 5
+willing = true
+value = 10
+[[personal_conflict.defenses]]
+person = 2
+reduction = 2
+willing = true
+
+[[personal_choices]]
+id = 1
+idle = 0
+preferences = [{ domain = 15, enabled = true, bias = 10 }]
+[[personal_choices]]
+id = 3
+idle = 0
+preferences = [{ domain = 15, enabled = true, bias = 10 }]

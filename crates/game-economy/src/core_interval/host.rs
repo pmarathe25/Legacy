@@ -8,6 +8,7 @@ mod animal_handling;
 mod animal_products;
 mod animal_restraints;
 mod claims;
+mod conflict;
 mod construction;
 mod dependent_care;
 mod dreams;
@@ -40,6 +41,10 @@ mod taking;
 mod tools;
 mod treatment;
 mod writing;
+pub use conflict::{
+    CorePersonalConflict, PersonalAttackPolicy, PersonalDefensePolicy, PersonalHarm,
+    StrikeCapability,
+};
 pub use construction::CoreConstructionResults;
 pub use food_search::{CoreFoodProvision, CoreFoodSearch};
 pub use giving::CorePracticeWorkEvidence;
@@ -72,6 +77,8 @@ pub struct CoreHostSnapshot {
     pub core: CoreSnapshot,
     #[serde(default)]
     pub mechanics: Option<CoreMechanics>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub personal_conflict: Option<CorePersonalConflict>,
     #[serde(default)]
     pub autowork: Option<Autowork>,
     #[serde(default)]
@@ -172,6 +179,7 @@ pub struct CoreHostSnapshot {
 pub struct CoreHost {
     core: CoreInterval,
     mechanics: Option<mechanics::Runtime>,
+    personal_conflict: Option<CorePersonalConflict>,
     autowork: Option<Autowork>,
     tool_wear: Option<ToolWear>,
     tool_requirements: Vec<game_economy_work::tools::Requirement>,
@@ -228,6 +236,7 @@ pub struct CoreHost {
 }
 struct CoreRuntimeOptions {
     mechanics: Option<CoreMechanics>,
+    personal_conflict: Option<CorePersonalConflict>,
     sites: Option<CoreSites>,
     schedule: Option<CoreSchedule>,
     tool_requirements: Vec<game_economy_work::tools::Requirement>,
@@ -281,6 +290,7 @@ impl CoreHost {
         let CoreHostSnapshot {
             core,
             mechanics,
+            personal_conflict,
             autowork,
             tool_wear,
             tool_requirements,
@@ -343,6 +353,7 @@ impl CoreHost {
             agreements,
             CoreRuntimeOptions {
                 mechanics,
+                personal_conflict,
                 dreams,
                 shared_work,
                 market,
@@ -392,6 +403,7 @@ impl CoreHost {
         let CoreHostSnapshot {
             core,
             mechanics,
+            personal_conflict,
             autowork,
             tool_wear,
             tool_requirements,
@@ -450,6 +462,7 @@ impl CoreHost {
             agreements,
             CoreRuntimeOptions {
                 mechanics,
+                personal_conflict,
                 dreams,
                 shared_work,
                 market,
@@ -506,6 +519,7 @@ impl CoreHost {
     ) -> Result<Self, String> {
         let CoreRuntimeOptions {
             mechanics,
+            personal_conflict,
             dreams,
             shared_work,
             market,
@@ -565,6 +579,9 @@ impl CoreHost {
             knowledge = Some(legacy);
         }
         let mechanics = mechanics.map(|owner| owner.compile(&core)).transpose()?;
+        if let Some(owner) = &personal_conflict {
+            owner.validate(&core)?;
+        }
         if let Some(owner) = &autowork {
             let people: Vec<_> = core
                 .people
@@ -612,6 +629,7 @@ impl CoreHost {
         if (tool_requirements.is_empty()
             && fatigue.is_none()
             && health.is_none()
+            && personal_conflict.is_none()
             && !paused_work_rates.is_empty())
             || paused_work_rates
                 .par_windows(2)
@@ -1259,6 +1277,7 @@ impl CoreHost {
         Ok(Self {
             core,
             mechanics,
+            personal_conflict,
             autowork,
             tool_wear,
             tool_requirements,
@@ -1326,6 +1345,7 @@ impl CoreHost {
         CoreHostSnapshot {
             core: self.core.snapshot(),
             mechanics: self.mechanics.as_ref().map(mechanics::Runtime::snapshot),
+            personal_conflict: self.personal_conflict.clone(),
             autowork: self.autowork.clone(),
             tool_wear: self.tool_wear.clone(),
             tool_requirements: self.tool_requirements.clone(),

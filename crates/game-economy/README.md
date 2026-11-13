@@ -545,6 +545,17 @@ With `LEGACY_WORK_EXPECTATION_TIMING=1 LEGACY_PEOPLE=50000`, the same benchmark 
 
 The interval host can learn personal skills from completed jobs or intervals in which configured work actually progressed. Credits for early completions and partial practice survive saves and are committed at the boundary. A person's learned skill scales the base rate of later jobs when they start; an already running job retains its admitted rate. The host caches the rate index and practice recipe set between changes. The authored `economy-core-skills.toml` loads its training rules from the content catalog. Personal teaching policies act through actual social meetings.
 
+Optional `personal_conflict` supplies individual attack choices, physical force
+limits, and independent standing defense preferences. Personal choice domain
+`15` can select a local strike without the target's consent. Chosen strikes
+resolve simultaneously and aggregate potential harm by target; the host applies
+actual health loss and pauses a worker's rate if they are incapacitated.
+Events distinguish attributed potential harm from the target's actual health
+loss, without inventing a killing blow. The authored
+`economy-core-personal-conflict.toml` demonstrates the slice. It does not yet
+model tactical positioning, lasting wounds, equipment, interventions, or
+subjective relationship reactions to violence.
+
 With `LEGACY_PEOPLE=50000`, the ignored `core_host_skill_learning_benchmark` measures 50,000 work completions and skill updates: one run took 151.8, 94.3, 69.5, and 62.9 ms at one, two, four, and six workers. With `LEGACY_SKILL_PRACTICE=1`, actual practice and boundary updates took 157.0, 101.4, 73.9, and 63.8 ms. Fingerprints matched within each workload and setup was excluded. Both runs scale sublinearly.
 
 Personal teaching occurs only during actual meetings. Each teacher independently chooses whether to teach, including when acting under their own fear or felt obligation; participants can interpret the lesson differently. Lessons affect later work rates when they change a learner's level. Configured newborns can inherit an age-gated inclination to teach, but do not inherit a parent's learned records or lessons.

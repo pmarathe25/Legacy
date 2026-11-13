@@ -85,6 +85,7 @@ impl CoreHostSnapshot {
         });
         Ok(Self {
             mechanics: None,
+            personal_conflict: None,
             core: CoreSnapshot {
                 seed: state.seed,
                 physical: state.physical,

@@ -99,6 +99,8 @@ struct Scenario {
     #[serde(default)]
     mechanics: Option<MechanicsConfig>,
     #[serde(default)]
+    personal_conflict: Option<game_economy::core_interval::CorePersonalConflict>,
+    #[serde(default)]
     personal_choices: Vec<game_personal_choice::Person>,
     #[serde(default)]
     birth_choices: Option<game_personal_choice::BirthProfile>,
@@ -997,12 +999,21 @@ pub fn core_scenario_with_options(
     let work_capabilities = authored.work_capabilities;
     let regions: HashSet<_> = authored.regions.iter().map(|region| region.id).collect();
     let mechanics = authored.mechanics;
+    let mut personal_conflict = authored.personal_conflict;
     let mut personal_choices = authored.personal_choices;
     let birth_choices = authored.birth_choices;
     let meal_preferences = authored.meal_preferences;
     let scenario = scenario_with_options_inner(path, content, seed, population_path, true)?;
     let mut snapshot =
         game_economy::core_interval::CoreHostSnapshot::from_scenario(scenario.snapshot())?;
+    if let Some(owner) = &mut personal_conflict {
+        owner
+            .attacks
+            .sort_unstable_by_key(|row| (row.actor, row.id));
+        owner.defenses.sort_unstable_by_key(|row| row.person);
+        owner.capabilities.sort_unstable_by_key(|row| row.person);
+    }
+    snapshot.personal_conflict = personal_conflict;
     if let Some(config) = work_capabilities {
         let mut requirements = config
             .requirements
@@ -1412,6 +1423,9 @@ fn scenario_with_options_inner(
     }
     if scenario.mechanics.is_some() && !interval_features {
         return Err("mechanics requires the interval simulation host".into());
+    }
+    if scenario.personal_conflict.is_some() && !interval_features {
+        return Err("personal conflict requires the interval simulation host".into());
     }
     if (!scenario.personal_choices.is_empty()
         || !scenario.meal_preferences.is_empty()

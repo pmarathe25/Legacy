@@ -17,6 +17,7 @@ pub(super) const CULTIVATION: u32 = 11;
 pub(super) const MECHANICAL_LOAD: u32 = 12;
 pub(super) const MECHANICAL_DESIGN: u32 = 13;
 pub(super) const MECHANICAL_WATCH: u32 = 14;
+pub(super) const PERSONAL_ATTACK: u32 = 15;
 
 fn index_by_person<T>(rows: &[T], id: u64, key: impl Fn(&T) -> u64) -> Option<usize> {
     rows.first()
@@ -52,6 +53,8 @@ pub struct CoreWorkIntent {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CoreChoiceIntent {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub strike: Option<game_personal_conflict::Strike>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub watch: Option<MechanicalWitnessRequest>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -600,6 +603,7 @@ impl CoreHost {
                 .map_err(str::to_owned)?
                 .into_par_iter()
                 .map(|opportunity| CoreChoiceIntent {
+                    strike: None,
                     watch: None,
                     assembly: None,
                     mechanical_load: None,
@@ -676,6 +680,7 @@ impl CoreHost {
                             }
                         });
                         CoreChoiceIntent {
+                            strike: None,
                             watch: None,
                             assembly: None,
                             mechanical_load: None,
@@ -727,6 +732,7 @@ impl CoreHost {
                 let rows: Vec<_> = opportunities
                     .into_par_iter()
                     .map(|opportunity| CoreChoiceIntent {
+                        strike: None,
                         watch: None,
                         assembly: None,
                         mechanical_load: None,
@@ -780,6 +786,7 @@ impl CoreHost {
                 .direct_opportunities()
                 .into_par_iter()
                 .map(|opportunity| CoreChoiceIntent {
+                    strike: None,
                     watch: None,
                     assembly: None,
                     mechanical_load: None,
@@ -827,6 +834,7 @@ impl CoreHost {
                     .preview_work_with_hunger_limit(&busy, schedule.work_rate, u32::MAX, true)?
                     .into_par_iter()
                     .map(|opportunity| CoreChoiceIntent {
+                        strike: None,
                         watch: None,
                         assembly: None,
                         mechanical_load: None,
@@ -887,6 +895,7 @@ impl CoreHost {
                 Ok(policies
                     .into_par_iter()
                     .map(|policy| CoreChoiceIntent {
+                        strike: None,
                         watch: None,
                         assembly: None,
                         mechanical_load: None,
@@ -909,6 +918,55 @@ impl CoreHost {
             } else {
                 Ok(Vec::new())
             }
+        };
+        let personal_attacks = || -> Result<Vec<CoreChoiceIntent>, String> {
+            if domain.is_some_and(|domain| domain != PERSONAL_ATTACK)
+                || !self
+                    .schedule
+                    .as_ref()
+                    .and_then(|schedule| schedule.personal_choices.as_ref())
+                    .is_some_and(|people| {
+                        people.par_iter().any(|person| {
+                            person
+                                .preferences
+                                .binary_search_by_key(&PERSONAL_ATTACK, |preference| {
+                                    preference.domain
+                                })
+                                .ok()
+                                .is_some_and(|index| person.preferences[index].enabled)
+                        })
+                    })
+            {
+                return Ok(Vec::new());
+            }
+            Ok(self
+                .preview_personal_attacks(&busy)?
+                .into_par_iter()
+                .map(|policy| CoreChoiceIntent {
+                    actor: policy.actor,
+                    key: Key {
+                        domain: PERSONAL_ATTACK,
+                        action: policy.id,
+                    },
+                    strike: Some(game_personal_conflict::Strike {
+                        actor: policy.actor,
+                        target: policy.target,
+                        force: policy.force,
+                    }),
+                    watch: None,
+                    assembly: None,
+                    cultivation: None,
+                    mechanical_load: None,
+                    movement: None,
+                    second_movement: None,
+                    work: None,
+                    experiment: None,
+                    experiment_value: Some(policy.value),
+                    meal_value: None,
+                    tool_damage: None,
+                    health_value: None,
+                })
+                .collect())
         };
         let mechanical_watching = || -> Result<Vec<CoreChoiceIntent>, String> {
             if domain.is_some_and(|domain| domain != MECHANICAL_WATCH)
@@ -934,6 +992,7 @@ impl CoreHost {
                 .preview_mechanical_watching(&busy)?
                 .into_par_iter()
                 .map(|policy| CoreChoiceIntent {
+                    strike: None,
                     actor: policy.observer,
                     key: Key {
                         domain: MECHANICAL_WATCH,
@@ -985,6 +1044,7 @@ impl CoreHost {
                 .preview_mechanical_designs(&designers, &busy)?
                 .into_par_iter()
                 .map(|assembly| CoreChoiceIntent {
+                    strike: None,
                     watch: None,
                     actor: assembly.actor,
                     key: Key {
@@ -1022,6 +1082,7 @@ impl CoreHost {
                     .preview_mechanical_loads(&busy)?
                     .into_par_iter()
                     .map(|policy| CoreChoiceIntent {
+                        strike: None,
                         watch: None,
                         assembly: None,
                         actor: policy.request.actor,
@@ -1071,6 +1132,7 @@ impl CoreHost {
                     let person = index_by_person(&self.core.people, opportunity.person, |p| p.id)
                         .expect("known person");
                     CoreChoiceIntent {
+                        strike: None,
                         watch: None,
                         assembly: None,
                         mechanical_load: None,
@@ -1140,6 +1202,7 @@ impl CoreHost {
                     let mut movement = action.movements[0];
                     movement.id = 0;
                     CoreChoiceIntent {
+                        strike: None,
                         watch: None,
                         assembly: None,
                         mechanical_load: None,
@@ -1181,6 +1244,7 @@ impl CoreHost {
                 let person = index_by_person(&self.core.people, opportunity.person, |p| p.id)
                     .expect("known person");
                 CoreChoiceIntent {
+                    strike: None,
                     watch: None,
                     assembly: None,
                     mechanical_load: None,
@@ -1241,6 +1305,7 @@ impl CoreHost {
             )?
             .into_par_iter()
             .map(|opportunity| CoreChoiceIntent {
+                strike: None,
                 watch: None,
                 assembly: None,
                 mechanical_load: None,
@@ -1307,6 +1372,7 @@ impl CoreHost {
         intents.par_extend(mechanical_loads()?);
         intents.par_extend(mechanical_designs()?);
         intents.par_extend(mechanical_watching()?);
+        intents.par_extend(personal_attacks()?);
         if intents
             .par_windows(2)
             .any(|rows| (rows[0].actor, rows[0].key) > (rows[1].actor, rows[1].key))
@@ -1404,6 +1470,7 @@ impl CoreHost {
                         && current[i].mechanical_load == intent.mechanical_load
                         && current[i].assembly == intent.assembly
                         && current[i].watch == intent.watch
+                        && current[i].strike == intent.strike
                 });
                 (intent, found)
             })

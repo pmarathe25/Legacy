@@ -10,6 +10,9 @@ use game_economy_person::{
 use game_lot_diet::Effects;
 use game_lot_runtime::{Events, Runtime, Snapshot};
 use game_nutrition::Nutrition;
+pub use game_personal_conflict::{
+    Defense as PersonalDefense, Strike as PersonalStrike, StrikeEvent as PersonalStrikeEvent,
+};
 use game_production_model::FoodEffect;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -19,15 +22,16 @@ pub use host::{
     CoreAssistRecord, CoreAssistSession, CoreChoiceEvent, CoreChoiceIntent, CoreChoiceOutcome,
     CoreConstructionResults, CoreDeliveryResults, CoreDynamicsResults, CoreFoodProvision,
     CoreFoodSearch, CoreHaulingResults, CoreHealth, CoreHost, CoreHostSnapshot,
-    CoreLocalTransportResults, CoreMarketResults, CoreMechanics, CorePracticeWorkEvidence,
-    CorePurpose, CoreRepairResults, CoreRequestResults, CoreRun, CoreRunEvent, CoreSchedule,
-    CoreSharedWork, CoreSites, CoreSkillCredit, CoreSkills, CoreSocial, CoreSocialResults,
-    CoreToolRepairResults, CoreTreatmentResults, CoreWorkIntent, CoreWritingPracticeResults,
-    CoreWritingResults, DecisionPhase, MechanicalCapability, MechanicalCommunication,
-    MechanicalLoadMaterial, MechanicalLoadOutcome, MechanicalLoadPolicy, MechanicalLoadRequest,
-    MechanicalLoadResult, MechanicalMaterial, MechanicalMemory, MechanicalPolicy,
-    MechanicalReactions, MechanicalTestimony, MechanicalWatchPolicy, MechanicalWitnessRequest,
-    WitnessedMechanicalResult,
+    CoreLocalTransportResults, CoreMarketResults, CoreMechanics, CorePersonalConflict,
+    CorePracticeWorkEvidence, CorePurpose, CoreRepairResults, CoreRequestResults, CoreRun,
+    CoreRunEvent, CoreSchedule, CoreSharedWork, CoreSites, CoreSkillCredit, CoreSkills, CoreSocial,
+    CoreSocialResults, CoreToolRepairResults, CoreTreatmentResults, CoreWorkIntent,
+    CoreWritingPracticeResults, CoreWritingResults, DecisionPhase, MechanicalCapability,
+    MechanicalCommunication, MechanicalLoadMaterial, MechanicalLoadOutcome, MechanicalLoadPolicy,
+    MechanicalLoadRequest, MechanicalLoadResult, MechanicalMaterial, MechanicalMemory,
+    MechanicalPolicy, MechanicalReactions, MechanicalTestimony, MechanicalWatchPolicy,
+    MechanicalWitnessRequest, PersonalAttackPolicy, PersonalDefensePolicy, PersonalHarm,
+    StrikeCapability, WitnessedMechanicalResult,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

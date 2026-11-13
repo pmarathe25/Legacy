@@ -566,6 +566,115 @@ fn saved_mechanical_load_intention_never_substitutes_changed_parameters() {
 }
 
 #[test]
+fn personal_strikes_are_simultaneous_and_targets_need_not_consent() {
+    use game_economy::core_interval::{CoreHost, CoreRunEvent};
+    fn run(workers: usize, case: &str) -> serde_json::Value {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let root = root();
+                let mut state = game_economy_cli::core_scenario(
+                    &root.join("content/scenarios/economy-core-personal-conflict.toml"),
+                    &root.join("content"),
+                )
+                .unwrap()
+                .snapshot();
+                if case == "one_idle" {
+                    std::sync::Arc::make_mut(
+                        state
+                            .schedule
+                            .as_mut()
+                            .unwrap()
+                            .personal_choices
+                            .as_mut()
+                            .unwrap(),
+                    )[0]
+                    .idle = 100;
+                }
+                if case == "no_defense" {
+                    state.personal_conflict.as_mut().unwrap().defenses[0].willing = false;
+                }
+                if case == "mutual" {
+                    state.core.people[0].health = 5;
+                    state.core.people[2].health = 5;
+                    state.personal_conflict.as_mut().unwrap().attacks[0].target = 3;
+                    state.personal_conflict.as_mut().unwrap().attacks[1].target = 1;
+                }
+                let mut host = CoreHost::resume(state).unwrap();
+                let result = host.advance_continuous(1, &[]).unwrap();
+                assert_eq!(result.failure, None);
+                let (events, harm) = result
+                    .events
+                    .iter()
+                    .find_map(|event| match event {
+                        CoreRunEvent::PersonalStrikes { events, harm } => Some((events, harm)),
+                        _ => None,
+                    })
+                    .unwrap();
+                let state = host.snapshot();
+                match case {
+                    "both" => {
+                        assert_eq!(events.len(), 2);
+                        assert_eq!(harm[0].after, 1);
+                        assert_eq!(state.core.people[1].health, 1);
+                    }
+                    "one_idle" => {
+                        assert_eq!(events.len(), 1);
+                        assert_eq!(state.core.people[1].health, 7);
+                    }
+                    "no_defense" => {
+                        assert_eq!(state.core.people[1].health, 0);
+                    }
+                    "mutual" => {
+                        assert_eq!(state.core.people[0].health, 0);
+                        assert_eq!(state.core.people[2].health, 0);
+                        assert_eq!(events.len(), 2);
+                    }
+                    _ => unreachable!(),
+                }
+                let restored = CoreHost::resume(
+                    serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap(),
+                )
+                .unwrap();
+                assert_eq!(state, restored.snapshot());
+                serde_json::to_value(state).unwrap()
+            })
+    }
+    for case in ["both", "one_idle", "no_defense", "mutual"] {
+        assert_eq!(run(1, case), run(4, case));
+    }
+}
+
+#[test]
+fn saved_strike_intentions_are_not_retargeted() {
+    use game_economy::core_interval::{CoreChoiceOutcome, CoreHost, CoreRunEvent, DecisionPhase};
+    let root = root();
+    let host = game_economy_cli::core_scenario(
+        &root.join("content/scenarios/economy-core-personal-conflict.toml"),
+        &root.join("content"),
+    )
+    .unwrap();
+    let (intents, _) = host.preview_personal_choices(&[]).unwrap();
+    let mut state = host.snapshot();
+    state.schedule.as_mut().unwrap().phase = DecisionPhase::ChosenAttack {
+        meal_people: vec![],
+        intents: std::sync::Arc::new(intents),
+        remaining: 0,
+    };
+    state.personal_conflict.as_mut().unwrap().attacks[0].target = 3;
+    let mut host =
+        CoreHost::resume(serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap())
+            .unwrap();
+    let result = host.advance_continuous(1, &[]).unwrap();
+    assert_eq!(result.failure, None);
+    assert!(result.events.iter().any(|event| matches!(event, CoreRunEvent::PersonalChoices(rows) if rows.iter().any(|row| row.actor == 1 && row.outcome == CoreChoiceOutcome::Stale))));
+    assert_eq!(host.snapshot().core.people[2].health, 100);
+    assert_eq!(host.snapshot().core.people[1].health, 7);
+}
+
+#[test]
 fn scheduled_watching_matches_explicit_validated_execution() {
     use game_economy::core_interval::{CoreHost, MechanicalWitnessRequest};
     let root = root();
@@ -4733,6 +4842,7 @@ fn stale_saved_carrying_intention_is_reported_without_substituting_an_action() {
         remaining: None,
         meal_people: vec![],
         intents: std::sync::Arc::new(vec![CoreChoiceIntent {
+            strike: None,
             watch: None,
             assembly: None,
             mechanical_load: None,
