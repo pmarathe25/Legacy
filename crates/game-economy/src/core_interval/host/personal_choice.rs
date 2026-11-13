@@ -859,8 +859,24 @@ impl CoreHost {
                     })
                 })
             {
-                Ok(self
-                    .preview_mechanical_experiments(&busy)?
+                let mut people: Vec<_> = schedule
+                    .personal_choices
+                    .as_ref()
+                    .expect("choice profile")
+                    .par_iter()
+                    .filter(|person| {
+                        person
+                            .preferences
+                            .binary_search_by_key(&EXPERIMENT, |preference| preference.domain)
+                            .ok()
+                            .is_some_and(|index| person.preferences[index].enabled)
+                    })
+                    .map(|person| person.id)
+                    .collect();
+                people.par_sort_unstable();
+                let mut policies = self.preview_mechanical_experiments(&busy)?;
+                policies.par_extend(self.preview_personal_device_trials(&people, &busy)?);
+                Ok(policies
                     .into_par_iter()
                     .map(|policy| CoreChoiceIntent {
                         assembly: None,

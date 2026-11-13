@@ -38,8 +38,12 @@ good = "tool"
 person = 1
 max_force = 200
 max_distance = 200
+[[mechanics.memories]]
+person = 1
+capacity = 4
+retain = true
 
 [[personal_choices]]
 id = 1
 idle = 0
-preferences = [{ domain = 13, enabled = true, bias = 10 }]
+preferences = [{ domain = 6, enabled = true, bias = 10 }, { domain = 13, enabled = true, bias = 10 }]

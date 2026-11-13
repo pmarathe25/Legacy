@@ -1,5 +1,6 @@
 //! Mechanical apparatus tied to real identified personal possessions.
 use super::*;
+use std::collections::HashMap;
 
 fn indexed<T>(rows: &[T], id: u64, key: impl Fn(&T) -> u64) -> Option<&T> {
     rows.first()
@@ -445,6 +446,87 @@ impl Runtime {
 }
 
 impl CoreHost {
+    /// Propose a simple trial of a carried apparatus for opted-in people who
+    /// have no authored experiment policy. No component strength is consulted.
+    pub fn preview_personal_device_trials(
+        &self,
+        people: &[u64],
+        occupied: &[u64],
+    ) -> Result<Vec<MechanicalPolicy>, String> {
+        if people.par_windows(2).any(|row| row[0] >= row[1])
+            || occupied.par_windows(2).any(|row| row[0] >= row[1])
+        {
+            return Err("invalid mechanical trial people".into());
+        }
+        if people.is_empty() {
+            return Ok(Vec::new());
+        }
+        let Some(owner) = &self.mechanics else {
+            return Ok(Vec::new());
+        };
+        let rest = self.blocked_with_rest(occupied);
+        let occupied = rest.as_deref().unwrap_or(occupied);
+        let active: HashSet<_> = self
+            .core
+            .physical
+            .work()
+            .par_iter()
+            .filter(|row| row.phase == game_lot_runtime::Phase::Working)
+            .map(|row| row.job.worker)
+            .collect();
+        let parts: HashMap<_, _> = owner
+            .world
+            .apparatus()
+            .par_iter()
+            .flat_map_iter(|machine| machine.parts.iter().map(move |part| (part.id, machine)))
+            .collect();
+        Ok(people
+            .par_iter()
+            .filter_map(|&actor| {
+                let person = indexed(&self.core.people, actor, |row| row.id)?;
+                let index = owner
+                    .policies
+                    .partition_point(|row| row.experiment.actor < actor);
+                if person.controlled
+                    || owner
+                        .policies
+                        .get(index)
+                        .is_some_and(|row| row.experiment.actor == actor)
+                {
+                    return None;
+                }
+                let capability = indexed(&owner.capabilities, actor, |row| row.person)?;
+                let container = self
+                    .core
+                    .physical
+                    .custody(game_lots::Place::Person(actor))?;
+                container
+                    .lots
+                    .iter()
+                    .filter_map(|lot| parts.get(&lot.item?).copied())
+                    .filter_map(|machine| {
+                        let experiment = game_mechanics::Experiment {
+                            actor,
+                            apparatus: machine.id,
+                            output_part: machine.parts.last()?.id,
+                            input_force: capability.max_force.min(100),
+                            input_distance: capability.max_distance.min(100),
+                            load_force: 1,
+                        };
+                        owner
+                            .eligible(&self.core, &experiment, occupied, &active)
+                            .then_some(MechanicalPolicy {
+                                id: machine.id,
+                                experiment,
+                                value: 1,
+                                willing: true,
+                            })
+                    })
+                    .min_by_key(|policy| policy.id)
+            })
+            .collect())
+    }
+
     /// Form a bounded candidate from each willing designer's carried parts.
     /// Component ratings are not inspected while choosing a design.
     pub fn preview_mechanical_designs(

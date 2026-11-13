@@ -8,6 +8,7 @@ fn mechanical_design_scaling() {
         .ok()
         .and_then(|v| v.parse::<u64>().ok())
         .unwrap_or(100_000);
+    let trials = std::env::var_os("LEGACY_DESIGN_TRIALS").is_some();
     let mut text = String::from(
         r#"seed = 7
 tick_millis = 900000
@@ -38,6 +39,13 @@ good = "tool"
         let first = actor * 2 + 1000;
         let second = first + 1;
         writeln!(text, "[[people]]\nid = {actor}\nregion = 1\nhealth = 100\nhunger = 0\nwilling_to_work = false\nseek_meals = false\nitems = [{{ id = {first}, good = \"timber\" }}, {{ id = {second}, good = \"tool\" }}]\n[[personal_choices]]\nid = {actor}\nidle = 0\npreferences = [{{ domain = 13, enabled = true, bias = 10 }}]").unwrap();
+        if trials {
+            writeln!(
+                text,
+                "[[mechanics.capabilities]]\nperson = {actor}\nmax_force = 100\nmax_distance = 100"
+            )
+            .unwrap();
+        }
     }
     let path = std::env::temp_dir().join(format!(
         "legacy-design-{}-{}.toml",
@@ -49,10 +57,29 @@ good = "tool"
     ));
     std::fs::write(&path, text).unwrap();
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let opening = game_economy_cli::core_scenario(&path, &root.join("content"))
-        .unwrap()
-        .snapshot();
+    let mut initial = game_economy_cli::core_scenario(&path, &root.join("content")).unwrap();
     std::fs::remove_file(path).unwrap();
+    if trials {
+        assert_eq!(initial.advance_continuous(1, &[]).unwrap().failure, None);
+    }
+    let mut opening = initial.snapshot();
+    if trials {
+        for person in std::sync::Arc::make_mut(
+            opening
+                .schedule
+                .as_mut()
+                .unwrap()
+                .personal_choices
+                .as_mut()
+                .unwrap(),
+        ) {
+            person.preferences.insert(
+                0,
+                serde_json::from_value(serde_json::json!({"domain":6,"enabled":true,"bias":10}))
+                    .unwrap(),
+            );
+        }
+    }
     let mut reference = None;
     for workers in [1, 2, 4, 6] {
         let pool = rayon::ThreadPoolBuilder::new()
@@ -65,21 +92,24 @@ good = "tool"
                 game_economy::core_interval::CoreHost::resume(opening.clone()).unwrap()
             });
             let start = std::time::Instant::now();
-            let run = pool.install(|| host.advance_continuous(1, &[]).unwrap());
+            let run = pool.install(|| {
+                host.advance_continuous(if trials { 900_000 } else { 1 }, &[])
+                    .unwrap()
+            });
             times.push(start.elapsed());
             assert_eq!(run.failure, None);
-            let results = run
+            let successes = run
                 .events
                 .iter()
                 .find_map(|event| match event {
-                    CoreRunEvent::MechanicalAssemblies(rows) => Some(rows),
+                    CoreRunEvent::MechanicalAssemblies(rows) if !trials => {
+                        Some(rows.iter().filter(|row| row.accepted).count())
+                    }
+                    CoreRunEvent::MechanicalExperiments(rows) if trials => Some(rows.len()),
                     _ => None,
                 })
                 .unwrap();
-            assert_eq!(
-                results.iter().filter(|row| row.accepted).count(),
-                count as usize
-            );
+            assert_eq!(successes, count as usize);
             let state = pool.install(|| host.snapshot());
             if let Some(expected) = &reference {
                 assert_eq!(&state, expected);
@@ -89,7 +119,7 @@ good = "tool"
         }
         times.sort_unstable();
         eprintln!(
-            "{workers} workers: {:?} median for {count} personal designs",
+            "{workers} workers: {:?} median for {count} personal designs; trials={trials}",
             times[1]
         );
     }

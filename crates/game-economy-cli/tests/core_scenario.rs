@@ -630,6 +630,40 @@ fn people_can_choose_to_design_and_assemble_carried_parts() {
             .snapshot(),
         state
     );
+    let mut declined = state.clone();
+    std::sync::Arc::make_mut(
+        declined
+            .schedule
+            .as_mut()
+            .unwrap()
+            .personal_choices
+            .as_mut()
+            .unwrap(),
+    )[0]
+    .preferences
+    .iter_mut()
+    .find(|row| row.domain == 6)
+    .unwrap()
+    .enabled = false;
+    assert!(
+        CoreHost::resume(declined)
+            .unwrap()
+            .preview_personal_choices(&[])
+            .unwrap()
+            .0
+            .is_empty()
+    );
+    let mut trial = CoreHost::resume(state).unwrap();
+    let preview = trial.preview_personal_choices(&[]).unwrap();
+    assert_eq!(preview.0[0].key.domain, 6);
+    let run = trial.advance_continuous(900_000, &[]).unwrap();
+    assert_eq!(run.failure, None);
+    assert!(run.events.iter().any(|event| matches!(event, CoreRunEvent::MechanicalExperiments(rows) if rows.iter().any(|row| row.actor == 1))));
+    assert!(
+        !trial.snapshot().mechanics.unwrap().memories[0]
+            .observations
+            .is_empty()
+    );
 }
 
 #[test]
