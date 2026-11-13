@@ -146,6 +146,31 @@ pub struct MechanicalReactions {
     pub contended: i64,
 }
 
+/// An individual's choices about sharing and accepting mechanical testimony.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MechanicalCommunication {
+    #[serde(default)]
+    pub share: bool,
+    #[serde(default)]
+    pub receive: bool,
+    #[serde(default)]
+    pub use_testimony: bool,
+    /// If set, deliberately report this result instead of the observed one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub misrepresent: Option<game_mechanics::Outcome>,
+}
+
+/// A received claim, kept distinct from the recipient's own observations.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MechanicalTestimony {
+    pub speaker: u64,
+    pub tick: u64,
+    pub apparatus: u64,
+    pub claimed_outcome: game_mechanics::Outcome,
+}
+
 /// A person's bounded recollection of their own actual experiments.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -156,6 +181,10 @@ pub struct MechanicalMemory {
     pub retain: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reactions: Option<MechanicalReactions>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub communication: Option<MechanicalCommunication>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub testimony: Vec<MechanicalTestimony>,
     #[serde(default)]
     pub observations: Vec<game_mechanics::Observation>,
 }
@@ -314,6 +343,7 @@ impl CoreMechanics {
                 memory.person == 0
                     || !(1..=64).contains(&memory.capacity)
                     || memory.observations.len() > memory.capacity
+                    || memory.testimony.len() > memory.capacity
                     || core
                         .people
                         .binary_search_by_key(&memory.person, |person| person.id)
@@ -326,6 +356,23 @@ impl CoreMechanics {
                         .observations
                         .windows(2)
                         .any(|rows| rows[0].tick > rows[1].tick)
+                    || memory
+                        .testimony
+                        .windows(2)
+                        .any(|rows| rows[0].tick > rows[1].tick)
+                    || memory.testimony.iter().any(|report| {
+                        report.speaker == memory.person
+                            || report.tick > core.physical.tick()
+                            || core
+                                .people
+                                .binary_search_by_key(&report.speaker, |person| person.id)
+                                .is_err()
+                            || self
+                                .world
+                                .apparatus
+                                .binary_search_by_key(&report.apparatus, |machine| machine.id)
+                                .is_err()
+                    })
             })
             || self.world.apparatus.par_iter().any(|apparatus| {
                 apparatus.parts.iter().any(|part| {
@@ -462,6 +509,83 @@ impl Runtime {
 }
 
 impl CoreHost {
+    pub(super) fn stage_mechanical_testimony(
+        &self,
+        meetings: &[game_social::Encounter],
+        tick: u64,
+    ) -> Option<Vec<MechanicalMemory>> {
+        let owner = self.mechanics.as_ref()?;
+        if meetings.is_empty()
+            || !owner
+                .memories
+                .par_iter()
+                .any(|memory| memory.communication.is_some_and(|policy| policy.share))
+        {
+            return None;
+        }
+        let mut reports: Vec<_> = meetings
+            .par_iter()
+            .flat_map_iter(|meeting| [(meeting.a, meeting.b), (meeting.b, meeting.a)])
+            .filter_map(|(speaker, recipient)| {
+                let speaker_person = indexed(&self.core.people, speaker, |row| row.id)?;
+                let recipient_person = indexed(&self.core.people, recipient, |row| row.id)?;
+                if speaker_person.controlled
+                    || recipient_person.controlled
+                    || speaker_person.health == 0
+                    || recipient_person.health == 0
+                {
+                    return None;
+                }
+                let source = indexed(&owner.memories, speaker, |memory| memory.person)?;
+                let destination = indexed(&owner.memories, recipient, |memory| memory.person)?;
+                let policy = source.communication.filter(|policy| policy.share)?;
+                if !destination
+                    .communication
+                    .is_some_and(|policy| policy.receive)
+                {
+                    return None;
+                }
+                let observation = source.observations.last()?;
+                Some((
+                    recipient,
+                    MechanicalTestimony {
+                        speaker,
+                        tick,
+                        apparatus: observation.apparatus,
+                        claimed_outcome: policy.misrepresent.unwrap_or(observation.outcome),
+                    },
+                ))
+            })
+            .collect();
+        if reports.is_empty() {
+            return None;
+        }
+        reports.par_sort_unstable_by_key(|(recipient, report)| {
+            (*recipient, report.speaker, report.apparatus)
+        });
+        let mut memories: Vec<_> = owner.memories.par_iter().cloned().collect();
+        memories.par_iter_mut().for_each(|memory| {
+            let begin = reports.partition_point(|row| row.0 < memory.person);
+            let end = reports.partition_point(|row| row.0 <= memory.person);
+            memory
+                .testimony
+                .extend(reports[begin..end].iter().map(|row| row.1));
+            if memory.testimony.len() > memory.capacity {
+                memory
+                    .testimony
+                    .drain(..memory.testimony.len() - memory.capacity);
+            }
+        });
+        Some(memories)
+    }
+
+    pub(super) fn publish_mechanical_testimony(&mut self, memories: Vec<MechanicalMemory>) {
+        self.mechanics
+            .as_mut()
+            .expect("testimony requires mechanics")
+            .memories = memories;
+    }
+
     /// Propose a simple trial of a carried apparatus for opted-in people who
     /// have no authored experiment policy. No component strength is consulted.
     pub fn preview_personal_device_trials(
@@ -532,12 +656,26 @@ impl CoreHost {
                         let reaction = indexed(&owner.memories, actor, |row| row.person)
                             .and_then(|memory| {
                                 let reactions = memory.reactions?;
-                                let observation = memory
+                                let outcome = memory
                                     .observations
                                     .iter()
                                     .rev()
-                                    .find(|row| row.apparatus == machine.id)?;
-                                Some(match observation.outcome {
+                                    .find(|row| row.apparatus == machine.id)
+                                    .map(|row| row.outcome)
+                                    .or_else(|| {
+                                        memory
+                                            .communication
+                                            .filter(|policy| policy.use_testimony)
+                                            .and_then(|_| {
+                                                memory
+                                                    .testimony
+                                                    .iter()
+                                                    .rev()
+                                                    .find(|row| row.apparatus == machine.id)
+                                                    .map(|row| row.claimed_outcome)
+                                            })
+                                    })?;
+                                Some(match outcome {
                                     game_mechanics::Outcome::Moved => reactions.moved,
                                     game_mechanics::Outcome::Stalled => reactions.stalled,
                                     game_mechanics::Outcome::Broken => reactions.broken,

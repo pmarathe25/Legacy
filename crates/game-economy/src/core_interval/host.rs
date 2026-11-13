@@ -47,9 +47,10 @@ pub use hauling::CoreHaulingResults;
 pub use local_transport::CoreLocalTransportResults;
 pub use market::CoreMarketResults;
 pub use mechanics::{
-    CoreMechanics, MechanicalCapability, MechanicalLoadMaterial, MechanicalLoadOutcome,
-    MechanicalLoadPolicy, MechanicalLoadRequest, MechanicalLoadResult, MechanicalMaterial,
-    MechanicalMemory, MechanicalPolicy, MechanicalReactions,
+    CoreMechanics, MechanicalCapability, MechanicalCommunication, MechanicalLoadMaterial,
+    MechanicalLoadOutcome, MechanicalLoadPolicy, MechanicalLoadRequest, MechanicalLoadResult,
+    MechanicalMaterial, MechanicalMemory, MechanicalPolicy, MechanicalReactions,
+    MechanicalTestimony,
 };
 pub use offers::CoreSocialResults;
 pub use personal_choice::{CoreChoiceEvent, CoreChoiceIntent, CoreChoiceOutcome, CoreWorkIntent};

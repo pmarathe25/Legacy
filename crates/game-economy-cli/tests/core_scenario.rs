@@ -566,6 +566,165 @@ fn saved_mechanical_load_intention_never_substitutes_changed_parameters() {
 }
 
 #[test]
+fn mechanical_testimony_follows_individual_choices_and_can_be_false() {
+    use game_economy::core_interval::{CoreHost, CoreSocial, MechanicalCommunication};
+    fn run(workers: usize, share: bool, receive: bool, lie: bool) -> serde_json::Value {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let root = root();
+                let mut host = game_economy_cli::core_scenario(
+                    &root.join("content/scenarios/economy-core-mechanical-loads.toml"),
+                    &root.join("content"),
+                )
+                .unwrap();
+                let experiment = game_mechanics::Experiment {
+                    actor: 1,
+                    apparatus: 1,
+                    output_part: 1002,
+                    input_force: 100,
+                    input_distance: 100,
+                    load_force: 1,
+                };
+                assert_eq!(
+                    host.experiment_mechanics(&[experiment], &[]).unwrap()[0].outcome,
+                    game_mechanics::Outcome::Moved
+                );
+                assert_eq!(host.advance_continuous(900_000, &[]).unwrap().failure, None);
+                let mut state = host.snapshot();
+                state.social = Some(CoreSocial {
+                    owner: game_social::Social {
+                        rules: game_social::Rules {
+                            interval: 1,
+                            min_health: 1,
+                            max_hunger: 100,
+                            familiarity_gain: 1,
+                            familiarity_max: 10,
+                            relationship_retention: None,
+                        },
+                        inherit_births: false,
+                        participants: vec![
+                            game_social::Participant {
+                                person: 1,
+                                willing: true,
+                            },
+                            game_social::Participant {
+                                person: 2,
+                                willing: true,
+                            },
+                        ],
+                        pressures: vec![],
+                        relationships: vec![],
+                        events: vec![],
+                        needs: None,
+                    },
+                    last_tick: None,
+                    language: None,
+                    signals: None,
+                });
+                let memories = &mut state.mechanics.as_mut().unwrap().memories;
+                memories[0].communication = Some(MechanicalCommunication {
+                    share,
+                    receive: false,
+                    use_testimony: false,
+                    misrepresent: lie.then_some(game_mechanics::Outcome::Stalled),
+                });
+                memories[1].communication = Some(MechanicalCommunication {
+                    share: false,
+                    receive,
+                    use_testimony: false,
+                    misrepresent: None,
+                });
+                let mut host = CoreHost::resume(state).unwrap();
+                assert_eq!(host.meet_autonomously(&[]).unwrap().len(), 1);
+                let state = host.snapshot();
+                let memories = &state.mechanics.as_ref().unwrap().memories;
+                assert_eq!(memories[1].testimony.len(), usize::from(share && receive));
+                assert!(memories[1].observations.is_empty());
+                if share && receive {
+                    assert_eq!(memories[1].testimony[0].speaker, 1);
+                    assert_eq!(
+                        memories[1].testimony[0].claimed_outcome,
+                        if lie {
+                            game_mechanics::Outcome::Stalled
+                        } else {
+                            game_mechanics::Outcome::Moved
+                        }
+                    );
+                    let mut recipient = state.clone();
+                    let containers = &mut recipient.core.physical.custody.containers;
+                    let source = containers
+                        .iter()
+                        .position(|row| row.place == game_lots::Place::Person(1))
+                        .unwrap();
+                    let destination = containers
+                        .iter()
+                        .position(|row| row.place == game_lots::Place::Person(2))
+                        .unwrap();
+                    let parts = containers[source].lots.clone();
+                    let mut all = containers[destination].lots.clone();
+                    all.extend(parts);
+                    containers[source] = game_lots::Container::new(
+                        game_lots::Place::Person(1),
+                        containers[source].capacity,
+                        vec![],
+                    )
+                    .unwrap();
+                    containers[destination] = game_lots::Container::new(
+                        game_lots::Place::Person(2),
+                        containers[destination].capacity,
+                        all,
+                    )
+                    .unwrap();
+                    let memory = &mut recipient.mechanics.as_mut().unwrap().memories[1];
+                    memory.reactions = Some(game_economy::core_interval::MechanicalReactions {
+                        moved: 100,
+                        stalled: -100,
+                        ..Default::default()
+                    });
+                    let unpersuaded = CoreHost::resume(recipient.clone()).unwrap();
+                    assert_eq!(
+                        unpersuaded
+                            .preview_personal_device_trials(&[2], &[])
+                            .unwrap()[0]
+                            .value,
+                        1
+                    );
+                    recipient.mechanics.as_mut().unwrap().memories[1]
+                        .communication
+                        .as_mut()
+                        .unwrap()
+                        .use_testimony = true;
+                    let persuaded = CoreHost::resume(recipient).unwrap();
+                    assert_eq!(
+                        persuaded.preview_personal_device_trials(&[2], &[]).unwrap()[0].value,
+                        if lie { -99 } else { 101 }
+                    );
+                }
+                assert_eq!(
+                    CoreHost::resume(
+                        serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap()
+                    )
+                    .unwrap()
+                    .snapshot(),
+                    state
+                );
+                serde_json::to_value(state).unwrap()
+            })
+    }
+    for (share, receive, lie) in [
+        (true, true, false),
+        (true, true, true),
+        (false, true, false),
+        (true, false, false),
+    ] {
+        assert_eq!(run(1, share, receive, lie), run(4, share, receive, lie));
+    }
+}
+
+#[test]
 fn people_can_choose_to_design_and_assemble_carried_parts() {
     use game_economy::core_interval::{CoreChoiceOutcome, CoreHost, CoreRunEvent, DecisionPhase};
     let root = root();

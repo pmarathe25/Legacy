@@ -80,6 +80,26 @@ trial according to their latest retained outcome for the same apparatus. Each
 person can like or dislike movement, stalls, breakage, or contention; forgotten
 or unretained outcomes do not change their interest.
 
+At an actual meeting, a person with a `communication.share` preference can
+report their latest firsthand mechanical observation. A separate receiving
+preference determines whether the listener retains the bounded claim, and
+`misrepresent` can replace the reported outcome. Testimony records its speaker
+and remains distinct from firsthand memory. A listener may opt to let it
+affect their own reaction when they have no firsthand observation of that
+apparatus. This slice does not yet require a shared language or model pressure
+to disclose.
+
+For example, a `[[mechanics.memories]]` entry may contain
+`communication = { share = true, receive = true, use_testimony = false, misrepresent = "stalled" }`.
+The same person's `reactions = { moved = 2, stalled = -3 }` can assign their own
+signed interest to those outcomes.
+
+With `LEGACY_MECHANICAL_TESTIMONY=1 LEGACY_PEOPLE=50000`, the ignored
+`core_host_social_benchmark` measured 24,999 meetings with two retained claims
+per meeting. Samples at one, two, four and six workers took 55.4, 34.2, 21.7
+and 19.9 ms, with matching fingerprints. Setup and snapshot hashing were
+excluded; these are synthetic, sublinear measurements.
+
 The ignored `mechanical_design_scaling` benchmark measured 100,000 complete
 scheduled design and assembly choices. Median times at one, two, four and six
 workers were 307.0, 236.2, 171.8 and 151.4 ms, with identical saved states.

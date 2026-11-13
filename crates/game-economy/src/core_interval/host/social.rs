@@ -408,6 +408,7 @@ impl CoreHost {
             .social
             .as_ref()
             .and_then(|social| self.stage_skill_teaching(social, tick));
+        let mechanical_testimony = self.stage_mechanical_testimony(&meetings, tick);
         let writing = self.writing.as_ref().and_then(|opening| {
             if opening.study.is_empty() || meetings.is_empty() {
                 return None;
@@ -490,6 +491,9 @@ impl CoreHost {
                 self.skill_rates = Some(frame.skills.owner.index());
             }
             self.skills = Some(frame.skills);
+        }
+        if let Some(memories) = mechanical_testimony {
+            self.publish_mechanical_testimony(memories);
         }
         if let Some(knowledge) = knowledge {
             self.knowledge = Some(knowledge);

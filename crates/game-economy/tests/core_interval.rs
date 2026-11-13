@@ -447,6 +447,8 @@ fn independent_physical_mechanics_benchmark() {
                     capacity: 4,
                     retain: true,
                     reactions: None,
+                    communication: None,
+                    testimony: vec![],
                     observations: vec![],
                 })
                 .collect()
@@ -7262,6 +7264,7 @@ fn core_host_social_benchmark() {
     let teaching_mode = std::env::var_os("LEGACY_TEACHING").is_some();
     let literacy_mode = std::env::var_os("LEGACY_LITERACY_STUDY").is_some();
     let taking_inquiries = std::env::var_os("LEGACY_TAKING_INQUIRIES").is_some();
+    let mechanical_testimony = std::env::var_os("LEGACY_MECHANICAL_TESTIMONY").is_some();
     let taking_reports = std::env::var_os("LEGACY_TAKING_REPORTS").is_some() || taking_inquiries;
     let treatment = std::env::var_os("LEGACY_TREATMENT").is_some();
     let disease = std::env::var_os("LEGACY_DISEASE").is_some() || treatment;
@@ -7467,6 +7470,20 @@ fn core_host_social_benchmark() {
         .unwrap()
         .install(|| {
             let mut snapshot = snapshot;
+            if mechanical_testimony {
+                let memories: Vec<_> = (2..=count).map(|person| serde_json::json!({
+                    "person":person,"capacity":4,"retain":true,
+                    "communication":{"share":true,"receive":true},
+                    "observations":[{"tick":0,"actor":person,"apparatus":1,"output_part":1,
+                        "input_force":100,"input_distance":100,"load_force":1,"outcome":"moved",
+                        "available_force":100,"travel":100,"delivered_work":100,"broken_parts":[]}]
+                })).collect();
+                snapshot.mechanics = Some(serde_json::from_value(serde_json::json!({
+                    "world":{"catalog":{"components":[{"id":1,"name":"part","force_ratio_numerator":1,"force_ratio_denominator":1,"efficiency_per_mille":1000,"max_input_force":1000}]},
+                        "apparatus":[{"id":1,"parts":[{"id":1,"component":1,"parent":null,"share_per_mille":1000}]}]},
+                    "materials":[{"component":1,"good":1}],"capabilities":[],"memories":memories,"observations":[]
+                })).unwrap());
+            }
             if literacy_mode {
                 let mut probe = CoreHost::begin(snapshot.clone(), &[(1, 1)]).unwrap();
                 let pairs = probe.meet_autonomously(&[]).unwrap();
@@ -7613,6 +7630,9 @@ fn core_host_social_benchmark() {
             let meetings = host.meet_autonomously(&[]).unwrap();
             let elapsed = start.elapsed();
             assert_eq!(meetings.len(), ((count - 1) / 2) as usize);
+            if mechanical_testimony {
+                assert_eq!(host.snapshot().mechanics.unwrap().memories.iter().map(|memory| memory.testimony.len()).sum::<usize>(), meetings.len() * 2);
+            }
             if teaching_mode { assert_eq!(host.snapshot().skills.unwrap().owner.lessons.len(), meetings.len()); }
             if literacy_mode { assert_eq!(host.snapshot().writing.unwrap().study.iter().filter(|row| row.progress == 1).count(), meetings.len()); }
             if taking_reports {

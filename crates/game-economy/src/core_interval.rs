@@ -23,9 +23,10 @@ pub use host::{
     CorePurpose, CoreRepairResults, CoreRequestResults, CoreRun, CoreRunEvent, CoreSchedule,
     CoreSharedWork, CoreSites, CoreSkillCredit, CoreSkills, CoreSocial, CoreSocialResults,
     CoreToolRepairResults, CoreTreatmentResults, CoreWorkIntent, CoreWritingPracticeResults,
-    CoreWritingResults, DecisionPhase, MechanicalCapability, MechanicalLoadMaterial,
-    MechanicalLoadOutcome, MechanicalLoadPolicy, MechanicalLoadRequest, MechanicalLoadResult,
-    MechanicalMaterial, MechanicalMemory, MechanicalPolicy, MechanicalReactions,
+    CoreWritingResults, DecisionPhase, MechanicalCapability, MechanicalCommunication,
+    MechanicalLoadMaterial, MechanicalLoadOutcome, MechanicalLoadPolicy, MechanicalLoadRequest,
+    MechanicalLoadResult, MechanicalMaterial, MechanicalMemory, MechanicalPolicy,
+    MechanicalReactions, MechanicalTestimony,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
