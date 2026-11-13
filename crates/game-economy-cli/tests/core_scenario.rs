@@ -566,6 +566,73 @@ fn saved_mechanical_load_intention_never_substitutes_changed_parameters() {
 }
 
 #[test]
+fn people_can_choose_to_design_and_assemble_carried_parts() {
+    use game_economy::core_interval::{CoreChoiceOutcome, CoreHost, CoreRunEvent, DecisionPhase};
+    let root = root();
+    let state = game_economy_cli::core_scenario(
+        &root.join("content/scenarios/economy-core-personal-design.toml"),
+        &root.join("content"),
+    )
+    .unwrap()
+    .snapshot();
+    let mut idle = state.clone();
+    std::sync::Arc::make_mut(
+        idle.schedule
+            .as_mut()
+            .unwrap()
+            .personal_choices
+            .as_mut()
+            .unwrap(),
+    )[0]
+    .idle = 100;
+    let idle = CoreHost::resume(idle).unwrap();
+    assert!(idle.preview_personal_choices(&[]).unwrap().0.is_empty());
+    let mut host = CoreHost::resume(state).unwrap();
+    let preview = host.preview_personal_choices(&[]).unwrap();
+    assert_eq!(preview.0[0].key.domain, 13);
+    let mut stale = host.snapshot();
+    stale.schedule.as_mut().unwrap().phase = DecisionPhase::ChosenMechanicalDesign {
+        meal_people: vec![],
+        intents: std::sync::Arc::new(preview.0.clone()),
+        remaining: 0,
+    };
+    let carried = stale
+        .core
+        .physical
+        .custody
+        .containers
+        .iter_mut()
+        .find(|row| row.place == game_lots::Place::Person(1))
+        .unwrap();
+    *carried = game_lots::Container::new(carried.place, carried.capacity, vec![]).unwrap();
+    let mut stale =
+        CoreHost::resume(serde_json::from_str(&serde_json::to_string(&stale).unwrap()).unwrap())
+            .unwrap();
+    let stale_run = stale.advance_continuous(1, &[]).unwrap();
+    assert!(stale_run.events.iter().any(|event| matches!(event, CoreRunEvent::PersonalChoices(rows) if rows.iter().any(|row| row.outcome == CoreChoiceOutcome::Stale))));
+    assert!(
+        stale
+            .snapshot()
+            .mechanics
+            .unwrap()
+            .world
+            .apparatus
+            .is_empty()
+    );
+    let run = host.advance_continuous(1, &[]).unwrap();
+    assert_eq!(run.failure, None);
+    assert!(run.events.iter().any(|event| matches!(event, CoreRunEvent::MechanicalAssemblies(rows) if rows.len() == 1 && rows[0].accepted)));
+    let state = host.snapshot();
+    assert_eq!(state.mechanics.as_ref().unwrap().world.apparatus.len(), 1);
+    assert_eq!(
+        CoreHost::resume(serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap())
+            .unwrap()
+            .snapshot(),
+        state
+    );
+}
+
+#[test]
 fn explicit_apparatus_assembly_uses_carried_parts_and_survives_reload() {
     use game_economy::core_interval::CoreHost;
     use game_mechanics::{Assembly, Experiment};
@@ -4059,6 +4126,7 @@ fn stale_saved_carrying_intention_is_reported_without_substituting_an_action() {
         remaining: None,
         meal_people: vec![],
         intents: std::sync::Arc::new(vec![CoreChoiceIntent {
+            assembly: None,
             mechanical_load: None,
             cultivation: None,
             actor: 2,

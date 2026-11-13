@@ -445,6 +445,119 @@ impl Runtime {
 }
 
 impl CoreHost {
+    /// Form a bounded candidate from each willing designer's carried parts.
+    /// Component ratings are not inspected while choosing a design.
+    pub fn preview_mechanical_designs(
+        &self,
+        designers: &[u64],
+        occupied: &[u64],
+    ) -> Result<Vec<game_mechanics::Assembly>, String> {
+        if designers.par_windows(2).any(|row| row[0] >= row[1])
+            || occupied.par_windows(2).any(|row| row[0] >= row[1])
+        {
+            return Err("invalid mechanical design people".into());
+        }
+        let Some(owner) = &self.mechanics else {
+            return Ok(Vec::new());
+        };
+        let tick = self.core.physical.tick();
+        let offset = self.core.elapsed_millis().ok_or("no physical interval")?;
+        let rest = self.blocked_with_rest(occupied);
+        let occupied = rest.as_deref().unwrap_or(occupied);
+        let active: HashSet<_> = self
+            .core
+            .physical
+            .work()
+            .par_iter()
+            .filter(|row| row.phase == game_lot_runtime::Phase::Working)
+            .map(|row| row.job.worker)
+            .collect();
+        let mut materials = owner.materials.clone();
+        materials.par_sort_unstable_by_key(|row| (row.good, row.component));
+        Ok(designers
+            .par_iter()
+            .filter_map(|&actor| {
+                let person = indexed(&self.core.people, actor, |row| row.id)?;
+                if person.controlled
+                    || person.health == 0
+                    || person.region.is_none()
+                    || occupied.binary_search(&actor).is_ok()
+                    || active.contains(&actor)
+                {
+                    return None;
+                }
+                let container = self
+                    .core
+                    .physical
+                    .custody(game_lots::Place::Person(actor))?;
+                let (first, second) = container
+                    .lots
+                    .iter()
+                    .filter_map(|lot| {
+                        let item = lot.item?;
+                        if owner.owns_part(item)
+                            || lot.expires_at.is_some_and(|expires| expires <= tick)
+                        {
+                            return None;
+                        }
+                        let index = materials.partition_point(|row| row.good < lot.good);
+                        let component = materials
+                            .get(index)
+                            .filter(|row| row.good == lot.good)?
+                            .component;
+                        let rank = game_genetics::random(
+                            self.core.seed,
+                            actor ^ tick.rotate_left(17),
+                            item ^ offset,
+                        );
+                        Some((rank, item, component))
+                    })
+                    .fold((None, None), |(first, second), candidate| {
+                        if first.is_none_or(|value| candidate < value) {
+                            (Some(candidate), first)
+                        } else if second.is_none_or(|value| candidate < value) {
+                            (first, Some(candidate))
+                        } else {
+                            (first, second)
+                        }
+                    });
+                let mut parts = [first?, second?];
+                parts.sort_unstable_by_key(|row| row.1);
+                let id = game_genetics::random(
+                    self.core.seed,
+                    0x6d65636864657369 ^ actor,
+                    tick ^ offset,
+                )
+                .max(1);
+                if indexed(owner.world.apparatus(), id, |row| row.id).is_some() {
+                    return None;
+                }
+                Some(game_mechanics::Assembly {
+                    actor,
+                    apparatus: game_mechanics::Apparatus {
+                        id,
+                        parts: std::sync::Arc::new(vec![
+                            game_mechanics::Part {
+                                id: parts[0].1,
+                                component: parts[0].2,
+                                parent: None,
+                                share_per_mille: 1000,
+                                broken: false,
+                            },
+                            game_mechanics::Part {
+                                id: parts[1].1,
+                                component: parts[1].2,
+                                parent: Some(parts[0].1),
+                                share_per_mille: 1000,
+                                broken: false,
+                            },
+                        ]),
+                    },
+                })
+            })
+            .collect())
+    }
+
     /// Assemble explicitly chosen designs from the actors' actual carried
     /// identified parts. This does not grant access or choose for anyone.
     pub fn assemble_mechanical_apparatus(

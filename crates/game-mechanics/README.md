@@ -13,8 +13,11 @@ graph and arbitrating competing apparatus identifiers and parts in parallel.
 A proposal succeeds only if it wins every resource; it may lose resources to a
 proposal that itself loses another resource. The interval host verifies that an
 available actor actually carries each correctly typed identified part before it
-commits. Assembly currently has no duration, disassembly, personal-choice
-integration, or autonomous generation of designs.
+commits. An opted-in person can also compare a generated two-part design with
+other activities and idleness in the shared choice round. The host retains the
+exact selected parts and revalidates before assembly. Assembly currently has no
+duration or disassembly, and design search, experimentation and learning are
+still rudimentary.
 
 The ignored `assembly_scaling` benchmark stages and commits 100,000 proposals.
 Median times at one, two, four and six workers were 86.1, 59.3, 44.9 and

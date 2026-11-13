@@ -15,6 +15,7 @@ pub(super) const FOOD_PICKUP: u32 = 9;
 pub(super) const SELF_TREATMENT: u32 = 10;
 pub(super) const CULTIVATION: u32 = 11;
 pub(super) const MECHANICAL_LOAD: u32 = 12;
+pub(super) const MECHANICAL_DESIGN: u32 = 13;
 
 fn index_by_person<T>(rows: &[T], id: u64, key: impl Fn(&T) -> u64) -> Option<usize> {
     rows.first()
@@ -50,6 +51,8 @@ pub struct CoreWorkIntent {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CoreChoiceIntent {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assembly: Option<game_mechanics::Assembly>,
     pub actor: u64,
     pub key: Key,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -594,6 +597,7 @@ impl CoreHost {
                 .map_err(str::to_owned)?
                 .into_par_iter()
                 .map(|opportunity| CoreChoiceIntent {
+                    assembly: None,
                     mechanical_load: None,
                     actor: opportunity.person,
                     key: Key {
@@ -668,6 +672,7 @@ impl CoreHost {
                             }
                         });
                         CoreChoiceIntent {
+                            assembly: None,
                             mechanical_load: None,
                             cultivation: None,
                             actor: opportunity.person,
@@ -717,6 +722,7 @@ impl CoreHost {
                 let rows: Vec<_> = opportunities
                     .into_par_iter()
                     .map(|opportunity| CoreChoiceIntent {
+                        assembly: None,
                         mechanical_load: None,
                         cultivation: None,
                         actor: opportunity.person,
@@ -768,6 +774,7 @@ impl CoreHost {
                 .direct_opportunities()
                 .into_par_iter()
                 .map(|opportunity| CoreChoiceIntent {
+                    assembly: None,
                     mechanical_load: None,
                     cultivation: None,
                     actor: opportunity.person,
@@ -813,6 +820,7 @@ impl CoreHost {
                     .preview_work_with_hunger_limit(&busy, schedule.work_rate, u32::MAX, true)?
                     .into_par_iter()
                     .map(|opportunity| CoreChoiceIntent {
+                        assembly: None,
                         mechanical_load: None,
                         cultivation: None,
                         actor: opportunity.person,
@@ -855,6 +863,7 @@ impl CoreHost {
                     .preview_mechanical_experiments(&busy)?
                     .into_par_iter()
                     .map(|policy| CoreChoiceIntent {
+                        assembly: None,
                         mechanical_load: None,
                         cultivation: None,
                         actor: policy.experiment.actor,
@@ -876,6 +885,53 @@ impl CoreHost {
                 Ok(Vec::new())
             }
         };
+        let mechanical_designs = || -> Result<Vec<CoreChoiceIntent>, String> {
+            if !domain.is_none_or(|domain| domain == MECHANICAL_DESIGN) {
+                return Ok(Vec::new());
+            }
+            let mut designers: Vec<_> = self
+                .schedule
+                .as_ref()
+                .and_then(|s| s.personal_choices.as_ref())
+                .map_or_else(Vec::new, |people| {
+                    people
+                        .par_iter()
+                        .filter(|person| {
+                            person
+                                .preferences
+                                .binary_search_by_key(&MECHANICAL_DESIGN, |preference| {
+                                    preference.domain
+                                })
+                                .ok()
+                                .is_some_and(|index| person.preferences[index].enabled)
+                        })
+                        .map(|person| person.id)
+                        .collect()
+                });
+            designers.par_sort_unstable();
+            Ok(self
+                .preview_mechanical_designs(&designers, &busy)?
+                .into_par_iter()
+                .map(|assembly| CoreChoiceIntent {
+                    actor: assembly.actor,
+                    key: Key {
+                        domain: MECHANICAL_DESIGN,
+                        action: assembly.apparatus.id,
+                    },
+                    assembly: Some(assembly),
+                    cultivation: None,
+                    mechanical_load: None,
+                    movement: None,
+                    second_movement: None,
+                    work: None,
+                    experiment: None,
+                    experiment_value: Some(1),
+                    meal_value: None,
+                    tool_damage: None,
+                    health_value: None,
+                })
+                .collect())
+        };
         let mechanical_loads = || -> Result<Vec<CoreChoiceIntent>, String> {
             let schedule = self.schedule.as_ref().ok_or("no core schedule")?;
             if domain.is_none_or(|domain| domain == MECHANICAL_LOAD)
@@ -893,6 +949,7 @@ impl CoreHost {
                     .preview_mechanical_loads(&busy)?
                     .into_par_iter()
                     .map(|policy| CoreChoiceIntent {
+                        assembly: None,
                         actor: policy.request.actor,
                         key: Key {
                             domain: MECHANICAL_LOAD,
@@ -940,6 +997,7 @@ impl CoreHost {
                     let person = index_by_person(&self.core.people, opportunity.person, |p| p.id)
                         .expect("known person");
                     CoreChoiceIntent {
+                        assembly: None,
                         mechanical_load: None,
                         cultivation: None,
                         actor: opportunity.person,
@@ -1007,6 +1065,7 @@ impl CoreHost {
                     let mut movement = action.movements[0];
                     movement.id = 0;
                     CoreChoiceIntent {
+                        assembly: None,
                         mechanical_load: None,
                         cultivation: None,
                         actor,
@@ -1046,6 +1105,7 @@ impl CoreHost {
                 let person = index_by_person(&self.core.people, opportunity.person, |p| p.id)
                     .expect("known person");
                 CoreChoiceIntent {
+                    assembly: None,
                     mechanical_load: None,
                     cultivation: None,
                     actor: opportunity.person,
@@ -1104,6 +1164,7 @@ impl CoreHost {
             )?
             .into_par_iter()
             .map(|opportunity| CoreChoiceIntent {
+                assembly: None,
                 mechanical_load: None,
                 cultivation: None,
                 actor: opportunity.person,
@@ -1166,6 +1227,7 @@ impl CoreHost {
         intents.par_extend(treatments?);
         intents.par_extend(cultivation);
         intents.par_extend(mechanical_loads()?);
+        intents.par_extend(mechanical_designs()?);
         if intents
             .par_windows(2)
             .any(|rows| (rows[0].actor, rows[0].key) > (rows[1].actor, rows[1].key))
@@ -1261,6 +1323,7 @@ impl CoreHost {
                         && current[i].health_value == intent.health_value
                         && current[i].cultivation == intent.cultivation
                         && current[i].mechanical_load == intent.mechanical_load
+                        && current[i].assembly == intent.assembly
                 });
                 (intent, found)
             })

@@ -114,13 +114,15 @@ pub struct Draft {
 
 /// A proposed apparatus assembled by an individual from identified parts.
 /// The caller must verify physical custody and the actor's decision to assemble.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Assembly {
     pub actor: u64,
     pub apparatus: Apparatus,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct AssemblyOutcome {
     pub actor: u64,
     pub apparatus: u64,

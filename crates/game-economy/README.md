@@ -66,8 +66,19 @@ The action does not model partial positions or fatigue. The authored
 
 `assemble_mechanical_apparatus` accepts explicit actor-chosen designs and checks
 availability and the actor's carried identified parts before staging assembly.
-The owner arbitrates shared part and apparatus identifiers atomically. It does
-not yet schedule assembly as a personal choice or generate designs.
+The owner arbitrates shared part and apparatus identifiers atomically. Personal
+choice domain `13` can propose a two-part apparatus from the person's actual
+carried parts, with no access to hidden component strength. The person can
+prefer another activity or idle; the saved proposal is revalidated before it
+is assembled. `economy-core-personal-design.toml` demonstrates this limited
+design process. It does not yet generate experiments for new devices or learn
+which designs work.
+
+The ignored `mechanical_design_scaling` benchmark measured 100,000 complete
+scheduled design and assembly choices. Median times at one, two, four and six
+workers were 307.0, 236.2, 171.8 and 151.4 ms, with identical saved states.
+Setup and snapshots are excluded. This synthetic workload scales sublinearly
+and does not represent a complete simulation.
 
 The ignored `mechanical_load_scaling` test with `LEGACY_LOAD_PERSONAL=1`
 measured complete scheduled choice and physical load processing for 100,000
