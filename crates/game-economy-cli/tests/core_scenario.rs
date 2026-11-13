@@ -527,6 +527,200 @@ fn cultivation_is_a_personal_choice_saved_until_physical_settlement() {
 }
 
 #[test]
+fn seed_preferences_learn_only_from_personally_observed_successful_harvests() {
+    use game_economy::core_interval::CoreHost;
+    use game_economy_agriculture::{Phase, Policy};
+    use game_lots::Place;
+    fn run(reaction: Option<i64>, harvester: u64, workers: usize) -> serde_json::Value {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let root = root();
+                let mut state = game_economy_cli::core_scenario(
+                    &root.join("content/scenarios/economy-core-seed-learning.toml"),
+                    &root.join("content"),
+                )
+                .unwrap()
+                .snapshot();
+                let profiles = std::sync::Arc::make_mut(
+                    &mut state
+                        .agriculture
+                        .as_mut()
+                        .unwrap()
+                        .provenance
+                        .as_mut()
+                        .unwrap()
+                        .profiles,
+                );
+                profiles[0].harvest_reaction = reaction;
+                let mut host = CoreHost::resume(state).unwrap();
+                assert_eq!(host.advance_continuous(900_001, &[]).unwrap().failure, None);
+                assert_eq!(
+                    host.snapshot()
+                        .agriculture
+                        .as_ref()
+                        .unwrap()
+                        .provenance
+                        .as_ref()
+                        .unwrap()
+                        .plantings[0]
+                        .planter,
+                    Some(1)
+                );
+                for _ in 0..100 {
+                    if host.snapshot().agriculture.as_ref().unwrap().fields[0].phase == Phase::Ripe
+                    {
+                        break;
+                    }
+                    assert_eq!(host.advance_continuous(900_000, &[]).unwrap().failure, None);
+                }
+                let mut ripe = host.snapshot();
+                let farm = ripe.agriculture.as_mut().unwrap();
+                assert_eq!(farm.fields[0].phase, Phase::Ripe);
+                let seed = farm
+                    .crops
+                    .iter()
+                    .find(|crop| crop.id == farm.fields[0].crop)
+                    .unwrap()
+                    .seed;
+                if harvester == 2 {
+                    farm.policies[0].willing = false;
+                    farm.policies.push(Policy {
+                        person: 2,
+                        willing: true,
+                        hunger_limit: None,
+                        pressured_by: None,
+                        pressure_threshold: None,
+                    });
+                }
+                ripe.core
+                    .physical
+                    .custody
+                    .containers
+                    .iter_mut()
+                    .find(|row| {
+                        row.place
+                            == Place::Stock {
+                                region: 1,
+                                good: seed,
+                            }
+                    })
+                    .unwrap()
+                    .capacity = 1;
+                let mut blocked = CoreHost::resume(ripe).unwrap();
+                assert_eq!(
+                    blocked.advance_continuous(900_000, &[]).unwrap().failure,
+                    None
+                );
+                let mut failed = blocked.snapshot();
+                let farm = failed.agriculture.as_ref().unwrap();
+                assert_eq!(farm.fields[0].phase, Phase::Ripe);
+                assert!(
+                    farm.provenance
+                        .as_ref()
+                        .unwrap()
+                        .profiles
+                        .iter()
+                        .all(|profile| profile.preferences.len() == 1)
+                );
+                failed
+                    .core
+                    .physical
+                    .custody
+                    .containers
+                    .iter_mut()
+                    .find(|row| {
+                        row.place
+                            == Place::Stock {
+                                region: 1,
+                                good: seed,
+                            }
+                    })
+                    .unwrap()
+                    .capacity = 1000;
+                let mut host = CoreHost::resume(failed).unwrap();
+                assert_eq!(host.advance_continuous(900_000, &[]).unwrap().failure, None);
+                let harvested = host.snapshot();
+                let farm = harvested.agriculture.as_ref().unwrap();
+                assert_eq!(farm.fields[0].phase, Phase::Fallow);
+                let profiles = &farm.provenance.as_ref().unwrap().profiles;
+                let child = profiles[0]
+                    .preferences
+                    .iter()
+                    .find(|preference| preference.batch == 12);
+                assert_eq!(
+                    child.map(|preference| preference.value),
+                    if harvester == 1 {
+                        reaction.map(|value| 10 + value)
+                    } else {
+                        None
+                    }
+                );
+                assert!(
+                    profiles[1]
+                        .preferences
+                        .iter()
+                        .all(|preference| preference.batch != 12)
+                );
+                let mut restored = CoreHost::resume(
+                    serde_json::from_str(&serde_json::to_string(&harvested).unwrap()).unwrap(),
+                )
+                .unwrap();
+                assert_eq!(
+                    restored.advance_continuous(900_000, &[]).unwrap().failure,
+                    None
+                );
+                let result = restored.snapshot();
+                let farm = result.agriculture.as_ref().unwrap();
+                if harvester == 1 && reaction == Some(10) {
+                    assert_eq!(farm.fields[0].phase, Phase::Growing);
+                    assert_eq!(
+                        farm.provenance.as_ref().unwrap().plantings[0].seeds[0].batch,
+                        Some(12)
+                    );
+                } else {
+                    assert_eq!(farm.fields[0].phase, Phase::Fallow);
+                }
+                serde_json::to_value(result).unwrap()
+            })
+    }
+    for (reaction, harvester) in [(Some(10), 1), (Some(-20), 1), (None, 1), (Some(10), 2)] {
+        assert_eq!(run(reaction, harvester, 1), run(reaction, harvester, 4));
+    }
+}
+
+#[test]
+fn chosen_cultivation_can_disregard_another_persons_claim() {
+    use game_economy::core_interval::{CoreChoiceOutcome, CoreHost, CoreRunEvent};
+    use game_economy_agriculture::Phase;
+    use game_personal_choice::{Person, Preference};
+    fn run(disregard: bool, workers: usize) -> serde_json::Value {
+        rayon::ThreadPoolBuilder::new().num_threads(workers).build().unwrap().install(|| {
+            let root = root();
+            let mut state = game_economy_cli::core_scenario(&root.join("content/scenarios/economy-cultivation-requests.toml"), &root.join("content")).unwrap().snapshot();
+            state.agriculture.as_mut().unwrap().requests = None;
+            state.claims.as_mut().unwrap().preferences.push(serde_json::from_value(serde_json::json!({"person": 2, "disregard_others": disregard})).unwrap());
+            let mut host = CoreHost::resume(state).unwrap();
+            host.enable_personal_choices(vec![Person { id: 2, idle: 0, act_on_tie: false, preferences: vec![Preference { domain: 11, enabled: true, bias: 10, weight: 0 }], actions: vec![] }]).unwrap();
+            assert_eq!(host.advance_continuous(1, &[]).unwrap().failure, None);
+            let result = host.advance_continuous(899_999, &[]).unwrap();
+            assert_eq!(result.failure, None);
+            let expected = if disregard { CoreChoiceOutcome::Accepted } else { CoreChoiceOutcome::Stale };
+            assert!(result.events.iter().any(|event| matches!(event, CoreRunEvent::PersonalChoices(rows) if rows.iter().any(|row| row.actor == 2 && row.outcome == expected))));
+            let state = host.snapshot();
+            assert_eq!(state.agriculture.as_ref().unwrap().fields[0].phase, if disregard { Phase::Growing } else { Phase::Fallow });
+            if disregard { assert!(state.claims.as_ref().unwrap().field_events.iter().any(|event| event.person == 2 && event.claimant == 1)); }
+            serde_json::to_value(state).unwrap()
+        })
+    }
+    for disregard in [false, true] {
+        assert_eq!(run(disregard, 1), run(disregard, 4));
+    }
+}
+
+#[test]
 fn authored_personal_cultivation_runs_in_the_interval_host() {
     use game_economy_agriculture::Phase;
     let root = root();

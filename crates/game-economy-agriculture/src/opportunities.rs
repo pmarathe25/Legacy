@@ -161,6 +161,7 @@ mod tests {
                     person: 1,
                     idle: 0,
                     act_on_tie: false,
+                    harvest_reaction: None,
                     preferences: vec![crate::provenance::SeedPreference {
                         batch: 17,
                         enabled: true,

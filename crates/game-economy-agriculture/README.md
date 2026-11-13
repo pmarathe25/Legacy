@@ -33,6 +33,14 @@ response paths. These authored preferences do not yet learn from harvest
 experience or compare seed choice with the general cross-domain choice round;
 see `content/scenarios/economy-core-seed-choice.toml`.
 
+An optional signed `harvest_reaction` lets a person form their own value for
+offspring seed after they both planted its known parent batch and successfully
+harvested it. The new value is their existing parent value plus their personal
+reaction, which may be positive, negative, or zero. Failed harvests, other
+people's unobserved plantings, and unknown parents create no such preference.
+They can still decline or prefer some other batch. See
+`content/scenarios/economy-core-seed-learning.toml`.
+
 The interval host's optional shared personal-choice round uses domain `11`
 for cultivation. It saves the exact field and seed input selected by each
 person until the physical boundary, then revalidates and settles it. A lost

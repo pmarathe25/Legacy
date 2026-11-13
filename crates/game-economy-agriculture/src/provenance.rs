@@ -22,6 +22,9 @@ pub struct SeedProfile {
     pub idle: i64,
     #[serde(default)]
     pub act_on_tie: bool,
+    /// Optional personal change in value for seed from one's own harvest.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub harvest_reaction: Option<i64>,
     #[serde(default)]
     pub preferences: Vec<SeedPreference>,
 }
@@ -31,6 +34,9 @@ pub struct SeedProfile {
 pub struct Planting {
     pub field: u64,
     pub tick: u64,
+    /// The actual planter, when recorded; old saves may not contain one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub planter: Option<u64>,
     /// Actual consumed physical cohorts, including any unknown batch.
     pub seeds: Vec<Lot>,
     /// Assigned once when the field matures; absent before maturation.
@@ -198,6 +204,7 @@ impl Provenance {
                 _ => false,
             };
             record.tick > now
+                || record.planter == Some(0)
                 || field.phase == Phase::Fallow
                 || offspring_invalid
                 || record.seeds.is_empty()
@@ -225,9 +232,13 @@ impl Provenance {
     pub(crate) fn stage(
         &self,
         changes: &[(u64, u64, Phase, u32)],
+        actors: &[u64],
         events: &Events,
         decisions: &[&game_lots::TransactionOutcome],
     ) -> Result<Self, String> {
+        if changes.len() != actors.len() {
+            return Err("invalid cultivation actors".into());
+        }
         if changes.is_empty() {
             return Ok(self.clone());
         }
@@ -244,16 +255,17 @@ impl Provenance {
         }
         let mut updates: Vec<_> = changes
             .par_iter()
-            .filter_map(|&(field, action, phase, _)| {
+            .zip(actors.par_iter())
+            .filter_map(|(&(field, action, phase, _), &actor)| {
                 let accepted = decisions
                     .binary_search_by_key(&action, |row| row.id)
                     .ok()
                     .is_some_and(|i| decisions[i].accepted);
-                accepted.then_some((field, action, phase))
+                accepted.then_some((field, action, phase, actor))
             })
-            .map(|(field, action, phase)| -> Result<_, String> {
+            .map(|(field, action, phase, actor)| -> Result<_, String> {
                 if phase == Phase::Fallow {
-                    return Ok((field, None));
+                    return Ok((field, actor, None));
                 }
                 if phase != Phase::Growing {
                     return Err("invalid planting phase".into());
@@ -270,9 +282,11 @@ impl Provenance {
                 }
                 Ok((
                     field,
+                    actor,
                     Some(Planting {
                         field,
                         tick: events.tick,
+                        planter: Some(actor),
                         seeds: receipt.movement.lots.to_vec(),
                         offspring: None,
                     }),
@@ -286,6 +300,106 @@ impl Provenance {
         if updates.par_windows(2).any(|rows| rows[0].0 == rows[1].0) {
             return Err("duplicate field provenance update".into());
         }
+        let mut learning: Vec<_> = if self
+            .profiles
+            .par_iter()
+            .any(|profile| profile.harvest_reaction.is_some())
+        {
+            updates
+                .par_iter()
+                .filter_map(|(field, actor, planting)| {
+                    if planting.is_some() {
+                        return None;
+                    }
+                    let planting = self
+                        .plantings
+                        .binary_search_by_key(field, |row| row.field)
+                        .ok()
+                        .map(|index| &self.plantings[index])?;
+                    if planting.planter != Some(*actor) {
+                        return None;
+                    }
+                    let profile = self
+                        .profiles
+                        .binary_search_by_key(actor, |row| row.person)
+                        .ok()
+                        .map(|index| &self.profiles[index])?;
+                    let reaction = profile.harvest_reaction?;
+                    let learned: Vec<_> = planting
+                        .offspring
+                        .as_ref()?
+                        .iter()
+                        .filter_map(|child| {
+                            let parent = child.parent?;
+                            let preference = profile
+                                .preferences
+                                .binary_search_by_key(&parent, |row| row.batch)
+                                .ok()
+                                .map(|index| profile.preferences[index])?;
+                            Some(SeedPreference {
+                                batch: child.batch,
+                                enabled: preference.enabled,
+                                value: preference.value.saturating_add(reaction),
+                            })
+                        })
+                        .collect();
+                    (!learned.is_empty()).then_some((*actor, learned))
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+        learning.par_sort_unstable_by_key(|row| row.0);
+        if learning.par_windows(2).any(|rows| rows[0].0 == rows[1].0) {
+            return Err("duplicate cultivation learning actor".into());
+        }
+        let profiles = if learning.is_empty() {
+            Arc::clone(&self.profiles)
+        } else {
+            Arc::new(
+                self.profiles
+                    .par_iter()
+                    .map(|profile| {
+                        let Ok(index) = learning.binary_search_by_key(&profile.person, |row| row.0)
+                        else {
+                            return profile.clone();
+                        };
+                        let additions = &learning[index].1;
+                        let mut merged =
+                            Vec::with_capacity(profile.preferences.len() + additions.len());
+                        let (mut old, mut new) = (0, 0);
+                        while old < profile.preferences.len() && new < additions.len() {
+                            let existing = profile.preferences[old];
+                            let learned = additions[new];
+                            match existing.batch.cmp(&learned.batch) {
+                                std::cmp::Ordering::Less => {
+                                    merged.push(existing);
+                                    old += 1;
+                                }
+                                std::cmp::Ordering::Greater => {
+                                    merged.push(learned);
+                                    new += 1;
+                                }
+                                std::cmp::Ordering::Equal => {
+                                    merged.push(existing);
+                                    old += 1;
+                                    new += 1;
+                                }
+                            }
+                        }
+                        merged.extend_from_slice(&profile.preferences[old..]);
+                        merged.extend_from_slice(&additions[new..]);
+                        SeedProfile {
+                            person: profile.person,
+                            idle: profile.idle,
+                            act_on_tie: profile.act_on_tie,
+                            harvest_reaction: profile.harvest_reaction,
+                            preferences: merged,
+                        }
+                    })
+                    .collect(),
+            )
+        };
         let mut plantings: Vec<_> = self
             .plantings
             .par_iter()
@@ -296,11 +410,11 @@ impl Provenance {
             })
             .cloned()
             .collect();
-        plantings.par_extend(updates.into_par_iter().filter_map(|row| row.1));
+        plantings.par_extend(updates.into_par_iter().filter_map(|row| row.2));
         plantings.par_sort_unstable_by_key(|row| row.field);
         Ok(Self {
             plantings: Arc::new(plantings),
-            profiles: Arc::clone(&self.profiles),
+            profiles,
             genetics: self.genetics.clone(),
         })
     }

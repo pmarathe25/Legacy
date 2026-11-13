@@ -12,9 +12,11 @@ fn concentrated_seed_provenance_scaling() {
     let personal = std::env::var_os("LEGACY_SEED_PERSONAL").is_some();
     let genetic = std::env::var_os("LEGACY_SEED_GENETIC").is_some();
     let reproduction = std::env::var_os("LEGACY_SEED_REPRODUCTION").is_some();
+    let learning = std::env::var_os("LEGACY_SEED_LEARNING").is_some();
     assert!(!personal || tracking);
     assert!(!genetic || tracking);
     assert!(!reproduction || genetic);
+    assert!(!learning || (personal && reproduction));
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let capacity = count * 100 + 100;
     let mut text = format!(
@@ -62,7 +64,7 @@ track_seed_batches = {tracking}
         )
         .unwrap();
         if personal {
-            writeln!(text, "[[cultivation.seed_profiles]]\nperson = {id}\nidle = 0\npreferences = [{{ batch = {id}, enabled = true, value = 10 }}]").unwrap();
+            writeln!(text, "[[cultivation.seed_profiles]]\nperson = {id}\nidle = 0\n{}preferences = [{{ batch = {id}, enabled = true, value = 10 }}]", if learning { "harvest_reaction = 10\n" } else { "" }).unwrap();
         }
         if genetic {
             let allele = id % 1001;
@@ -234,6 +236,18 @@ track_seed_batches = {tracking}
                         .iter()
                         .all(|field| field.phase == game_economy_agriculture::Phase::Fallow)
                 );
+                if learning {
+                    let profiles = &state
+                        .agriculture
+                        .as_ref()
+                        .unwrap()
+                        .provenance
+                        .as_ref()
+                        .unwrap()
+                        .profiles;
+                    assert!(profiles.iter().all(|profile| profile.preferences.len() == 2
+                        && profile.preferences[1].value == 20));
+                }
                 if let Some(expected) = &harvested_reference {
                     assert_eq!(&state, expected);
                 } else {

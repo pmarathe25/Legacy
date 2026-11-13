@@ -967,7 +967,7 @@ impl Plan {
         let provenance = owner
             .provenance
             .as_ref()
-            .map(|provenance| provenance.stage(&self.changes, events, &decisions))
+            .map(|provenance| provenance.stage(&self.changes, &self.actors, events, &decisions))
             .transpose()?;
         let provenance = match (provenance, self.maturations) {
             (Some(owner), Some(maturations)) => Some(owner.mature(maturations)?),
