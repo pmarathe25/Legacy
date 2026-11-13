@@ -177,6 +177,12 @@ pub struct CoreSchedule {
     /// Opt-in personal choice for construction, carrying, maintenance and work starts.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub personal_choices: Option<Arc<Vec<game_personal_choice::Person>>>,
+    /// Chosen cultivation intentions awaiting the next physical boundary.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pending_cultivation: Vec<game_economy_agriculture::opportunities::Opportunity>,
+    /// Outcomes staged by the boundary and emitted by the scheduler.
+    #[serde(skip)]
+    pub settled_cultivation: Vec<CoreChoiceEvent>,
     /// Optional authored inclinations for actual newborns.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub birth_choices: Option<game_personal_choice::BirthProfile>,
@@ -212,6 +218,45 @@ impl CoreSchedule {
                     .is_err()
             }) {
                 return Err("invalid personal choice people".into());
+            }
+        }
+        if !self.pending_cultivation.is_empty() {
+            let Some(people) = &self.personal_choices else {
+                return Err("pending cultivation requires personal choices".into());
+            };
+            let mut fields: Vec<_> = self
+                .pending_cultivation
+                .par_iter()
+                .map(|row| row.field)
+                .collect();
+            fields.par_sort_unstable();
+            if self
+                .pending_cultivation
+                .par_windows(2)
+                .any(|p| p[0].person >= p[1].person)
+                || fields.par_windows(2).any(|p| p[0] == p[1])
+                || self.pending_cultivation.par_iter().any(|row| {
+                    row.person == 0
+                        || row.field == 0
+                        || row.region == 0
+                        || row.crop == 0
+                        || people
+                            .binary_search_by_key(&row.person, |person| person.id)
+                            .is_err()
+                        || core
+                            .people
+                            .binary_search_by_key(&row.person, |person| person.id)
+                            .is_err()
+                        || match (row.phase, row.planting) {
+                            (game_economy_agriculture::Phase::Fallow, Some(seed)) => {
+                                seed.good == 0 || seed.quantity == 0 || seed.batch == Some(0)
+                            }
+                            (game_economy_agriculture::Phase::Ripe, None) => false,
+                            _ => true,
+                        }
+                })
+            {
+                return Err("invalid pending cultivation".into());
             }
         }
         if let Some(profile) = &self.birth_choices {
@@ -290,6 +335,7 @@ impl CoreSchedule {
                 || intents.par_iter().any(|intent| {
                     intent.actor == 0
                         || intent.key.action == 0
+                        || intent.cultivation.is_some()
                         || match (
                             intent.key.domain,
                             intent.movement,
@@ -605,6 +651,8 @@ impl CoreHost {
             phase: DecisionPhase::Meals,
             carried_rates,
             personal_choices: None,
+            pending_cultivation: Vec::new(),
+            settled_cultivation: Vec::new(),
             birth_choices: None,
         };
         schedule.validate(&self.core)?;
@@ -614,7 +662,9 @@ impl CoreHost {
     /// Stop scheduling between completed personal decision batches.
     pub fn disable_schedule(&mut self) -> Result<(), String> {
         let schedule = self.schedule.as_ref().ok_or("no core schedule")?;
-        if !matches!(schedule.phase, DecisionPhase::Meals) {
+        if !matches!(schedule.phase, DecisionPhase::Meals)
+            || !schedule.pending_cultivation.is_empty()
+        {
             return Err("finish the pending work decision first".into());
         }
         self.schedule = None;
@@ -660,6 +710,23 @@ impl CoreHost {
             };
         }
         'run: loop {
+            let pending_busy = self
+                .schedule
+                .as_ref()
+                .filter(|schedule| !schedule.pending_cultivation.is_empty())
+                .map(|schedule| {
+                    let mut busy = blocked.to_vec();
+                    busy.par_extend(
+                        schedule
+                            .pending_cultivation
+                            .par_iter()
+                            .map(|row| row.person),
+                    );
+                    busy.par_sort_unstable();
+                    busy.dedup();
+                    busy
+                });
+            let blocked = pending_busy.as_deref().unwrap_or(blocked);
             let offset = self.core.elapsed_millis().expect("active interval");
             if offset == quantum {
                 run.boundary = true;
@@ -1254,7 +1321,7 @@ impl CoreHost {
                         let next = self.after_assisting(meal_people);
                         self.schedule.as_mut().expect("active schedule").phase = next;
                     }
-                    DecisionPhase::ChooseLocal { meal_people } => {
+                    DecisionPhase::ChooseLocal { mut meal_people } => {
                         let mut busy = blocked.to_vec();
                         busy.extend(meal_people.iter().copied());
                         busy.par_sort_unstable();
@@ -1262,7 +1329,19 @@ impl CoreHost {
                         let people = schedule.personal_choices.as_ref().expect("choice profile");
                         let (intents, idle) =
                             attempt!('run, self.choose_local_actions(&busy, people));
-                        let intents = Arc::new(intents);
+                        let (actors, pending) = self.queue_cultivation(&intents);
+                        meal_people.par_extend(actors.into_par_iter());
+                        meal_people.par_sort_unstable();
+                        meal_people.dedup();
+                        if !pending.is_empty() {
+                            run.events.push(CoreRunEvent::PersonalChoices(pending));
+                        }
+                        let intents = Arc::new(
+                            intents
+                                .into_par_iter()
+                                .filter(|intent| intent.key.domain != personal_choice::CULTIVATION)
+                                .collect::<Vec<_>>(),
+                        );
                         if !idle.is_empty() {
                             run.events.push(CoreRunEvent::PersonalChoices(idle));
                         }
@@ -2298,6 +2377,13 @@ impl CoreHost {
             combined
                 .events
                 .push(CoreRunEvent::Boundary(Box::new(events)));
+            if !schedule.settled_cultivation.is_empty() {
+                combined
+                    .events
+                    .push(CoreRunEvent::PersonalChoices(std::mem::take(
+                        &mut schedule.settled_cultivation,
+                    )));
+            }
             let Some(boundaries) = combined.boundaries.checked_add(1) else {
                 combined.failure = Some("boundary count overflow".into());
                 combined.boundary = true;

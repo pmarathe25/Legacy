@@ -13,6 +13,7 @@ pub(super) const MEAL: u32 = 7;
 pub(super) const TOOL_REPAIR: u32 = 8;
 pub(super) const FOOD_PICKUP: u32 = 9;
 pub(super) const SELF_TREATMENT: u32 = 10;
+pub(super) const CULTIVATION: u32 = 11;
 
 fn index_by_person<T>(rows: &[T], id: u64, key: impl Fn(&T) -> u64) -> Option<usize> {
     rows.first()
@@ -50,6 +51,8 @@ pub struct CoreWorkIntent {
 pub struct CoreChoiceIntent {
     pub actor: u64,
     pub key: Key,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cultivation: Option<game_economy_agriculture::opportunities::Opportunity>,
     /// Exact physical movements except transient action and new-site identities.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub movement: Option<game_lots::Movement>,
@@ -72,6 +75,9 @@ pub struct CoreChoiceIntent {
 
 impl CoreChoiceIntent {
     pub(super) fn magnitude(&self) -> i64 {
+        if self.cultivation.is_some() {
+            return 1;
+        }
         if let Some(value) = self
             .experiment_value
             .or(self.meal_value)
@@ -95,6 +101,8 @@ impl CoreChoiceIntent {
 #[serde(rename_all = "snake_case")]
 pub enum CoreChoiceOutcome {
     NoLocalAction,
+    Pending,
+    Cancelled,
     Stale,
     Accepted,
     Denied,
@@ -119,6 +127,32 @@ pub(super) fn intention_permitted(person: &Person, intent: &CoreChoiceIntent) ->
 }
 
 impl CoreHost {
+    /// Withdraw one person's pending cultivation intention before settlement.
+    pub fn cancel_cultivation_intention(
+        &mut self,
+        person: u64,
+    ) -> Result<Option<CoreChoiceEvent>, String> {
+        let tick = self.core.physical.tick();
+        let offset_millis = self.core.elapsed_millis().ok_or("no physical interval")?;
+        let schedule = self.schedule.as_mut().ok_or("no core schedule")?;
+        let Ok(index) = schedule
+            .pending_cultivation
+            .binary_search_by_key(&person, |row| row.person)
+        else {
+            return Ok(None);
+        };
+        let intention = schedule.pending_cultivation.remove(index);
+        Ok(Some(CoreChoiceEvent {
+            tick,
+            offset_millis,
+            actor: person,
+            key: Some(Key {
+                domain: CULTIVATION,
+                action: intention.field,
+            }),
+            outcome: CoreChoiceOutcome::Cancelled,
+        }))
+    }
     /// People with an explicit continuation preference may leave an ordinary
     /// active job. Shared sessions and succession are reviewed by their owners.
     pub(super) fn reconsider_ordinary_work(
@@ -360,7 +394,9 @@ impl CoreHost {
     /// Enable voluntary competition at a clean decision boundary.
     pub fn enable_personal_choices(&mut self, people: Vec<Person>) -> Result<(), String> {
         let schedule = self.schedule.as_ref().ok_or("no core schedule")?;
-        if !matches!(schedule.phase, DecisionPhase::Meals) {
+        if !matches!(schedule.phase, DecisionPhase::Meals)
+            || !schedule.pending_cultivation.is_empty()
+        {
             return Err("finish the pending decision before changing personal choices".into());
         }
         game_personal_choice::validate_people(&people).map_err(str::to_owned)?;
@@ -396,6 +432,14 @@ impl CoreHost {
     fn choice_busy(&self, blocked: &[u64]) -> Vec<u64> {
         let rest = self.blocked_with_rest(blocked);
         let mut busy = rest.as_deref().unwrap_or(blocked).to_vec();
+        if let Some(schedule) = &self.schedule {
+            busy.par_extend(
+                schedule
+                    .pending_cultivation
+                    .par_iter()
+                    .map(|row| row.person),
+            );
+        }
         busy.par_extend(
             self.core
                 .physical
@@ -407,6 +451,70 @@ impl CoreHost {
         busy.par_sort_unstable();
         busy.dedup();
         busy
+    }
+
+    pub(super) fn queue_cultivation(
+        &mut self,
+        intents: &[CoreChoiceIntent],
+    ) -> (Vec<u64>, Vec<CoreChoiceEvent>) {
+        let tick = self.core.physical.tick();
+        let offset = self.core.elapsed_millis().expect("active interval");
+        let schedule = self.schedule.as_mut().expect("active schedule");
+        let mut occupied: Vec<_> = schedule
+            .pending_cultivation
+            .par_iter()
+            .map(|row| row.field)
+            .collect();
+        occupied.par_sort_unstable();
+        let mut choices: Vec<_> = intents
+            .par_iter()
+            .filter_map(|intent| intent.cultivation)
+            .collect();
+        choices.par_sort_unstable_by_key(|row| {
+            (
+                row.field,
+                game_genetics::random(self.core.seed, row.field, row.person ^ tick.rotate_left(17)),
+                row.person,
+            )
+        });
+        let mut resolved: Vec<_> = choices
+            .par_chunk_by(|a, b| a.field == b.field)
+            .flat_map_iter(|group| {
+                let available = occupied.binary_search(&group[0].field).is_err();
+                group
+                    .iter()
+                    .enumerate()
+                    .map(move |(index, row)| (*row, available && index == 0))
+            })
+            .collect();
+        resolved.par_sort_unstable_by_key(|row| row.0.person);
+        schedule.pending_cultivation.par_extend(
+            resolved
+                .par_iter()
+                .filter_map(|(row, accepted)| accepted.then_some(*row)),
+        );
+        schedule
+            .pending_cultivation
+            .par_sort_unstable_by_key(|row| row.person);
+        let actors = resolved.par_iter().map(|row| row.0.person).collect();
+        let events = resolved
+            .into_par_iter()
+            .map(|(row, accepted)| CoreChoiceEvent {
+                tick,
+                offset_millis: offset,
+                actor: row.person,
+                key: Some(Key {
+                    domain: CULTIVATION,
+                    action: row.field,
+                }),
+                outcome: if accepted {
+                    CoreChoiceOutcome::Pending
+                } else {
+                    CoreChoiceOutcome::Denied
+                },
+            })
+            .collect();
+        (actors, events)
     }
 
     /// Read candidates against one opening state; no resource is reserved here.
@@ -447,6 +555,64 @@ impl CoreHost {
             None
         };
         let busy = self.choice_busy(blocked);
+        let cultivation = if domain.is_none_or(|domain| domain == CULTIVATION) {
+            let mut eligible: Vec<_> = self
+                .schedule
+                .as_ref()
+                .and_then(|s| s.personal_choices.as_ref())
+                .map_or_else(Vec::new, |people| {
+                    people
+                        .par_iter()
+                        .filter(|person| {
+                            person
+                                .preferences
+                                .binary_search_by_key(&CULTIVATION, |preference| preference.domain)
+                                .ok()
+                                .is_some_and(|index| person.preferences[index].enabled)
+                        })
+                        .map(|person| person.id)
+                        .collect()
+                });
+            eligible.par_sort_unstable();
+            if let Some(owner) = self.agriculture.as_ref().filter(|_| !eligible.is_empty()) {
+                let round = tick.rotate_left(21)
+                    ^ self.core.elapsed_millis().ok_or("no physical interval")?;
+                game_economy_agriculture::opportunities::discover(
+                    owner,
+                    &self.core.people,
+                    &eligible,
+                    &busy,
+                    self.environment
+                        .as_ref()
+                        .and_then(|environment| environment.season(tick)),
+                    self.core.seed,
+                    round,
+                )
+                .map_err(str::to_owned)?
+                .into_par_iter()
+                .map(|opportunity| CoreChoiceIntent {
+                    actor: opportunity.person,
+                    key: Key {
+                        domain: CULTIVATION,
+                        action: opportunity.field,
+                    },
+                    cultivation: Some(opportunity),
+                    movement: None,
+                    second_movement: None,
+                    work: None,
+                    experiment: None,
+                    experiment_value: None,
+                    meal_value: None,
+                    tool_damage: None,
+                    health_value: None,
+                })
+                .collect()
+            } else {
+                Vec::new()
+            }
+        } else {
+            Vec::new()
+        };
         let claims = self.claims.as_ref().map(game_economy_claims::Claims::index);
         let construction = || -> Result<Vec<CoreChoiceIntent>, String> {
             if domain.is_none_or(|domain| domain == CONSTRUCTION)
@@ -498,6 +664,7 @@ impl CoreHost {
                             }
                         });
                         CoreChoiceIntent {
+                            cultivation: None,
                             actor: opportunity.person,
                             key: Key {
                                 domain: CONSTRUCTION,
@@ -545,6 +712,7 @@ impl CoreHost {
                 let rows: Vec<_> = opportunities
                     .into_par_iter()
                     .map(|opportunity| CoreChoiceIntent {
+                        cultivation: None,
                         actor: opportunity.person,
                         key: Key {
                             domain: CARRYING,
@@ -594,6 +762,7 @@ impl CoreHost {
                 .direct_opportunities()
                 .into_par_iter()
                 .map(|opportunity| CoreChoiceIntent {
+                    cultivation: None,
                     actor: opportunity.person,
                     key: Key {
                         domain: MAINTENANCE,
@@ -637,6 +806,7 @@ impl CoreHost {
                     .preview_work_with_hunger_limit(&busy, schedule.work_rate, u32::MAX, true)?
                     .into_par_iter()
                     .map(|opportunity| CoreChoiceIntent {
+                        cultivation: None,
                         actor: opportunity.person,
                         key: Key {
                             domain: WORK,
@@ -677,6 +847,7 @@ impl CoreHost {
                     .preview_mechanical_experiments(&busy)?
                     .into_par_iter()
                     .map(|policy| CoreChoiceIntent {
+                        cultivation: None,
                         actor: policy.experiment.actor,
                         key: Key {
                             domain: EXPERIMENT,
@@ -722,6 +893,7 @@ impl CoreHost {
                     let person = index_by_person(&self.core.people, opportunity.person, |p| p.id)
                         .expect("known person");
                     CoreChoiceIntent {
+                        cultivation: None,
                         actor: opportunity.person,
                         key: Key {
                             domain: MEAL,
@@ -787,6 +959,7 @@ impl CoreHost {
                     let mut movement = action.movements[0];
                     movement.id = 0;
                     CoreChoiceIntent {
+                        cultivation: None,
                         actor,
                         key: Key {
                             domain: TOOL_REPAIR,
@@ -824,6 +997,7 @@ impl CoreHost {
                 let person = index_by_person(&self.core.people, opportunity.person, |p| p.id)
                     .expect("known person");
                 CoreChoiceIntent {
+                    cultivation: None,
                     actor: opportunity.person,
                     key: Key {
                         domain: FOOD_PICKUP,
@@ -880,6 +1054,7 @@ impl CoreHost {
             )?
             .into_par_iter()
             .map(|opportunity| CoreChoiceIntent {
+                cultivation: None,
                 actor: opportunity.person,
                 key: Key {
                     domain: SELF_TREATMENT,
@@ -938,6 +1113,7 @@ impl CoreHost {
         intents.par_extend(tool_repairs?);
         intents.par_extend(food_pickups?);
         intents.par_extend(treatments?);
+        intents.par_extend(cultivation);
         if intents
             .par_windows(2)
             .any(|rows| (rows[0].actor, rows[0].key) > (rows[1].actor, rows[1].key))
@@ -1031,6 +1207,7 @@ impl CoreHost {
                         && current[i].meal_value == intent.meal_value
                         && current[i].tool_damage == intent.tool_damage
                         && current[i].health_value == intent.health_value
+                        && current[i].cultivation == intent.cultivation
                 });
                 (intent, found)
             })

@@ -2001,6 +2001,31 @@ impl CoreHost {
             return Err("invalid occupied people".into());
         }
         let external = occupied;
+        if next_schedule.is_none()
+            && self
+                .schedule
+                .as_ref()
+                .is_some_and(|schedule| !schedule.pending_cultivation.is_empty())
+        {
+            return Err("pending cultivation requires scheduled settlement".into());
+        }
+        let pending_busy = self
+            .schedule
+            .as_ref()
+            .filter(|schedule| !schedule.pending_cultivation.is_empty())
+            .map(|schedule| {
+                let mut busy = occupied.to_vec();
+                busy.par_extend(
+                    schedule
+                        .pending_cultivation
+                        .par_iter()
+                        .map(|row| row.person),
+                );
+                busy.par_sort_unstable();
+                busy.dedup();
+                busy
+            });
+        let occupied = pending_busy.as_deref().unwrap_or(occupied);
         let mut dependent = self.plan_dependent_care(occupied)?;
         let mut actions = dependent
             .as_mut()
@@ -2091,7 +2116,7 @@ impl CoreHost {
             .map_err(|_| "care action overflow")?
             .checked_add(1)
             .ok_or("care action overflow")?;
-        let mut cultivation = self.plan_cultivation(occupied, base)?;
+        let mut cultivation = self.plan_cultivation(occupied, external, base)?;
         let compact = game_economy_agriculture::append_planting(&mut cultivation, &mut actions);
         let irrigation_plan = self.plan_irrigation(occupied, &mut cultivation, &mut actions)?;
         let amendment_plan = self.plan_soil_amendment(
@@ -2462,6 +2487,57 @@ impl CoreHost {
         let care_uses = dependent
             .as_ref()
             .map_or(&[][..], |plan| plan.uses.as_slice());
+        let mut cultivation_actions: Vec<_> = cultivation
+            .as_ref()
+            .filter(|_| {
+                self.schedule
+                    .as_ref()
+                    .is_some_and(|schedule| !schedule.pending_cultivation.is_empty())
+            })
+            .map_or_else(Vec::new, |plan| {
+                plan.actors
+                    .par_iter()
+                    .zip(plan.changes.par_iter())
+                    .map(|(&actor, &(_, action, _, _))| (actor, action))
+                    .collect()
+            });
+        cultivation_actions.par_sort_unstable_by_key(|row| row.0);
+        let settled_cultivation: Vec<_> =
+            self.schedule.as_ref().map_or_else(Vec::new, |schedule| {
+                schedule
+                    .pending_cultivation
+                    .par_iter()
+                    .map(|intent| {
+                        let outcome = cultivation_actions
+                            .binary_search_by_key(&intent.person, |row| row.0)
+                            .ok()
+                            .map_or(CoreChoiceOutcome::Stale, |index| {
+                                let action = cultivation_actions[index].1;
+                                if draft
+                                    .events()
+                                    .physical_actions
+                                    .binary_search_by_key(&action, |row| row.id)
+                                    .ok()
+                                    .is_some_and(|i| draft.events().physical_actions[i].accepted)
+                                {
+                                    CoreChoiceOutcome::Accepted
+                                } else {
+                                    CoreChoiceOutcome::Denied
+                                }
+                            });
+                        CoreChoiceEvent {
+                            tick: self.core.physical.tick(),
+                            offset_millis: self.core.physical.tick_millis(),
+                            actor: intent.person,
+                            key: Some(game_personal_choice::Key {
+                                domain: personal_choice::CULTIVATION,
+                                action: intent.field,
+                            }),
+                            outcome,
+                        }
+                    })
+                    .collect()
+            });
         let (mut agriculture, mut claims) =
             self.stage_cultivation(cultivation, draft.events(), care_uses)?;
         if let Some(plan) = amendment_plan {
@@ -2782,6 +2858,8 @@ impl CoreHost {
         self.work_checked_revision = None;
         if let (Some(next), Some(current)) = (next_schedule, &self.schedule) {
             next.personal_choices = current.personal_choices.clone();
+            next.pending_cultivation.clear();
+            next.settled_cultivation = settled_cultivation;
         }
         self.schedule = None;
         Ok(events)

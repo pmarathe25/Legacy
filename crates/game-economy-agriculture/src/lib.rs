@@ -399,6 +399,29 @@ pub struct Context<'a> {
 }
 impl Context<'_> {
     pub fn prepare(&self, base: u64) -> Result<Plan, String> {
+        self.prepare_choices(base, &[], &[], &[])
+    }
+
+    /// Admit exact personal intentions alongside legacy and requested work.
+    /// Choice-controlled people never receive an implicit substitute.
+    pub fn prepare_choices(
+        &self,
+        base: u64,
+        selected: &[opportunities::Opportunity],
+        choice_people: &[u64],
+        selected_blocked: &[u64],
+    ) -> Result<Plan, String> {
+        if selected.par_windows(2).any(|p| p[0].person >= p[1].person)
+            || choice_people.par_windows(2).any(|p| p[0] >= p[1])
+            || selected_blocked.par_windows(2).any(|p| p[0] >= p[1])
+        {
+            return Err("invalid selected cultivation intentions".into());
+        }
+        let mut selected_fields: Vec<_> = selected.par_iter().map(|row| row.field).collect();
+        selected_fields.par_sort_unstable();
+        if selected_fields.par_windows(2).any(|p| p[0] == p[1]) {
+            return Err("duplicate selected cultivation field".into());
+        }
         #[cfg(feature = "profile")]
         let mut phase = game_diagnostics::span("agriculture.workers");
         let manual = if let Some((actor, field)) = self.manual {
@@ -457,6 +480,7 @@ impl Context<'_> {
             .filter_map(|person| {
                 if person.controlled
                     || person.health == 0
+                    || choice_people.binary_search(&person.id).is_ok()
                     || self.busy.binary_search(&person.id).is_ok()
                     || requested
                         .as_ref()
@@ -503,6 +527,9 @@ impl Context<'_> {
                     return false;
                 }
                 if self.reserved_field == Some(field.id) {
+                    return false;
+                }
+                if selected_fields.binary_search(&field.id).is_ok() {
                     return false;
                 }
                 if requested
@@ -600,6 +627,70 @@ impl Context<'_> {
                 (field, attempt.worker)
             }));
         }
+        let mut by_id: Vec<_> = if selected.is_empty() {
+            Vec::new()
+        } else {
+            self.agriculture.fields.par_iter().collect()
+        };
+        if by_id.par_windows(2).any(|p| p[0].id > p[1].id) {
+            by_id.par_sort_unstable_by_key(|field| field.id);
+        }
+        picked.par_extend(selected.par_iter().filter_map(|intent| {
+            if choice_people.binary_search(&intent.person).is_err()
+                || selected_blocked.binary_search(&intent.person).is_ok()
+                || self
+                    .manual
+                    .is_some_and(|(person, field)| person == intent.person || field == intent.field)
+                || self.reserved_field == Some(intent.field)
+                || requested.as_ref().is_some_and(|plan| {
+                    plan.reserved.binary_search(&intent.person).is_ok()
+                        || plan.fields.binary_search(&intent.field).is_ok()
+                })
+            {
+                return None;
+            }
+            let person = self
+                .people
+                .binary_search_by_key(&intent.person, |person| person.id)
+                .ok()
+                .map(|i| &self.people[i])?;
+            let field = by_id
+                .binary_search_by_key(&intent.field, |field| field.id)
+                .ok()
+                .map(|i| by_id[i])?;
+            let crop = crops
+                .binary_search_by_key(&field.crop, |crop| crop.id)
+                .ok()
+                .map(|i| crops[i])?;
+            if person.controlled
+                || person.health == 0
+                || person.region != Some(intent.region)
+                || field.region != intent.region
+                || field.crop != intent.crop
+                || field.phase != intent.phase
+                || self.season.is_some_and(|season| match field.phase {
+                    Phase::Fallow => !season.planting_allowed,
+                    Phase::Ripe => !season.harvest_allowed,
+                    Phase::Growing => true,
+                })
+                || self
+                    .claims
+                    .is_some_and(|claims| !claims.allows_field(person.id, field.id, None))
+            {
+                return None;
+            }
+            match (field.phase, intent.planting) {
+                (Phase::Fallow, Some(seed))
+                    if seed.good == crop.seed
+                        && seed.quantity == crop.seed_quantity
+                        && self.claims.is_none_or(|claims| {
+                            claims.allows(person.id, field.region, seed.good)
+                        }) => {}
+                (Phase::Ripe, None) => {}
+                _ => return None,
+            }
+            Some((field, person.id))
+        }));
         // An authored personal profile can choose a particular batch or
         // decline an ordinary planting. Controlled and requested actions
         // retain their existing independent response paths.
@@ -619,7 +710,12 @@ impl Context<'_> {
         };
         picked = picked
             .into_par_iter()
-            .filter(|(field, worker)| seed_choice(field, *worker) != Some(None))
+            .filter(|(field, worker)| {
+                selected
+                    .binary_search_by_key(worker, |row| row.person)
+                    .is_ok()
+                    || seed_choice(field, *worker) != Some(None)
+            })
             .collect();
         #[cfg(feature = "profile")]
         {
@@ -642,7 +738,13 @@ impl Context<'_> {
                         Some(Transaction {
                             id: action,
                             movements: vec![Movement {
-                                batch: seed_choice(field, worker).flatten(),
+                                batch: selected
+                                    .binary_search_by_key(&worker, |row| row.person)
+                                    .ok()
+                                    .map(|index| {
+                                        selected[index].planting.and_then(|seed| seed.batch)
+                                    })
+                                    .unwrap_or_else(|| seed_choice(field, worker).flatten()),
                                 item: None,
                                 id: action,
                                 from: Place::Stock {

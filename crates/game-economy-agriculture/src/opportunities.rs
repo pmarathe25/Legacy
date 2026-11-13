@@ -1,7 +1,6 @@
 //! Bounded cultivation opportunities; discovery never reserves or advances fields.
 use crate::{Agriculture, Phase};
 use game_economy_person::Person;
-use game_lots::{Movement, Place};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -14,8 +13,17 @@ pub struct Opportunity {
     pub region: u64,
     pub crop: u32,
     pub phase: Phase,
-    /// Planting's exact seed movement; harvests have no seed input.
-    pub planting: Option<Movement>,
+    /// Planting's exact seed input; harvests have no seed input.
+    pub planting: Option<Planting>,
+}
+
+/// Compact physical input; the source is the opportunity's regional stock.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Planting {
+    pub good: u32,
+    pub quantity: u64,
+    pub batch: Option<u64>,
 }
 
 /// Sample at most four local fields per person from immutable regional indexes.
@@ -102,16 +110,9 @@ pub fn discover(
                     else {
                         continue;
                     };
-                    let planting = (field.phase == Phase::Fallow).then_some(Movement {
-                        id: 0,
-                        from: Place::Stock {
-                            region,
-                            good: crop.seed,
-                        },
-                        to: None,
+                    let planting = (field.phase == Phase::Fallow).then_some(Planting {
                         good: crop.seed,
                         quantity: crop.seed_quantity,
-                        item: None,
                         batch: selected_seed.flatten(),
                     });
                     *slot = Some(Opportunity {

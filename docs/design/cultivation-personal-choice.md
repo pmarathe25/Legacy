@@ -9,11 +9,14 @@ prematurely, its owner needs a separate candidate and admission path.
   exact planting movement and personally chosen seed batch when applicable.
   Candidate generation must not reserve stock or publish work.
   `game-economy-agriculture::opportunities::discover` now implements this
-  bounded discovery, but it is not yet connected to the choice scheduler.
+  bounded discovery, and the interval host exposes a read-only preview and
+  includes these opportunities in the optional shared choice round.
 * Let the person's ordinary choice profile compare that candidate with other
   activities and idleness. Preserve the exact selected intent and its actor and
   field reservations through partial intervals and save/load. A queued choice
   is not yet a successful harvest or planting.
+  The scheduler reports a pending intention when it reserves a field and a
+  separate accepted, denied, or stale outcome at settlement.
 * At the next boundary, revalidate the same field, worker, crop, phase and seed.
   A stale or unavailable intent fails without substituting another field or
   cohort. Reconcile requests and legacy autonomous actors against reservations.

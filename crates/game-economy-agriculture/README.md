@@ -33,6 +33,13 @@ response paths. These authored preferences do not yet learn from harvest
 experience or compare seed choice with the general cross-domain choice round;
 see `content/scenarios/economy-core-seed-choice.toml`.
 
+The interval host's optional shared personal-choice round uses domain `11`
+for cultivation. It saves the exact field and seed input selected by each
+person until the physical boundary, then revalidates and settles it. A lost
+field or seed does not cause substitution; a person who chooses another
+activity or idleness is not automatically assigned ordinary cultivation.
+See `content/scenarios/economy-core-personal-cultivation.toml`.
+
 An optional `[cultivation.seed_genetics]` assigns diploid growth-trait alleles
 to batch IDs and defines a signed effect and bounds for physical growth
 duration. The field's duration uses a quantity-weighted expression of the

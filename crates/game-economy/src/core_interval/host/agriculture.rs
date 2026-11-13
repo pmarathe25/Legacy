@@ -3,6 +3,50 @@ use super::*;
 type CultivationClaims = Option<(game_economy_claims::Claims, Option<game_opinions::Opinions>)>;
 
 impl CoreHost {
+    /// Inspect bounded local farming opportunities without selecting or executing them.
+    pub fn preview_cultivation_opportunities(
+        &self,
+        people: &[u64],
+        blocked: &[u64],
+    ) -> Result<Vec<game_economy_agriculture::opportunities::Opportunity>, String> {
+        if blocked.par_windows(2).any(|rows| rows[0] >= rows[1]) {
+            return Err("invalid occupied people".into());
+        }
+        let Some(owner) = &self.agriculture else {
+            return Ok(Vec::new());
+        };
+        let mut busy = self
+            .blocked_with_rest(blocked)
+            .as_deref()
+            .unwrap_or(blocked)
+            .to_vec();
+        busy.par_extend(
+            self.core
+                .physical
+                .work()
+                .par_iter()
+                .filter(|row| row.phase == game_lot_runtime::Phase::Working)
+                .map(|row| row.job.worker),
+        );
+        busy.par_sort_unstable();
+        busy.dedup();
+        let tick = self.core.physical.tick();
+        let round =
+            tick.rotate_left(21) ^ self.core.elapsed_millis().ok_or("no physical interval")?;
+        game_economy_agriculture::opportunities::discover(
+            owner,
+            &self.core.people,
+            people,
+            &busy,
+            self.environment
+                .as_ref()
+                .and_then(|environment| environment.season(tick)),
+            self.core.seed,
+            round,
+        )
+        .map_err(str::to_owned)
+    }
+
     /// Stage individually chosen soil work with the same physical boundary.
     pub(super) fn plan_soil_amendment(
         &self,
@@ -261,6 +305,7 @@ impl CoreHost {
     pub(super) fn plan_cultivation(
         &self,
         occupied: &[u64],
+        external: &[u64],
         base: u64,
     ) -> Result<Option<game_economy_agriculture::Plan>, String> {
         let Some(owner) = &self.agriculture else {
@@ -314,6 +359,37 @@ impl CoreHost {
                 .as_ref()
                 .and_then(|environment| environment.season(tick)),
         };
-        Ok(Some(context.prepare(base)?))
+        let selected = self
+            .schedule
+            .as_ref()
+            .map_or(&[][..], |schedule| schedule.pending_cultivation.as_slice());
+        let choice_people: Vec<_> = self
+            .schedule
+            .as_ref()
+            .and_then(|schedule| schedule.personal_choices.as_ref())
+            .map_or_else(Vec::new, |people| {
+                people.par_iter().map(|person| person.id).collect()
+            });
+        let mut selected_blocked = self
+            .blocked_with_rest(external)
+            .as_deref()
+            .unwrap_or(external)
+            .to_vec();
+        selected_blocked.par_extend(
+            self.core
+                .physical
+                .work()
+                .par_iter()
+                .filter(|row| row.phase == game_lot_runtime::Phase::Working)
+                .map(|row| row.job.worker),
+        );
+        selected_blocked.par_sort_unstable();
+        selected_blocked.dedup();
+        Ok(Some(context.prepare_choices(
+            base,
+            selected,
+            &choice_people,
+            &selected_blocked,
+        )?))
     }
 }

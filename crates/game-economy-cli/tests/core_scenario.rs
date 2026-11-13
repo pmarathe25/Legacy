@@ -484,6 +484,478 @@ fn language_topics_arise_from_personally_chosen_physical_demonstrations() {
 }
 
 #[test]
+fn cultivation_is_a_personal_choice_saved_until_physical_settlement() {
+    use game_economy::core_interval::{CoreChoiceOutcome, CoreHost, CoreRunEvent};
+    use game_economy_agriculture::Phase;
+    use game_lots::{Container, Place};
+    use game_personal_choice::{Person, Preference};
+    fn run(enabled: bool, remove_stock: bool, workers: usize) -> serde_json::Value {
+        rayon::ThreadPoolBuilder::new().num_threads(workers).build().unwrap().install(|| {
+            let root = root();
+            let mut host = game_economy_cli::core_scenario(&root.join("content/scenarios/economy-core-seed-choice.toml"), &root.join("content")).unwrap();
+            host.enable_personal_choices(vec![Person { id: 1, idle: 0, act_on_tie: false, preferences: vec![Preference { domain: 11, enabled, bias: 10, weight: 0 }], actions: vec![] }]).unwrap();
+            let preview = host.preview_personal_choices(&[]).unwrap();
+            assert_eq!(preview.0.len(), usize::from(enabled));
+            let first = host.advance_continuous(1, &[]).unwrap();
+            assert_eq!(first.failure, None);
+            let pending_event = first.events.iter().any(|event| matches!(event, CoreRunEvent::PersonalChoices(rows) if rows.iter().any(|row| row.actor == 1 && row.outcome == CoreChoiceOutcome::Pending)));
+            assert_eq!(pending_event, enabled);
+            let mut saved = host.snapshot();
+            assert_eq!(saved.schedule.as_ref().unwrap().pending_cultivation.len(), usize::from(enabled));
+            if enabled { assert_eq!(saved.schedule.as_ref().unwrap().pending_cultivation[0].planting.unwrap().batch, Some(12)); }
+            if remove_stock {
+                let farm = saved.agriculture.as_ref().unwrap();
+                let seed = farm.crops.iter().find(|crop| crop.id == farm.fields[0].crop).unwrap().seed;
+                let stock = saved.core.physical.custody.containers.iter_mut().find(|row| row.place == Place::Stock { region: 1, good: seed }).unwrap();
+                *stock = Container::new(stock.place, stock.capacity, vec![]).unwrap();
+            }
+            let mut restored = CoreHost::resume(serde_json::from_str(&serde_json::to_string(&saved).unwrap()).unwrap()).unwrap();
+            let result = restored.advance_continuous(899_999, &[]).unwrap();
+            assert_eq!(result.failure, None);
+            let expected = if remove_stock { CoreChoiceOutcome::Denied } else { CoreChoiceOutcome::Accepted };
+            assert_eq!(result.events.iter().any(|event| matches!(event, CoreRunEvent::PersonalChoices(rows) if rows.iter().any(|row| row.actor == 1 && row.outcome == expected))), enabled, "enabled={enabled} removed={remove_stock} events={:?}", result.events);
+            let state = restored.snapshot();
+            // A failed attempt can lead to a fresh choice at the next tick.
+            assert_eq!(state.schedule.as_ref().unwrap().pending_cultivation.len(), usize::from(enabled && remove_stock));
+            assert_eq!(state.agriculture.as_ref().unwrap().fields[0].phase, if enabled && !remove_stock { Phase::Growing } else { Phase::Fallow });
+            serde_json::to_value(state).unwrap()
+        })
+    }
+    for (enabled, removed) in [(true, false), (true, true), (false, false)] {
+        assert_eq!(run(enabled, removed, 1), run(enabled, removed, 4));
+    }
+}
+
+#[test]
+fn authored_personal_cultivation_runs_in_the_interval_host() {
+    use game_economy_agriculture::Phase;
+    let root = root();
+    let mut host = game_economy_cli::core_scenario(
+        &root.join("content/scenarios/economy-core-personal-cultivation.toml"),
+        &root.join("content"),
+    )
+    .unwrap();
+    assert_eq!(host.advance_continuous(900_000, &[]).unwrap().failure, None);
+    assert_eq!(
+        host.snapshot().agriculture.unwrap().fields[0].phase,
+        Phase::Growing
+    );
+}
+
+#[test]
+fn a_person_can_cancel_a_pending_cultivation_intention() {
+    use game_economy::core_interval::{CoreChoiceOutcome, CoreHost};
+    use game_economy_agriculture::Phase;
+    use game_lots::Place;
+    use game_personal_choice::{Person, Preference};
+    let root = root();
+    let mut host = game_economy_cli::core_scenario(
+        &root.join("content/scenarios/economy-core-seed-choice.toml"),
+        &root.join("content"),
+    )
+    .unwrap();
+    host.enable_personal_choices(vec![Person {
+        id: 1,
+        idle: 0,
+        act_on_tie: false,
+        preferences: vec![Preference {
+            domain: 11,
+            enabled: true,
+            bias: 10,
+            weight: 0,
+        }],
+        actions: vec![],
+    }])
+    .unwrap();
+    assert_eq!(host.advance_continuous(1, &[]).unwrap().failure, None);
+    let event = host.cancel_cultivation_intention(1).unwrap().unwrap();
+    assert_eq!(event.outcome, CoreChoiceOutcome::Cancelled);
+    assert!(host.cancel_cultivation_intention(1).unwrap().is_none());
+    let state = host.snapshot();
+    assert!(
+        state
+            .schedule
+            .as_ref()
+            .unwrap()
+            .pending_cultivation
+            .is_empty()
+    );
+    let mut restored =
+        CoreHost::resume(serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap())
+            .unwrap();
+    assert_eq!(
+        restored.advance_continuous(899_999, &[]).unwrap().failure,
+        None
+    );
+    let state = restored.snapshot();
+    let farm = state.agriculture.as_ref().unwrap();
+    assert_eq!(farm.fields[0].phase, Phase::Fallow);
+    let seed = farm
+        .crops
+        .iter()
+        .find(|crop| crop.id == farm.fields[0].crop)
+        .unwrap()
+        .seed;
+    assert_eq!(
+        state
+            .core
+            .physical
+            .custody
+            .containers
+            .iter()
+            .find(|row| row.place
+                == Place::Stock {
+                    region: 1,
+                    good: seed
+                })
+            .unwrap()
+            .used,
+        20
+    );
+}
+
+#[test]
+fn chosen_cultivation_actions_compete_for_real_seed() {
+    use game_economy::core_interval::{CoreChoiceOutcome, CoreHost, CoreRunEvent};
+    use game_economy_agriculture::Phase;
+    use game_lots::{Container, Place};
+    use game_personal_choice::{ActionPreference, Key, Person, Preference};
+    fn run(workers: usize) -> serde_json::Value {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let root = root();
+                let mut state = game_economy_cli::core_scenario(
+                    &root.join("content/scenarios/economy-cultivation-requests.toml"),
+                    &root.join("content"),
+                )
+                .unwrap()
+                .snapshot();
+                state.claims = None;
+                let farm = state.agriculture.as_mut().unwrap();
+                farm.requests = None;
+                let mut field = farm.fields[0].clone();
+                field.id = 2;
+                farm.fields.push(field);
+                let seed = farm
+                    .crops
+                    .iter()
+                    .find(|crop| crop.id == farm.fields[0].crop)
+                    .unwrap()
+                    .seed;
+                let stock = state
+                    .core
+                    .physical
+                    .custody
+                    .containers
+                    .iter_mut()
+                    .find(|row| {
+                        row.place
+                            == Place::Stock {
+                                region: 1,
+                                good: seed,
+                            }
+                    })
+                    .unwrap();
+                let mut lot = stock.lots[0].clone();
+                lot.quantity = 10;
+                *stock = Container::new(stock.place, stock.capacity, vec![lot]).unwrap();
+                let mut host = CoreHost::resume(state).unwrap();
+                host.enable_personal_choices(
+                    (1..=2)
+                        .map(|id| Person {
+                            id,
+                            idle: 0,
+                            act_on_tie: false,
+                            preferences: vec![Preference {
+                                domain: 11,
+                                enabled: true,
+                                bias: 10,
+                                weight: 0,
+                            }],
+                            actions: vec![ActionPreference {
+                                key: Key {
+                                    domain: 11,
+                                    action: id,
+                                },
+                                enabled: true,
+                                bias: 100,
+                            }],
+                        })
+                        .collect(),
+                )
+                .unwrap();
+                assert_eq!(host.advance_continuous(1, &[]).unwrap().failure, None);
+                assert_eq!(
+                    host.snapshot()
+                        .schedule
+                        .as_ref()
+                        .unwrap()
+                        .pending_cultivation
+                        .len(),
+                    2
+                );
+                let result = host.advance_continuous(899_999, &[]).unwrap();
+                assert_eq!(result.failure, None);
+                let outcomes: Vec<_> = result
+                    .events
+                    .iter()
+                    .filter_map(|event| match event {
+                        CoreRunEvent::PersonalChoices(rows) => Some(rows.as_slice()),
+                        _ => None,
+                    })
+                    .flatten()
+                    .filter(|row| {
+                        row.tick == 0
+                            && row.offset_millis == 900_000
+                            && row.key.is_some_and(|key| key.domain == 11)
+                    })
+                    .collect();
+                assert_eq!(
+                    outcomes
+                        .iter()
+                        .filter(|row| row.outcome == CoreChoiceOutcome::Accepted)
+                        .count(),
+                    1
+                );
+                assert_eq!(
+                    outcomes
+                        .iter()
+                        .filter(|row| row.outcome == CoreChoiceOutcome::Denied)
+                        .count(),
+                    1
+                );
+                let state = host.snapshot();
+                assert_eq!(
+                    state
+                        .agriculture
+                        .as_ref()
+                        .unwrap()
+                        .fields
+                        .iter()
+                        .filter(|field| field.phase == Phase::Growing)
+                        .count(),
+                    1
+                );
+                assert_eq!(
+                    state
+                        .core
+                        .physical
+                        .custody
+                        .containers
+                        .iter()
+                        .find(|row| row.place
+                            == Place::Stock {
+                                region: 1,
+                                good: seed
+                            })
+                        .unwrap()
+                        .used,
+                    0
+                );
+                serde_json::to_value(state).unwrap()
+            })
+    }
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
+fn people_can_choose_to_harvest_a_ripe_field() {
+    use game_economy::core_interval::{CoreChoiceOutcome, CoreHost, CoreRunEvent};
+    use game_economy_agriculture::Phase;
+    use game_personal_choice::{Person, Preference};
+    fn run(workers: usize) -> serde_json::Value {
+        rayon::ThreadPoolBuilder::new().num_threads(workers).build().unwrap().install(|| {
+            let root = root();
+            let mut host = game_economy_cli::core_scenario(&root.join("content/scenarios/economy-core-seed-choice.toml"), &root.join("content")).unwrap();
+            assert_eq!(host.advance_continuous(900_001, &[]).unwrap().failure, None);
+            let mut state = host.snapshot();
+            assert_eq!(state.agriculture.as_ref().unwrap().fields[0].phase, Phase::Growing);
+            state.agriculture.as_mut().unwrap().policies[0].willing = false;
+            let mut host = CoreHost::resume(state).unwrap();
+            for _ in 0..100 {
+                if host.snapshot().agriculture.as_ref().unwrap().fields[0].phase == Phase::Ripe { break; }
+                assert_eq!(host.advance_continuous(900_000, &[]).unwrap().failure, None);
+            }
+            assert_eq!(host.snapshot().agriculture.as_ref().unwrap().fields[0].phase, Phase::Ripe);
+            host.enable_personal_choices(vec![Person { id: 1, idle: 0, act_on_tie: false, preferences: vec![Preference { domain: 11, enabled: true, bias: 10, weight: 0 }], actions: vec![] }]).unwrap();
+            for _ in 0..3 {
+                if !host.snapshot().schedule.as_ref().unwrap().pending_cultivation.is_empty() { break; }
+                assert_eq!(host.advance_continuous(900_000, &[]).unwrap().failure, None);
+            }
+            let pending = host.snapshot();
+            assert_eq!(pending.schedule.as_ref().unwrap().pending_cultivation[0].phase, Phase::Ripe);
+            let mut restored = CoreHost::resume(serde_json::from_str(&serde_json::to_string(&pending).unwrap()).unwrap()).unwrap();
+            let result = restored.advance_continuous(900_000, &[]).unwrap();
+            assert_eq!(result.failure, None);
+            assert!(result.events.iter().any(|event| matches!(event, CoreRunEvent::PersonalChoices(rows) if rows.iter().any(|row| row.actor == 1 && row.outcome == CoreChoiceOutcome::Accepted))));
+            let state = restored.snapshot();
+            assert_eq!(state.agriculture.as_ref().unwrap().fields[0].phase, Phase::Fallow);
+            serde_json::to_value(state).unwrap()
+        })
+    }
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
+fn cultivation_competes_with_other_personal_activities() {
+    use game_economy::core_interval::{CoreHost, CoreRunEvent};
+    use game_economy_agriculture::Phase;
+    use game_lots::Place;
+    use game_personal_choice::Preference;
+    fn run(farm_bias: i64, workers: usize) -> serde_json::Value {
+        rayon::ThreadPoolBuilder::new().num_threads(workers).build().unwrap().install(|| {
+            let root = root();
+            let mut state = game_economy_cli::core_scenario(&root.join("content/scenarios/economy-core-personal-choices.toml"), &root.join("content")).unwrap().snapshot();
+            let farm_state = game_economy_cli::core_scenario(&root.join("content/scenarios/economy-core-seed-choice.toml"), &root.join("content")).unwrap().snapshot();
+            let farm = farm_state.agriculture.unwrap();
+            let seed = farm.crops.iter().find(|crop| crop.id == farm.fields[0].crop).unwrap().seed;
+            let place = Place::Stock { region: 1, good: seed };
+            let stock = farm_state.core.physical.custody.containers.into_iter().find(|row| row.place == place).unwrap();
+            let containers = &mut state.core.physical.custody.containers;
+            if let Some(index) = containers.iter().position(|row| row.place == place) { containers[index] = stock; } else { containers.push(stock); containers.sort_unstable_by_key(|row| row.place); }
+            state.agriculture = Some(farm);
+            let people = std::sync::Arc::make_mut(state.schedule.as_mut().unwrap().personal_choices.as_mut().unwrap());
+            people[0].preferences.push(Preference { domain: 11, enabled: true, bias: farm_bias, weight: 0 });
+            let mut host = CoreHost::resume(state).unwrap();
+            let (selected, _) = host.preview_personal_choices(&[]).unwrap();
+            assert_eq!(selected.iter().find(|row| row.actor == 1).unwrap().key.domain, if farm_bias > 10 { 11 } else { 1 });
+            let first = host.advance_continuous(1, &[]).unwrap();
+            assert_eq!(first.failure, None);
+            let built = first.events.iter().any(|event| matches!(event, CoreRunEvent::Construction(rows) if rows.iter().any(|row| row.person == 1)));
+            assert_eq!(built, farm_bias < 10);
+            assert_eq!(host.snapshot().schedule.as_ref().unwrap().pending_cultivation.len(), usize::from(farm_bias > 10));
+            let result = host.advance_continuous(899_999, &[]).unwrap();
+            assert_eq!(result.failure, None);
+            assert_eq!(host.snapshot().agriculture.as_ref().unwrap().fields[0].phase, if farm_bias > 10 { Phase::Growing } else { Phase::Fallow });
+            serde_json::to_value(host.snapshot()).unwrap()
+        })
+    }
+    for bias in [0, 20] {
+        assert_eq!(run(bias, 1), run(bias, 4));
+    }
+}
+
+#[test]
+fn competing_personal_cultivation_intentions_reserve_one_field() {
+    use game_economy::core_interval::{CoreChoiceOutcome, CoreHost, CoreRunEvent};
+    use game_economy_agriculture::Phase;
+    use game_personal_choice::{Person, Preference};
+    fn run(workers: usize) -> serde_json::Value {
+        rayon::ThreadPoolBuilder::new().num_threads(workers).build().unwrap().install(|| {
+            let root = root();
+            let mut snapshot = game_economy_cli::core_scenario(&root.join("content/scenarios/economy-cultivation-requests.toml"), &root.join("content")).unwrap().snapshot();
+            snapshot.agriculture.as_mut().unwrap().requests = None;
+            // Both people may independently use the field for this test.
+            snapshot.claims = None;
+            let mut host = CoreHost::resume(snapshot).unwrap();
+            host.enable_personal_choices((1..=2).map(|id| Person { id, idle: 0, act_on_tie: false, preferences: vec![Preference { domain: 11, enabled: true, bias: 10, weight: 0 }], actions: vec![] }).collect()).unwrap();
+            assert_eq!(host.preview_personal_choices(&[]).unwrap().0.len(), 2);
+            let first = host.advance_continuous(1, &[]).unwrap();
+            assert_eq!(first.failure, None);
+            let choices: Vec<_> = first.events.iter().filter_map(|event| match event { CoreRunEvent::PersonalChoices(rows) => Some(rows.as_slice()), _ => None }).flatten().filter(|row| row.key.is_some_and(|key| key.domain == 11)).collect();
+            assert_eq!(choices.iter().filter(|row| row.outcome == CoreChoiceOutcome::Pending).count(), 1);
+            assert_eq!(choices.iter().filter(|row| row.outcome == CoreChoiceOutcome::Denied).count(), 1);
+            assert_eq!(host.snapshot().schedule.as_ref().unwrap().pending_cultivation.len(), 1);
+            let result = host.advance_continuous(899_999, &[]).unwrap();
+            assert_eq!(result.failure, None);
+            assert!(result.events.iter().any(|event| matches!(event, CoreRunEvent::PersonalChoices(rows) if rows.iter().any(|row| row.outcome == CoreChoiceOutcome::Accepted))));
+            assert_eq!(host.snapshot().agriculture.as_ref().unwrap().fields[0].phase, Phase::Growing);
+            serde_json::to_value(host.snapshot()).unwrap()
+        })
+    }
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
+fn cultivation_intention_becomes_stale_when_the_actor_dies() {
+    use game_economy::core_interval::{CoreChoiceOutcome, CoreHost, CoreRunEvent};
+    use game_economy_agriculture::Phase;
+    use game_personal_choice::{Person, Preference};
+    let root = root();
+    let mut host = game_economy_cli::core_scenario(
+        &root.join("content/scenarios/economy-core-seed-choice.toml"),
+        &root.join("content"),
+    )
+    .unwrap();
+    host.enable_personal_choices(vec![Person {
+        id: 1,
+        idle: 0,
+        act_on_tie: false,
+        preferences: vec![Preference {
+            domain: 11,
+            enabled: true,
+            bias: 10,
+            weight: 0,
+        }],
+        actions: vec![],
+    }])
+    .unwrap();
+    assert_eq!(host.advance_continuous(1, &[]).unwrap().failure, None);
+    let mut state = host.snapshot();
+    assert_eq!(
+        state.schedule.as_ref().unwrap().pending_cultivation.len(),
+        1
+    );
+    state.core.people[0].health = 0;
+    let mut restored = CoreHost::resume(state).unwrap();
+    let result = restored.advance_continuous(899_999, &[]).unwrap();
+    assert_eq!(result.failure, None);
+    assert!(result.events.iter().any(|event| matches!(event, CoreRunEvent::PersonalChoices(rows) if rows.iter().any(|row| row.actor == 1 && row.outcome == CoreChoiceOutcome::Stale))));
+    assert_eq!(
+        restored.snapshot().agriculture.unwrap().fields[0].phase,
+        Phase::Fallow
+    );
+}
+
+#[test]
+fn cultivation_opportunities_preserve_personal_seed_choice_without_reserving_stock() {
+    use game_economy::core_interval::CoreHost;
+    use game_lots::{Container, Place};
+    let root = root();
+    let mut snapshot = game_economy_cli::core_scenario(
+        &root.join("content/scenarios/economy-core-seed-choice.toml"),
+        &root.join("content"),
+    )
+    .unwrap()
+    .snapshot();
+    let farm = snapshot.agriculture.as_ref().unwrap();
+    let seed = farm
+        .crops
+        .iter()
+        .find(|crop| crop.id == farm.fields[0].crop)
+        .unwrap()
+        .seed;
+    let stock = snapshot
+        .core
+        .physical
+        .custody
+        .containers
+        .iter_mut()
+        .find(|row| {
+            row.place
+                == Place::Stock {
+                    region: 1,
+                    good: seed,
+                }
+        })
+        .unwrap();
+    *stock = Container::new(stock.place, stock.capacity, vec![]).unwrap();
+    let host = CoreHost::resume(snapshot.clone()).unwrap();
+    let options = host.preview_cultivation_opportunities(&[1], &[]).unwrap();
+    assert_eq!(options.len(), 1);
+    assert_eq!(options[0].planting.unwrap().batch, Some(12));
+    assert!(
+        host.preview_cultivation_opportunities(&[1], &[1])
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(host.snapshot(), snapshot);
+}
+
+#[test]
 fn soil_amendment_choices_settle_atomically_in_the_interval_host() {
     use game_economy::core_interval::CoreHost;
     use game_economy_agriculture::soil::FieldSoil;
@@ -2850,6 +3322,7 @@ fn stale_saved_carrying_intention_is_reported_without_substituting_an_action() {
         remaining: None,
         meal_people: vec![],
         intents: std::sync::Arc::new(vec![CoreChoiceIntent {
+            cultivation: None,
             actor: 2,
             key: game_personal_choice::Key {
                 domain: 2,
