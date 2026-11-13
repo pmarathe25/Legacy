@@ -42,6 +42,7 @@ max_distance = 200
 person = 1
 capacity = 4
 retain = true
+reactions = { moved = 2, stalled = -3, broken = -4 }
 
 [[personal_choices]]
 id = 1

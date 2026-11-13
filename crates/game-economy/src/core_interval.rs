@@ -25,7 +25,7 @@ pub use host::{
     CoreToolRepairResults, CoreTreatmentResults, CoreWorkIntent, CoreWritingPracticeResults,
     CoreWritingResults, DecisionPhase, MechanicalCapability, MechanicalLoadMaterial,
     MechanicalLoadOutcome, MechanicalLoadPolicy, MechanicalLoadRequest, MechanicalLoadResult,
-    MechanicalMaterial, MechanicalMemory, MechanicalPolicy,
+    MechanicalMaterial, MechanicalMemory, MechanicalPolicy, MechanicalReactions,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

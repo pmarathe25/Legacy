@@ -49,7 +49,7 @@ pub use market::CoreMarketResults;
 pub use mechanics::{
     CoreMechanics, MechanicalCapability, MechanicalLoadMaterial, MechanicalLoadOutcome,
     MechanicalLoadPolicy, MechanicalLoadRequest, MechanicalLoadResult, MechanicalMaterial,
-    MechanicalMemory, MechanicalPolicy,
+    MechanicalMemory, MechanicalPolicy, MechanicalReactions,
 };
 pub use offers::CoreSocialResults;
 pub use personal_choice::{CoreChoiceEvent, CoreChoiceIntent, CoreChoiceOutcome, CoreWorkIntent};

@@ -74,7 +74,11 @@ is assembled. `economy-core-personal-design.toml` demonstrates this limited
 design process. Someone who enables experiments and has no authored experiment
 policy may also propose a simple trial of an apparatus they carry; a chosen
 trial can enter their existing personal observation memory. It does not yet
-infer which designs work or generate more sophisticated trials.
+infer which designs work or generate more sophisticated trials. Optional signed
+`reactions` on that memory alter the person's interest in another generated
+trial according to their latest retained outcome for the same apparatus. Each
+person can like or dislike movement, stalls, breakage, or contention; forgotten
+or unretained outcomes do not change their interest.
 
 The ignored `mechanical_design_scaling` benchmark measured 100,000 complete
 scheduled design and assembly choices. Median times at one, two, four and six
@@ -84,6 +88,9 @@ and does not represent a complete simulation.
 With `LEGACY_DESIGN_TRIALS=1`, the benchmark starts with previously assembled
 devices and measures the next boundary and personal trials instead. It took
 458.2, 279.0, 198.4 and 174.1 ms at those worker counts; saved states matched.
+Adding `LEGACY_TRIAL_REACTIONS=1` gives each person a retained observation and
+subjective reaction; a run took 464.8, 284.8, 199.2 and 175.2 ms, with matching
+states. These are separate synthetic measurements, not a whole-world benchmark.
 
 The ignored `mechanical_load_scaling` test with `LEGACY_LOAD_PERSONAL=1`
 measured complete scheduled choice and physical load processing for 100,000

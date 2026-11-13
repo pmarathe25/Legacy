@@ -653,16 +653,100 @@ fn people_can_choose_to_design_and_assemble_carried_parts() {
             .0
             .is_empty()
     );
+    let mut failure = CoreHost::resume(state.clone()).unwrap();
+    let apparatus = &state.mechanics.as_ref().unwrap().world.apparatus[0];
+    let failed_trial = game_mechanics::Experiment {
+        actor: 1,
+        apparatus: apparatus.id,
+        output_part: apparatus.parts.last().unwrap().id,
+        input_force: 100,
+        input_distance: 100,
+        load_force: 10_000,
+    };
+    assert_eq!(
+        failure.experiment_mechanics(&[failed_trial], &[]).unwrap()[0].outcome,
+        game_mechanics::Outcome::Stalled
+    );
+    let mut failed_memory = failure.snapshot();
+    failed_memory.mechanics.as_mut().unwrap().memories[0].reactions =
+        Some(game_economy::core_interval::MechanicalReactions {
+            stalled: 100,
+            moved: -100,
+            ..Default::default()
+        });
+    assert_eq!(
+        CoreHost::resume(failed_memory)
+            .unwrap()
+            .preview_personal_choices(&[])
+            .unwrap()
+            .0[0]
+            .key
+            .domain,
+        6
+    );
     let mut trial = CoreHost::resume(state).unwrap();
     let preview = trial.preview_personal_choices(&[]).unwrap();
     assert_eq!(preview.0[0].key.domain, 6);
     let run = trial.advance_continuous(900_000, &[]).unwrap();
     assert_eq!(run.failure, None);
     assert!(run.events.iter().any(|event| matches!(event, CoreRunEvent::MechanicalExperiments(rows) if rows.iter().any(|row| row.actor == 1))));
+    let learned = trial.snapshot();
     assert!(
-        !trial.snapshot().mechanics.unwrap().memories[0]
+        !learned.mechanics.as_ref().unwrap().memories[0]
             .observations
             .is_empty()
+    );
+    assert_eq!(
+        learned.mechanics.as_ref().unwrap().memories[0]
+            .observations
+            .last()
+            .unwrap()
+            .outcome,
+        game_mechanics::Outcome::Moved
+    );
+    let mut disliked = learned.clone();
+    disliked.mechanics.as_mut().unwrap().memories[0].reactions =
+        Some(game_economy::core_interval::MechanicalReactions {
+            moved: -100,
+            ..Default::default()
+        });
+    let mut forgotten = disliked.clone();
+    forgotten.mechanics.as_mut().unwrap().memories[0]
+        .observations
+        .clear();
+    assert_eq!(
+        CoreHost::resume(forgotten)
+            .unwrap()
+            .preview_personal_choices(&[])
+            .unwrap()
+            .0[0]
+            .key
+            .domain,
+        6
+    );
+    assert!(
+        CoreHost::resume(disliked)
+            .unwrap()
+            .preview_personal_choices(&[])
+            .unwrap()
+            .0
+            .is_empty()
+    );
+    let mut enjoyed = learned;
+    enjoyed.mechanics.as_mut().unwrap().memories[0].reactions =
+        Some(game_economy::core_interval::MechanicalReactions {
+            moved: 100,
+            ..Default::default()
+        });
+    assert_eq!(
+        CoreHost::resume(enjoyed)
+            .unwrap()
+            .preview_personal_choices(&[])
+            .unwrap()
+            .0[0]
+            .key
+            .domain,
+        6
     );
 }
 

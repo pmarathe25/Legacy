@@ -132,6 +132,20 @@ fn default_experiment_value() -> i64 {
     1
 }
 
+/// A person's signed reaction to personally remembered trial outcomes.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MechanicalReactions {
+    #[serde(default)]
+    pub moved: i64,
+    #[serde(default)]
+    pub stalled: i64,
+    #[serde(default)]
+    pub broken: i64,
+    #[serde(default)]
+    pub contended: i64,
+}
+
 /// A person's bounded recollection of their own actual experiments.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -140,6 +154,8 @@ pub struct MechanicalMemory {
     pub capacity: usize,
     #[serde(default)]
     pub retain: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reactions: Option<MechanicalReactions>,
     #[serde(default)]
     pub observations: Vec<game_mechanics::Observation>,
 }
@@ -513,12 +529,28 @@ impl CoreHost {
                             input_distance: capability.max_distance.min(100),
                             load_force: 1,
                         };
+                        let reaction = indexed(&owner.memories, actor, |row| row.person)
+                            .and_then(|memory| {
+                                let reactions = memory.reactions?;
+                                let observation = memory
+                                    .observations
+                                    .iter()
+                                    .rev()
+                                    .find(|row| row.apparatus == machine.id)?;
+                                Some(match observation.outcome {
+                                    game_mechanics::Outcome::Moved => reactions.moved,
+                                    game_mechanics::Outcome::Stalled => reactions.stalled,
+                                    game_mechanics::Outcome::Broken => reactions.broken,
+                                    game_mechanics::Outcome::Contended => reactions.contended,
+                                })
+                            })
+                            .unwrap_or_default();
                         owner
                             .eligible(&self.core, &experiment, occupied, &active)
                             .then_some(MechanicalPolicy {
                                 id: machine.id,
                                 experiment,
-                                value: 1,
+                                value: 1i64.saturating_add(reaction),
                                 willing: true,
                             })
                     })

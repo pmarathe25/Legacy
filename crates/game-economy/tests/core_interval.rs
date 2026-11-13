@@ -446,6 +446,7 @@ fn independent_physical_mechanics_benchmark() {
                     person,
                     capacity: 4,
                     retain: true,
+                    reactions: None,
                     observations: vec![],
                 })
                 .collect()

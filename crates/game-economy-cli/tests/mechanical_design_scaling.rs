@@ -9,6 +9,8 @@ fn mechanical_design_scaling() {
         .and_then(|v| v.parse::<u64>().ok())
         .unwrap_or(100_000);
     let trials = std::env::var_os("LEGACY_DESIGN_TRIALS").is_some();
+    let reactions = std::env::var_os("LEGACY_TRIAL_REACTIONS").is_some();
+    assert!(!reactions || trials);
     let mut text = String::from(
         r#"seed = 7
 tick_millis = 900000
@@ -46,6 +48,9 @@ good = "tool"
             )
             .unwrap();
         }
+        if reactions {
+            writeln!(text, "[[mechanics.memories]]\nperson = {actor}\ncapacity = 4\nretain = true\nreactions = {{ moved = 10 }}").unwrap();
+        }
     }
     let path = std::env::temp_dir().join(format!(
         "legacy-design-{}-{}.toml",
@@ -79,6 +84,14 @@ good = "tool"
                     .unwrap(),
             );
         }
+    }
+    if reactions {
+        let mut learned = game_economy::core_interval::CoreHost::resume(opening).unwrap();
+        assert_eq!(
+            learned.advance_continuous(900_000, &[]).unwrap().failure,
+            None
+        );
+        opening = learned.snapshot();
     }
     let mut reference = None;
     for workers in [1, 2, 4, 6] {
@@ -119,7 +132,7 @@ good = "tool"
         }
         times.sort_unstable();
         eprintln!(
-            "{workers} workers: {:?} median for {count} personal designs; trials={trials}",
+            "{workers} workers: {:?} median for {count} personal designs; trials={trials}, reactions={reactions}",
             times[1]
         );
     }
