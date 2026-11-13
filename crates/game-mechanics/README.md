@@ -18,8 +18,9 @@ access, evaluates the apparatus, and transfers the actual lot only when the
 calculated travel is sufficient. Short travel, stalled or broken apparatus,
 and unavailable stock do not transfer the whole load. Resistance and required
 travel are still scalar inputs; partial positions, fatigue, invention and
-scientific discovery are not yet modelled by this action. Autonomous load
-policies have not yet been connected to the shared personal-choice round.
+scientific discovery are not yet modelled by this action. Optional personal
+load policies participate in the interval host's shared choice round; a person
+can prefer another activity or idleness, and an unavailable load can fail.
 
 The ignored benchmarks compare complete state and observations across worker
 counts. On one development machine, 50,000 independent apparatus took 14.4,

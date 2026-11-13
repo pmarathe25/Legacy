@@ -55,8 +55,23 @@ apparatus physics. Material resistance is data-defined; physical custody,
 apparatus outcomes, personal observations and claim-use evidence are staged
 before commit. An unavailable load does not generate an experiment, and a
 stalled, broken or insufficient-travel attempt does not transfer the lot.
-The API currently requires an explicit request and does not model partial
-positions or fatigue.
+Personal load policies can also compete with other activities in shared choice
+domain `12`; the exact selected request survives a saved decision phase and is
+revalidated before the attempt. Access is provisionally arbitrated before the
+apparatus is evaluated, so a stalled winner does not promote a denied request
+in the same batch. To protect attached apparatus parts, an unspecified load is
+currently excluded when its source mixes such parts with the requested good.
+The action does not model partial positions or fatigue. The authored
+`economy-core-personal-loads.toml` demonstrates a personal load policy.
+
+The ignored `mechanical_load_scaling` test with `LEGACY_LOAD_PERSONAL=1`
+measured complete scheduled choice and physical load processing for 100,000
+people. Median times across three runs were 815.5, 480.6, 332.9 and 298.4 ms
+at one, two, four and six workers. With `LEGACY_LOAD_CONTENDED=1`, half the
+shared stock was available and times were 602.7, 369.2, 255.9 and 215.3 ms.
+States matched across worker counts; setup and snapshots were outside the
+timed section. These synthetic workloads scale sublinearly and do not measure a
+complete simulation.
 
 In the optional shared personal-choice round, domain `11` lets a person compare
 bounded local planting and harvest opportunities with other activities and

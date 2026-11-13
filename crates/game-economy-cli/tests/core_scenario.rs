@@ -527,6 +527,89 @@ fn cultivation_is_a_personal_choice_saved_until_physical_settlement() {
 }
 
 #[test]
+fn saved_mechanical_load_intention_never_substitutes_changed_parameters() {
+    use game_economy::core_interval::{CoreChoiceOutcome, CoreHost, CoreRunEvent, DecisionPhase};
+    let root = root();
+    let host = game_economy_cli::core_scenario(
+        &root.join("content/scenarios/economy-core-personal-loads.toml"),
+        &root.join("content"),
+    )
+    .unwrap();
+    let (intents, _) = host.preview_personal_choices(&[]).unwrap();
+    let selected: Vec<_> = intents
+        .into_iter()
+        .filter(|row| row.actor == 1 && row.key.domain == 12)
+        .collect();
+    assert_eq!(selected.len(), 1);
+    let mut state = host.snapshot();
+    state.schedule.as_mut().unwrap().phase = DecisionPhase::ChosenMechanicalLoad {
+        meal_people: vec![],
+        intents: std::sync::Arc::new(selected),
+        remaining: 0,
+    };
+    state.mechanics.as_mut().unwrap().load_policies[0]
+        .request
+        .required_travel += 1;
+    let mut host =
+        CoreHost::resume(serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap())
+            .unwrap();
+    let result = host.advance_continuous(1, &[]).unwrap();
+    assert_eq!(result.failure, None);
+    assert!(result.events.iter().any(|event| matches!(event, CoreRunEvent::PersonalChoices(rows) if rows.iter().any(|row| row.actor == 1 && row.outcome == CoreChoiceOutcome::Stale))));
+    assert!(
+        !result
+            .events
+            .iter()
+            .any(|event| matches!(event, CoreRunEvent::MechanicalLoads(_)))
+    );
+    assert!(host.snapshot().mechanics.unwrap().observations.is_empty());
+}
+
+#[test]
+fn physical_mechanical_loads_compete_with_personal_activities() {
+    use game_economy::core_interval::{
+        CoreChoiceOutcome, CoreHost, CoreRunEvent, MechanicalLoadOutcome,
+    };
+    use game_lots::{Container, Place};
+    fn run(choice: &str, workers: usize) -> serde_json::Value {
+        rayon::ThreadPoolBuilder::new().num_threads(workers).build().unwrap().install(|| {
+            let root = root();
+            let mut state = game_economy_cli::core_scenario(&root.join("content/scenarios/economy-core-personal-loads.toml"), &root.join("content")).unwrap().snapshot();
+            let good = state.core.physical.goods.iter().find(|good| good.name == "timber").unwrap().id;
+            let people = std::sync::Arc::make_mut(state.schedule.as_mut().unwrap().personal_choices.as_mut().unwrap());
+            if choice == "carry" { people[0].preferences.iter_mut().find(|row| row.domain == 2).unwrap().bias = 100; }
+            if choice == "idle" { people[0].idle = 100; }
+            if choice == "empty" {
+                let stock = state.core.physical.custody.containers.iter_mut().find(|row| row.place == Place::Stock { region: 1, good }).unwrap();
+                *stock = Container::new(stock.place, stock.capacity, vec![]).unwrap();
+            }
+            let mut host = CoreHost::resume(state).unwrap();
+            let preview = host.preview_personal_choices(&[]).unwrap();
+            let selected = preview.0.iter().find(|row| row.actor == 1).map(|row| row.key.domain);
+            assert_eq!(selected, match choice { "carry" => Some(2), "idle" => None, _ => Some(12) });
+            let result = host.advance_continuous(1, &[]).unwrap();
+            assert_eq!(result.failure, None);
+            let load = result.events.iter().find_map(|event| match event { CoreRunEvent::MechanicalLoads(rows) => Some(rows), _ => None });
+            if choice == "load" || choice == "empty" {
+                let outcome = if choice == "load" { MechanicalLoadOutcome::Moved } else { MechanicalLoadOutcome::Unavailable };
+                assert_eq!(load.unwrap()[0].outcome, outcome);
+                let choice_outcome = if choice == "load" { CoreChoiceOutcome::Accepted } else { CoreChoiceOutcome::Denied };
+                assert!(result.events.iter().any(|event| matches!(event, CoreRunEvent::PersonalChoices(rows) if rows.iter().any(|row| row.actor == 1 && row.outcome == choice_outcome && row.key.is_some_and(|key| key.domain == 12)))));
+            } else { assert!(load.is_none()); }
+            let state = host.snapshot();
+            let used = state.core.physical.custody.containers.iter().find(|row| row.place == Place::Inventory(1)).unwrap().used;
+            assert_eq!(used, match choice { "load" => 2, "carry" => 1, _ => 0 });
+            let restored = CoreHost::resume(serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap()).unwrap();
+            assert_eq!(state, restored.snapshot());
+            serde_json::to_value(state).unwrap()
+        })
+    }
+    for choice in ["load", "carry", "idle", "empty"] {
+        assert_eq!(run(choice, 1), run(choice, 4));
+    }
+}
+
+#[test]
 fn mechanical_loads_follow_personal_claim_choices_and_record_use() {
     use game_economy::core_interval::{CoreHost, MechanicalLoadOutcome, MechanicalLoadRequest};
     use game_lots::{Movement, Place};
@@ -3925,6 +4008,7 @@ fn stale_saved_carrying_intention_is_reported_without_substituting_an_action() {
         remaining: None,
         meal_people: vec![],
         intents: std::sync::Arc::new(vec![CoreChoiceIntent {
+            mechanical_load: None,
             cultivation: None,
             actor: 2,
             key: game_personal_choice::Key {

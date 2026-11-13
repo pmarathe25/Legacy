@@ -206,6 +206,7 @@ fn mechanical_experiments_require_real_carried_parts_and_survive_reload() {
                 let mut host = CoreHost::begin(snapshot, &[(1, 1)]).unwrap();
                 host.enable_mechanics(CoreMechanics {
                     load_materials: vec![],
+                    load_policies: vec![],
                     world: MechanicsSnapshot {
                         catalog: Catalog {
                             components: vec![
@@ -382,6 +383,7 @@ fn independent_physical_mechanics_benchmark() {
     let mut host = CoreHost::begin(snapshot, &[(1, 1)]).unwrap();
     host.enable_mechanics(CoreMechanics {
         load_materials: vec![],
+        load_policies: vec![],
         world: MechanicsSnapshot {
             catalog: Catalog {
                 components: vec![Component {

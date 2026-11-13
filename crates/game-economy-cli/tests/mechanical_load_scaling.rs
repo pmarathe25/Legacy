@@ -3,13 +3,14 @@ use std::{fmt::Write as _, path::PathBuf};
 #[test]
 #[ignore = "mechanical load scaling measurement"]
 fn mechanical_load_scaling() {
-    use game_economy::core_interval::{MechanicalLoadOutcome, MechanicalLoadRequest};
+    use game_economy::core_interval::{CoreRunEvent, MechanicalLoadOutcome, MechanicalLoadRequest};
     use game_lots::{Movement, Place};
     let count = std::env::var("LEGACY_MECHANICAL_LOADS")
         .ok()
         .and_then(|v| v.parse::<u64>().ok())
         .unwrap_or(10_000);
     let contended = std::env::var_os("LEGACY_LOAD_CONTENDED").is_some();
+    let personal = std::env::var_os("LEGACY_LOAD_PERSONAL").is_some();
     let available = if contended { count / 2 } else { count };
     let mut text = format!(
         r#"seed = 7
@@ -58,6 +59,9 @@ force_per_unit = 10
             "[[mechanics.capabilities]]\nperson = {id}\nmax_force = 200\nmax_distance = 200"
         )
         .unwrap();
+        if personal {
+            writeln!(text, "[[mechanics.load_policies]]\nid = {id}\nperson = {id}\napparatus = {id}\noutput_part = {second}\ninput_force = 100\ninput_distance = 100\nrequired_travel = 10\nregion = 1\ngood = \"timber\"\nquantity = 1\nsource = {{ kind = \"stock\" }}\ndestination = {{ kind = \"store\", id = 1 }}\nwilling = true\nvalue = 20\n[[personal_choices]]\nid = {id}\nidle = 0\npreferences = [{{ domain = 12, enabled = true, bias = 10 }}]").unwrap();
+        }
     }
     let path = std::env::temp_dir().join(format!(
         "legacy-mechanical-load-{}-{}.toml",
@@ -112,7 +116,21 @@ force_per_unit = 10
                 game_economy::core_interval::CoreHost::resume(opening.clone()).unwrap()
             });
             let start = std::time::Instant::now();
-            let results = pool.install(|| host.move_mechanical_loads(&requests, &[]).unwrap());
+            let results = pool.install(|| {
+                if personal {
+                    host.advance_continuous(1, &[])
+                        .unwrap()
+                        .events
+                        .into_iter()
+                        .find_map(|event| match event {
+                            CoreRunEvent::MechanicalLoads(results) => Some(results),
+                            _ => None,
+                        })
+                        .expect("mechanical load results")
+                } else {
+                    host.move_mechanical_loads(&requests, &[]).unwrap()
+                }
+            });
             times.push(start.elapsed());
             assert_eq!(
                 results
@@ -130,7 +148,7 @@ force_per_unit = 10
         }
         times.sort_unstable();
         eprintln!(
-            "{workers} workers: {:?} median for {count} mechanical loads; contended={contended}",
+            "{workers} workers: {:?} median for {count} mechanical loads; contended={contended}, personal={personal}",
             times[1]
         );
     }

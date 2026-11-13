@@ -167,6 +167,8 @@ struct MechanicsConfig {
     #[serde(default)]
     load_materials: Vec<MechanicsLoadMaterialConfig>,
     #[serde(default)]
+    load_policies: Vec<MechanicsLoadPolicyConfig>,
+    #[serde(default)]
     capabilities: Vec<game_economy::core_interval::MechanicalCapability>,
     #[serde(default)]
     policies: Vec<game_economy::core_interval::MechanicalPolicy>,
@@ -186,6 +188,35 @@ struct MechanicsMaterialConfig {
 struct MechanicsLoadMaterialConfig {
     good: String,
     force_per_unit: u64,
+}
+
+fn default_mechanical_load_value() -> i64 {
+    1
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct MechanicsLoadPolicyConfig {
+    id: u64,
+    person: u64,
+    apparatus: u64,
+    output_part: u64,
+    input_force: u64,
+    input_distance: u64,
+    required_travel: u64,
+    region: u64,
+    good: String,
+    quantity: u64,
+    source: game_economy::LocalEndpoint,
+    destination: game_economy::LocalEndpoint,
+    #[serde(default)]
+    item: Option<u64>,
+    #[serde(default)]
+    batch: Option<u64>,
+    #[serde(default)]
+    willing: bool,
+    #[serde(default = "default_mechanical_load_value")]
+    value: i64,
 }
 
 fn goal_retry_interval() -> u64 {
@@ -1252,6 +1283,50 @@ pub fn core_scenario_with_options(
             })
             .collect::<Result<_, _>>()?;
         load_materials.sort_unstable_by_key(|row| row.good);
+        let mut load_policies: Vec<_> = mechanics
+            .load_policies
+            .into_iter()
+            .map(|row| {
+                let good = snapshot
+                    .core
+                    .physical
+                    .goods
+                    .iter()
+                    .find(|good| good.name == row.good)
+                    .map(|good| good.id)
+                    .ok_or_else(|| format!("unknown mechanical load good {}", row.good))?;
+                let place = |endpoint| match endpoint {
+                    game_economy::LocalEndpoint::Stock => game_lots::Place::Stock {
+                        region: row.region,
+                        good,
+                    },
+                    game_economy::LocalEndpoint::Store { id } => game_lots::Place::Inventory(id),
+                };
+                Ok(game_economy::core_interval::MechanicalLoadPolicy {
+                    id: row.id,
+                    value: row.value,
+                    willing: row.willing,
+                    request: game_economy::core_interval::MechanicalLoadRequest {
+                        actor: row.person,
+                        apparatus: row.apparatus,
+                        output_part: row.output_part,
+                        input_force: row.input_force,
+                        input_distance: row.input_distance,
+                        required_travel: row.required_travel,
+                        movement: game_lots::Movement {
+                            id: 0,
+                            from: place(row.source),
+                            to: Some(place(row.destination)),
+                            good,
+                            quantity: row.quantity,
+                            item: row.item,
+                            batch: row.batch,
+                        },
+                    },
+                })
+            })
+            .collect::<Result<_, String>>()?;
+        load_policies.sort_unstable_by_key(|row| (row.request.actor, row.id));
         mechanics
             .capabilities
             .sort_unstable_by_key(|row| row.person);
@@ -1272,6 +1347,7 @@ pub fn core_scenario_with_options(
             },
             materials,
             load_materials,
+            load_policies,
             capabilities: mechanics.capabilities,
             policies: mechanics.policies,
             memories: mechanics.memories,

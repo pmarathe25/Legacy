@@ -14,6 +14,7 @@ pub(super) const TOOL_REPAIR: u32 = 8;
 pub(super) const FOOD_PICKUP: u32 = 9;
 pub(super) const SELF_TREATMENT: u32 = 10;
 pub(super) const CULTIVATION: u32 = 11;
+pub(super) const MECHANICAL_LOAD: u32 = 12;
 
 fn index_by_person<T>(rows: &[T], id: u64, key: impl Fn(&T) -> u64) -> Option<usize> {
     rows.first()
@@ -53,6 +54,8 @@ pub struct CoreChoiceIntent {
     pub key: Key,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cultivation: Option<game_economy_agriculture::opportunities::Opportunity>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mechanical_load: Option<MechanicalLoadRequest>,
     /// Exact physical movements except transient action and new-site identities.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub movement: Option<game_lots::Movement>,
@@ -591,6 +594,7 @@ impl CoreHost {
                 .map_err(str::to_owned)?
                 .into_par_iter()
                 .map(|opportunity| CoreChoiceIntent {
+                    mechanical_load: None,
                     actor: opportunity.person,
                     key: Key {
                         domain: CULTIVATION,
@@ -664,6 +668,7 @@ impl CoreHost {
                             }
                         });
                         CoreChoiceIntent {
+                            mechanical_load: None,
                             cultivation: None,
                             actor: opportunity.person,
                             key: Key {
@@ -712,6 +717,7 @@ impl CoreHost {
                 let rows: Vec<_> = opportunities
                     .into_par_iter()
                     .map(|opportunity| CoreChoiceIntent {
+                        mechanical_load: None,
                         cultivation: None,
                         actor: opportunity.person,
                         key: Key {
@@ -762,6 +768,7 @@ impl CoreHost {
                 .direct_opportunities()
                 .into_par_iter()
                 .map(|opportunity| CoreChoiceIntent {
+                    mechanical_load: None,
                     cultivation: None,
                     actor: opportunity.person,
                     key: Key {
@@ -806,6 +813,7 @@ impl CoreHost {
                     .preview_work_with_hunger_limit(&busy, schedule.work_rate, u32::MAX, true)?
                     .into_par_iter()
                     .map(|opportunity| CoreChoiceIntent {
+                        mechanical_load: None,
                         cultivation: None,
                         actor: opportunity.person,
                         key: Key {
@@ -847,6 +855,7 @@ impl CoreHost {
                     .preview_mechanical_experiments(&busy)?
                     .into_par_iter()
                     .map(|policy| CoreChoiceIntent {
+                        mechanical_load: None,
                         cultivation: None,
                         actor: policy.experiment.actor,
                         key: Key {
@@ -857,6 +866,44 @@ impl CoreHost {
                         second_movement: None,
                         work: None,
                         experiment: Some(policy.experiment),
+                        experiment_value: Some(policy.value),
+                        meal_value: None,
+                        tool_damage: None,
+                        health_value: None,
+                    })
+                    .collect())
+            } else {
+                Ok(Vec::new())
+            }
+        };
+        let mechanical_loads = || -> Result<Vec<CoreChoiceIntent>, String> {
+            let schedule = self.schedule.as_ref().ok_or("no core schedule")?;
+            if domain.is_none_or(|domain| domain == MECHANICAL_LOAD)
+                && schedule.personal_choices.as_ref().is_some_and(|people| {
+                    people.par_iter().any(|person| {
+                        person
+                            .preferences
+                            .binary_search_by_key(&MECHANICAL_LOAD, |preference| preference.domain)
+                            .ok()
+                            .is_some_and(|index| person.preferences[index].enabled)
+                    })
+                })
+            {
+                Ok(self
+                    .preview_mechanical_loads(&busy)?
+                    .into_par_iter()
+                    .map(|policy| CoreChoiceIntent {
+                        actor: policy.request.actor,
+                        key: Key {
+                            domain: MECHANICAL_LOAD,
+                            action: policy.id,
+                        },
+                        cultivation: None,
+                        mechanical_load: Some(policy.request),
+                        movement: None,
+                        second_movement: None,
+                        work: None,
+                        experiment: None,
                         experiment_value: Some(policy.value),
                         meal_value: None,
                         tool_damage: None,
@@ -893,6 +940,7 @@ impl CoreHost {
                     let person = index_by_person(&self.core.people, opportunity.person, |p| p.id)
                         .expect("known person");
                     CoreChoiceIntent {
+                        mechanical_load: None,
                         cultivation: None,
                         actor: opportunity.person,
                         key: Key {
@@ -959,6 +1007,7 @@ impl CoreHost {
                     let mut movement = action.movements[0];
                     movement.id = 0;
                     CoreChoiceIntent {
+                        mechanical_load: None,
                         cultivation: None,
                         actor,
                         key: Key {
@@ -997,6 +1046,7 @@ impl CoreHost {
                 let person = index_by_person(&self.core.people, opportunity.person, |p| p.id)
                     .expect("known person");
                 CoreChoiceIntent {
+                    mechanical_load: None,
                     cultivation: None,
                     actor: opportunity.person,
                     key: Key {
@@ -1054,6 +1104,7 @@ impl CoreHost {
             )?
             .into_par_iter()
             .map(|opportunity| CoreChoiceIntent {
+                mechanical_load: None,
                 cultivation: None,
                 actor: opportunity.person,
                 key: Key {
@@ -1114,6 +1165,7 @@ impl CoreHost {
         intents.par_extend(food_pickups?);
         intents.par_extend(treatments?);
         intents.par_extend(cultivation);
+        intents.par_extend(mechanical_loads()?);
         if intents
             .par_windows(2)
             .any(|rows| (rows[0].actor, rows[0].key) > (rows[1].actor, rows[1].key))
@@ -1208,6 +1260,7 @@ impl CoreHost {
                         && current[i].tool_damage == intent.tool_damage
                         && current[i].health_value == intent.health_value
                         && current[i].cultivation == intent.cultivation
+                        && current[i].mechanical_load == intent.mechanical_load
                 });
                 (intent, found)
             })

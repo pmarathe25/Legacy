@@ -94,6 +94,18 @@ pub struct MechanicalLoadResult {
     pub observation: Option<game_mechanics::Observation>,
 }
 
+/// One person's optional inclination to attempt an exact physical load action.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MechanicalLoadPolicy {
+    pub id: u64,
+    pub request: MechanicalLoadRequest,
+    #[serde(default = "default_experiment_value")]
+    pub value: i64,
+    #[serde(default)]
+    pub willing: bool,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct MechanicalCapability {
@@ -138,6 +150,8 @@ pub struct CoreMechanics {
     pub materials: Vec<MechanicalMaterial>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub load_materials: Vec<MechanicalLoadMaterial>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub load_policies: Vec<MechanicalLoadPolicy>,
     pub capabilities: Vec<MechanicalCapability>,
     #[serde(default)]
     pub policies: Vec<MechanicalPolicy>,
@@ -152,6 +166,7 @@ pub(super) struct Runtime {
     part_ids: Vec<u64>,
     materials: Vec<MechanicalMaterial>,
     load_materials: Vec<MechanicalLoadMaterial>,
+    load_policies: Vec<MechanicalLoadPolicy>,
     capabilities: Vec<MechanicalCapability>,
     policies: Vec<MechanicalPolicy>,
     memories: Vec<MechanicalMemory>,
@@ -172,6 +187,50 @@ impl CoreMechanics {
                 .load_materials
                 .par_windows(2)
                 .any(|rows| rows[0].good >= rows[1].good)
+            || self.load_policies.par_windows(2).any(|rows| {
+                (rows[0].request.actor, rows[0].id) >= (rows[1].request.actor, rows[1].id)
+            })
+            || self.load_policies.par_iter().any(|policy| {
+                let request = policy.request;
+                policy.id == 0
+                    || request.actor == 0
+                    || request.apparatus == 0
+                    || request.output_part == 0
+                    || request.input_force == 0
+                    || request.input_distance == 0
+                    || request.required_travel == 0
+                    || request.movement.id != 0
+                    || request.movement.quantity == 0
+                    || request.movement.to.is_none()
+                    || request.movement.to == Some(request.movement.from)
+                    || !request.movement.from.accepts(request.movement.good)
+                    || request
+                        .movement
+                        .to
+                        .is_some_and(|to| !to.accepts(request.movement.good))
+                    || request.movement.item == Some(0)
+                    || request.movement.batch == Some(0)
+                    || (request.movement.item.is_some() && request.movement.quantity != 1)
+                    || core
+                        .people
+                        .binary_search_by_key(&request.actor, |person| person.id)
+                        .is_err()
+                    || self
+                        .load_materials
+                        .binary_search_by_key(&request.movement.good, |row| row.good)
+                        .is_err()
+                    || self
+                        .world
+                        .apparatus
+                        .binary_search_by_key(&request.apparatus, |row| row.id)
+                        .ok()
+                        .is_none_or(|index| {
+                            self.world.apparatus[index]
+                                .parts
+                                .binary_search_by_key(&request.output_part, |row| row.id)
+                                .is_err()
+                        })
+            })
             || self.load_materials.par_iter().any(|row| {
                 row.force_per_unit == 0
                     || core
@@ -330,6 +389,7 @@ impl CoreMechanics {
             part_ids,
             materials: self.materials,
             load_materials: self.load_materials,
+            load_policies: self.load_policies,
             capabilities: self.capabilities,
             policies: self.policies,
             memories: self.memories,
@@ -347,6 +407,7 @@ impl Runtime {
             world: self.world.snapshot(),
             materials: self.materials.clone(),
             load_materials: self.load_materials.clone(),
+            load_policies: self.load_policies.clone(),
             capabilities: self.capabilities.clone(),
             policies: self.policies.clone(),
             memories: self.memories.clone(),
@@ -384,6 +445,119 @@ impl Runtime {
 }
 
 impl CoreHost {
+    /// Inspect each person's willing local load policies without reserving stock.
+    pub fn preview_mechanical_loads(
+        &self,
+        occupied: &[u64],
+    ) -> Result<Vec<MechanicalLoadPolicy>, String> {
+        if occupied.par_windows(2).any(|rows| rows[0] >= rows[1]) {
+            return Err("invalid occupied people".into());
+        }
+        let Some(owner) = &self.mechanics else {
+            return Ok(Vec::new());
+        };
+        if owner.load_policies.is_empty() {
+            return Ok(Vec::new());
+        }
+        let rest = self.blocked_with_rest(occupied);
+        let occupied = rest.as_deref().unwrap_or(occupied);
+        let active: HashSet<_> = self
+            .core
+            .physical
+            .work()
+            .par_iter()
+            .filter(|row| row.phase == game_lot_runtime::Phase::Working)
+            .map(|row| row.job.worker)
+            .collect();
+        let claims = self.claims.as_ref().map(game_economy_claims::Claims::index);
+        let mut sources: Vec<_> = owner
+            .load_policies
+            .par_iter()
+            .filter(|policy| policy.request.movement.item.is_none())
+            .map(|policy| (policy.request.movement.from, policy.request.movement.good))
+            .collect();
+        sources.par_sort_unstable();
+        sources.dedup();
+        let unsafe_sources: HashSet<_> = sources
+            .into_par_iter()
+            .filter(|(place, good)| {
+                self.core.physical.custody(*place).is_some_and(|container| {
+                    container.lots.par_iter().any(|lot| {
+                        lot.good == *good && lot.item.is_some_and(|item| owner.owns_part(item))
+                    })
+                })
+            })
+            .collect();
+        Ok(owner
+            .load_policies
+            .par_iter()
+            .filter(|policy| {
+                let request = policy.request;
+                let Some(person) = indexed(&self.core.people, request.actor, |row| row.id)
+                    .filter(|person| !person.controlled)
+                else {
+                    return false;
+                };
+                let Some(region) = person.region else {
+                    return false;
+                };
+                let Some(destination) = request.movement.to else {
+                    return false;
+                };
+                let local = |place| match place {
+                    game_lots::Place::Person(id) => id == request.actor,
+                    game_lots::Place::Stock {
+                        region: place_region,
+                        ..
+                    } => place_region == region,
+                    game_lots::Place::Inventory(id) => {
+                        self.local_transport.as_ref().is_some_and(|transport| {
+                            indexed(&transport.stores, id, |store| store.id)
+                                .is_some_and(|store| store.region == region)
+                        })
+                    }
+                    _ => false,
+                };
+                let Some(material) = indexed(
+                    &owner.load_materials,
+                    u64::from(request.movement.good),
+                    |row| u64::from(row.good),
+                ) else {
+                    return false;
+                };
+                let Some(force) = material
+                    .force_per_unit
+                    .checked_mul(request.movement.quantity)
+                else {
+                    return false;
+                };
+                let experiment = game_mechanics::Experiment {
+                    actor: request.actor,
+                    apparatus: request.apparatus,
+                    output_part: request.output_part,
+                    input_force: request.input_force,
+                    input_distance: request.input_distance,
+                    load_force: force,
+                };
+                policy.willing
+                    && local(request.movement.from)
+                    && local(destination)
+                    && request
+                        .movement
+                        .item
+                        .is_none_or(|item| !owner.owns_part(item))
+                    && !(request.movement.item.is_none()
+                        && unsafe_sources.contains(&(request.movement.from, request.movement.good)))
+                    && (!matches!(request.movement.from, game_lots::Place::Stock { .. })
+                        || claims.as_ref().is_none_or(|index| {
+                            index.allows(request.actor, region, request.movement.good)
+                        }))
+                    && owner.eligible(&self.core, &experiment, occupied, &active)
+            })
+            .copied()
+            .collect())
+    }
+
     /// Inspect personally willing experiment opportunities without executing them.
     pub fn preview_mechanical_experiments(
         &self,

@@ -10,7 +10,8 @@ const SELECTED_DOMAINS: u64 = (1 << 1)
     | (1 << 7)
     | (1 << 8)
     | (1 << 9)
-    | (1 << 10);
+    | (1 << 10)
+    | (1 << 12);
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "phase", rename_all = "snake_case")]
@@ -99,6 +100,11 @@ pub enum DecisionPhase {
         remaining: u64,
     },
     ChosenSelfTreatment {
+        meal_people: Vec<u64>,
+        intents: Arc<Vec<CoreChoiceIntent>>,
+        remaining: u64,
+    },
+    ChosenMechanicalLoad {
         meal_people: Vec<u64>,
         intents: Arc<Vec<CoreChoiceIntent>>,
         remaining: u64,
@@ -279,7 +285,8 @@ impl CoreSchedule {
             | DecisionPhase::ChosenMeal { remaining, .. }
             | DecisionPhase::ChosenToolRepair { remaining, .. }
             | DecisionPhase::ChosenFoodPickup { remaining, .. }
-            | DecisionPhase::ChosenSelfTreatment { remaining, .. } => Some(*remaining),
+            | DecisionPhase::ChosenSelfTreatment { remaining, .. }
+            | DecisionPhase::ChosenMechanicalLoad { remaining, .. } => Some(*remaining),
             DecisionPhase::ChosenConstruction { remaining, .. }
             | DecisionPhase::ChosenCarrying { remaining, .. }
             | DecisionPhase::ChosenMaintenance { remaining, .. }
@@ -307,6 +314,7 @@ impl CoreSchedule {
             DecisionPhase::ChosenToolRepair { .. } => Some(8),
             DecisionPhase::ChosenFoodPickup { .. } => Some(9),
             DecisionPhase::ChosenSelfTreatment { .. } => Some(10),
+            DecisionPhase::ChosenMechanicalLoad { .. } => Some(12),
             _ => None,
         };
         if current_domain
@@ -324,7 +332,8 @@ impl CoreSchedule {
         | DecisionPhase::ChosenMeal { intents, .. }
         | DecisionPhase::ChosenToolRepair { intents, .. }
         | DecisionPhase::ChosenFoodPickup { intents, .. }
-        | DecisionPhase::ChosenSelfTreatment { intents, .. } = &self.phase
+        | DecisionPhase::ChosenSelfTreatment { intents, .. }
+        | DecisionPhase::ChosenMechanicalLoad { intents, .. } = &self.phase
         {
             let Some(people) = &self.personal_choices else {
                 return Err("selected actions require personal choices".into());
@@ -336,6 +345,7 @@ impl CoreSchedule {
                     intent.actor == 0
                         || intent.key.action == 0
                         || intent.cultivation.is_some()
+                        || (intent.key.domain != personal_choice::MECHANICAL_LOAD && intent.mechanical_load.is_some())
                         || match (
                             intent.key.domain,
                             intent.movement,
@@ -413,6 +423,18 @@ impl CoreSchedule {
                                     || movement.from != game_lots::Place::Person(intent.actor) || movement.to.is_some()
                                     || intent.key.action != u64::from(movement.good)
                             }
+                            (12, None, None, None) => {
+                                let Some(load) = intent.mechanical_load else { return true; };
+                                intent.health_value.is_some() || intent.tool_damage.is_some() || intent.meal_value.is_some()
+                                    || intent.experiment_value.is_none() || intent.second_movement.is_some()
+                                    || load.actor != intent.actor || load.apparatus == 0 || load.output_part == 0
+                                    || load.input_force == 0 || load.input_distance == 0 || load.required_travel == 0
+                                    || load.movement.id != 0 || load.movement.quantity == 0 || load.movement.to.is_none()
+                                    || !load.movement.from.accepts(load.movement.good)
+                                    || load.movement.to.is_some_and(|to| !to.accepts(load.movement.good) || to == load.movement.from)
+                                    || load.movement.item == Some(0) || load.movement.batch == Some(0)
+                                    || (load.movement.item.is_some() && load.movement.quantity != 1)
+                            }
                             _ => true,
                         }
                         || people
@@ -451,6 +473,7 @@ impl CoreSchedule {
         | DecisionPhase::ChosenToolRepair { meal_people, .. }
         | DecisionPhase::ChosenFoodPickup { meal_people, .. }
         | DecisionPhase::ChosenSelfTreatment { meal_people, .. }
+        | DecisionPhase::ChosenMechanicalLoad { meal_people, .. }
         | DecisionPhase::ChosenConstruction { meal_people, .. }
         | DecisionPhase::ChosenCarrying { meal_people, .. }
         | DecisionPhase::ChosenMaintenance { meal_people, .. }
@@ -502,6 +525,7 @@ pub enum CoreRunEvent {
     LocalCarries(Vec<game_economy_local_transport::Event>),
     PersonalChoices(Vec<CoreChoiceEvent>),
     MechanicalExperiments(Vec<game_mechanics::Observation>),
+    MechanicalLoads(Vec<MechanicalLoadResult>),
     HaulingRequests(Vec<u64>),
     HaulingTransfers(Vec<game_lots::TransactionOutcome>),
     HaulingDepartures(Vec<travel::DepartureOutcome>),
@@ -1377,6 +1401,9 @@ impl CoreHost {
                         let has_treatments = intents
                             .par_iter()
                             .any(|intent| intent.key.domain == personal_choice::SELF_TREATMENT);
+                        let has_mechanical_loads = intents
+                            .par_iter()
+                            .any(|intent| intent.key.domain == personal_choice::MECHANICAL_LOAD);
                         let random = game_genetics::random(self.core.seed, 0x63686f696365, round);
                         let first = if has_work {
                             random % 4
@@ -1390,6 +1417,7 @@ impl CoreHost {
                             || has_tool_repairs
                             || has_food_pickups
                             || has_treatments
+                            || has_mechanical_loads
                         {
                             let mut remaining = 0;
                             if has_experiments {
@@ -1406,6 +1434,9 @@ impl CoreHost {
                             }
                             if has_treatments {
                                 remaining |= 1 << 10;
+                            }
+                            if has_mechanical_loads {
+                                remaining |= 1 << 12;
                             }
                             if self.construction.is_some() {
                                 remaining |= 1 << 1;
@@ -1468,7 +1499,7 @@ impl CoreHost {
                         remaining,
                     } => {
                         let round = self.core.physical.tick().rotate_left(21) ^ offset;
-                        let domain = [1u32, 2, 3, 4, 6, 7, 8, 9, 10]
+                        let domain = [1u32, 2, 3, 4, 6, 7, 8, 9, 10, 12]
                             .into_iter()
                             .filter(|domain| remaining & (1u64 << domain) != 0)
                             .min_by_key(|domain| {
@@ -1538,8 +1569,64 @@ impl CoreHost {
                                 intents,
                                 remaining,
                             },
+                            12 => DecisionPhase::ChosenMechanicalLoad {
+                                meal_people,
+                                intents,
+                                remaining,
+                            },
                             _ => unreachable!("validated domain"),
                         };
+                    }
+                    DecisionPhase::ChosenMechanicalLoad {
+                        mut meal_people,
+                        intents,
+                        remaining,
+                    } => {
+                        let mut busy = blocked.to_vec();
+                        busy.extend(meal_people.iter().copied());
+                        busy.par_sort_unstable();
+                        busy.dedup();
+                        let people = schedule.personal_choices.as_ref().expect("choice profile");
+                        let (blocked_choice, mut choices) = attempt!('run, self.choice_blocked(&busy, people, &intents, personal_choice::MECHANICAL_LOAD));
+                        let selected: Vec<_> = intents
+                            .par_iter()
+                            .filter(|intent| {
+                                intent.key.domain == personal_choice::MECHANICAL_LOAD
+                                    && blocked_choice.binary_search(&intent.actor).is_err()
+                            })
+                            .map(|intent| {
+                                intent.mechanical_load.expect("validated mechanical load")
+                            })
+                            .collect();
+                        let results =
+                            attempt!('run, self.move_mechanical_loads(&selected, &blocked_choice));
+                        choices.par_extend(results.par_iter().map(|row| CoreChoiceEvent {
+                            tick: self.core.physical.tick(),
+                            offset_millis: offset,
+                            actor: row.actor,
+                            key: personal_choice::selected_key(&intents, row.actor),
+                            outcome: if matches!(
+                                row.outcome,
+                                MechanicalLoadOutcome::Unavailable
+                                    | MechanicalLoadOutcome::Contended
+                            ) {
+                                CoreChoiceOutcome::Denied
+                            } else {
+                                CoreChoiceOutcome::Accepted
+                            },
+                        }));
+                        meal_people.par_extend(selected.par_iter().map(|row| row.actor));
+                        meal_people.par_sort_unstable();
+                        meal_people.dedup();
+                        if !results.is_empty() {
+                            run.events.push(CoreRunEvent::MechanicalLoads(results));
+                        }
+                        if !choices.is_empty() {
+                            choices.par_sort_unstable_by_key(|event| event.actor);
+                            run.events.push(CoreRunEvent::PersonalChoices(choices));
+                        }
+                        self.schedule.as_mut().expect("active schedule").phase =
+                            self.after_selected_batch(meal_people, intents, remaining);
                     }
                     DecisionPhase::ChosenSelfTreatment {
                         mut meal_people,

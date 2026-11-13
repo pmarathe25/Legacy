@@ -1,0 +1,133 @@
+# A person can choose to move a real load with carried mechanical parts.
+seed = 7
+tick_millis = 900000
+stock_capacity = 100
+food_relief_divisor = 20
+
+[rules]
+hunger_per_tick = 1
+meal_threshold = 5
+starvation_threshold = 50
+starvation_damage = 1
+max_health = 100
+carrying_capacity = 10
+max_work_hunger = 20
+
+[[regions]]
+id = 1
+stock = { timber = 10 }
+
+[[people]]
+id = 1
+region = 1
+health = 100
+hunger = 0
+willing_to_work = false
+seek_meals = false
+items = [{ id = 1001, good = "timber" }, { id = 1002, good = "tool" }]
+
+[local_transport]
+[[local_transport.stores]]
+id = 1
+region = 1
+name = "Store"
+capacity = 10
+[[local_transport.policies]]
+person = 1
+region = 1
+source = { kind = "stock" }
+destination = { kind = "store", id = 1 }
+good = "timber"
+quantity = 1
+willing = true
+
+[mechanics]
+catalog = "mechanics/basic.toml"
+
+[[mechanics.apparatus]]
+id = 1
+parts = [
+  { id = 1001, component = 1, share_per_mille = 1000 },
+  { id = 1002, component = 2, parent = 1001, share_per_mille = 1000 },
+]
+
+[[mechanics.materials]]
+component = 1
+good = "timber"
+
+[[mechanics.materials]]
+component = 2
+good = "tool"
+
+[[mechanics.capabilities]]
+person = 1
+max_force = 200
+max_distance = 200
+
+[[mechanics.memories]]
+person = 1
+capacity = 4
+retain = true
+
+[[mechanics.policies]]
+id = 1
+willing = true
+value = 5
+experiment = { actor = 1, apparatus = 1, output_part = 1002, input_force = 100, input_distance = 100, load_force = 20 }
+
+[[mechanics.policies]]
+id = 2
+willing = true
+value = -10
+experiment = { actor = 1, apparatus = 1, output_part = 1002, input_force = 100, input_distance = 100, load_force = 30 }
+
+[[personal_choices]]
+id = 1
+idle = 0
+preferences = [{ domain = 2, enabled = true, bias = 0 }, { domain = 6, enabled = false, bias = 0 }, { domain = 12, enabled = true, bias = 10 }]
+
+[[people]]
+id = 2
+region = 1
+health = 100
+hunger = 0
+willing_to_work = false
+seek_meals = false
+items = [{ id = 1003, good = "timber" }, { id = 1004, good = "tool" }]
+
+[[mechanics.apparatus]]
+id = 2
+parts = [
+  { id = 1003, component = 1, share_per_mille = 1000 },
+  { id = 1004, component = 2, parent = 1003, share_per_mille = 1000 },
+]
+
+[[mechanics.capabilities]]
+person = 2
+max_force = 200
+max_distance = 200
+
+[[mechanics.memories]]
+person = 2
+capacity = 4
+retain = true
+
+[[mechanics.load_materials]]
+good = "timber"
+force_per_unit = 10
+
+[[mechanics.load_policies]]
+id = 1
+person = 1
+apparatus = 1
+output_part = 1002
+input_force = 100
+input_distance = 100
+required_travel = 10
+region = 1
+good = "timber"
+quantity = 2
+source = { kind = "stock" }
+destination = { kind = "store", id = 1 }
+willing = true
+value = 20
