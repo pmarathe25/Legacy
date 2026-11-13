@@ -43,7 +43,8 @@ mod treatment;
 mod writing;
 pub use conflict::{
     CorePersonalConflict, PersonalAttackPolicy, PersonalDefensePolicy, PersonalHarm,
-    PersonalStrikeReaction, StrikeCapability, StrikeFeeling, StrikeInterpretation,
+    PersonalStrikeReaction, StrikeCapability, StrikeFeeling, StrikeInterpretation, WoundCarePolicy,
+    WoundTreatment,
 };
 pub use construction::CoreConstructionResults;
 pub use food_search::{CoreFoodProvision, CoreFoodSearch};

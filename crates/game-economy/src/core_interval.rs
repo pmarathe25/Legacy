@@ -32,7 +32,7 @@ pub use host::{
     MechanicalPolicy, MechanicalReactions, MechanicalTestimony, MechanicalWatchPolicy,
     MechanicalWitnessRequest, PersonalAttackPolicy, PersonalDefensePolicy, PersonalHarm,
     PersonalStrikeReaction, StrikeCapability, StrikeFeeling, StrikeInterpretation,
-    WitnessedMechanicalResult,
+    WitnessedMechanicalResult, WoundCarePolicy, WoundTreatment,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

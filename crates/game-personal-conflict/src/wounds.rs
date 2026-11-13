@@ -28,12 +28,23 @@ pub struct Injury {
     pub harm: u32,
 }
 
+/// A physical medicine and its effect when an individual actually uses it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Remedy {
+    pub good: u32,
+    pub quantity: u64,
+    pub severity_relief: u32,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Wounds {
     pub rules: Rules,
     #[serde(default)]
     pub cases: Vec<Wound>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub remedies: Vec<Remedy>,
 }
 
 impl Wounds {
@@ -60,6 +71,13 @@ impl Wounds {
                 .cases
                 .par_windows(2)
                 .any(|pair| pair[0].person >= pair[1].person)
+            || self
+                .remedies
+                .par_windows(2)
+                .any(|pair| pair[0].good >= pair[1].good)
+            || self.remedies.par_iter().any(|remedy| {
+                remedy.good == 0 || remedy.quantity == 0 || remedy.severity_relief == 0
+            })
             || self.cases.par_iter().any(|wound| {
                 !exists(wound.person)
                     || wound.severity == 0
@@ -135,6 +153,49 @@ impl Wounds {
         Ok(Self {
             rules: self.rules.clone(),
             cases,
+            remedies: self.remedies.clone(),
+        })
+    }
+
+    /// Apply only treatments whose physical consumption was accepted.
+    /// Each pair identifies a person and the medicine they actually consumed.
+    pub fn treated(&self, accepted: &[(u64, u32)]) -> Result<Self, &'static str> {
+        if accepted.par_windows(2).any(|pair| pair[0].0 >= pair[1].0)
+            || accepted.par_iter().any(|(person, good)| {
+                *person == 0
+                    || self
+                        .remedies
+                        .binary_search_by_key(good, |remedy| remedy.good)
+                        .is_err()
+            })
+        {
+            return Err("invalid accepted wound treatments");
+        }
+        let cases = self
+            .cases
+            .par_iter()
+            .filter_map(|case| {
+                let Some((_, good)) = accepted
+                    .binary_search_by_key(&case.person, |row| row.0)
+                    .ok()
+                    .map(|index| accepted[index])
+                else {
+                    return Some(case.clone());
+                };
+                let relief = self.remedies[self
+                    .remedies
+                    .binary_search_by_key(&good, |remedy| remedy.good)
+                    .expect("validated remedy")]
+                .severity_relief;
+                let mut next = case.clone();
+                next.severity = next.severity.saturating_sub(relief);
+                (next.severity > 0).then_some(next)
+            })
+            .collect();
+        Ok(Self {
+            rules: self.rules.clone(),
+            cases,
+            remedies: self.remedies.clone(),
         })
     }
 }

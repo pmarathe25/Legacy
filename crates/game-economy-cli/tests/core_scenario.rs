@@ -793,6 +793,209 @@ fn physical_wounds_record_actual_group_harm_and_recover_after_reload() {
 }
 
 #[test]
+fn chosen_wound_treatment_requires_real_supplies_and_can_be_declined() {
+    use game_economy::core_interval::{CoreHost, WoundTreatment};
+    use game_lots::{Container, Lot, Place};
+    fn run(workers: usize, stocked: bool, chosen: bool) -> serde_json::Value {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let root = root();
+                let mut state = game_economy_cli::core_scenario(
+                    &root.join("content/scenarios/economy-core-wounds.toml"),
+                    &root.join("content"),
+                )
+                .unwrap()
+                .snapshot();
+                let good = state.core.physical.goods[0].id;
+                state
+                    .personal_conflict
+                    .as_mut()
+                    .unwrap()
+                    .wounds
+                    .as_mut()
+                    .unwrap()
+                    .remedies = serde_json::from_value(
+                    serde_json::json!([{"good":good,"quantity":2,"severity_relief":4}]),
+                )
+                .unwrap();
+                let holder = state
+                    .core
+                    .physical
+                    .custody
+                    .containers
+                    .iter_mut()
+                    .find(|row| row.place == Place::Person(2))
+                    .unwrap();
+                *holder = Container::new(
+                    holder.place,
+                    holder.capacity,
+                    if stocked {
+                        vec![Lot {
+                            batch: None,
+                            item: None,
+                            good,
+                            quantity: 2,
+                            expires_at: None,
+                        }]
+                    } else {
+                        vec![]
+                    },
+                )
+                .unwrap();
+                let mut host = CoreHost::resume(state).unwrap();
+                assert_eq!(host.advance_continuous(1, &[]).unwrap().failure, None);
+                let before = host.snapshot();
+                assert!(
+                    host.treat_wounds(&[WoundTreatment { person: 2, good: 0 }], &[])
+                        .is_err()
+                );
+                assert_eq!(host.snapshot(), before);
+                if chosen {
+                    let result = host
+                        .treat_wounds(&[WoundTreatment { person: 2, good }], &[])
+                        .unwrap();
+                    assert_eq!(result.outcomes.len(), 1);
+                    assert_eq!(result.outcomes[0].accepted, stocked);
+                }
+                let state = host.snapshot();
+                let wound = &state
+                    .personal_conflict
+                    .as_ref()
+                    .unwrap()
+                    .wounds
+                    .as_ref()
+                    .unwrap()
+                    .cases[0];
+                assert_eq!(wound.severity, if chosen && stocked { 5 } else { 9 });
+                let holder = state
+                    .core
+                    .physical
+                    .custody
+                    .containers
+                    .iter()
+                    .find(|row| row.place == Place::Person(2))
+                    .unwrap();
+                assert_eq!(
+                    holder
+                        .lots
+                        .iter()
+                        .filter(|lot| lot.good == good)
+                        .map(|lot| lot.quantity)
+                        .sum::<u64>(),
+                    if stocked && !chosen { 2 } else { 0 }
+                );
+                let restored = CoreHost::resume(
+                    serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap(),
+                )
+                .unwrap();
+                assert_eq!(state, restored.snapshot());
+                serde_json::to_value(state).unwrap()
+            })
+    }
+    for (stocked, chosen) in [(true, true), (false, true), (true, false)] {
+        assert_eq!(run(1, stocked, chosen), run(4, stocked, chosen));
+    }
+}
+
+#[test]
+fn autonomous_wound_care_follows_personal_choice_and_felt_pressure() {
+    use game_economy::core_interval::{CoreChoiceOutcome, CoreHost, CoreRunEvent, DecisionPhase};
+    use game_lots::{Container, Lot, Place};
+    fn run(
+        workers: usize,
+        willing: bool,
+        fear: u64,
+        obligation: u64,
+        idle: i64,
+        stocked: bool,
+    ) -> serde_json::Value {
+        rayon::ThreadPoolBuilder::new().num_threads(workers).build().unwrap().install(|| {
+            let root = root();
+            let state = game_economy_cli::core_scenario(&root.join("content/scenarios/economy-core-wounds.toml"), &root.join("content")).unwrap().snapshot();
+            let mut host = CoreHost::resume(state).unwrap();
+            assert_eq!(host.advance_continuous(1, &[]).unwrap().failure, None);
+            let mut state = host.snapshot();
+            let good = state.core.physical.goods[0].id;
+            let owner = state.personal_conflict.as_mut().unwrap();
+            for attack in &mut owner.attacks { attack.willing = false; }
+            owner.wounds.as_mut().unwrap().remedies = serde_json::from_value(serde_json::json!([{"good":good,"quantity":2,"severity_relief":4}])).unwrap();
+            owner.wound_care = serde_json::from_value(serde_json::json!([{"person":2,"good":good,"willing":willing,"pressured_by":1,"pressure_threshold":1}])).unwrap();
+            state.opinions = Some(serde_json::from_value(serde_json::json!({"rules":{"minimum":-10,"maximum":10,"initial":0,"fulfilled_gain":1,"default_loss":1},"records":[{"observer":2,"target":1,"trust":0,"fear":fear,"obligation":obligation}]})).unwrap());
+            let holder = state.core.physical.custody.containers.iter_mut().find(|row| row.place == Place::Person(2)).unwrap();
+            *holder = Container::new(holder.place, holder.capacity, if stocked { vec![Lot { batch:None,item:None,good,quantity:2,expires_at:None }] } else { vec![] }).unwrap();
+            let profiles = std::sync::Arc::make_mut(state.schedule.as_mut().unwrap().personal_choices.as_mut().unwrap());
+            profiles.push(serde_json::from_value(serde_json::json!({"id":2,"idle":idle,"preferences":[{"domain":16,"enabled":true,"bias":10}]})).unwrap());
+            profiles.sort_unstable_by_key(|row| row.id);
+            let mut host = CoreHost::resume(serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap()).unwrap();
+            if willing && fear == 0 && obligation == 0 && idle == 0 && stocked {
+                let (intents, _) = host.preview_personal_choices(&[]).unwrap();
+                let selected: Vec<_> = intents.into_iter().filter(|intent| intent.actor == 2 && intent.key.domain == 16).collect();
+                assert_eq!(selected.len(), 1);
+                let mut stale = host.snapshot();
+                let schedule = stale.schedule.as_mut().unwrap();
+                schedule.next_decision_millis = Some(1);
+                schedule.phase = DecisionPhase::ChosenWoundCare { meal_people: vec![], intents: std::sync::Arc::new(selected), remaining: 0 };
+                stale.personal_conflict.as_mut().unwrap().wounds.as_mut().unwrap().remedies[0].quantity = 1;
+                let mut stale = CoreHost::resume(serde_json::from_str(&serde_json::to_string(&stale).unwrap()).unwrap()).unwrap();
+                let result = stale.advance_continuous(1, &[]).unwrap();
+                assert_eq!(result.failure, None);
+                assert!(result.events.iter().any(|event| matches!(event, CoreRunEvent::PersonalChoices(rows) if rows.iter().any(|row| row.actor == 2 && row.outcome == CoreChoiceOutcome::Stale))));
+                assert_eq!(stale.snapshot().personal_conflict.unwrap().wounds.unwrap().cases[0].severity, 9);
+            }
+            let result = host.advance_continuous(900_000, &[]).unwrap();
+            assert_eq!(result.failure, None);
+            let state = host.snapshot();
+            let severity = state.personal_conflict.as_ref().unwrap().wounds.as_ref().unwrap().cases[0].severity;
+            let expected = stocked && idle == 0 && (willing || fear > 0 || obligation > 0);
+            assert_eq!(severity, if expected { 5 } else { 9 });
+            serde_json::to_value(state).unwrap()
+        })
+    }
+    for (willing, fear, obligation, idle, stocked) in [
+        (true, 0, 0, 0, true),
+        (false, 0, 0, 0, true),
+        (false, 2, 0, 0, true),
+        (false, 0, 2, 0, true),
+        (true, 0, 0, 100, true),
+        (true, 0, 0, 0, false),
+    ] {
+        assert_eq!(
+            run(1, willing, fear, obligation, idle, stocked),
+            run(4, willing, fear, obligation, idle, stocked)
+        );
+    }
+}
+
+#[test]
+fn conflict_alone_still_opens_the_personal_choice_round() {
+    use game_economy::core_interval::{CoreHost, CoreRunEvent};
+    let root = root();
+    let mut state = game_economy_cli::core_scenario(
+        &root.join("content/scenarios/economy-core-personal-conflict.toml"),
+        &root.join("content"),
+    )
+    .unwrap()
+    .snapshot();
+    state.construction = None;
+    state.local_transport = None;
+    state.sites = None;
+    state.autowork = None;
+    state.mechanics = None;
+    state.tool_wear = None;
+    state.food_search = None;
+    state.health = None;
+    let mut host = CoreHost::resume(state).unwrap();
+    let result = host.advance_continuous(1, &[]).unwrap();
+    assert_eq!(result.failure, None);
+    assert!(result.events.iter().any(
+        |event| matches!(event, CoreRunEvent::PersonalStrikes { events, .. } if events.len() == 2)
+    ));
+}
+
+#[test]
 fn saved_strike_intentions_are_not_retargeted() {
     use game_economy::core_interval::{CoreChoiceOutcome, CoreHost, CoreRunEvent, DecisionPhase};
     let root = root();

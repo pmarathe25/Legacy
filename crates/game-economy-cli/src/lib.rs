@@ -1013,8 +1013,10 @@ pub fn core_scenario_with_options(
         owner.defenses.sort_unstable_by_key(|row| row.person);
         owner.capabilities.sort_unstable_by_key(|row| row.person);
         owner.reactions.sort_unstable_by_key(|row| row.person);
+        owner.wound_care.sort_unstable_by_key(|row| row.person);
         if let Some(wounds) = &mut owner.wounds {
             wounds.cases.sort_unstable_by_key(|row| row.person);
+            wounds.remedies.sort_unstable_by_key(|row| row.good);
         }
     }
     snapshot.personal_conflict = personal_conflict;

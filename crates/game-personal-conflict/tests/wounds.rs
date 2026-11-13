@@ -1,4 +1,4 @@
-use game_personal_conflict::wounds::{Injury, Rules, Wounds};
+use game_personal_conflict::wounds::{Injury, Remedy, Rules, Wounds};
 
 #[test]
 fn wounds_accumulate_capped_harm_and_recover_without_assigning_blame() {
@@ -9,6 +9,7 @@ fn wounds_accumulate_capped_harm_and_recover_without_assigning_blame() {
             force_loss_per_severity: 1,
         },
         cases: vec![],
+        remedies: vec![],
     };
     let run = |workers| {
         rayon::ThreadPoolBuilder::new()
@@ -53,4 +54,41 @@ fn wounds_accumulate_capped_harm_and_recover_without_assigning_blame() {
     );
     assert!(overflow.cases.is_empty());
     assert!(overflow.injured(&[], u64::MAX).is_ok());
+}
+
+#[test]
+fn only_accepted_personal_treatments_change_wounds() {
+    let initial = Wounds {
+        rules: Rules {
+            minimum_harm: 1,
+            recovery_ticks: 3,
+            force_loss_per_severity: 1,
+        },
+        cases: vec![],
+        remedies: vec![Remedy {
+            good: 1,
+            quantity: 2,
+            severity_relief: 3,
+        }],
+    };
+    let wounded = initial
+        .injured(
+            &[Injury { person: 1, harm: 5 }, Injury { person: 2, harm: 2 }],
+            0,
+        )
+        .unwrap();
+    let treated = wounded.treated(&[(1, 1)]).unwrap();
+    assert_eq!(treated.cases[0].severity, 2);
+    assert_eq!(treated.cases[1].severity, 2);
+    assert!(wounded.treated(&[(1, 2)]).is_err());
+    assert!(wounded.treated(&[(1, 1), (1, 1)]).is_err());
+    assert!(
+        treated
+            .treated(&[(1, 1)])
+            .unwrap()
+            .cases
+            .iter()
+            .all(|case| case.person != 1)
+    );
+    assert_eq!(wounded.cases[0].severity, 5);
 }

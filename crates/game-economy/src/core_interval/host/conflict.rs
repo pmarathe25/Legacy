@@ -75,6 +75,28 @@ pub struct PersonalHarm {
     pub after: u32,
 }
 
+/// An individual's explicit choice to use carried medicine on their own wound.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WoundTreatment {
+    pub person: u64,
+    pub good: u32,
+}
+
+/// A person's own inclination to use a remedy, possibly motivated by pressure.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WoundCarePolicy {
+    pub person: u64,
+    pub good: u32,
+    #[serde(default)]
+    pub willing: bool,
+    #[serde(default)]
+    pub pressured_by: Option<u64>,
+    #[serde(default)]
+    pub pressure_threshold: Option<u64>,
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CorePersonalConflict {
@@ -88,6 +110,8 @@ pub struct CorePersonalConflict {
     pub reactions: Vec<PersonalStrikeReaction>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub wounds: Option<game_personal_conflict::wounds::Wounds>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub wound_care: Vec<WoundCarePolicy>,
     /// Physical deaths awaiting the next family boundary.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub pending_deaths: Vec<u64>,
@@ -141,6 +165,23 @@ impl CorePersonalConflict {
                 .any(|row| row.max_force == 0 || !exists(row.person))
             || self.reactions.par_iter().any(|row| !exists(row.person))
             || self
+                .wound_care
+                .par_windows(2)
+                .any(|rows| rows[0].person >= rows[1].person)
+            || self.wound_care.par_iter().any(|row| {
+                !exists(row.person)
+                    || row
+                        .pressured_by
+                        .is_some_and(|id| id == row.person || !exists(id))
+                    || row.pressured_by.is_some() != row.pressure_threshold.is_some()
+                    || self.wounds.as_ref().is_none_or(|wounds| {
+                        wounds
+                            .remedies
+                            .binary_search_by_key(&row.good, |remedy| remedy.good)
+                            .is_err()
+                    })
+            })
+            || self
                 .pending_deaths
                 .par_windows(2)
                 .any(|rows| rows[0] >= rows[1])
@@ -176,12 +217,223 @@ impl CorePersonalConflict {
             wounds
                 .validate(core.physical.tick(), &exists)
                 .map_err(str::to_owned)?;
+            if wounds.remedies.par_iter().any(|remedy| {
+                !core
+                    .physical
+                    .goods()
+                    .iter()
+                    .any(|good| good.id == remedy.good)
+            }) {
+                return Err("unknown wound remedy".into());
+            }
         }
         Ok(())
     }
 }
 
 impl CoreHost {
+    /// Preview each individual's own available wound-care opportunity.
+    pub fn preview_wound_care(&self, occupied: &[u64]) -> Result<Vec<WoundTreatment>, String> {
+        if occupied.par_windows(2).any(|pair| pair[0] >= pair[1]) {
+            return Err("invalid occupied people".into());
+        }
+        let Some(owner) = &self.personal_conflict else {
+            return Ok(Vec::new());
+        };
+        let Some(wounds) = &owner.wounds else {
+            return Ok(Vec::new());
+        };
+        let rest = self.blocked_with_rest(occupied);
+        let occupied = rest.as_deref().unwrap_or(occupied);
+        let active: HashSet<_> = self
+            .core
+            .physical
+            .work()
+            .par_iter()
+            .filter(|row| row.phase == game_lot_runtime::Phase::Working)
+            .map(|row| row.job.worker)
+            .collect();
+        let opinions = self.opinions.as_ref().map(|owner| owner.index());
+        Ok(owner
+            .wound_care
+            .par_iter()
+            .filter_map(|policy| {
+                let person = self
+                    .core
+                    .people
+                    .binary_search_by_key(&policy.person, |row| row.id)
+                    .ok()
+                    .map(|i| &self.core.people[i])?;
+                let remedy = wounds
+                    .remedies
+                    .binary_search_by_key(&policy.good, |row| row.good)
+                    .ok()
+                    .map(|i| wounds.remedies[i])?;
+                let pressured = policy
+                    .pressured_by
+                    .zip(policy.pressure_threshold)
+                    .is_some_and(|(other, threshold)| {
+                        opinions.as_ref().is_some_and(|index| {
+                            let (fear, obligation) = index.feelings(policy.person, other);
+                            fear.saturating_add(obligation) >= threshold
+                        })
+                    });
+                if person.controlled
+                    || person.health == 0
+                    || occupied.binary_search(&person.id).is_ok()
+                    || active.contains(&person.id)
+                    || (!policy.willing && !pressured)
+                    || wounds
+                        .cases
+                        .binary_search_by_key(&person.id, |row| row.person)
+                        .is_err()
+                {
+                    return None;
+                }
+                let holder = self
+                    .core
+                    .physical
+                    .custody(game_lots::Place::Person(person.id))?;
+                let quantity: u128 = holder
+                    .lots
+                    .iter()
+                    .filter(|lot| {
+                        lot.good == policy.good
+                            && lot
+                                .expires_at
+                                .is_none_or(|at| at > self.core.physical.tick())
+                    })
+                    .map(|lot| u128::from(lot.quantity))
+                    .sum();
+                (quantity >= u128::from(remedy.quantity)).then_some(WoundTreatment {
+                    person: person.id,
+                    good: policy.good,
+                })
+            })
+            .collect())
+    }
+    /// Consume personally held supplies and treat only accepted transactions.
+    /// Selection is the caller's decision, not an obligation imposed by injury.
+    pub fn treat_wounds(
+        &mut self,
+        choices: &[WoundTreatment],
+        occupied: &[u64],
+    ) -> Result<CoreTreatmentResults, String> {
+        if choices
+            .par_windows(2)
+            .any(|pair| pair[0].person >= pair[1].person)
+            || occupied.par_windows(2).any(|pair| pair[0] >= pair[1])
+        {
+            return Err("wound treatments and occupied people must be sorted and distinct".into());
+        }
+        if choices.is_empty() {
+            return Ok(CoreTreatmentResults::default());
+        }
+        let wounds = self
+            .personal_conflict
+            .as_ref()
+            .and_then(|owner| owner.wounds.as_ref())
+            .ok_or("wound treatment is disabled")?;
+        let offset = self.core.elapsed_millis().ok_or("no physical interval")?;
+        if offset >= self.core.physical.tick_millis()
+            || self.core.next_deadline(None)?.after_millis == 0
+        {
+            return Err("publish pending interval events before treatment".into());
+        }
+        let rest = self.blocked_with_rest(occupied);
+        let busy = rest.as_deref().unwrap_or(occupied);
+        let active: HashSet<_> = self
+            .core
+            .physical
+            .work()
+            .par_iter()
+            .filter(|row| row.phase == game_lot_runtime::Phase::Working)
+            .map(|row| row.job.worker)
+            .collect();
+        if choices.par_iter().any(|choice| {
+            busy.binary_search(&choice.person).is_ok()
+                || active.contains(&choice.person)
+                || self
+                    .core
+                    .people
+                    .binary_search_by_key(&choice.person, |row| row.id)
+                    .ok()
+                    .is_none_or(|index| self.core.people[index].health == 0)
+                || wounds
+                    .cases
+                    .binary_search_by_key(&choice.person, |row| row.person)
+                    .is_err()
+                || wounds
+                    .remedies
+                    .binary_search_by_key(&choice.good, |row| row.good)
+                    .is_err()
+        }) {
+            return Err(
+                "wound treatment requires an available living person, wound, and known remedy"
+                    .into(),
+            );
+        }
+        let actions: Vec<_> = choices
+            .par_iter()
+            .enumerate()
+            .map(|(index, choice)| {
+                let id = index as u64 + 1;
+                let remedy = wounds.remedies[wounds
+                    .remedies
+                    .binary_search_by_key(&choice.good, |row| row.good)
+                    .expect("known remedy")];
+                game_lots::Transaction {
+                    id,
+                    creations: vec![],
+                    movements: vec![game_lots::Movement {
+                        id,
+                        from: game_lots::Place::Person(choice.person),
+                        to: None,
+                        good: choice.good,
+                        quantity: remedy.quantity,
+                        item: None,
+                        batch: None,
+                    }],
+                }
+            })
+            .collect();
+        let physical = self
+            .core
+            .physical
+            .prepare_interval_consumption(&actions, self.core.seed)?;
+        let tools = self.stage_tools(&[], None, physical.item_updates())?;
+        let writing = self.stage_written_page_removals(physical.item_updates());
+        let mut outcomes = physical.transactions().to_vec();
+        outcomes.par_sort_unstable_by_key(|row| row.id);
+        let accepted: Vec<_> = choices
+            .par_iter()
+            .enumerate()
+            .filter_map(|(index, choice)| {
+                outcomes
+                    .binary_search_by_key(&(index as u64 + 1), |row| row.id)
+                    .ok()
+                    .filter(|&index| outcomes[index].accepted)
+                    .map(|_| (choice.person, choice.good))
+            })
+            .collect();
+        let next = wounds.treated(&accepted).map_err(str::to_owned)?;
+        self.core
+            .physical
+            .validate_interval_consumption(&physical)?;
+        let result = self.core.physical.commit_interval_consumption(physical)?;
+        if let Some(tools) = tools {
+            self.tool_wear = Some(tools);
+        }
+        if let Some(writing) = writing {
+            self.writing = Some(writing);
+        }
+        self.personal_conflict.as_mut().expect("wound owner").wounds = Some(next);
+        Ok(CoreTreatmentResults {
+            actors: choices.par_iter().map(|row| row.person).collect(),
+            outcomes: result.transactions,
+        })
+    }
+
     /// Commit explicit personal strikes and defenses after checking real reach,
     /// availability, and actor capability. A target's consent is not needed.
     pub fn strike_people(

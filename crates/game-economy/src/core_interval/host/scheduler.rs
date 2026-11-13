@@ -13,7 +13,8 @@ const SELECTED_DOMAINS: u64 = (1 << 1)
     | (1 << 10)
     | (1 << 12)
     | (1 << 13)
-    | (1 << 15);
+    | (1 << 15)
+    | (1 << 16);
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "phase", rename_all = "snake_case")]
@@ -117,6 +118,11 @@ pub enum DecisionPhase {
         remaining: u64,
     },
     ChosenAttack {
+        meal_people: Vec<u64>,
+        intents: Arc<Vec<CoreChoiceIntent>>,
+        remaining: u64,
+    },
+    ChosenWoundCare {
         meal_people: Vec<u64>,
         intents: Arc<Vec<CoreChoiceIntent>>,
         remaining: u64,
@@ -300,7 +306,8 @@ impl CoreSchedule {
             | DecisionPhase::ChosenSelfTreatment { remaining, .. }
             | DecisionPhase::ChosenMechanicalLoad { remaining, .. }
             | DecisionPhase::ChosenMechanicalDesign { remaining, .. }
-            | DecisionPhase::ChosenAttack { remaining, .. } => Some(*remaining),
+            | DecisionPhase::ChosenAttack { remaining, .. }
+            | DecisionPhase::ChosenWoundCare { remaining, .. } => Some(*remaining),
             DecisionPhase::ChosenConstruction { remaining, .. }
             | DecisionPhase::ChosenCarrying { remaining, .. }
             | DecisionPhase::ChosenMaintenance { remaining, .. }
@@ -331,6 +338,7 @@ impl CoreSchedule {
             DecisionPhase::ChosenMechanicalLoad { .. } => Some(12),
             DecisionPhase::ChosenMechanicalDesign { .. } => Some(13),
             DecisionPhase::ChosenAttack { .. } => Some(15),
+            DecisionPhase::ChosenWoundCare { .. } => Some(16),
             _ => None,
         };
         if current_domain
@@ -351,7 +359,8 @@ impl CoreSchedule {
         | DecisionPhase::ChosenSelfTreatment { intents, .. }
         | DecisionPhase::ChosenMechanicalLoad { intents, .. }
         | DecisionPhase::ChosenMechanicalDesign { intents, .. }
-        | DecisionPhase::ChosenAttack { intents, .. } = &self.phase
+        | DecisionPhase::ChosenAttack { intents, .. }
+        | DecisionPhase::ChosenWoundCare { intents, .. } = &self.phase
         {
             let Some(people) = &self.personal_choices else {
                 return Err("selected actions require personal choices".into());
@@ -436,7 +445,7 @@ impl CoreSchedule {
                                     || movement.to != Some(game_lots::Place::Person(intent.actor))
                                     || intent.key.action != u64::from(movement.good)
                             }
-                            (10, Some(movement), None, None) => {
+                            (10 | 16, Some(movement), None, None) => {
                                 intent.health_value.is_none_or(|value| value < 0)
                                     || intent.tool_damage.is_some() || intent.meal_value.is_some()
                                     || intent.experiment_value.is_some() || intent.second_movement.is_some()
@@ -516,6 +525,7 @@ impl CoreSchedule {
         | DecisionPhase::ChosenMechanicalLoad { meal_people, .. }
         | DecisionPhase::ChosenMechanicalDesign { meal_people, .. }
         | DecisionPhase::ChosenAttack { meal_people, .. }
+        | DecisionPhase::ChosenWoundCare { meal_people, .. }
         | DecisionPhase::ChosenConstruction { meal_people, .. }
         | DecisionPhase::ChosenCarrying { meal_people, .. }
         | DecisionPhase::ChosenMaintenance { meal_people, .. }
@@ -661,6 +671,7 @@ impl CoreHost {
                 || self.sites.is_some()
                 || self.autowork.is_some()
                 || self.mechanics.is_some()
+                || self.personal_conflict.is_some()
                 || self.tool_wear.is_some()
                 || self.food_search.is_some()
                 || self
@@ -1460,6 +1471,9 @@ impl CoreHost {
                         let has_attacks = intents
                             .par_iter()
                             .any(|intent| intent.key.domain == personal_choice::PERSONAL_ATTACK);
+                        let has_wound_care = intents
+                            .par_iter()
+                            .any(|intent| intent.key.domain == personal_choice::WOUND_CARE);
                         let random = game_genetics::random(self.core.seed, 0x63686f696365, round);
                         let first = if has_work {
                             random % 4
@@ -1476,6 +1490,7 @@ impl CoreHost {
                             || has_mechanical_loads
                             || has_mechanical_designs
                             || has_attacks
+                            || has_wound_care
                         {
                             let mut remaining = 0;
                             if has_experiments {
@@ -1501,6 +1516,9 @@ impl CoreHost {
                             }
                             if has_attacks {
                                 remaining |= 1 << 15;
+                            }
+                            if has_wound_care {
+                                remaining |= 1 << 16;
                             }
                             if self.construction.is_some() {
                                 remaining |= 1 << 1;
@@ -1563,7 +1581,7 @@ impl CoreHost {
                         remaining,
                     } => {
                         let round = self.core.physical.tick().rotate_left(21) ^ offset;
-                        let domain = [1u32, 2, 3, 4, 6, 7, 8, 9, 10, 12, 13, 15]
+                        let domain = [1u32, 2, 3, 4, 6, 7, 8, 9, 10, 12, 13, 15, 16]
                             .into_iter()
                             .filter(|domain| remaining & (1u64 << domain) != 0)
                             .min_by_key(|domain| {
@@ -1648,8 +1666,70 @@ impl CoreHost {
                                 intents,
                                 remaining,
                             },
+                            16 => DecisionPhase::ChosenWoundCare {
+                                meal_people,
+                                intents,
+                                remaining,
+                            },
                             _ => unreachable!("validated domain"),
                         };
+                    }
+                    DecisionPhase::ChosenWoundCare {
+                        mut meal_people,
+                        intents,
+                        remaining,
+                    } => {
+                        let mut busy = blocked.to_vec();
+                        busy.extend(meal_people.iter().copied());
+                        busy.par_sort_unstable();
+                        busy.dedup();
+                        let people = schedule.personal_choices.as_ref().expect("choice profile");
+                        let (blocked_choice, mut choices) = attempt!('run, self.choice_blocked(&busy, people, &intents, personal_choice::WOUND_CARE));
+                        let selected: Vec<_> = intents
+                            .par_iter()
+                            .filter(|intent| {
+                                intent.key.domain == personal_choice::WOUND_CARE
+                                    && blocked_choice.binary_search(&intent.actor).is_err()
+                            })
+                            .map(|intent| WoundTreatment {
+                                person: intent.actor,
+                                good: intent.movement.expect("validated wound care").good,
+                            })
+                            .collect();
+                        let result = attempt!('run, self.treat_wounds(&selected, &busy));
+                        let mut outcomes = result.outcomes;
+                        outcomes.par_sort_unstable_by_key(|row| row.id);
+                        choices.par_extend(selected.par_iter().enumerate().map(
+                            |(index, choice)| {
+                                CoreChoiceEvent {
+                                    tick: self.core.physical.tick(),
+                                    offset_millis: offset,
+                                    actor: choice.person,
+                                    key: personal_choice::selected_key(&intents, choice.person),
+                                    outcome: if outcomes
+                                        .binary_search_by_key(&(index as u64 + 1), |row| row.id)
+                                        .ok()
+                                        .is_some_and(|i| outcomes[i].accepted)
+                                    {
+                                        CoreChoiceOutcome::Accepted
+                                    } else {
+                                        CoreChoiceOutcome::Denied
+                                    },
+                                }
+                            },
+                        ));
+                        meal_people.par_extend(selected.par_iter().map(|choice| choice.person));
+                        meal_people.par_sort_unstable();
+                        meal_people.dedup();
+                        if !outcomes.is_empty() {
+                            run.events.push(CoreRunEvent::Treatments(outcomes));
+                        }
+                        if !choices.is_empty() {
+                            choices.par_sort_unstable_by_key(|row| row.actor);
+                            run.events.push(CoreRunEvent::PersonalChoices(choices));
+                        }
+                        self.schedule.as_mut().expect("active schedule").phase =
+                            self.after_selected_batch(meal_people, intents, remaining);
                     }
                     DecisionPhase::ChosenAttack {
                         mut meal_people,

@@ -18,6 +18,7 @@ pub(super) const MECHANICAL_LOAD: u32 = 12;
 pub(super) const MECHANICAL_DESIGN: u32 = 13;
 pub(super) const MECHANICAL_WATCH: u32 = 14;
 pub(super) const PERSONAL_ATTACK: u32 = 15;
+pub(super) const WOUND_CARE: u32 = 16;
 
 fn index_by_person<T>(rows: &[T], id: u64, key: impl Fn(&T) -> u64) -> Option<usize> {
     rows.first()
@@ -1373,6 +1374,70 @@ impl CoreHost {
         intents.par_extend(mechanical_designs()?);
         intents.par_extend(mechanical_watching()?);
         intents.par_extend(personal_attacks()?);
+        if domain.is_none_or(|domain| domain == WOUND_CARE)
+            && self
+                .schedule
+                .as_ref()
+                .and_then(|schedule| schedule.personal_choices.as_ref())
+                .is_some_and(|people| {
+                    people.par_iter().any(|person| {
+                        person
+                            .preferences
+                            .binary_search_by_key(&WOUND_CARE, |row| row.domain)
+                            .ok()
+                            .is_some_and(|index| person.preferences[index].enabled)
+                    })
+                })
+        {
+            let owner = self
+                .personal_conflict
+                .as_ref()
+                .and_then(|owner| owner.wounds.as_ref());
+            let care: Vec<_> = self
+                .preview_wound_care(&busy)?
+                .into_par_iter()
+                .map(|choice| {
+                    let wounds = owner.expect("care requires wounds");
+                    let remedy = wounds.remedies[wounds
+                        .remedies
+                        .binary_search_by_key(&choice.good, |row| row.good)
+                        .expect("known remedy")];
+                    let case = &wounds.cases[wounds
+                        .cases
+                        .binary_search_by_key(&choice.person, |row| row.person)
+                        .expect("known wound")];
+                    CoreChoiceIntent {
+                        actor: choice.person,
+                        key: Key {
+                            domain: WOUND_CARE,
+                            action: u64::from(choice.good),
+                        },
+                        movement: Some(game_lots::Movement {
+                            id: 0,
+                            from: game_lots::Place::Person(choice.person),
+                            to: None,
+                            good: choice.good,
+                            quantity: remedy.quantity,
+                            item: None,
+                            batch: None,
+                        }),
+                        strike: None,
+                        watch: None,
+                        assembly: None,
+                        mechanical_load: None,
+                        cultivation: None,
+                        second_movement: None,
+                        work: None,
+                        experiment: None,
+                        experiment_value: None,
+                        meal_value: None,
+                        tool_damage: None,
+                        health_value: Some(i64::from(case.severity)),
+                    }
+                })
+                .collect();
+            intents.par_extend(care);
+        }
         if intents
             .par_windows(2)
             .any(|rows| (rows[0].actor, rows[0].key) > (rows[1].actor, rows[1].key))
