@@ -9,6 +9,18 @@ vocabulary is inherited, and a listener can misunderstand an unfamiliar form.
 Updates are prepared from an immutable opening view in parallel and committed
 as a sorted, deterministic batch. Events preserve the heard and adopted forms.
 
+`prepare_ungrounded` stages explicitly selected assertions whose referents are
+not jointly observable. It lets the speaker use or coin a personal sound form
+and records the listener's interpretation from their opening vocabulary, but
+never teaches the listener the speaker's intended meaning. The caller supplies
+actual disjoint contact and must treat the event's intended meaning as private
+to the speaker. This primitive is not yet wired into mechanical testimony.
+
+The ignored `parallel_ungrounded_utterance_benchmark` staged 100,000 proposals
+in median times of 52.5, 32.1, 25.5 and 21.6 ms at one, two, four and six
+workers. Results matched across worker counts; this is an isolated synthetic
+workload with sublinear scaling.
+
 The interval host supplies the shared location and objects each participant
 personally carries. An optional personal topic policy lets each participant
 propose a preferred topic or remain silent; choosing a carried object models

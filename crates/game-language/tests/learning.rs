@@ -4,6 +4,140 @@ use game_language::{
 };
 use std::collections::HashSet;
 
+#[test]
+fn ungrounded_claims_preserve_private_interpretation_without_teaching() {
+    use game_language::UngroundedUtterance;
+    fn run(workers: usize, listener: &str) -> Language {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut state = language();
+                state
+                    .configure_topics(&[
+                        (
+                            1,
+                            TopicPolicy {
+                                idle: 0,
+                                act_on_tie: false,
+                                preferences: vec![TopicPreference {
+                                    meaning: Meaning::Object(1),
+                                    enabled: true,
+                                    value: 10,
+                                }],
+                            },
+                        ),
+                        (
+                            2,
+                            TopicPolicy {
+                                idle: 0,
+                                act_on_tie: false,
+                                preferences: vec![],
+                            },
+                        ),
+                    ])
+                    .unwrap();
+                state.minds[0].initiative = 1000;
+                state.minds[0].words.push(Word {
+                    meaning: Meaning::Object(1),
+                    sounds: vec![0, 1],
+                });
+                state.minds[1].adoption = 1000;
+                if listener == "different" || listener == "ambiguous" {
+                    state.minds[1].words.push(Word {
+                        meaning: Meaning::Object(2),
+                        sounds: vec![0, 1],
+                    });
+                }
+                if listener == "ambiguous" {
+                    state.minds[1].words.push(Word {
+                        meaning: Meaning::Object(3),
+                        sounds: vec![0, 1],
+                    });
+                }
+                let opening = state.minds[1].words.clone();
+                let next = state
+                    .prepare_ungrounded(
+                        &[UngroundedUtterance {
+                            speaker: 1,
+                            listener: 2,
+                            meaning: Meaning::Object(1),
+                        }],
+                        7,
+                        1,
+                    )
+                    .unwrap();
+                assert_eq!(next.minds[1].words, opening);
+                assert_eq!(next.events.len(), 1);
+                assert!(!next.events[0].learned);
+                assert_eq!(
+                    next.events[0].interpreted,
+                    if listener == "different" {
+                        Some(Meaning::Object(2))
+                    } else {
+                        None
+                    }
+                );
+                assert_eq!(state.minds[1].words, opening);
+                assert!(next.validate(&HashSet::from([1, 2]), 1).is_ok());
+                next
+            })
+    }
+    for listener in ["unknown", "different", "ambiguous"] {
+        assert_eq!(run(1, listener), run(4, listener));
+    }
+}
+
+#[test]
+fn ungrounded_speakers_can_coin_or_refuse_without_teaching_listeners() {
+    use game_language::UngroundedUtterance;
+    let mut state = language();
+    state
+        .configure_topics(&[
+            (
+                1,
+                TopicPolicy {
+                    idle: 0,
+                    act_on_tie: false,
+                    preferences: vec![TopicPreference {
+                        meaning: Meaning::Object(1),
+                        enabled: true,
+                        value: 10,
+                    }],
+                },
+            ),
+            (
+                2,
+                TopicPolicy {
+                    idle: 0,
+                    act_on_tie: false,
+                    preferences: vec![],
+                },
+            ),
+        ])
+        .unwrap();
+    state.minds[0].initiative = 1000;
+    state.minds[1].adoption = 1000;
+    let utterance = UngroundedUtterance {
+        speaker: 1,
+        listener: 2,
+        meaning: Meaning::Object(1),
+    };
+    let next = state.prepare_ungrounded(&[utterance], 7, 1).unwrap();
+    assert_eq!(next.minds[0].words.len(), 1);
+    assert!(next.minds[1].words.is_empty());
+    assert_eq!(next.events[0].interpreted, None);
+    state.minds[0].speak = false;
+    assert!(
+        state
+            .prepare_ungrounded(&[utterance], 7, 1)
+            .unwrap()
+            .events
+            .is_empty()
+    );
+}
+
 fn language() -> Language {
     Language {
         rules: Rules {
@@ -786,6 +920,45 @@ fn parallel_grounded_conversation_benchmark() {
             "{workers} workers: {:?} median for {} encounters",
             times[1],
             meetings.len()
+        );
+    }
+}
+
+#[test]
+#[ignore = "ungrounded utterance scaling benchmark"]
+fn parallel_ungrounded_utterance_benchmark() {
+    use game_language::UngroundedUtterance;
+    let utterances: Vec<_> = (0..100_000)
+        .map(|n| UngroundedUtterance {
+            speaker: 2 * n + 1,
+            listener: 2 * n + 2,
+            meaning: Meaning::Object((n % 64 + 1) as u32),
+        })
+        .collect();
+    let mut reference = None;
+    for workers in [1, 2, 4, 6] {
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap();
+        let mut times = Vec::new();
+        for _ in 0..3 {
+            let start = std::time::Instant::now();
+            let result =
+                pool.install(|| language().prepare_ungrounded(&utterances, 27, 1).unwrap());
+            times.push(start.elapsed());
+            assert!(result.events.iter().all(|event| !event.learned));
+            if let Some(expected) = &reference {
+                assert_eq!(&result, expected);
+            } else {
+                reference = Some(result);
+            }
+        }
+        times.sort_unstable();
+        eprintln!(
+            "{workers} workers: {:?} median for {} ungrounded utterances",
+            times[1],
+            utterances.len()
         );
     }
 }

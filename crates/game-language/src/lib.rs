@@ -204,6 +204,15 @@ pub struct Meeting {
     pub meaning: Meaning,
 }
 
+/// A person-selected assertion whose intended referent is not jointly grounded.
+/// The caller must establish an actual contact and the person's intent to speak.
+#[derive(Clone, Copy, Debug)]
+pub struct UngroundedUtterance {
+    pub speaker: u64,
+    pub listener: u64,
+    pub meaning: Meaning,
+}
+
 /// The shared place and things each participant could choose to demonstrate.
 #[derive(Clone, Debug)]
 pub struct GroundedMeeting {
@@ -436,7 +445,7 @@ impl Language {
             })
             .collect();
         let (meetings, speakers): (Vec<_>, Vec<_>) = selected.into_par_iter().unzip();
-        self.prepare_internal(&meetings, Some(&speakers), seed, tick, affinity)
+        self.prepare_internal(&meetings, Some(&speakers), seed, tick, affinity, true)
     }
 
     pub fn validate(&self, people: &HashSet<u64>, now: u64) -> Result<(), &'static str> {
@@ -515,7 +524,29 @@ impl Language {
         seed: u64,
         tick: u64,
     ) -> Result<Self, &'static str> {
-        self.prepare_internal(meetings, None, seed, tick, &|_, _| 0)
+        self.prepare_internal(meetings, None, seed, tick, &|_, _| 0, true)
+    }
+
+    /// Stage assertions from opening vocabularies without teaching a listener
+    /// the speaker's private intended meaning. A listener may hear an unknown,
+    /// ambiguous, or differently understood form. Speakers can still coin a
+    /// personal form; the listener's mappings are never altered by this call.
+    pub fn prepare_ungrounded(
+        &self,
+        utterances: &[UngroundedUtterance],
+        seed: u64,
+        tick: u64,
+    ) -> Result<Self, &'static str> {
+        let meetings: Vec<_> = utterances
+            .par_iter()
+            .map(|row| Meeting {
+                a: row.speaker,
+                b: row.listener,
+                meaning: row.meaning,
+            })
+            .collect();
+        let speakers: Vec<_> = utterances.par_iter().map(|row| Some(row.speaker)).collect();
+        self.prepare_internal(&meetings, Some(&speakers), seed, tick, &|_, _| 0, false)
     }
 
     fn prepare_internal<F: Fn(u64, u64) -> i32 + Sync>(
@@ -525,6 +556,7 @@ impl Language {
         seed: u64,
         tick: u64,
         affinity: &F,
+        grounded: bool,
     ) -> Result<Self, &'static str> {
         if self.rules.sounds.is_empty()
             || self.rules.sounds.len() > 256
@@ -717,7 +749,8 @@ impl Language {
                         };
                     }
                 }
-                let learned = target.hear
+                let learned = grounded
+                    && target.hear
                     && target.learn
                     && random(seed ^ tick.rotate_left(23) ^ listener ^ speaker) % 1000
                         < u64::from(target.adoption)
