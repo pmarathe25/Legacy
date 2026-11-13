@@ -86,6 +86,8 @@ pub struct CorePersonalConflict {
     pub capabilities: Vec<StrikeCapability>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub reactions: Vec<PersonalStrikeReaction>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wounds: Option<game_personal_conflict::wounds::Wounds>,
     /// Physical deaths awaiting the next family boundary.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub pending_deaths: Vec<u64>,
@@ -170,6 +172,11 @@ impl CorePersonalConflict {
         {
             return Err("invalid personal conflict state".into());
         }
+        if let Some(wounds) = &self.wounds {
+            wounds
+                .validate(core.physical.tick(), &exists)
+                .map_err(str::to_owned)?;
+        }
         Ok(())
     }
 }
@@ -228,7 +235,12 @@ impl CoreHost {
                 .capabilities
                 .binary_search_by_key(&strike.actor, |row| row.person)
                 .ok()
-                .is_some_and(|index| owner.capabilities[index].max_force >= strike.force);
+                .is_some_and(|index| {
+                    let maximum = owner.capabilities[index].max_force;
+                    owner.wounds.as_ref().map_or(maximum, |wounds| {
+                        wounds.available_force(strike.actor, maximum)
+                    }) >= strike.force
+                });
             !capable
                 || occupied.binary_search(&strike.actor).is_ok()
                 || active.contains(&strike.actor)
@@ -318,6 +330,20 @@ impl CoreHost {
             })
             .collect();
         let changed = harm.par_iter().any(|row| row.before != row.after);
+        let wounds = owner
+            .wounds
+            .as_ref()
+            .map(|wounds| {
+                let injuries: Vec<_> = harm
+                    .par_iter()
+                    .map(|row| game_personal_conflict::wounds::Injury {
+                        person: row.target,
+                        harm: row.before - row.after,
+                    })
+                    .collect();
+                wounds.injured(&injuries, tick).map_err(str::to_owned)
+            })
+            .transpose()?;
         let generation = if changed {
             Some(
                 self.core
@@ -385,6 +411,9 @@ impl CoreHost {
         }
         let owner = self.personal_conflict.as_mut().expect("conflict checked");
         owner.pending_deaths = pending_deaths;
+        if let Some(wounds) = wounds {
+            owner.wounds = Some(wounds);
+        }
         owner.events = resolved.events;
         owner.harm = harm.clone();
         owner.last_tick = Some(tick);
@@ -434,7 +463,12 @@ impl CoreHost {
                     .capabilities
                     .binary_search_by_key(&policy.actor, |row| row.person)
                     .ok()
-                    .is_some_and(|index| owner.capabilities[index].max_force >= policy.force);
+                    .is_some_and(|index| {
+                        let maximum = owner.capabilities[index].max_force;
+                        owner.wounds.as_ref().map_or(maximum, |wounds| {
+                            wounds.available_force(policy.actor, maximum)
+                        }) >= policy.force
+                    });
                 policy.willing
                     && capable
                     && occupied.binary_search(&policy.actor).is_err()

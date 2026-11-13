@@ -2398,6 +2398,16 @@ impl CoreHost {
                 &mut draft.people.people,
             );
         }
+        let next_wounds = self
+            .personal_conflict
+            .as_ref()
+            .and_then(|owner| owner.wounds.as_ref())
+            .map(|wounds| {
+                wounds
+                    .injured(&[], draft.events().tick)
+                    .map_err(str::to_owned)
+            })
+            .transpose()?;
         let skills = self.stage_skills(&draft.events().finished, draft.events().tick);
         let family = self.stage_family(&mut draft)?;
         if family.is_none() {
@@ -2834,6 +2844,9 @@ impl CoreHost {
         } else {
             Vec::new()
         };
+        if let Some(wounds) = next_wounds {
+            self.personal_conflict.as_mut().expect("wound owner").wounds = Some(wounds);
+        }
         if let Some(health) = birth_health {
             self.health = Some(health);
         }

@@ -2,6 +2,8 @@
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
+pub mod wounds;
+
 /// An actual choice to strike; a target's consent is not required.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

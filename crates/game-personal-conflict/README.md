@@ -28,5 +28,14 @@ person = 2
 as_target = { penetrated = { affinity = 4 }, blocked = { fear = 2 } }
 ```
 
-This is an initial slice: tactical positioning, equipment, injuries and
-recovery, intervention, and richer ongoing conflict remain unimplemented.
+An optional `personal_conflict.wounds` owner records actual health lost to each
+target as one accumulating physical wound. A later injury extends its recovery;
+ordinary boundary passage removes it when its configured recovery time arrives.
+Simultaneous attackers are not assigned individual shares of that injury. An
+optional `force_loss_per_severity` physically limits an injured person's strike
+force; it defaults to zero. Other capabilities and treatment are not yet modeled.
+`content/scenarios/economy-core-wounds.toml` demonstrates these settings in the
+interval host.
+
+Tactical positioning, equipment, intervention, and richer ongoing conflict
+remain unimplemented.

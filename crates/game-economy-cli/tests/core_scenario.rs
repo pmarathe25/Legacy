@@ -693,6 +693,106 @@ fn strike_reactions_follow_each_person_and_the_physical_outcome() {
 }
 
 #[test]
+fn physical_wounds_record_actual_group_harm_and_recover_after_reload() {
+    use game_economy::core_interval::{CoreHost, PersonalAttackPolicy, PersonalStrike};
+    fn run(workers: usize) -> serde_json::Value {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let root = root();
+                let state = game_economy_cli::core_scenario(
+                    &root.join("content/scenarios/economy-core-wounds.toml"),
+                    &root.join("content"),
+                )
+                .unwrap()
+                .snapshot();
+                let mut host = CoreHost::resume(state).unwrap();
+                assert_eq!(host.advance_continuous(1, &[]).unwrap().failure, None);
+                let before = host.snapshot();
+                let strike = PersonalStrike {
+                    actor: 2,
+                    target: 1,
+                    force: 2,
+                };
+                assert!(host.strike_people(&[strike], &[], &[]).is_err());
+                assert_eq!(host.snapshot(), before);
+                let mut state = host.snapshot();
+                let wounds = state
+                    .personal_conflict
+                    .as_ref()
+                    .unwrap()
+                    .wounds
+                    .as_ref()
+                    .unwrap();
+                assert_eq!(wounds.cases.len(), 1);
+                assert_eq!(wounds.cases[0].person, 2);
+                assert_eq!(wounds.cases[0].severity, 9);
+                assert_eq!(wounds.cases[0].heals_at, 2);
+                for attack in &mut state.personal_conflict.as_mut().unwrap().attacks {
+                    attack.willing = false;
+                }
+                state
+                    .personal_conflict
+                    .as_mut()
+                    .unwrap()
+                    .attacks
+                    .push(PersonalAttackPolicy {
+                        id: 2,
+                        actor: 2,
+                        target: 1,
+                        force: 2,
+                        willing: true,
+                        value: 10,
+                    });
+                state
+                    .personal_conflict
+                    .as_mut()
+                    .unwrap()
+                    .attacks
+                    .sort_unstable_by_key(|row| (row.actor, row.id));
+                let mut host = CoreHost::resume(
+                    serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap(),
+                )
+                .unwrap();
+                assert!(
+                    !host
+                        .preview_personal_attacks(&[])
+                        .unwrap()
+                        .iter()
+                        .any(|row| row.actor == 2)
+                );
+                assert_eq!(
+                    host.advance_continuous(1_799_999, &[]).unwrap().failure,
+                    None
+                );
+                let state = host.snapshot();
+                assert!(
+                    state
+                        .personal_conflict
+                        .as_ref()
+                        .unwrap()
+                        .wounds
+                        .as_ref()
+                        .unwrap()
+                        .cases
+                        .is_empty()
+                );
+                assert!(
+                    host.preview_personal_attacks(&[])
+                        .unwrap()
+                        .iter()
+                        .any(|row| row.actor == 2)
+                );
+                assert!(host.strike_people(&[strike], &[], &[]).is_ok());
+                serde_json::to_value(host.snapshot()).unwrap()
+            })
+    }
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
 fn saved_strike_intentions_are_not_retargeted() {
     use game_economy::core_interval::{CoreChoiceOutcome, CoreHost, CoreRunEvent, DecisionPhase};
     let root = root();
