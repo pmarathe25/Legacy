@@ -113,6 +113,9 @@ and 50,000 watch choices. Median times at one, two, four and six workers were
 watchers selected the same target and times were 270.3, 165.7, 139.5 and
 121.5 ms. States and observations matched across worker counts. These synthetic
 workloads scale sublinearly, at about 2.1–2.2 times faster on six workers.
+A separate attempt to avoid repeated validation sampled 260.9, 160.4, 134.2
+and 125.3 ms for independent pairs; it did not establish an improvement and
+was not retained.
 
 With `LEGACY_MECHANICS_WITNESSES=1 LEGACY_MECHANISMS=50000`, the ignored
 `independent_physical_mechanics_benchmark` measured 50,000 experiments and

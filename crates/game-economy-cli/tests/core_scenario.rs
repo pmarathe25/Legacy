@@ -566,6 +566,55 @@ fn saved_mechanical_load_intention_never_substitutes_changed_parameters() {
 }
 
 #[test]
+fn scheduled_watching_matches_explicit_validated_execution() {
+    use game_economy::core_interval::{CoreHost, MechanicalWitnessRequest};
+    let root = root();
+    let initial = game_economy_cli::core_scenario(
+        &root.join("content/scenarios/economy-core-mechanical-watching.toml"),
+        &root.join("content"),
+    )
+    .unwrap()
+    .snapshot();
+    for overload in [false, true] {
+        let mut state = initial.clone();
+        if overload {
+            state.mechanics.as_mut().unwrap().policies[0]
+                .experiment
+                .input_force = 1001;
+            state.mechanics.as_mut().unwrap().capabilities[0].max_force = 2000;
+        }
+        let mut scheduled = CoreHost::resume(state.clone()).unwrap();
+        let chosen = scheduled.preview_personal_choices(&[]).unwrap().0;
+        let experiment = chosen
+            .iter()
+            .find(|row| row.actor == 1)
+            .unwrap()
+            .experiment
+            .unwrap();
+        let mut explicit = CoreHost::resume(state).unwrap();
+        let observations = explicit
+            .experiment_mechanics_witnessed(
+                &[experiment],
+                &[MechanicalWitnessRequest {
+                    observer: 2,
+                    actor: 1,
+                }],
+                &[],
+            )
+            .unwrap();
+        assert_eq!(
+            observations[0].outcome == game_mechanics::Outcome::Broken,
+            overload
+        );
+        assert_eq!(scheduled.advance_continuous(1, &[]).unwrap().failure, None);
+        assert_eq!(
+            scheduled.snapshot().mechanics,
+            explicit.snapshot().mechanics
+        );
+    }
+}
+
+#[test]
 fn saved_watching_intention_becomes_stale_when_willingness_changes() {
     use game_economy::core_interval::{CoreChoiceOutcome, CoreHost, CoreRunEvent, DecisionPhase};
     let root = root();
