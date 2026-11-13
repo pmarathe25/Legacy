@@ -86,8 +86,10 @@ preference determines whether the listener retains the bounded claim, and
 `misrepresent` can replace the reported outcome. Testimony records its speaker
 and remains distinct from firsthand memory. A listener may opt to let it
 affect their own reaction when they have no firsthand observation of that
-apparatus. This slice does not yet require a shared language or model pressure
-to disclose.
+apparatus. An unwilling speaker can also disclose when their own configured
+fear or obligation threshold toward that listener is met; neither response is
+imposed on people without such a threshold. This slice does not yet require a
+shared language.
 
 For example, a `[[mechanics.memories]]` entry may contain
 `communication = { share = true, receive = true, use_testimony = false, misrepresent = "stalled" }`.
@@ -99,6 +101,9 @@ With `LEGACY_MECHANICAL_TESTIMONY=1 LEGACY_PEOPLE=50000`, the ignored
 per meeting. Samples at one, two, four and six workers took 55.4, 34.2, 21.7
 and 19.9 ms, with matching fingerprints. Setup and snapshot hashing were
 excluded; these are synthetic, sublinear measurements.
+With `LEGACY_TESTIMONY_PRESSURE=1`, both speakers respond to their own directed
+fear of the listener. A separate run took 69.6, 34.1, 21.7 and 19.6 ms at the
+same worker counts, with matching fingerprints.
 
 The ignored `mechanical_design_scaling` benchmark measured 100,000 complete
 scheduled design and assembly choices. Median times at one, two, four and six

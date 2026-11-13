@@ -7265,6 +7265,8 @@ fn core_host_social_benchmark() {
     let literacy_mode = std::env::var_os("LEGACY_LITERACY_STUDY").is_some();
     let taking_inquiries = std::env::var_os("LEGACY_TAKING_INQUIRIES").is_some();
     let mechanical_testimony = std::env::var_os("LEGACY_MECHANICAL_TESTIMONY").is_some();
+    let testimony_pressure = std::env::var_os("LEGACY_TESTIMONY_PRESSURE").is_some();
+    assert!(!testimony_pressure || mechanical_testimony);
     let taking_reports = std::env::var_os("LEGACY_TAKING_REPORTS").is_some() || taking_inquiries;
     let treatment = std::env::var_os("LEGACY_TREATMENT").is_some();
     let disease = std::env::var_os("LEGACY_DISEASE").is_some() || treatment;
@@ -7473,7 +7475,7 @@ fn core_host_social_benchmark() {
             if mechanical_testimony {
                 let memories: Vec<_> = (2..=count).map(|person| serde_json::json!({
                     "person":person,"capacity":4,"retain":true,
-                    "communication":{"share":true,"receive":true},
+                    "communication":{"share":!testimony_pressure,"receive":true,"share_fear_at_least":if testimony_pressure {Some(1)} else {None}},
                     "observations":[{"tick":0,"actor":person,"apparatus":1,"output_part":1,
                         "input_force":100,"input_distance":100,"load_force":1,"outcome":"moved",
                         "available_force":100,"travel":100,"delivered_work":100,"broken_parts":[]}]
@@ -7483,6 +7485,16 @@ fn core_host_social_benchmark() {
                         "apparatus":[{"id":1,"parts":[{"id":1,"component":1,"parent":null,"share_per_mille":1000}]}]},
                     "materials":[{"component":1,"good":1}],"capabilities":[],"memories":memories,"observations":[]
                 })).unwrap());
+                if testimony_pressure {
+                    let mut probe = CoreHost::begin(snapshot.clone(), &[(1, 1)]).unwrap();
+                    let pairs = probe.meet_autonomously(&[]).unwrap();
+                    let mut records: Vec<_> = pairs.iter().flat_map(|pair| [(pair.a, pair.b), (pair.b, pair.a)]).collect();
+                    records.sort_unstable();
+                    let records: Vec<_> = records.into_iter().map(|(observer, target)| serde_json::json!({"observer":observer,"target":target,"trust":0,"fear":1})).collect();
+                    snapshot.opinions = Some(serde_json::from_value(serde_json::json!({
+                        "rules":{"minimum":-10,"maximum":10,"initial":0,"fulfilled_gain":1,"default_loss":1,"affinity":{"limit":10}},"records":records
+                    })).unwrap());
+                }
             }
             if literacy_mode {
                 let mut probe = CoreHost::begin(snapshot.clone(), &[(1, 1)]).unwrap();

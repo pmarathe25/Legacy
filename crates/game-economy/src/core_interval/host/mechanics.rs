@@ -152,6 +152,10 @@ pub struct MechanicalReactions {
 pub struct MechanicalCommunication {
     #[serde(default)]
     pub share: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub share_fear_at_least: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub share_obligation_at_least: Option<u64>,
     #[serde(default)]
     pub receive: bool,
     #[serde(default)]
@@ -344,6 +348,10 @@ impl CoreMechanics {
                     || !(1..=64).contains(&memory.capacity)
                     || memory.observations.len() > memory.capacity
                     || memory.testimony.len() > memory.capacity
+                    || memory.communication.is_some_and(|policy| {
+                        policy.share_fear_at_least == Some(0)
+                            || policy.share_obligation_at_least == Some(0)
+                    })
                     || core
                         .people
                         .binary_search_by_key(&memory.person, |person| person.id)
@@ -516,13 +524,24 @@ impl CoreHost {
     ) -> Option<Vec<MechanicalMemory>> {
         let owner = self.mechanics.as_ref()?;
         if meetings.is_empty()
-            || !owner
-                .memories
-                .par_iter()
-                .any(|memory| memory.communication.is_some_and(|policy| policy.share))
+            || !owner.memories.par_iter().any(|memory| {
+                memory.communication.is_some_and(|policy| {
+                    policy.share
+                        || policy.share_fear_at_least.is_some()
+                        || policy.share_obligation_at_least.is_some()
+                })
+            })
         {
             return None;
         }
+        let pressured = owner.memories.par_iter().any(|memory| {
+            memory.communication.is_some_and(|policy| {
+                policy.share_fear_at_least.is_some() || policy.share_obligation_at_least.is_some()
+            })
+        });
+        let feelings = pressured
+            .then(|| self.opinions.as_ref().map(game_opinions::Opinions::index))
+            .flatten();
         let mut reports: Vec<_> = meetings
             .par_iter()
             .flat_map_iter(|meeting| [(meeting.a, meeting.b), (meeting.b, meeting.a)])
@@ -538,7 +557,20 @@ impl CoreHost {
                 }
                 let source = indexed(&owner.memories, speaker, |memory| memory.person)?;
                 let destination = indexed(&owner.memories, recipient, |memory| memory.person)?;
-                let policy = source.communication.filter(|policy| policy.share)?;
+                let policy = source.communication?;
+                let (fear, obligation) = feelings
+                    .as_ref()
+                    .map_or((0, 0), |index| index.feelings(speaker, recipient));
+                if !policy.share
+                    && !policy
+                        .share_fear_at_least
+                        .is_some_and(|limit| fear >= limit)
+                    && !policy
+                        .share_obligation_at_least
+                        .is_some_and(|limit| obligation >= limit)
+                {
+                    return None;
+                }
                 if !destination
                     .communication
                     .is_some_and(|policy| policy.receive)

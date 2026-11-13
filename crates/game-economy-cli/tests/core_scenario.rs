@@ -568,7 +568,13 @@ fn saved_mechanical_load_intention_never_substitutes_changed_parameters() {
 #[test]
 fn mechanical_testimony_follows_individual_choices_and_can_be_false() {
     use game_economy::core_interval::{CoreHost, CoreSocial, MechanicalCommunication};
-    fn run(workers: usize, share: bool, receive: bool, lie: bool) -> serde_json::Value {
+    fn run(
+        workers: usize,
+        share: bool,
+        receive: bool,
+        lie: bool,
+        pressure: Option<(u64, u64)>,
+    ) -> serde_json::Value {
         rayon::ThreadPoolBuilder::new()
             .num_threads(workers)
             .build()
@@ -627,23 +633,34 @@ fn mechanical_testimony_follows_individual_choices_and_can_be_false() {
                 let memories = &mut state.mechanics.as_mut().unwrap().memories;
                 memories[0].communication = Some(MechanicalCommunication {
                     share,
+                    share_fear_at_least: pressure.map(|_| 1),
+                    share_obligation_at_least: pressure.map(|_| 1),
                     receive: false,
                     use_testimony: false,
                     misrepresent: lie.then_some(game_mechanics::Outcome::Stalled),
                 });
                 memories[1].communication = Some(MechanicalCommunication {
                     share: false,
+                    share_fear_at_least: None,
+                    share_obligation_at_least: None,
                     receive,
                     use_testimony: false,
                     misrepresent: None,
                 });
+                if let Some((fear, obligation)) = pressure {
+                    state.opinions = Some(serde_json::from_value(serde_json::json!({
+                        "rules":{"minimum":-10,"maximum":10,"initial":0,"fulfilled_gain":1,"default_loss":1,"affinity":{"limit":10}},
+                        "records":[{"observer":1,"target":2,"trust":0,"fear":fear,"obligation":obligation}]
+                    })).unwrap());
+                }
                 let mut host = CoreHost::resume(state).unwrap();
                 assert_eq!(host.meet_autonomously(&[]).unwrap().len(), 1);
                 let state = host.snapshot();
                 let memories = &state.mechanics.as_ref().unwrap().memories;
-                assert_eq!(memories[1].testimony.len(), usize::from(share && receive));
+                let sent = receive && (share || pressure.is_some_and(|(fear, obligation)| fear > 0 || obligation > 0));
+                assert_eq!(memories[1].testimony.len(), usize::from(sent));
                 assert!(memories[1].observations.is_empty());
-                if share && receive {
+                if sent {
                     assert_eq!(memories[1].testimony[0].speaker, 1);
                     assert_eq!(
                         memories[1].testimony[0].claimed_outcome,
@@ -714,13 +731,20 @@ fn mechanical_testimony_follows_individual_choices_and_can_be_false() {
                 serde_json::to_value(state).unwrap()
             })
     }
-    for (share, receive, lie) in [
-        (true, true, false),
-        (true, true, true),
-        (false, true, false),
-        (true, false, false),
+    for (share, receive, lie, pressure) in [
+        (true, true, false, None),
+        (true, true, true, None),
+        (false, true, false, None),
+        (true, false, false, None),
+        (false, true, false, Some((0, 0))),
+        (false, true, false, Some((2, 0))),
+        (false, true, true, Some((2, 0))),
+        (false, true, false, Some((0, 2))),
     ] {
-        assert_eq!(run(1, share, receive, lie), run(4, share, receive, lie));
+        assert_eq!(
+            run(1, share, receive, lie, pressure),
+            run(4, share, receive, lie, pressure)
+        );
     }
 }
 
