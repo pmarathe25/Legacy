@@ -175,6 +175,23 @@ pub struct MechanicalTestimony {
     pub claimed_outcome: game_mechanics::Outcome,
 }
 
+/// An actual result personally observed by someone other than the actor.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WitnessedMechanicalResult {
+    pub actor: u64,
+    pub tick: u64,
+    pub apparatus: u64,
+    pub outcome: game_mechanics::Outcome,
+}
+
+/// A person's explicit choice to watch one actor's experiment.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MechanicalWitnessRequest {
+    pub observer: u64,
+    pub actor: u64,
+}
+
 /// A person's bounded recollection of their own actual experiments.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -189,6 +206,8 @@ pub struct MechanicalMemory {
     pub communication: Option<MechanicalCommunication>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub testimony: Vec<MechanicalTestimony>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub witnessed: Vec<WitnessedMechanicalResult>,
     #[serde(default)]
     pub observations: Vec<game_mechanics::Observation>,
 }
@@ -348,6 +367,7 @@ impl CoreMechanics {
                     || !(1..=64).contains(&memory.capacity)
                     || memory.observations.len() > memory.capacity
                     || memory.testimony.len() > memory.capacity
+                    || memory.witnessed.len() > memory.capacity
                     || memory.communication.is_some_and(|policy| {
                         policy.share_fear_at_least == Some(0)
                             || policy.share_obligation_at_least == Some(0)
@@ -368,6 +388,24 @@ impl CoreMechanics {
                         .testimony
                         .windows(2)
                         .any(|rows| rows[0].tick > rows[1].tick)
+                    || memory
+                        .witnessed
+                        .windows(2)
+                        .any(|rows| rows[0].tick > rows[1].tick)
+                    || memory.witnessed.iter().any(|row| {
+                        row.actor == memory.person
+                            || row.tick > core.physical.tick()
+                            || row.outcome == game_mechanics::Outcome::Contended
+                            || core
+                                .people
+                                .binary_search_by_key(&row.actor, |person| person.id)
+                                .is_err()
+                            || self
+                                .world
+                                .apparatus
+                                .binary_search_by_key(&row.apparatus, |machine| machine.id)
+                                .is_err()
+                    })
                     || memory.testimony.iter().any(|report| {
                         report.speaker == memory.person
                             || report.tick > core.physical.tick()
@@ -590,16 +628,39 @@ impl CoreHost {
     pub(super) fn stage_mechanical_testimony(
         &self,
         events: &[game_language::Event],
+        meetings: &[game_social::Encounter],
+        offers: &[(
+            Option<game_language::Meaning>,
+            Option<game_language::Meaning>,
+        )],
         tick: u64,
     ) -> Option<Vec<MechanicalMemory>> {
         let owner = self.mechanics.as_ref()?;
+        let mut allowed: Vec<_> = meetings
+            .par_iter()
+            .zip(offers.par_iter())
+            .flat_map_iter(|(meeting, offer)| {
+                [
+                    (offer.0, meeting.a, meeting.b),
+                    (offer.1, meeting.b, meeting.a),
+                ]
+                .into_iter()
+                .filter_map(|(meaning, speaker, listener)| {
+                    meaning.map(|meaning| (speaker, listener, meaning))
+                })
+            })
+            .collect();
+        allowed.par_sort_unstable();
         let mut reports: Vec<_> = events
             .par_iter()
             .filter_map(|event| {
                 if !matches!(
                     event.meaning,
                     game_language::Meaning::MechanicalResult { .. }
-                ) {
+                ) || allowed
+                    .binary_search(&(event.speaker, event.listener, event.meaning))
+                    .is_err()
+                {
                     return None;
                 }
                 let game_language::Meaning::MechanicalResult { apparatus, outcome } =
@@ -652,6 +713,54 @@ impl CoreHost {
             }
         });
         Some(memories)
+    }
+
+    /// Topics grounded by both an actor's own retained experiment and another
+    /// person's retained observation of that exact result.
+    pub(super) fn joint_mechanical_topics(
+        &self,
+    ) -> Option<Vec<(u64, u64, game_language::Meaning)>> {
+        let owner = self.mechanics.as_ref()?;
+        if !owner
+            .memories
+            .par_iter()
+            .any(|memory| !memory.witnessed.is_empty())
+        {
+            return None;
+        }
+        let mut topics: Vec<_> = owner
+            .memories
+            .par_iter()
+            .flat_map_iter(|memory| {
+                memory.witnessed.iter().filter_map(move |witnessed| {
+                    let actor = indexed(&owner.memories, witnessed.actor, |row| row.person)?;
+                    if !actor.observations.iter().any(|observation| {
+                        observation.tick == witnessed.tick
+                            && observation.apparatus == witnessed.apparatus
+                            && observation.outcome == witnessed.outcome
+                    }) {
+                        return None;
+                    }
+                    let outcome = match witnessed.outcome {
+                        game_mechanics::Outcome::Moved => 0,
+                        game_mechanics::Outcome::Stalled => 1,
+                        game_mechanics::Outcome::Broken => 2,
+                        game_mechanics::Outcome::Contended => return None,
+                    };
+                    Some((
+                        memory.person.min(witnessed.actor),
+                        memory.person.max(witnessed.actor),
+                        game_language::Meaning::MechanicalResult {
+                            apparatus: witnessed.apparatus,
+                            outcome,
+                        },
+                    ))
+                })
+            })
+            .collect();
+        topics.par_sort_unstable();
+        topics.dedup();
+        Some(topics)
     }
 
     pub(super) fn publish_mechanical_testimony(&mut self, memories: Vec<MechanicalMemory>) {
@@ -1155,6 +1264,89 @@ impl CoreHost {
             return Err("experiment requires an available person with capable effort and carried matching parts".into());
         }
         self.commit_chosen_mechanics(requests)
+    }
+
+    /// Execute chosen experiments while explicitly chosen observers watch.
+    /// A watcher must be available and in the actor's region; watching does not
+    /// require the actor's consent. Only real, uncontended outcomes can be kept.
+    pub fn experiment_mechanics_witnessed(
+        &mut self,
+        requests: &[game_mechanics::Experiment],
+        witnesses: &[MechanicalWitnessRequest],
+        occupied: &[u64],
+    ) -> Result<Vec<game_mechanics::Observation>, String> {
+        if occupied.par_windows(2).any(|rows| rows[0] >= rows[1]) {
+            return Err("invalid occupied people".into());
+        }
+        let mut actors: Vec<_> = requests.par_iter().map(|row| row.actor).collect();
+        actors.par_sort_unstable();
+        let mut watchers: Vec<_> = witnesses.par_iter().map(|row| row.observer).collect();
+        watchers.par_sort_unstable();
+        if watchers.par_windows(2).any(|rows| rows[0] == rows[1]) {
+            return Err("overlapping mechanical witnesses".into());
+        }
+        let rest = self.blocked_with_rest(occupied);
+        let occupied = rest.as_deref().unwrap_or(occupied);
+        let active: HashSet<_> = self
+            .core
+            .physical
+            .work()
+            .par_iter()
+            .filter(|row| row.phase == game_lot_runtime::Phase::Working)
+            .map(|row| row.job.worker)
+            .collect();
+        let locations = game_economy_person::travel::Colocation::new(self.core.travel.as_ref());
+        if witnesses.par_iter().any(|witness| {
+            let observer = indexed(&self.core.people, witness.observer, |row| row.id);
+            let actor = indexed(&self.core.people, witness.actor, |row| row.id);
+            witness.observer == witness.actor
+                || actors.binary_search(&witness.actor).is_err()
+                || actors.binary_search(&witness.observer).is_ok()
+                || occupied.binary_search(&witness.observer).is_ok()
+                || active.contains(&witness.observer)
+                || observer.is_none_or(|person| person.health == 0 || person.region.is_none())
+                || actor.is_none_or(|person| person.region.is_none())
+                || observer.zip(actor).is_none_or(|(observer, actor)| {
+                    locations
+                        .region((observer.id, observer.region), (actor.id, actor.region))
+                        .is_none()
+                })
+        }) {
+            return Err(
+                "mechanical witnessing requires an available local observer and chosen actor"
+                    .into(),
+            );
+        }
+        let outcomes = self.experiment_mechanics(requests, occupied)?;
+        let mut witnessed: Vec<_> = witnesses
+            .par_iter()
+            .filter_map(|witness| {
+                let result = indexed(&outcomes, witness.actor, |row| row.actor)?;
+                (result.outcome != game_mechanics::Outcome::Contended).then_some((
+                    witness.observer,
+                    WitnessedMechanicalResult {
+                        actor: witness.actor,
+                        tick: result.tick,
+                        apparatus: result.apparatus,
+                        outcome: result.outcome,
+                    },
+                ))
+            })
+            .collect();
+        witnessed.par_sort_unstable_by_key(|row| row.0);
+        if let Some(owner) = self.mechanics.as_mut() {
+            owner.memories.par_iter_mut().for_each(|memory| {
+                if memory.retain
+                    && let Some((_, result)) = indexed(&witnessed, memory.person, |row| row.0)
+                {
+                    if memory.witnessed.len() == memory.capacity {
+                        memory.witnessed.remove(0);
+                    }
+                    memory.witnessed.push(*result);
+                }
+            });
+        }
+        Ok(outcomes)
     }
 
     /// Execute personally chosen apparatus attempts against real local loads.

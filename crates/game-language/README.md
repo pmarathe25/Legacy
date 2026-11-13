@@ -17,8 +17,10 @@ actual disjoint contact and must treat the event's intended meaning as private
 to the speaker. The interval host uses the same ungrounded semantics when a
 personally offered mechanical claim wins the meeting's topic choice; the
 listener's interpretation, rather than the speaker's intention, becomes any
-received testimony. The host does not yet let people ground and learn words
-for mechanical outcomes through witnessed trials.
+received testimony. A retained jointly witnessed experiment can also ground an
+outcome topic at a later meeting. A person's optional `mechanical_interest`
+can make such a topic attractive without predefining a word for each apparatus;
+they can still decline, coin, interpret differently, or decline adoption.
 
 The ignored `parallel_ungrounded_utterance_benchmark` staged 100,000 proposals
 in median times of 52.5, 32.1, 25.5 and 21.6 ms at one, two, four and six

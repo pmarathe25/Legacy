@@ -50,7 +50,7 @@ pub use mechanics::{
     CoreMechanics, MechanicalCapability, MechanicalCommunication, MechanicalLoadMaterial,
     MechanicalLoadOutcome, MechanicalLoadPolicy, MechanicalLoadRequest, MechanicalLoadResult,
     MechanicalMaterial, MechanicalMemory, MechanicalPolicy, MechanicalReactions,
-    MechanicalTestimony,
+    MechanicalTestimony, MechanicalWitnessRequest, WitnessedMechanicalResult,
 };
 pub use offers::CoreSocialResults;
 pub use personal_choice::{CoreChoiceEvent, CoreChoiceIntent, CoreChoiceOutcome, CoreWorkIntent};

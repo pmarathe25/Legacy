@@ -341,11 +341,14 @@ fn independent_physical_mechanics_benchmark() {
         .and_then(|value| value.parse::<u64>().ok())
         .unwrap_or(20_000);
     let scheduled = std::env::var_os("LEGACY_MECHANICS_CHOICES").is_some();
-    let retain = std::env::var_os("LEGACY_MECHANICS_MEMORIES").is_some();
+    let witnesses = std::env::var_os("LEGACY_MECHANICS_WITNESSES").is_some();
+    let retain = std::env::var_os("LEGACY_MECHANICS_MEMORIES").is_some() || witnesses;
+    assert!(!witnesses || !scheduled);
+    let people_count = if witnesses { 2 * count + 1 } else { count + 1 };
     assert!(count > 0);
     let mut initial = fixture();
     let template = initial.people[0].clone();
-    initial.people = (1..=count + 1)
+    initial.people = (1..=people_count)
         .map(|id| {
             let mut person = template.clone();
             person.id = id;
@@ -441,7 +444,7 @@ fn independent_physical_mechanics_benchmark() {
             vec![]
         },
         memories: if retain {
-            (2..=count + 1)
+            (2..=people_count)
                 .map(|person| MechanicalMemory {
                     person,
                     capacity: 4,
@@ -449,6 +452,7 @@ fn independent_physical_mechanics_benchmark() {
                     reactions: None,
                     communication: None,
                     testimony: vec![],
+                    witnessed: vec![],
                     observations: vec![],
                 })
                 .collect()
@@ -489,6 +493,18 @@ fn independent_physical_mechanics_benchmark() {
             load_force: 20,
         })
         .collect();
+    let watchers: Vec<_> = if witnesses {
+        (2..=count + 1)
+            .map(
+                |actor| game_economy::core_interval::MechanicalWitnessRequest {
+                    actor,
+                    observer: actor + count,
+                },
+            )
+            .collect()
+    } else {
+        vec![]
+    };
     let mut reference = None;
     for workers in [1, 2, 4, 6] {
         let pool = rayon::ThreadPoolBuilder::new()
@@ -512,6 +528,11 @@ fn independent_physical_mechanics_benchmark() {
                     })
                     .flatten()
                     .collect::<Vec<_>>()
+            } else if witnesses {
+                pool.install(|| {
+                    host.experiment_mechanics_witnessed(&requests, &watchers, &[])
+                        .unwrap()
+                })
             } else {
                 pool.install(|| host.experiment_mechanics(&requests, &[]).unwrap())
             };
@@ -527,7 +548,11 @@ fn independent_physical_mechanics_benchmark() {
                         .unwrap()
                         .memories
                         .iter()
-                        .all(|memory| memory.observations.len() == 1)
+                        .all(|memory| if witnesses && memory.person > count + 1 {
+                            memory.witnessed.len() == 1
+                        } else {
+                            memory.observations.len() == 1
+                        })
                 );
             }
             if let Some(expected) = &reference {
@@ -538,7 +563,7 @@ fn independent_physical_mechanics_benchmark() {
         }
         samples.sort_unstable();
         eprintln!(
-            "{workers} workers: {:?} median for {count} physical experiments",
+            "{workers} workers: {:?} median for {count} physical experiments; witnesses={witnesses}",
             samples[1]
         );
     }
@@ -7266,7 +7291,9 @@ fn core_host_social_benchmark() {
     let taking_inquiries = std::env::var_os("LEGACY_TAKING_INQUIRIES").is_some();
     let mechanical_testimony = std::env::var_os("LEGACY_MECHANICAL_TESTIMONY").is_some();
     let testimony_pressure = std::env::var_os("LEGACY_TESTIMONY_PRESSURE").is_some();
+    let mechanical_witness = std::env::var_os("LEGACY_MECHANICAL_WITNESS").is_some();
     assert!(!testimony_pressure || mechanical_testimony);
+    assert!(!mechanical_witness || (mechanical_testimony && !testimony_pressure));
     let taking_reports = std::env::var_os("LEGACY_TAKING_REPORTS").is_some() || taking_inquiries;
     let treatment = std::env::var_os("LEGACY_TREATMENT").is_some();
     let disease = std::env::var_os("LEGACY_DISEASE").is_some() || treatment;
@@ -7485,11 +7512,22 @@ fn core_host_social_benchmark() {
                         "apparatus":[{"id":1,"parts":[{"id":1,"component":1,"parent":null,"share_per_mille":1000}]}]},
                     "materials":[{"component":1,"good":1}],"capabilities":[],"memories":memories,"observations":[]
                 })).unwrap());
+                if mechanical_witness {
+                    let mut probe = CoreHost::begin(snapshot.clone(), &[(1, 1)]).unwrap();
+                    for pair in probe.meet_autonomously(&[]).unwrap() {
+                        let memories = &mut snapshot.mechanics.as_mut().unwrap().memories;
+                        let index = memories.binary_search_by_key(&pair.b, |row| row.person).unwrap();
+                        memories[index].witnessed.push(game_economy::core_interval::WitnessedMechanicalResult {
+                            actor: pair.a, tick: 0, apparatus: 1, outcome: game_mechanics::Outcome::Moved,
+                        });
+                    }
+                }
                 let meaning = game_language::Meaning::MechanicalResult { apparatus: 1, outcome: 0 };
                 let minds: Vec<_> = (2..=count).map(|person| serde_json::json!({
-                    "person":person,"initiative":1000,
-                    "words":[{"meaning":meaning,"sounds":[0]}],
-                    "topic_policy":{"idle":0,"preferences":[{"meaning":meaning,"enabled":true,"value":10}]}
+                    "person":person,"initiative":1000,"adoption":1000,
+                    "mechanical_interest":if mechanical_witness {Some(10)} else {None},
+                    "words":if mechanical_witness {vec![]} else {vec![serde_json::json!({"meaning":meaning,"sounds":[0]})]},
+                    "topic_policy":{"idle":0,"preferences":if mechanical_witness {vec![]} else {vec![serde_json::json!({"meaning":meaning,"enabled":true,"value":10})]}}
                 })).collect();
                 snapshot.social.as_mut().unwrap().language = Some(serde_json::from_value(serde_json::json!({
                     "rules":{"sounds":["a"],"word_length":1,"capacity":4},"minds":minds,"events":[]
@@ -7652,7 +7690,11 @@ fn core_host_social_benchmark() {
             let elapsed = start.elapsed();
             assert_eq!(meetings.len(), ((count - 1) / 2) as usize);
             if mechanical_testimony {
-                assert_eq!(host.snapshot().mechanics.unwrap().memories.iter().map(|memory| memory.testimony.len()).sum::<usize>(), meetings.len());
+                if mechanical_witness {
+                    assert_eq!(host.snapshot().social.unwrap().language.unwrap().events.iter().filter(|event| event.learned).count(), meetings.len());
+                } else {
+                    assert_eq!(host.snapshot().mechanics.unwrap().memories.iter().map(|memory| memory.testimony.len()).sum::<usize>(), meetings.len());
+                }
             }
             if teaching_mode { assert_eq!(host.snapshot().skills.unwrap().owner.lessons.len(), meetings.len()); }
             if literacy_mode { assert_eq!(host.snapshot().writing.unwrap().study.iter().filter(|row| row.progress == 1).count(), meetings.len()); }

@@ -302,6 +302,51 @@ fn mixed_batch_grounds_only_the_observable_meetings() {
     assert_eq!(next.minds[3].words.len(), 1);
 }
 
+#[test]
+fn specific_topic_refusal_overrides_general_mechanical_interest() {
+    let meaning = Meaning::MechanicalResult {
+        apparatus: 1,
+        outcome: 0,
+    };
+    let mut state = language();
+    state
+        .configure_topics(&[
+            (
+                1,
+                TopicPolicy {
+                    idle: 0,
+                    act_on_tie: false,
+                    preferences: vec![TopicPreference {
+                        meaning,
+                        enabled: false,
+                        value: 100,
+                    }],
+                },
+            ),
+            (
+                2,
+                TopicPolicy {
+                    idle: 0,
+                    act_on_tie: false,
+                    preferences: vec![],
+                },
+            ),
+        ])
+        .unwrap();
+    state.minds[0].initiative = 1000;
+    state.minds[0].mechanical_interest = Some(100);
+    let meeting = GroundedMeeting {
+        a: 1,
+        b: 2,
+        a_topics: vec![Meaning::Place(7), meaning],
+        b_topics: vec![Meaning::Place(7)],
+    };
+    let next = state
+        .prepare_mixed_with_affinity(&[meeting], Some(&[(Some(meaning), None)]), 7, 1, &|_, _| 0)
+        .unwrap();
+    assert!(next.events.is_empty());
+}
+
 fn language() -> Language {
     Language {
         rules: Rules {
@@ -788,6 +833,7 @@ fn a_listener_can_have_a_different_interpretation_and_decline_learning() {
             initiative: 1000,
             topic_policy: None,
             naming: None,
+            mechanical_interest: None,
             adoption: 0,
             modify: false,
             phonemes: vec![],
@@ -805,6 +851,7 @@ fn a_listener_can_have_a_different_interpretation_and_decline_learning() {
             initiative: 1000,
             topic_policy: None,
             naming: None,
+            mechanical_interest: None,
             adoption: 0,
             modify: false,
             phonemes: vec![],
@@ -850,6 +897,7 @@ fn people_can_decline_to_speak_or_choose_to_change_a_form() {
             initiative: 0,
             topic_policy: None,
             naming: None,
+            mechanical_interest: None,
             adoption: 1000,
             modify: true,
             phonemes: vec![0, 1],
@@ -936,6 +984,7 @@ fn a_person_can_speak_even_when_the_other_person_cannot_hear() {
             initiative: 1000,
             topic_policy: None,
             naming: None,
+            mechanical_interest: None,
             adoption: 1000,
             modify: false,
             phonemes: vec![],
@@ -978,6 +1027,7 @@ fn a_chosen_form_can_spread_through_separate_grounded_encounters() {
             initiative: 1000,
             topic_policy: None,
             naming: None,
+            mechanical_interest: None,
             adoption: 1000,
             modify: false,
             phonemes: vec![],

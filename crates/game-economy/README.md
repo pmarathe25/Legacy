@@ -93,7 +93,24 @@ topics in the meeting's language choice. The listener must hear and interpret
 the sound as a mechanical claim, and retains their own interpretation, which
 may differ from the speaker's intention. Missing, unknown, or ambiguous
 language does not convey a claim. Characters cannot yet learn mechanical
-outcome words from witnessed experiments.
+outcome words from merely hearing an ungrounded assertion.
+
+`experiment_mechanics_witnessed` lets explicitly selected, available local
+observers watch actual experiments without requiring the actor's permission.
+Retaining observers record the outcome and apparatus, not hidden force ratings.
+If the actor and observer both remember that same event at a later meeting,
+their personal language choices can treat the result as grounded and learn a
+sound for it. Watching is currently an explicit caller-selected action and is
+not yet part of the general autonomous choice round.
+
+With `LEGACY_MECHANICS_WITNESSES=1 LEGACY_MECHANISMS=50000`, the ignored
+`independent_physical_mechanics_benchmark` measured 50,000 experiments and
+chosen observers. Median times at one, two, four and six workers were 61.0,
+32.5, 21.1 and 17.1 ms, with matching states. With
+`LEGACY_MECHANICAL_TESTIMONY=1 LEGACY_MECHANICAL_WITNESS=1 LEGACY_PEOPLE=50000`,
+the social benchmark measured 24,999 later meetings and grounded language
+updates in 121.7, 62.4, 40.6 and 33.6 ms, with matching fingerprints. Setup and
+snapshot checking were excluded; these synthetic measurements are sublinear.
 
 For example, a `[[mechanics.memories]]` entry may contain
 `communication = { share = true, receive = true, use_testimony = false, misrepresent = "stalled" }`.

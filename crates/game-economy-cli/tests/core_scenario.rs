@@ -566,6 +566,165 @@ fn saved_mechanical_load_intention_never_substitutes_changed_parameters() {
 }
 
 #[test]
+fn witnessed_experiments_can_ground_personal_outcome_words() {
+    use game_economy::core_interval::{CoreHost, CoreSocial, MechanicalWitnessRequest};
+    fn run(workers: usize, watch: bool, actor_remembers: bool) -> serde_json::Value {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let root = root();
+                let mut host = game_economy_cli::core_scenario(
+                    &root.join("content/scenarios/economy-core-mechanical-loads.toml"),
+                    &root.join("content"),
+                )
+                .unwrap();
+                if !actor_remembers {
+                    let mut state = host.snapshot();
+                    state.mechanics.as_mut().unwrap().memories[0].retain = false;
+                    host = CoreHost::resume(state).unwrap();
+                }
+                let experiment = game_mechanics::Experiment {
+                    actor: 1,
+                    apparatus: 1,
+                    output_part: 1002,
+                    input_force: 100,
+                    input_distance: 100,
+                    load_force: 1,
+                };
+                let witness = MechanicalWitnessRequest {
+                    observer: 2,
+                    actor: 1,
+                };
+                let opening = host.snapshot();
+                assert!(
+                    host.experiment_mechanics_witnessed(&[experiment], &[witness], &[2])
+                        .is_err()
+                );
+                assert_eq!(opening, host.snapshot());
+                host.experiment_mechanics_witnessed(
+                    &[experiment],
+                    if watch {
+                        std::slice::from_ref(&witness)
+                    } else {
+                        &[]
+                    },
+                    &[],
+                )
+                .unwrap();
+                assert_eq!(
+                    host.snapshot().mechanics.as_ref().unwrap().memories[1]
+                        .witnessed
+                        .len(),
+                    usize::from(watch)
+                );
+                assert_eq!(host.advance_continuous(900_000, &[]).unwrap().failure, None);
+                let mut state = host.snapshot();
+                let meaning = game_language::Meaning::MechanicalResult {
+                    apparatus: 1,
+                    outcome: 0,
+                };
+                let mut language = game_language::Language {
+                    rules: game_language::Rules {
+                        sounds: vec!["a".into()],
+                        word_length: 1,
+                        capacity: 4,
+                    },
+                    minds: vec![],
+                    events: vec![],
+                };
+                language
+                    .configure_topics(&[
+                        (
+                            1,
+                            game_language::TopicPolicy {
+                                idle: 0,
+                                act_on_tie: false,
+                                preferences: vec![],
+                            },
+                        ),
+                        (
+                            2,
+                            game_language::TopicPolicy {
+                                idle: 0,
+                                act_on_tie: false,
+                                preferences: vec![],
+                            },
+                        ),
+                    ])
+                    .unwrap();
+                language.minds[0].initiative = 1000;
+                language.minds[0].mechanical_interest = Some(10);
+                language.minds[1].adoption = 1000;
+                state.social = Some(CoreSocial {
+                    owner: game_social::Social {
+                        rules: game_social::Rules {
+                            interval: 1,
+                            min_health: 1,
+                            max_hunger: 100,
+                            familiarity_gain: 1,
+                            familiarity_max: 10,
+                            relationship_retention: None,
+                        },
+                        inherit_births: false,
+                        participants: vec![
+                            game_social::Participant {
+                                person: 1,
+                                willing: true,
+                            },
+                            game_social::Participant {
+                                person: 2,
+                                willing: true,
+                            },
+                        ],
+                        pressures: vec![],
+                        relationships: vec![],
+                        events: vec![],
+                        needs: None,
+                    },
+                    last_tick: None,
+                    language: Some(language),
+                    signals: None,
+                });
+                let mut host = CoreHost::resume(
+                    serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap(),
+                )
+                .unwrap();
+                assert_eq!(host.meet_autonomously(&[]).unwrap().len(), 1);
+                let state = host.snapshot();
+                let language = state.social.as_ref().unwrap().language.as_ref().unwrap();
+                assert_eq!(
+                    language.minds[1]
+                        .words
+                        .iter()
+                        .any(|word| word.meaning == meaning),
+                    watch && actor_remembers
+                );
+                assert_eq!(
+                    language
+                        .events
+                        .iter()
+                        .any(|event| event.meaning == meaning && event.learned),
+                    watch && actor_remembers
+                );
+                assert!(
+                    state.mechanics.as_ref().unwrap().memories[1]
+                        .testimony
+                        .is_empty()
+                );
+                serde_json::to_value(state).unwrap()
+            })
+    }
+    for (watch, actor_remembers) in [(false, true), (true, false), (true, true)] {
+        assert_eq!(
+            run(1, watch, actor_remembers),
+            run(4, watch, actor_remembers)
+        );
+    }
+}
+
+#[test]
 fn mechanical_testimony_follows_individual_choices_and_can_be_false() {
     use game_economy::core_interval::{CoreHost, CoreSocial, MechanicalCommunication};
     fn run(

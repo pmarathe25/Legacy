@@ -217,13 +217,31 @@ impl CoreHost {
                         }
                         rows
                     });
+                let mechanical_topics = language
+                    .minds
+                    .par_iter()
+                    .any(|mind| {
+                        mind.topic_policy.as_ref().is_some_and(|policy| {
+                            mind.mechanical_interest.is_some()
+                                || policy.preferences.iter().any(|row| {
+                                    row.enabled
+                                        && matches!(
+                                            row.meaning,
+                                            game_language::Meaning::MechanicalResult { .. }
+                                        )
+                                })
+                        })
+                    })
+                    .then(|| self.joint_mechanical_topics())
+                    .flatten();
                 let topics = |person: u64, other: u64, region: u64| {
                     let mut topics = vec![game_language::Meaning::Place(region)];
-                    let policy = language
+                    let mind = language
                         .minds
                         .binary_search_by_key(&person, |mind| mind.person)
                         .ok()
-                        .and_then(|index| language.minds[index].topic_policy.as_ref());
+                        .map(|index| &language.minds[index]);
+                    let policy = mind.and_then(|mind| mind.topic_policy.as_ref());
                     if let Some(policy) = policy
                         && policy.preferences.iter().any(|row| {
                             row.enabled && matches!(row.meaning, game_language::Meaning::Object(_))
@@ -265,10 +283,38 @@ impl CoreHost {
                                 {
                                     Some(preference.meaning)
                                 }
+                                game_language::Meaning::MechanicalResult { .. }
+                                    if preference.enabled
+                                        && mechanical_topics.as_ref().is_some_and(|rows| {
+                                            rows.binary_search(&(
+                                                person.min(other),
+                                                person.max(other),
+                                                preference.meaning,
+                                            ))
+                                            .is_ok()
+                                        }) =>
+                                {
+                                    Some(preference.meaning)
+                                }
                                 _ => None,
                             }
                         }));
                     }
+                    if mind.is_some_and(|mind| {
+                        mind.mechanical_interest.is_some() && mind.topic_policy.is_some()
+                    }) && let Some(rows) = &mechanical_topics
+                    {
+                        let pair = (person.min(other), person.max(other));
+                        let begin = rows.partition_point(|row| (row.0, row.1) < pair);
+                        topics.extend(
+                            rows[begin..]
+                                .iter()
+                                .take_while(|row| (row.0, row.1) == pair)
+                                .map(|row| row.2),
+                        );
+                    }
+                    topics.sort_unstable();
+                    topics.dedup();
                     topics
                 };
                 let rows: Vec<_> = meetings
@@ -417,9 +463,13 @@ impl CoreHost {
             .social
             .as_ref()
             .and_then(|social| self.stage_skill_teaching(social, tick));
-        let mechanical_testimony = language
-            .as_ref()
-            .and_then(|language| self.stage_mechanical_testimony(&language.events, tick));
+        let mechanical_testimony =
+            language
+                .as_ref()
+                .zip(mechanical_claims.as_ref())
+                .and_then(|(language, offers)| {
+                    self.stage_mechanical_testimony(&language.events, &meetings, offers, tick)
+                });
         let writing = self.writing.as_ref().and_then(|opening| {
             if opening.study.is_empty() || meetings.is_empty() {
                 return None;

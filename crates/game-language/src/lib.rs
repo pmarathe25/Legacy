@@ -149,6 +149,10 @@ pub struct Mind {
     pub topic_policy: Option<TopicPolicy>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub naming: Option<NamingPolicy>,
+    /// Personal value for discussing a mechanical result when it is grounded
+    /// or deliberately offered; this does not supply a word or its meaning.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mechanical_interest: Option<i64>,
 }
 
 fn enabled() -> bool {
@@ -174,6 +178,7 @@ impl Mind {
             words: Vec::new(),
             topic_policy: None,
             naming: None,
+            mechanical_interest: None,
         }
     }
 }
@@ -430,32 +435,47 @@ impl Language {
                                 matches!(meaning, Meaning::Place(_)) && eligible(*meaning)
                             })
                             .map(|meaning| (meaning, true)),
-                        Some(policy) => policy
-                            .preferences
-                            .iter()
-                            .filter(|topic| {
-                                topic.enabled
-                                    && (topic.value > policy.idle
-                                        || (topic.value == policy.idle && policy.act_on_tie))
-                                    && (observed.binary_search(&topic.meaning).is_ok()
-                                        || claim == Some(topic.meaning))
-                                    && eligible(topic.meaning)
-                            })
-                            .max_by_key(|topic| {
-                                (
-                                    topic.value,
-                                    random(
-                                        seed ^ tick.rotate_left(19) ^ person ^ topic.meaning.key(),
-                                    ),
-                                    topic.meaning,
-                                )
-                            })
-                            .map(|topic| {
-                                (
-                                    topic.meaning,
-                                    observed.binary_search(&topic.meaning).is_ok(),
-                                )
-                            }),
+                        Some(policy) => {
+                            let explicit = policy
+                                .preferences
+                                .iter()
+                                .filter(|topic| {
+                                    topic.enabled
+                                        && (topic.value > policy.idle
+                                            || (topic.value == policy.idle && policy.act_on_tie))
+                                        && (observed.binary_search(&topic.meaning).is_ok()
+                                            || claim == Some(topic.meaning))
+                                        && eligible(topic.meaning)
+                                })
+                                .map(|topic| (topic.meaning, topic.value));
+                            let dynamic =
+                                observed.iter().copied().chain(claim).filter_map(|meaning| {
+                                    let value = mind.mechanical_interest?;
+                                    (matches!(meaning, Meaning::MechanicalResult { .. })
+                                        && policy
+                                            .preferences
+                                            .binary_search_by_key(&meaning, |topic| topic.meaning)
+                                            .is_err()
+                                        && (value > policy.idle
+                                            || (value == policy.idle && policy.act_on_tie))
+                                        && eligible(meaning))
+                                    .then_some((meaning, value))
+                                });
+                            explicit
+                                .chain(dynamic)
+                                .max_by_key(|(meaning, value)| {
+                                    (
+                                        *value,
+                                        random(
+                                            seed ^ tick.rotate_left(19) ^ person ^ meaning.key(),
+                                        ),
+                                        *meaning,
+                                    )
+                                })
+                                .map(|(meaning, _)| {
+                                    (meaning, observed.binary_search(&meaning).is_ok())
+                                })
+                        }
                     }
                 };
                 let a = offer(meeting.a, &meeting.a_topics, offered.0);
@@ -712,12 +732,22 @@ impl Language {
                                 .preferences
                                 .binary_search_by_key(&meeting.meaning, |topic| topic.meaning)
                                 .ok()
-                                .is_some_and(|index| {
-                                    let topic = policy.preferences[index];
-                                    topic.enabled
-                                        && (topic.value > policy.idle
-                                            || (topic.value == policy.idle && policy.act_on_tie))
-                                })
+                                .map_or_else(
+                                    || {
+                                        matches!(meeting.meaning, Meaning::MechanicalResult { .. })
+                                            && mind.mechanical_interest.is_some_and(|value| {
+                                                value > policy.idle
+                                                    || (value == policy.idle && policy.act_on_tie)
+                                            })
+                                    },
+                                    |index| {
+                                        let topic = policy.preferences[index];
+                                        topic.enabled
+                                            && (topic.value > policy.idle
+                                                || (topic.value == policy.idle
+                                                    && policy.act_on_tie))
+                                    },
+                                )
                         })
                         && random(seed ^ tick.rotate_left(11) ^ id ^ meeting.meaning.key()) % 1000
                             < u64::from(mind.initiative)
