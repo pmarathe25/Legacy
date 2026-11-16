@@ -326,6 +326,15 @@ Inspect a saved NDJSON history without loading the whole file at once:
 
 The inspector reports observed population changes, sample genome means by species, intermediate animal population events, selected family events, and recorded meetings. Meeting counts do not establish leadership, and changes in genome averages do not establish selection or causation. It preserves the run metadata and indicates whether a completion record was present.
 
+An initial controlled-person interface for the interval host is available with
+`cargo run -p game-economy-cli -- --interval-player 1`. It uses
+`economy-core-player.toml` by default, or accepts another interval-compatible
+scenario containing that controlled person. Enter `help` for its limited
+observation, time, travel, self-treatment, and save/load commands. Saving
+requires a new path and does not overwrite an existing file. This path does not
+yet provide campaign succession or the full command set; the ordinary `--player`
+command still uses the separate whole-boundary host.
+
 The history runner archives opinion-change events in annual observations and removes those events from active state after each tick; directed opinions continue to influence decisions. The person inspector reports archived opinion changes separately from family events. Events already present in a resumed checkpoint remain in the initial snapshot. Hourly runs also write a checkpoint each year.
 
 Personal strikes are archived as simultaneous events alongside target-grouped health changes. The person inspector shows strikes involving that individual and, when they were the target, the group's actual health loss. Individual strike harm is potential harm before health is capped; it does not identify which attacker caused a death.

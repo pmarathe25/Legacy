@@ -1,4 +1,5 @@
 //! Small interactive entry point for the composed economic simulation.
+mod interval_player;
 use game_economy::{Departure, Economy, PromiseDecision, PromiseProposal};
 use game_lots::Place;
 use std::io::{self, BufRead, IsTerminal, Write};
@@ -724,12 +725,22 @@ fn run() -> Result<(), String> {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let mut args = std::env::args_os().skip(1);
     let mut player_mode = false;
+    let mut interval_person = None;
     let mut scenario = None;
     let mut seed = None;
     let mut population = None;
     while let Some(arg) = args.next() {
         if arg == "--player" && !player_mode {
             player_mode = true;
+        } else if arg == "--interval-player" && interval_person.is_none() {
+            interval_person = Some(
+                args.next()
+                    .ok_or("missing controlled person")?
+                    .to_str()
+                    .ok_or("invalid controlled person")?
+                    .parse::<u64>()
+                    .map_err(|_| "invalid controlled person")?,
+            );
         } else if arg == "--seed" && seed.is_none() {
             seed = Some(
                 args.next()
@@ -748,6 +759,17 @@ fn run() -> Result<(), String> {
         } else {
             return Err("unexpected argument".into());
         }
+    }
+    if let Some(person) = interval_person {
+        if player_mode || seed.is_some() || population.is_some() {
+            return Err(
+                "interval player cannot be combined with player, seed, or population options"
+                    .into(),
+            );
+        }
+        let scenario =
+            scenario.unwrap_or_else(|| root.join("content/scenarios/economy-core-player.toml"));
+        return interval_player::run(&root, &scenario, person);
     }
     let scenario = scenario.unwrap_or_else(|| {
         root.join(if player_mode {

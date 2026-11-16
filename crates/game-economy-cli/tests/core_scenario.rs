@@ -996,6 +996,156 @@ fn conflict_alone_still_opens_the_personal_choice_round() {
 }
 
 #[test]
+fn interval_player_sees_only_local_people_and_rechecks_control() {
+    use game_economy::core_interval::CoreHost;
+    use game_economy_player::interval::Player;
+    use game_lots::{Container, Place};
+    fn run(workers: usize) -> serde_json::Value {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let root = root();
+                let mut state = game_economy_cli::core_scenario(
+                    &root.join("content/scenarios/economy-core-personal-conflict.toml"),
+                    &root.join("content"),
+                )
+                .unwrap()
+                .snapshot();
+                state.core.people[0].controlled = true;
+                state.core.people[2].region = Some(2);
+                let good = state.core.physical.goods[0].id;
+                state
+                    .core
+                    .physical
+                    .custody
+                    .containers
+                    .push(Container::new(Place::Stock { region: 2, good }, 10, vec![]).unwrap());
+                state
+                    .core
+                    .physical
+                    .custody
+                    .containers
+                    .sort_unstable_by_key(|row| row.place);
+                let mut host = CoreHost::resume(state).unwrap();
+                assert!(Player::new(&mut host, 2).is_err());
+                {
+                    let mut player = Player::new(&mut host, 1).unwrap();
+                    let view = player.view().unwrap();
+                    assert_eq!(view.person.id, 1);
+                    assert_eq!(
+                        view.nearby
+                            .iter()
+                            .map(|person| person.id)
+                            .collect::<Vec<_>>(),
+                        vec![2]
+                    );
+                    assert!(view.journey.is_none());
+                    assert_eq!(view.offset_millis, 0);
+                    let advanced = player.advance(1).unwrap();
+                    assert_eq!(advanced.elapsed_millis, 1);
+                    assert_eq!(advanced.failure, None);
+                    assert_eq!(player.view().unwrap().offset_millis, 1);
+                }
+                let state = host.snapshot();
+                let mut restored = CoreHost::resume(
+                    serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap(),
+                )
+                .unwrap();
+                assert_eq!(
+                    Player::new(&mut restored, 1)
+                        .unwrap()
+                        .view()
+                        .unwrap()
+                        .nearby[0]
+                        .id,
+                    2
+                );
+                serde_json::to_value(state).unwrap()
+            })
+    }
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
+fn interval_player_can_choose_self_care_without_other_control() {
+    use game_economy::core_interval::CoreHost;
+    use game_economy_player::interval::Player;
+    use game_lots::{Container, Lot, Place};
+    let root = root();
+    let mut state = game_economy_cli::core_scenario(
+        &root.join("content/scenarios/economy-core-wounds.toml"),
+        &root.join("content"),
+    )
+    .unwrap()
+    .snapshot();
+    state.core.people[1].controlled = true;
+    state.core.people[1].health = 30;
+    let good = state.core.physical.goods[0].id;
+    state
+        .personal_conflict
+        .as_mut()
+        .unwrap()
+        .wounds
+        .as_mut()
+        .unwrap()
+        .remedies =
+        serde_json::from_value(serde_json::json!([{"good":good,"quantity":2,"severity_relief":4}]))
+            .unwrap();
+    let holder = state
+        .core
+        .physical
+        .custody
+        .containers
+        .iter_mut()
+        .find(|row| row.place == Place::Person(2))
+        .unwrap();
+    *holder = Container::new(
+        holder.place,
+        holder.capacity,
+        vec![Lot {
+            batch: None,
+            item: None,
+            good,
+            quantity: 2,
+            expires_at: None,
+        }],
+    )
+    .unwrap();
+    let mut host = CoreHost::resume(state).unwrap();
+    assert!(Player::new(&mut host, 1).is_err());
+    let mut player = Player::new(&mut host, 2).unwrap();
+    assert_eq!(player.advance(1).unwrap().failure, None);
+    let wound = player.view().unwrap().wound.unwrap();
+    assert_eq!(wound.severity, 13);
+    assert!(!format!("{wound:?}").contains("heals_at"));
+    assert!(player.treat_wound(good).unwrap());
+    assert_eq!(player.view().unwrap().wound.unwrap().severity, 9);
+    assert!(!player.treat_wound(good).unwrap());
+}
+
+#[test]
+fn incapacitated_interval_player_can_wait_but_cannot_observe() {
+    use game_economy::core_interval::CoreHost;
+    use game_economy_player::interval::Player;
+    let root = root();
+    let mut state = game_economy_cli::core_scenario(
+        &root.join("content/scenarios/economy-core-personal-conflict.toml"),
+        &root.join("content"),
+    )
+    .unwrap()
+    .snapshot();
+    state.core.people[0].controlled = true;
+    state.core.people[0].health = 0;
+    let mut host = CoreHost::resume(state).unwrap();
+    let mut player = Player::new(&mut host, 1).unwrap();
+    assert!(player.view().is_err());
+    assert_eq!(player.advance(1).unwrap().failure, None);
+    assert!(player.view().is_err());
+}
+
+#[test]
 fn saved_strike_intentions_are_not_retargeted() {
     use game_economy::core_interval::{CoreChoiceOutcome, CoreHost, CoreRunEvent, DecisionPhase};
     let root = root();

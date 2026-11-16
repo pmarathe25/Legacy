@@ -29,6 +29,7 @@ mod medical;
 mod offers;
 mod personal_choice;
 mod personality;
+mod player;
 mod purpose;
 mod requests;
 mod scenario;
@@ -61,6 +62,7 @@ pub use mechanics::{
 };
 pub use offers::CoreSocialResults;
 pub use personal_choice::{CoreChoiceEvent, CoreChoiceIntent, CoreChoiceOutcome, CoreWorkIntent};
+pub use player::{CorePlayerView, CorePlayerWound, CoreSeenPerson};
 pub use purpose::CorePurpose;
 pub use requests::{CoreDeliveryResults, CoreRequestResults};
 pub use scheduler::{CoreRun, CoreRunEvent, CoreSchedule, DecisionPhase};

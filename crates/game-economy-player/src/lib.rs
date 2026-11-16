@@ -1,4 +1,5 @@
 //! Ruler-bound choices and observations, independent of administrative inspection.
+pub mod interval;
 use game_economy::{Departure, Economy, MissionStart, Person, PromiseDecision, PromiseProposal};
 use game_economy_campaign::{InvocationWarning, Life, ReleaseDecision};
 use game_economy_combat::{Map, Order, Point};

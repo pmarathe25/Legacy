@@ -20,6 +20,7 @@ game-economy-dynamics = { path = "../game-economy-dynamics" }
 game-opinions = { path = "../game-opinions" }
 game-economy-agriculture = { path = "../game-economy-agriculture" }
 game-economy = { path = "../game-economy" }
+game-economy-player = { path = "../game-economy-player" }
 game-economy-cli-commands = { path = "../game-economy-cli-commands" }
 game-autowork = { path = "../game-autowork" }
 game-content-import = { path = "../game-content-import" }
@@ -43,7 +44,6 @@ game-economy-building = { path = "../game-economy-building" }
 game-economy-work = { path = "../game-economy-work" }
 game-economy-skills = { path = "../game-economy-skills" }
 game-diagnostics = { path = "../game-diagnostics" }
-game-economy-player = { path = "../game-economy-player" }
 game-economy-knowledge = { path = "../game-economy-knowledge" }
 game-economy-treatment = { path = "../game-economy-treatment" }
 game-agreements = { path = "../game-agreements" }

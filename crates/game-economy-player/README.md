@@ -4,6 +4,17 @@ This interface exposes the controlled person's own state, possessions, current j
 
 The interface is an initial playable slice of the economic host, not a complete game client.
 
+The separate `interval::Player` adapter is an initial path for the interval
+host. It checks that the chosen person is controlled before each action, and
+provides their own state, possessions and observable wound severity, along with
+co-located people. It does not reveal the wound's future recovery deadline.
+An incapacitated controlled person may still advance time but cannot observe.
+It can advance time, depart on a route, and use a carried wound remedy. Time
+advancement reports elapsed time and failures without returning administrative
+events. A limited `--interval-player PERSON` CLI exposes this adapter. It does
+not yet provide campaign succession or the full player command set, and the
+ordinary `--player` CLI still uses the whole-boundary host.
+
 `advance_boundaries` can yield between committed whole boundaries and reports partial progress and pending warnings. Its callback exposes boundary time only; administrative physical events remain outside the player view. Partial-boundary time is not yet supported.
 
 The explicit guardian search view reads embodied guardians' current health, location and journeys from the same person and travel records as the rest of the world. The ruler may meet a local guardian and request release; the guardian's decision uses their own accumulated mentorship.

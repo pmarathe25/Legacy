@@ -1,0 +1,65 @@
+//! Player-controlled actions on the interval host, without administrative events.
+use game_economy::core_interval::{CoreHost, CorePlayerView, WoundTreatment};
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Advance {
+    pub elapsed_millis: u64,
+    pub boundaries: u64,
+    /// Earlier elapsed time stays committed if a later stage fails.
+    pub failure: Option<String>,
+}
+
+/// One explicitly controlled person; every action rechecks current control.
+pub struct Player<'a> {
+    host: &'a mut CoreHost,
+    person: u64,
+}
+
+impl<'a> Player<'a> {
+    pub fn new(host: &'a mut CoreHost, person: u64) -> Result<Self, String> {
+        host.controlled_person(person)?;
+        Ok(Self { host, person })
+    }
+
+    pub fn view(&self) -> Result<CorePlayerView, String> {
+        self.host.player_view(self.person)
+    }
+
+    /// Advance time without exposing other people's private decision events.
+    pub fn advance(&mut self, millis: u64) -> Result<Advance, String> {
+        self.host.controlled_person(self.person)?;
+        let run = self.host.advance_continuous(millis, &[])?;
+        Ok(Advance {
+            elapsed_millis: run.elapsed_millis,
+            boundaries: run.boundaries,
+            failure: run.failure,
+        })
+    }
+
+    pub fn depart(&mut self, destination: u64) -> Result<bool, String> {
+        self.host.controlled_person(self.person)?;
+        let result = self.host.depart(
+            &[game_economy::Departure {
+                person: self.person,
+                destination,
+            }],
+            &[],
+        )?;
+        Ok(result.first().is_some_and(|outcome| outcome.departed))
+    }
+
+    pub fn treat_wound(&mut self, good: u32) -> Result<bool, String> {
+        self.host.controlled_person(self.person)?;
+        let result = self.host.treat_wounds(
+            &[WoundTreatment {
+                person: self.person,
+                good,
+            }],
+            &[],
+        )?;
+        Ok(result
+            .outcomes
+            .first()
+            .is_some_and(|outcome| outcome.accepted))
+    }
+}
