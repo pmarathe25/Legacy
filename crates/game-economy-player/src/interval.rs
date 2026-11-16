@@ -48,6 +48,27 @@ impl<'a> Player<'a> {
         Ok(result.first().is_some_and(|outcome| outcome.departed))
     }
 
+    pub fn eat(&mut self, good: u32) -> Result<bool, String> {
+        self.host.controlled_person(self.person)?;
+        self.host.eat_controlled(self.person, good)
+    }
+
+    pub fn start_work(&mut self, recipe: u32, units: u32) -> Result<Option<u64>, String> {
+        self.host.controlled_person(self.person)?;
+        let (job, accepted) = self
+            .host
+            .start_controlled_work(self.person, recipe, units)?;
+        Ok(accepted.then_some(job))
+    }
+
+    pub fn stop_work(&mut self, job: u64) -> Result<(), String> {
+        let person = self.host.controlled_person(self.person)?;
+        if person.health == 0 {
+            return Err("the controlled person cannot stop work while incapacitated".into());
+        }
+        self.host.abandon_work(&[(job, self.person)])
+    }
+
     pub fn treat_wound(&mut self, good: u32) -> Result<bool, String> {
         self.host.controlled_person(self.person)?;
         let result = self.host.treat_wounds(

@@ -350,9 +350,11 @@ impl CoreHost {
             .filter(|row| row.phase == game_lot_runtime::Phase::Working)
             .map(|row| row.job.worker)
             .collect();
+        let assisting = self.assisting_people();
         if choices.par_iter().any(|choice| {
             busy.binary_search(&choice.person).is_ok()
                 || active.contains(&choice.person)
+                || assisting.binary_search(&choice.person).is_ok()
                 || self
                     .core
                     .people

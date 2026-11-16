@@ -62,7 +62,7 @@ pub use mechanics::{
 };
 pub use offers::CoreSocialResults;
 pub use personal_choice::{CoreChoiceEvent, CoreChoiceIntent, CoreChoiceOutcome, CoreWorkIntent};
-pub use player::{CorePlayerView, CorePlayerWound, CoreSeenPerson};
+pub use player::{CorePlayerJob, CorePlayerView, CorePlayerWound, CoreSeenPerson};
 pub use purpose::CorePurpose;
 pub use requests::{CoreDeliveryResults, CoreRequestResults};
 pub use scheduler::{CoreRun, CoreRunEvent, CoreSchedule, DecisionPhase};
@@ -1098,12 +1098,6 @@ impl CoreHost {
                 core.physical.tick(),
                 core.rules.max_health,
             )?;
-            if work_capabilities.is_none() {
-                game_economy_work::validate_age(
-                    &game_economy_work::underage(owner),
-                    core.physical.work(),
-                )?;
-            }
         } else if personal_conflict
             .as_ref()
             .is_some_and(|owner| !owner.pending_deaths.is_empty())
@@ -1847,9 +1841,7 @@ impl CoreHost {
         } else if let Some(personality) = &self.personality {
             busy.par_extend(personality.work_refusals(self.core.seed, tick));
         }
-        if (!personal || self.work_capabilities.is_none())
-            && let Some(family) = &self.family
-        {
+        if !personal && let Some(family) = &self.family {
             busy.par_extend(game_economy_work::underage(family));
         }
         busy.par_sort_unstable();

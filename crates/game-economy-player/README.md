@@ -9,7 +9,10 @@ host. It checks that the chosen person is controlled before each action, and
 provides their own state, possessions and observable wound severity, along with
 co-located people. It does not reveal the wound's future recovery deadline.
 An incapacitated controlled person may still advance time but cannot observe.
-It can advance time, depart on a route, and use a carried wound remedy. Time
+It can advance time, depart on a route, eat carried food, start and stop chosen
+production work, and use a carried wound remedy. Chosen work uses configured
+physical capability rather than a universal age or hunger refusal; its base rate
+currently comes from the host schedule rather than a personal effort choice. Time
 advancement reports elapsed time and failures without returning administrative
 events. A limited `--interval-player PERSON` CLI exposes this adapter. It does
 not yet provide campaign succession or the full player command set, and the

@@ -13,6 +13,28 @@ fn interval_player_can_observe_travel_and_reload() {
             .as_nanos()
     );
     let save = std::env::temp_dir().join(format!("{token}.json"));
+    let initial = game_economy_cli::core_scenario(
+        &root.join("content/scenarios/economy-core-player.toml"),
+        &root.join("content"),
+    )
+    .unwrap()
+    .snapshot();
+    let bread = initial
+        .core
+        .physical
+        .goods
+        .iter()
+        .find(|good| good.name == "bread")
+        .unwrap()
+        .id;
+    let recipe = initial
+        .core
+        .physical
+        .recipes
+        .iter()
+        .find(|recipe| recipe.name == "fixture-tool")
+        .unwrap()
+        .id;
     let mut child = Command::new(env!("CARGO_BIN_EXE_game-economy-cli"))
         .current_dir(&root)
         .args(["--interval-player", "1"])
@@ -22,7 +44,7 @@ fn interval_player_can_observe_travel_and_reload() {
         .spawn()
         .unwrap();
     let input = format!(
-        "look\nmove 2\nwait 1000\nlook\nsave {}\nload {}\nquit\n",
+        "look\neat {bread}\nwork {recipe} 1\nlook\nstop 1\nmove 2\nwait 1000\nlook\nsave {}\nload {}\nquit\n",
         save.display(),
         save.display()
     );
@@ -39,6 +61,9 @@ fn interval_player_can_observe_travel_and_reload() {
     assert!(stderr.is_empty(), "{stderr}");
     assert!(stdout.contains("person=1 region=Some(1)"), "{stdout}");
     assert!(stdout.contains("departed=true"), "{stdout}");
+    assert!(stdout.contains("consumed=true"), "{stdout}");
+    assert!(stdout.contains("job=1 started=true"), "{stdout}");
+    assert!(stdout.contains("stopped"), "{stdout}");
     assert!(stdout.contains("person=1 region=Some(2)"), "{stdout}");
     assert!(
         stdout.contains("saved") && stdout.contains("loaded"),

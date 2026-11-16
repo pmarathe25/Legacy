@@ -9,7 +9,7 @@ fn command(host: &mut CoreHost, person: u64, words: &[&str]) -> Result<bool, Str
     match words {
         [] => {}
         ["help"] => println!(
-            "look | wait MILLISECONDS | move REGION | treat GOOD | save PATH | load PATH | quit"
+            "look | wait MILLISECONDS | move REGION | eat GOOD | treat GOOD | work RECIPE UNITS | stop JOB | save PATH | load PATH | quit"
         ),
         ["quit"] | ["exit"] => return Ok(false),
         ["look"] => {
@@ -38,6 +38,12 @@ fn command(host: &mut CoreHost, person: u64, words: &[&str]) -> Result<bool, Str
                     journey.destination, journey.remaining
                 );
             }
+            if let Some(job) = view.job {
+                println!(
+                    "job={} recipe={} remaining={}",
+                    job.id, job.recipe, job.remaining
+                );
+            }
         }
         ["wait", millis] => {
             let millis = millis.parse::<u64>().map_err(|_| "invalid milliseconds")?;
@@ -54,9 +60,27 @@ fn command(host: &mut CoreHost, person: u64, words: &[&str]) -> Result<bool, Str
             let region = region.parse::<u64>().map_err(|_| "invalid region")?;
             println!("departed={}", Player::new(host, person)?.depart(region)?);
         }
+        ["eat", good] => {
+            let good = good.parse::<u32>().map_err(|_| "invalid good")?;
+            println!("consumed={}", Player::new(host, person)?.eat(good)?);
+        }
         ["treat", good] => {
             let good = good.parse::<u32>().map_err(|_| "invalid good")?;
             println!("consumed={}", Player::new(host, person)?.treat_wound(good)?);
+        }
+        ["work", recipe, units] => {
+            let recipe = recipe.parse::<u32>().map_err(|_| "invalid recipe")?;
+            let units = units.parse::<u32>().map_err(|_| "invalid units")?;
+            if let Some(job) = Player::new(host, person)?.start_work(recipe, units)? {
+                println!("job={} started=true", job);
+            } else {
+                println!("started=false");
+            }
+        }
+        ["stop", job] => {
+            let job = job.parse::<u64>().map_err(|_| "invalid job")?;
+            Player::new(host, person)?.stop_work(job)?;
+            println!("stopped");
         }
         ["save", path @ ..] if !path.is_empty() => {
             host.controlled_person(person)?;

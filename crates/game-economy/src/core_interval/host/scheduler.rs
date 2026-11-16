@@ -192,6 +192,9 @@ pub enum DecisionPhase {
 pub struct CoreSchedule {
     pub period_millis: u64,
     pub work_rate: u64,
+    /// Next ID reserved by a controlled person's work attempt.
+    #[serde(default = "first_player_job_id")]
+    pub next_player_job_id: u64,
     /// Offset from this quantum's opening; it may lie in a later quantum.
     pub next_decision_millis: Option<u128>,
     pub phase: DecisionPhase,
@@ -211,6 +214,9 @@ pub struct CoreSchedule {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub birth_choices: Option<game_personal_choice::BirthProfile>,
 }
+fn first_player_job_id() -> u64 {
+    1
+}
 impl CoreSchedule {
     pub(super) fn validate(&self, core: &CoreInterval) -> Result<(), String> {
         let offset = core
@@ -219,6 +225,7 @@ impl CoreSchedule {
         let quantum = core.physical.tick_millis();
         if self.period_millis == 0
             || self.work_rate == 0
+            || self.next_player_job_id == 0
             || offset > quantum
             || self
                 .next_decision_millis
@@ -729,6 +736,7 @@ impl CoreHost {
         let schedule = CoreSchedule {
             period_millis,
             work_rate,
+            next_player_job_id: 1,
             next_decision_millis: Some(u128::from(offset)),
             phase: DecisionPhase::Meals,
             carried_rates,

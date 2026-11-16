@@ -1126,6 +1126,87 @@ fn interval_player_can_choose_self_care_without_other_control() {
 }
 
 #[test]
+fn interval_player_can_choose_to_eat_carried_food_at_any_hunger() {
+    use game_economy::core_interval::CoreHost;
+    use game_economy_player::interval::Player;
+    use game_lots::{Container, Lot, Place};
+    fn run(workers: usize, hunger: u32) -> serde_json::Value {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let root = root();
+                let mut state = game_economy_cli::core_scenario(
+                    &root.join("content/scenarios/economy-core-player.toml"),
+                    &root.join("content"),
+                )
+                .unwrap()
+                .snapshot();
+                state.core.people[0].hunger = hunger;
+                let food = state
+                    .core
+                    .physical
+                    .goods
+                    .iter()
+                    .find(|good| {
+                        good.food
+                            .as_ref()
+                            .is_some_and(|profile| profile.portion <= 10)
+                    })
+                    .unwrap();
+                let good = food.id;
+                let quantity = food.food.as_ref().unwrap().portion;
+                let holder = state
+                    .core
+                    .physical
+                    .custody
+                    .containers
+                    .iter_mut()
+                    .find(|row| row.place == Place::Person(1))
+                    .unwrap();
+                *holder = Container::new(
+                    holder.place,
+                    holder.capacity,
+                    vec![Lot {
+                        batch: None,
+                        item: None,
+                        good,
+                        quantity,
+                        expires_at: None,
+                    }],
+                )
+                .unwrap();
+                let mut host = CoreHost::resume(state).unwrap();
+                {
+                    let mut player = Player::new(&mut host, 1).unwrap();
+                    assert!(player.eat(good).unwrap());
+                    assert!(player.view().unwrap().person.hunger <= hunger);
+                    assert!(
+                        player
+                            .view()
+                            .unwrap()
+                            .possessions
+                            .iter()
+                            .all(|lot| lot.good != good)
+                    );
+                    assert!(!player.eat(good).unwrap());
+                }
+                let state = host.snapshot();
+                let restored = CoreHost::resume(
+                    serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap(),
+                )
+                .unwrap();
+                assert_eq!(state, restored.snapshot());
+                serde_json::to_value(state).unwrap()
+            })
+    }
+    for hunger in [0, 100] {
+        assert_eq!(run(1, hunger), run(4, hunger));
+    }
+}
+
+#[test]
 fn incapacitated_interval_player_can_wait_but_cannot_observe() {
     use game_economy::core_interval::CoreHost;
     use game_economy_player::interval::Player;
@@ -4740,6 +4821,35 @@ fn individual_capability_allows_young_workers_and_can_limit_adults() {
             snapshot.schedule.as_mut().unwrap().personal_choices = Some(std::sync::Arc::new((1..=2).map(|id| game_personal_choice::Person {
                 id, idle: 0, act_on_tie: false, preferences: vec![game_personal_choice::Preference { domain: 4, enabled: true, bias: 10, weight: 1000 }], actions: vec![],
             }).collect()));
+            for physical_limit in [false, true] {
+                let mut manual = snapshot.clone();
+                manual.core.people[0].controlled = true;
+                manual.core.people[0].hunger = 100;
+                for policy in &mut manual.autowork.as_mut().unwrap().policies { policy.enabled = false; }
+                if physical_limit { manual.family.as_mut().unwrap().members[0].genome.alleles[1] = [0, 0]; }
+                else { manual.work_capabilities = None; }
+                let mut manual = CoreHost::resume(manual).unwrap();
+                let before = manual.snapshot();
+                let selected = game_economy_player::interval::Player::new(&mut manual, 1).unwrap().start_work(recipe, 1).unwrap();
+                assert_eq!(selected.is_some(), !physical_limit);
+                if selected.is_none() { assert_eq!(manual.snapshot(), before); }
+                if let Some(job) = selected {
+                    assert_eq!(job, 1);
+                    assert_eq!(game_economy_player::interval::Player::new(&mut manual, 1).unwrap().view().unwrap().job.unwrap().id, job);
+                    let saved = serde_json::to_string(&manual.snapshot()).unwrap();
+                    let mut restored = CoreHost::resume(serde_json::from_str(&saved).unwrap()).unwrap();
+                    let before = restored.snapshot();
+                    assert!(game_economy_player::interval::Player::new(&mut restored, 1).unwrap().stop_work(job + 1).is_err());
+                    assert_eq!(restored.snapshot(), before);
+                    game_economy_player::interval::Player::new(&mut restored, 1).unwrap().stop_work(job).unwrap();
+                    let stopped = restored.snapshot();
+                    assert_eq!(stopped.schedule.as_ref().unwrap().next_player_job_id, 2);
+                    let quantum = stopped.core.physical.tick_millis;
+                    let mut player = game_economy_player::interval::Player::new(&mut restored, 1).unwrap();
+                    assert_eq!(player.advance(quantum).unwrap().failure, None);
+                    assert_eq!(player.start_work(recipe, 1).unwrap(), Some(2));
+                }
+            }
             let mut host = CoreHost::resume(snapshot.clone()).unwrap();
             let (choices, _) = host.preview_personal_choices(&[]).unwrap();
             assert!(choices.iter().any(|row| row.actor == 1 && row.key.domain == 4));
@@ -4773,10 +4883,12 @@ fn individual_capability_allows_young_workers_and_can_limit_adults() {
             assert_eq!(host.snapshot(), restored.snapshot());
             let mut legacy = snapshot;
             legacy.work_capabilities = None;
-            let legacy = CoreHost::resume(legacy).unwrap();
+            let mut legacy = CoreHost::resume(legacy).unwrap();
             let (choices, _) = legacy.preview_personal_choices(&[]).unwrap();
-            assert!(!choices.iter().any(|row| row.actor == 1 && row.key.domain == 4));
+            assert!(choices.iter().any(|row| row.actor == 1 && row.key.domain == 4));
             assert!(choices.iter().any(|row| row.actor == 2 && row.key.domain == 4));
+            assert_eq!(legacy.advance_continuous(1, &[]).unwrap().failure, None);
+            assert!(legacy.snapshot().core.physical.work.iter().any(|row| row.job.worker == 1));
             serde_json::to_value(host.snapshot()).unwrap()
         })
     }

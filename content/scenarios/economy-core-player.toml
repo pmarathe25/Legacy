@@ -15,7 +15,7 @@ max_work_hunger = 20
 
 [[regions]]
 id = 1
-stock = { grain = 10 }
+stock = { grain = 10, timber = 5 }
 
 [[people]]
 id = 1
@@ -25,6 +25,7 @@ hunger = 0
 willing_to_work = false
 seek_meals = false
 controlled = true
+goods = { bread = 4 }
 
 
 [[regions]]

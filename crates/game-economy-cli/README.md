@@ -330,7 +330,7 @@ An initial controlled-person interface for the interval host is available with
 `cargo run -p game-economy-cli -- --interval-player 1`. It uses
 `economy-core-player.toml` by default, or accepts another interval-compatible
 scenario containing that controlled person. Enter `help` for its limited
-observation, time, travel, self-treatment, and save/load commands. Saving
+observation, time, travel, eating, work, self-treatment, and save/load commands. Saving
 requires a new path and does not overwrite an existing file. This path does not
 yet provide campaign succession or the full command set; the ordinary `--player`
 command still uses the separate whole-boundary host.
