@@ -23,6 +23,11 @@ This is a restoration inventory, not a claim of complete behavioral parity. A do
 | Content and world generation | Data files, scenario generation, material definitions, catalogs and authored overlays. | Partial: TOML content and seeded scenarios exist; old world-generation and content breadth not yet compared. | Inventory content schemas and producer/consumer support alongside each restored owner. |
 | Execution and scaling | Older engine used transactions, indexed state and selected parallel work. | Parallel interval engine exists; isolated scaling tests do not prove full-world linear scaling. | Benchmark realistic mixed, independent and contended workloads, including event retention, save/resume and worker determinism. |
 
+People with optional mechanical exploration settings can propose changed trial
+conditions based on their own remembered outcomes, and compare different
+carried devices. This is an initial iterative experimentation path; general
+inference, retained design copying, and broader invention remain unfinished.
+
 ## Verification criteria
 
 For each restored feature: demonstrate its owner actually runs through `CoreHost`, with data-defined configuration and observations; exercise personal refusal or noncompliance where relevant; test resource conservation and rollback, save/resume and deterministic results across worker counts. Measure independent and contested workloads separately. Do not mark the full domain complete merely because a type, catalog, or isolated helper is present. Historical institutions are descriptions of autonomous behavior and never grant authority or bind agreements by themselves.

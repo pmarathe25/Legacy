@@ -29,12 +29,12 @@ pub use host::{
     CoreSharedWork, CoreSites, CoreSkillCredit, CoreSkills, CoreSocial, CoreSocialResults,
     CoreToolRepairResults, CoreTreatmentResults, CoreWorkIntent, CoreWritingPracticeResults,
     CoreWritingResults, DecisionPhase, MechanicalCapability, MechanicalCommunication,
-    MechanicalLoadMaterial, MechanicalLoadOutcome, MechanicalLoadPolicy, MechanicalLoadRequest,
-    MechanicalLoadResult, MechanicalMaterial, MechanicalMemory, MechanicalPolicy,
-    MechanicalReactions, MechanicalTestimony, MechanicalWatchPolicy, MechanicalWitnessRequest,
-    PersonalAttackPolicy, PersonalDefensePolicy, PersonalHarm, PersonalStrikeReaction,
-    StrikeCapability, StrikeFeeling, StrikeInterpretation, WitnessedMechanicalResult,
-    WoundCarePolicy, WoundTreatment,
+    MechanicalExploration, MechanicalLoadMaterial, MechanicalLoadOutcome, MechanicalLoadPolicy,
+    MechanicalLoadRequest, MechanicalLoadResult, MechanicalMaterial, MechanicalMemory,
+    MechanicalPolicy, MechanicalReactions, MechanicalTestimony, MechanicalTrialChange,
+    MechanicalWatchPolicy, MechanicalWitnessRequest, PersonalAttackPolicy, PersonalDefensePolicy,
+    PersonalHarm, PersonalStrikeReaction, StrikeCapability, StrikeFeeling, StrikeInterpretation,
+    WitnessedMechanicalResult, WoundCarePolicy, WoundTreatment,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

@@ -146,6 +146,25 @@ pub struct MechanicalReactions {
     pub contended: i64,
 }
 
+/// A person's signed changes to a remembered trial's physical conditions.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct MechanicalTrialChange {
+    pub force: i64,
+    pub distance: i64,
+    pub load: i64,
+}
+
+/// Personal, outcome-dependent exploration; no outcome has an inherent value.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct MechanicalExploration {
+    pub moved: MechanicalTrialChange,
+    pub stalled: MechanicalTrialChange,
+    pub broken: MechanicalTrialChange,
+    pub contended: MechanicalTrialChange,
+}
+
 /// An individual's choices about sharing and accepting mechanical testimony.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -216,6 +235,8 @@ pub struct MechanicalMemory {
     pub retain: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reactions: Option<MechanicalReactions>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exploration: Option<MechanicalExploration>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub communication: Option<MechanicalCommunication>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -916,7 +937,7 @@ impl CoreHost {
                         .iter()
                         .filter_map(|lot| parts.get(&lot.item?).copied())
                         .filter_map(|machine| {
-                            let experiment = game_mechanics::Experiment {
+                            let mut experiment = game_mechanics::Experiment {
                                 actor,
                                 apparatus: machine.id,
                                 output_part: machine.parts.last()?.id,
@@ -924,7 +945,37 @@ impl CoreHost {
                                 input_distance: capability.max_distance.min(100),
                                 load_force: 1,
                             };
-                            let reaction = indexed(&owner.memories, actor, |row| row.person)
+                            let memory = indexed(&owner.memories, actor, |row| row.person);
+                            if let Some((exploration, previous)) = memory.and_then(|memory| {
+                                Some((
+                                    memory.exploration?,
+                                    memory
+                                        .observations
+                                        .iter()
+                                        .rev()
+                                        .find(|row| row.apparatus == machine.id)?,
+                                ))
+                            }) {
+                                let change = match previous.outcome {
+                                    game_mechanics::Outcome::Moved => exploration.moved,
+                                    game_mechanics::Outcome::Stalled => exploration.stalled,
+                                    game_mechanics::Outcome::Broken => exploration.broken,
+                                    game_mechanics::Outcome::Contended => exploration.contended,
+                                };
+                                experiment.input_force = previous
+                                    .input_force
+                                    .saturating_add_signed(change.force)
+                                    .clamp(1, capability.max_force);
+                                experiment.input_distance = previous
+                                    .input_distance
+                                    .saturating_add_signed(change.distance)
+                                    .clamp(1, capability.max_distance);
+                                experiment.load_force = previous
+                                    .load_force
+                                    .saturating_add_signed(change.load)
+                                    .max(1);
+                            }
+                            let reaction = memory
                                 .and_then(|memory| {
                                     let reactions = memory.reactions?;
                                     let outcome = memory

@@ -55,11 +55,11 @@ pub use hauling::CoreHaulingResults;
 pub use local_transport::CoreLocalTransportResults;
 pub use market::CoreMarketResults;
 pub use mechanics::{
-    CoreMechanics, MechanicalCapability, MechanicalCommunication, MechanicalLoadMaterial,
-    MechanicalLoadOutcome, MechanicalLoadPolicy, MechanicalLoadRequest, MechanicalLoadResult,
-    MechanicalMaterial, MechanicalMemory, MechanicalPolicy, MechanicalReactions,
-    MechanicalTestimony, MechanicalWatchPolicy, MechanicalWitnessRequest,
-    WitnessedMechanicalResult,
+    CoreMechanics, MechanicalCapability, MechanicalCommunication, MechanicalExploration,
+    MechanicalLoadMaterial, MechanicalLoadOutcome, MechanicalLoadPolicy, MechanicalLoadRequest,
+    MechanicalLoadResult, MechanicalMaterial, MechanicalMemory, MechanicalPolicy,
+    MechanicalReactions, MechanicalTestimony, MechanicalTrialChange, MechanicalWatchPolicy,
+    MechanicalWitnessRequest, WitnessedMechanicalResult,
 };
 pub use offers::CoreSocialResults;
 pub use personal_choice::{CoreChoiceEvent, CoreChoiceIntent, CoreChoiceOutcome, CoreWorkIntent};

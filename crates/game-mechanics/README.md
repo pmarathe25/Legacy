@@ -30,7 +30,21 @@ people's locations, effort, part custody and access. The interval host offers an
 explicit experiment API that checks actors' carried identified items and effort
 limits. A person without authored trial policies can consider one generated
 trial for each carried apparatus; their own remembered outcomes can influence
-the value of each candidate. The interval host can offer personally willing experiment policies in
+the value of each candidate. Optional `exploration` on a person's mechanical
+memory adjusts the next trial's force, distance, and load from their latest
+personally observed trial of that apparatus. Adjustments are signed and chosen
+per outcome, with effort limited by the person's physical capability. They do
+not guarantee improvement or cause the person to experiment. For example:
+
+```toml
+[[mechanics.memories]]
+person = 1
+capacity = 4
+retain = true
+exploration = { stalled = { force = 10, load = -1 }, moved = { load = 2 } }
+```
+
+The interval host can offer personally willing experiment policies in
 its opt-in choice round. The interval host also offers an explicit chosen-load
 action using data-defined force per unit of a real good. It stages physical
 access, evaluates the apparatus, and transfers the actual lot only when the

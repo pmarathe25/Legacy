@@ -4538,6 +4538,28 @@ fn people_compare_their_own_memories_of_carried_devices() {
                 assert!(choices.iter().any(|choice| choice.actor == 1
                     && choice.key.domain == 6
                     && choice.key.action == 2));
+                let mut exploring = host.snapshot();
+                exploring.mechanics.as_mut().unwrap().memories[0].exploration = Some(serde_json::from_value(serde_json::json!({
+                    "moved": {"force": -10, "distance": -20, "load": 5},
+                    "stalled": {"force": 500, "distance": -999, "load": -9999}
+                })).unwrap());
+                let mut stale = exploring.clone();
+                stale.schedule.as_mut().unwrap().phase = game_economy::core_interval::DecisionPhase::ChosenExperiment {
+                    meal_people: vec![], intents: std::sync::Arc::new(choices), remaining: 0,
+                };
+                let mut stale = CoreHost::resume(stale).unwrap();
+                let stale_result = stale.advance_continuous(1, &[]).unwrap();
+                assert_eq!(stale_result.failure, None);
+                assert!(stale_result.events.iter().any(|event| matches!(event, game_economy::core_interval::CoreRunEvent::PersonalChoices(rows) if rows.iter().any(|row| row.actor == 1 && row.outcome == game_economy::core_interval::CoreChoiceOutcome::Stale))));
+                assert_eq!(stale.snapshot().mechanics.unwrap().memories[0].observations.len(), 2);
+                let mut exploring = CoreHost::resume(serde_json::from_str(&serde_json::to_string(&exploring).unwrap()).unwrap()).unwrap();
+                let adjusted = exploring.preview_personal_device_trials(&[1], &[]).unwrap();
+                assert_eq!((adjusted[0].experiment.input_force, adjusted[0].experiment.input_distance, adjusted[0].experiment.load_force), (200, 1, 1));
+                assert_eq!((adjusted[1].experiment.input_force, adjusted[1].experiment.input_distance, adjusted[1].experiment.load_force), (90, 80, 6));
+                assert_eq!(exploring.advance_continuous(1, &[]).unwrap().failure, None);
+                let after = exploring.snapshot();
+                let result = after.mechanics.as_ref().unwrap().memories[0].observations.last().unwrap();
+                assert_eq!((result.apparatus, result.input_force, result.input_distance, result.load_force), (2, 90, 80, 6));
                 serde_json::to_value(host.snapshot()).unwrap()
             })
     }

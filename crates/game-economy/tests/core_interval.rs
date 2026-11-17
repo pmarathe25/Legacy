@@ -593,6 +593,7 @@ fn independent_physical_mechanics_benchmark() {
                     capacity: 4,
                     retain: true,
                     reactions: None,
+                    exploration: None,
                     communication: None,
                     testimony: vec![],
                     witnessed: vec![],
