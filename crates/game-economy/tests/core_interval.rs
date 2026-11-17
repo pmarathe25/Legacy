@@ -12696,7 +12696,12 @@ fn composed_core_interval_is_chunk_independent_and_resumable() {
         1,
     );
     let mut people = expected_person.people;
-    let expected_travel = initial.travel.as_ref().unwrap().advance(&mut people);
+    let expected_travel = initial
+        .travel
+        .as_ref()
+        .unwrap()
+        .advance_boundary(&mut people, initial.physical.tick_millis)
+        .unwrap();
     assert_eq!(whole.physical, physical.snapshot());
     assert_eq!(whole.people, people);
     assert_eq!(whole.nutrition, expected_person.nutrition);

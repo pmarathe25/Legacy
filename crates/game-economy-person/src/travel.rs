@@ -761,26 +761,6 @@ impl Travel {
         self.observations
             .par_sort_unstable_by_key(|o| (o.person, o.source, o.destination));
     }
-    /// Arrival occurs after this interval's personal and physical decisions.
-    pub fn advance(&self, people: &mut [Person]) -> Self {
-        let journeys: Vec<_> = self
-            .journeys
-            .par_iter()
-            .map(|j| {
-                let mut j = j.clone();
-                let incapacitated_immortal = people
-                    .binary_search_by_key(&j.person, |p| p.id)
-                    .ok()
-                    .is_some_and(|i| people[i].health == 0 && people[i].immortal.is_some());
-                if !incapacitated_immortal && !j.pending_arrival {
-                    j.remaining -= 1;
-                }
-                j
-            })
-            .collect();
-        self.settle_journeys(people, journeys)
-    }
-
     /// Advance a boundary by its actual elapsed duration and publish arrivals.
     pub fn advance_boundary(
         &self,
@@ -1057,7 +1037,7 @@ mod elapsed_tests {
             seek_meals: false,
             controlled: false,
         }];
-        let travel = travel.advance(&mut people);
+        let travel = travel.advance_boundary(&mut people, 1000).unwrap();
         assert_eq!(
             (
                 travel.journeys[0].remaining,
@@ -1066,7 +1046,7 @@ mod elapsed_tests {
             (1, 250)
         );
         assert_eq!(people[0].region, None);
-        let travel = travel.advance(&mut people);
+        let travel = travel.advance_boundary(&mut people, 1000).unwrap();
         assert!(travel.journeys.is_empty());
         assert_eq!(people[0].region, Some(2));
     }
@@ -1159,7 +1139,7 @@ mod elapsed_tests {
             ..Travel::default()
         };
         let mut whole_people = people.clone();
-        let expected = initial.advance(&mut whole_people);
+        let expected = initial.advance_boundary(&mut whole_people, 1000).unwrap();
         let mut split_people = people;
         let mut split = initial;
         split.progress_elapsed(&split_people, 333, 1000).unwrap();
