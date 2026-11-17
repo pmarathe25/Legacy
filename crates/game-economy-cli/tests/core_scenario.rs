@@ -1207,6 +1207,77 @@ fn interval_player_can_choose_to_eat_carried_food_at_any_hunger() {
 }
 
 #[test]
+fn interval_player_can_rest_and_resume_a_chosen_job() {
+    use game_economy::core_interval::CoreHost;
+    use game_economy_player::interval::Player;
+    fn run(workers: usize) -> serde_json::Value {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let root = root();
+                let host = game_economy_cli::core_scenario(
+                    &root.join("content/scenarios/economy-core-player.toml"),
+                    &root.join("content"),
+                )
+                .unwrap();
+                let mut state = host.snapshot();
+                let recipe = state
+                    .core
+                    .physical
+                    .recipes
+                    .iter()
+                    .find(|row| row.name == "fixture-tool")
+                    .unwrap()
+                    .id;
+                let bread = state
+                    .core
+                    .physical
+                    .goods
+                    .iter()
+                    .find(|row| row.name == "bread")
+                    .unwrap()
+                    .id;
+                state.core.people[0].hunger = 21;
+                let mut host = CoreHost::resume(state).unwrap();
+                let job;
+                {
+                    let mut player = Player::new(&mut host, 1).unwrap();
+                    job = player.start_work(recipe, 1).unwrap().unwrap();
+                    let before = player.view().unwrap().job.unwrap().remaining;
+                    player.set_rest(true).unwrap();
+                    assert!(player.view().unwrap().fatigue.unwrap().resting);
+                    assert!(player.eat(bread).is_err());
+                    assert_eq!(player.advance(500).unwrap().failure, None);
+                    assert_eq!(player.view().unwrap().job.unwrap().remaining, before);
+                }
+                let saved = host.snapshot();
+                assert_eq!(saved.core.physical.work[0].progress_remainder, 0);
+                host = CoreHost::resume(
+                    serde_json::from_str(&serde_json::to_string(&saved).unwrap()).unwrap(),
+                )
+                .unwrap();
+                {
+                    let mut player = Player::new(&mut host, 1).unwrap();
+                    assert!(player.view().unwrap().fatigue.unwrap().resting);
+                    player.set_rest(false).unwrap();
+                    assert!(!player.view().unwrap().fatigue.unwrap().resting);
+                    assert_eq!(player.advance(1250).unwrap().failure, None);
+                }
+                assert!(host.snapshot().core.physical.work[0].progress_remainder > 0);
+                {
+                    let mut player = Player::new(&mut host, 1).unwrap();
+                    player.stop_work(job).unwrap();
+                    assert!(player.eat(bread).unwrap());
+                }
+                serde_json::to_value(host.snapshot()).unwrap()
+            })
+    }
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
 fn incapacitated_interval_player_can_wait_but_cannot_observe() {
     use game_economy::core_interval::CoreHost;
     use game_economy_player::interval::Player;

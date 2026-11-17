@@ -2882,7 +2882,6 @@ impl CoreHost {
                         .is_some_and(|person| {
                             let person = &self.core.people[person];
                             person.health > 0
-                                && person.hunger <= self.core.rules.max_work_hunger
                                 && person.region == Some(job.region)
                                 && blocked.binary_search(&person.id).is_err()
                         })

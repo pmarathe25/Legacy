@@ -85,7 +85,6 @@ impl CoreHost {
                     .map(|i| &self.core.people[i]);
                 let able = worker.is_some_and(|person| {
                     person.health > 0
-                        && person.hunger <= self.core.rules.max_work_hunger
                         && person.region == Some(work.job.region)
                         && blocked.binary_search(&person.id).is_err()
                 });

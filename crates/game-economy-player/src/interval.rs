@@ -53,6 +53,10 @@ impl<'a> Player<'a> {
         self.host.eat_controlled(self.person, good)
     }
 
+    pub fn set_rest(&mut self, resting: bool) -> Result<(), String> {
+        self.host.set_controlled_rest(self.person, resting)
+    }
+
     pub fn start_work(&mut self, recipe: u32, units: u32) -> Result<Option<u64>, String> {
         self.host.controlled_person(self.person)?;
         let (job, accepted) = self

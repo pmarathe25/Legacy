@@ -9,7 +9,7 @@ fn command(host: &mut CoreHost, person: u64, words: &[&str]) -> Result<bool, Str
     match words {
         [] => {}
         ["help"] => println!(
-            "look | wait MILLISECONDS | move REGION | eat GOOD | treat GOOD | work RECIPE UNITS | stop JOB | save PATH | load PATH | quit"
+            "look | wait MILLISECONDS | move REGION | eat GOOD | treat GOOD | work RECIPE UNITS | stop JOB | rest on|off | save PATH | load PATH | quit"
         ),
         ["quit"] | ["exit"] => return Ok(false),
         ["look"] => {
@@ -43,6 +43,9 @@ fn command(host: &mut CoreHost, person: u64, words: &[&str]) -> Result<bool, Str
                     "job={} recipe={} remaining={}",
                     job.id, job.recipe, job.remaining
                 );
+            }
+            if let Some(fatigue) = view.fatigue {
+                println!("fatigue={} resting={}", fatigue.fatigue, fatigue.resting);
             }
         }
         ["wait", millis] => {
@@ -81,6 +84,11 @@ fn command(host: &mut CoreHost, person: u64, words: &[&str]) -> Result<bool, Str
             let job = job.parse::<u64>().map_err(|_| "invalid job")?;
             Player::new(host, person)?.stop_work(job)?;
             println!("stopped");
+        }
+        ["rest", choice @ ("on" | "off")] => {
+            let resting = *choice == "on";
+            Player::new(host, person)?.set_rest(resting)?;
+            println!("resting={resting}");
         }
         ["save", path @ ..] if !path.is_empty() => {
             host.controlled_person(person)?;

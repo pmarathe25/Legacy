@@ -20,6 +20,12 @@ pub struct CorePlayerJob {
     pub remaining: u64,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CorePlayerFatigue {
+    pub fatigue: u32,
+    pub resting: bool,
+}
+
 /// Only the controlled person's own state and physically co-located people.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CorePlayerView {
@@ -31,6 +37,7 @@ pub struct CorePlayerView {
     pub nearby: Vec<CoreSeenPerson>,
     pub wound: Option<CorePlayerWound>,
     pub job: Option<CorePlayerJob>,
+    pub fatigue: Option<CorePlayerFatigue>,
 }
 
 impl CoreHost {
@@ -222,6 +229,13 @@ impl CoreHost {
                 recipe: work.job.recipe,
                 remaining: work.job.remaining,
             });
+        let fatigue = self.fatigue.as_ref().map(|owner| {
+            let state = owner.fatigue.people.iter().find(|row| row.id == id);
+            CorePlayerFatigue {
+                fatigue: state.map_or(0, |row| row.fatigue),
+                resting: state.is_some_and(|row| row.resting),
+            }
+        });
         Ok(CorePlayerView {
             tick: self.core.physical.tick(),
             offset_millis: self.core.elapsed_millis().ok_or("no physical interval")?,
@@ -231,6 +245,7 @@ impl CoreHost {
             nearby,
             wound,
             job,
+            fatigue,
         })
     }
 }

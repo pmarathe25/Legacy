@@ -44,3 +44,15 @@ ticks = 1
 
 [hauling]
 policies = [{ person = 1, source = 1, destination = 2, good = "grain", quantity = 2, willing = true }]
+
+[fatigue.rules]
+capacity = 30
+baseline_gain = 1
+work_gain = 2
+travel_gain = 1
+idle_recovery = 1
+rest_recovery = 5
+rest_at = 15
+resume_at = 5
+exhaustion_at = 25
+exhaustion_damage = 1

@@ -62,7 +62,9 @@ pub use mechanics::{
 };
 pub use offers::CoreSocialResults;
 pub use personal_choice::{CoreChoiceEvent, CoreChoiceIntent, CoreChoiceOutcome, CoreWorkIntent};
-pub use player::{CorePlayerJob, CorePlayerView, CorePlayerWound, CoreSeenPerson};
+pub use player::{
+    CorePlayerFatigue, CorePlayerJob, CorePlayerView, CorePlayerWound, CoreSeenPerson,
+};
 pub use purpose::CorePurpose;
 pub use requests::{CoreDeliveryResults, CoreRequestResults};
 pub use scheduler::{CoreRun, CoreRunEvent, CoreSchedule, DecisionPhase};

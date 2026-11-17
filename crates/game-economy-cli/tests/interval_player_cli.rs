@@ -44,7 +44,7 @@ fn interval_player_can_observe_travel_and_reload() {
         .spawn()
         .unwrap();
     let input = format!(
-        "look\neat {bread}\nwork {recipe} 1\nlook\nstop 1\nmove 2\nwait 1000\nlook\nsave {}\nload {}\nquit\n",
+        "look\neat {bread}\nwork {recipe} 1\nrest on\nwait 500\nlook\nrest off\nstop 1\nmove 2\nwait 1000\nlook\nsave {}\nload {}\nquit\n",
         save.display(),
         save.display()
     );
@@ -63,6 +63,8 @@ fn interval_player_can_observe_travel_and_reload() {
     assert!(stdout.contains("departed=true"), "{stdout}");
     assert!(stdout.contains("consumed=true"), "{stdout}");
     assert!(stdout.contains("job=1 started=true"), "{stdout}");
+    assert!(stdout.contains("resting=true"), "{stdout}");
+    assert!(stdout.contains("resting=false"), "{stdout}");
     assert!(stdout.contains("stopped"), "{stdout}");
     assert!(stdout.contains("person=1 region=Some(2)"), "{stdout}");
     assert!(
