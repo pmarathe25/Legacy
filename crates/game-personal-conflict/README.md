@@ -33,12 +33,13 @@ target as one accumulating physical wound. A later injury extends its recovery;
 ordinary boundary passage removes it when its configured recovery time arrives.
 Simultaneous attackers are not assigned individual shares of that injury. An
 optional `force_loss_per_severity` physically limits an injured person's strike
-force; it defaults to zero. Optional remedies specify physical goods, quantities,
+force; `work_strength_loss_per_severity` reduces strength used by the optional
+production capability model. Both default to zero. Optional remedies specify physical goods, quantities,
 and severity relief. An individual may choose to consume a remedy from their own
 custody, and a failed consumption does not change the wound. `wound_care`
 policies and personal choice domain 16 let individuals compare care with other
 actions; willingness, personal fear or obligation can motivate them. Other
-capabilities and assistance from other people are not yet modeled.
+capability effects and assistance from other people are not yet modeled.
 `content/scenarios/economy-core-wounds.toml` demonstrates wound recovery and
 force settings in the interval host.
 

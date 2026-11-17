@@ -1551,7 +1551,7 @@ impl CoreHost {
         {
             return Err("an assisting person cannot start other work".into());
         }
-        self.start_with_sites(requests)
+        self.start_with_sites_hunger_limit(requests, u32::MAX, true)
     }
     /// A worker may independently stop work; inputs return at the boundary.
     pub fn abandon_work(&mut self, requests: &[(u64, u64)]) -> Result<(), String> {

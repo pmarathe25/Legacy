@@ -13812,7 +13812,7 @@ fn family_birth_custody_and_worker_death_commit_atomically() {
             let mut next = CoreHost::begin(state.clone(), &[]).unwrap();
             assert!(next.start_chosen_work(&[(Start {
                 id: 2, worker: 3, region: 1, recipe: 1, units: 1,
-            }, 1)]).is_err());
+            }, 1)]).is_ok());
             state
         })
     };

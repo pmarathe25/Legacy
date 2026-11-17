@@ -6324,6 +6324,56 @@ fn wounds_can_physically_pause_work_until_personal_treatment() {
                 if !configured {
                     wounds.rules.work_strength_loss_per_severity = 0;
                 }
+                let mut admission_state = state.clone();
+                admission_state
+                    .core
+                    .people
+                    .iter_mut()
+                    .find(|person| person.id == 1)
+                    .unwrap()
+                    .hunger = 30;
+                let mut admission = CoreHost::resume(admission_state).unwrap();
+                admission
+                    .strike_people(
+                        &[PersonalStrike {
+                            actor: 2,
+                            target: 1,
+                            force: 6,
+                        }],
+                        &[],
+                        &[],
+                    )
+                    .unwrap();
+                let starts = [
+                    (
+                        game_production::Start {
+                            id: 10,
+                            worker: 1,
+                            region: 1,
+                            recipe,
+                            units: 1,
+                        },
+                        1,
+                    ),
+                    (
+                        game_production::Start {
+                            id: 11,
+                            worker: 2,
+                            region: 1,
+                            recipe,
+                            units: 1,
+                        },
+                        1,
+                    ),
+                ];
+                assert_eq!(
+                    admission.start_chosen_work(&starts).unwrap(),
+                    vec![(10, !configured), (11, true)]
+                );
+                assert_eq!(
+                    admission.snapshot().core.physical.work.len(),
+                    if configured { 1 } else { 2 }
+                );
                 let mut host = CoreHost::resume(state).unwrap();
                 assert_eq!(
                     Player::new(&mut host, 1)

@@ -166,7 +166,10 @@ impl CoreHost {
         }
         let tick = self.core.physical.tick();
         let offset = self.core.elapsed_millis().ok_or("no physical interval")?;
-        if self.sites.is_none() && self.tool_requirements.is_empty() {
+        if self.sites.is_none()
+            && self.tool_requirements.is_empty()
+            && self.work_capabilities.is_none()
+        {
             return self
                 .core
                 .start_work_with_hunger_limit(tick, offset, starts, max_hunger);
@@ -268,9 +271,23 @@ impl CoreHost {
                     .ok()
                     .is_some_and(|index| tools[index].2.is_some())
         };
+        let capability = self.work_capability_checks(
+            &starts
+                .par_iter()
+                .map(|(start, _)| (start.worker, start.recipe))
+                .collect::<Vec<_>>(),
+        );
+        let mut incapable: Vec<_> = starts
+            .par_iter()
+            .zip(capability)
+            .filter_map(|((start, _), permitted)| (!permitted).then_some(start.id))
+            .collect();
+        incapable.par_sort_unstable();
         let plain: Vec<_> = starts
             .par_iter()
-            .filter(|(start, _)| tool_permits(start.id))
+            .filter(|(start, _)| {
+                tool_permits(start.id) && incapable.binary_search(&start.id).is_err()
+            })
             .map(|row| row.0)
             .collect();
         let plan = self.sites.as_ref().map(|owner| {
@@ -296,6 +313,7 @@ impl CoreHost {
         });
         let permitted = |start: &game_production_model::Start| {
             tool_permits(start.id)
+                && incapable.binary_search(&start.id).is_err()
                 && self.sites.as_ref().is_none_or(|owner| {
                     owner
                         .facilities
