@@ -291,6 +291,12 @@ impl CoreInterval {
     pub fn simulated_millis(&self) -> u128 {
         self.boundary_millis + u128::from(self.elapsed_millis().unwrap_or(0))
     }
+    /// Stable key for a decision at this absolute instant, independent of the
+    /// physical quantum and of how the caller partitioned its advances.
+    fn decision_time_key(&self) -> u64 {
+        let instant = self.simulated_millis();
+        (instant as u64) ^ ((instant >> 64) as u64).rotate_left(29)
+    }
     /// Inspect the earliest work, travel, or optional hunger threshold. Early
     /// Work and travel can be published early under the restrictions below.
     pub fn next_deadline(&self, hunger_threshold: Option<u32>) -> Result<CoreDeadline, String> {

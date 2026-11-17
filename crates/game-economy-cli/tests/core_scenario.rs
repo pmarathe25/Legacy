@@ -5974,6 +5974,62 @@ fn authored_core_scenario_runs_and_survives_save_resume() {
 }
 
 #[test]
+fn personal_choices_use_absolute_time_instead_of_tick_number() {
+    use game_economy::core_interval::CoreHost;
+    let root = root();
+    let initial = game_economy_cli::core_scenario(
+        &root.join("content/scenarios/economy-core-personal-choices.toml"),
+        &root.join("content"),
+    )
+    .unwrap()
+    .snapshot();
+    let decide = |quantum: u64, tick: u64, seed: u64, workers: usize| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut state = initial.clone();
+                state.core.seed = seed;
+                state.core.boundary_millis = Some(3_600_000);
+                state.core.physical.tick_millis = quantum;
+                state.core.physical.custody.tick = tick;
+                state.core.physical.work_interval.as_mut().unwrap().tick = tick;
+                let people = std::sync::Arc::make_mut(
+                    state
+                        .schedule
+                        .as_mut()
+                        .unwrap()
+                        .personal_choices
+                        .as_mut()
+                        .unwrap(),
+                );
+                for preference in &mut people[0].preferences {
+                    preference.bias = 100;
+                }
+                let host = CoreHost::resume(state).unwrap();
+                host.preview_personal_choices(&[])
+                    .unwrap()
+                    .0
+                    .into_iter()
+                    .map(|intent| (intent.actor, intent.key))
+                    .collect::<Vec<_>>()
+            })
+    };
+    let mut chosen = std::collections::HashSet::new();
+    for seed in 1..=32 {
+        let hourly = decide(3_600_000, 1, seed, 1);
+        let minute = decide(60_000, 60, seed, 4);
+        assert_eq!(hourly, minute);
+        chosen.insert(hourly.iter().find(|row| row.0 == 1).unwrap().1.domain);
+    }
+    assert!(
+        chosen.len() > 1,
+        "test must exercise randomized choice ties"
+    );
+}
+
+#[test]
 fn authored_decision_cadence_is_independent_of_physical_quantum() {
     let root = root();
     let source =

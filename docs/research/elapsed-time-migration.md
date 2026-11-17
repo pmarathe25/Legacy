@@ -32,6 +32,13 @@ and animal clocks, ecological renewal, disease, or social randomness. In
 particular, a short physical quantum must not be advertised as a faithful
 minute-world until those owners have independent elapsed-time rules.
 
+Personal-choice tie breaking, cultivation opportunity ranking, and their
+intra-round ordering use the saved absolute decision instant rather than the
+physical tick number. This makes those particular random choices stable under
+a different quantum when the available opportunities are the same. Other
+owners still key random events to ticks and require their own persistent event
+clocks before whole-world outcomes can have that property.
+
 Acceptance for each migrated owner includes exact state and event-order
 equivalence across one advance and irregular partitions, checkpoint/resume in
 the middle of an interval, and worker-count independence. Test threshold and

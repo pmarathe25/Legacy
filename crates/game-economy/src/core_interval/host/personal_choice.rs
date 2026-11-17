@@ -284,7 +284,7 @@ impl CoreHost {
             .collect();
         let tick = self.core.physical.tick();
         let offset_millis = self.core.elapsed_millis().ok_or("no physical interval")?;
-        let round = tick.rotate_left(21) ^ offset_millis;
+        let round = self.core.decision_time_key();
         let decisions =
             game_personal_choice::select(&decision_makers, &proposals, self.core.seed, round)
                 .map_err(str::to_owned)?;
@@ -509,6 +509,7 @@ impl CoreHost {
     ) -> (Vec<u64>, Vec<CoreChoiceEvent>) {
         let tick = self.core.physical.tick();
         let offset = self.core.elapsed_millis().expect("active interval");
+        let round = self.core.decision_time_key();
         let schedule = self.schedule.as_mut().expect("active schedule");
         let mut occupied: Vec<_> = schedule
             .pending_cultivation
@@ -523,7 +524,7 @@ impl CoreHost {
         choices.par_sort_unstable_by_key(|row| {
             (
                 row.field,
-                game_genetics::random(self.core.seed, row.field, row.person ^ tick.rotate_left(17)),
+                game_genetics::random(self.core.seed ^ round, row.field, row.person),
                 row.person,
             )
         });
@@ -723,8 +724,7 @@ impl CoreHost {
                 });
             eligible.par_sort_unstable();
             if let Some(owner) = self.agriculture.as_ref().filter(|_| !eligible.is_empty()) {
-                let round = tick.rotate_left(21)
-                    ^ self.core.elapsed_millis().ok_or("no physical interval")?;
+                let round = self.core.decision_time_key();
                 game_economy_agriculture::opportunities::discover(
                     owner,
                     &self.core.people,
@@ -1613,8 +1613,7 @@ impl CoreHost {
                 .and_then(|social| social.language.as_ref())
             && let Some(forms) = language.writing.as_ref()
         {
-            let round =
-                tick.rotate_left(21) ^ self.core.elapsed_millis().ok_or("no physical interval")?;
+            let round = self.core.decision_time_key();
             let proposed: Vec<_> = people
                 .par_iter()
                 .flat_map_iter(|person| {
@@ -1873,8 +1872,7 @@ impl CoreHost {
                 }
             })
             .collect();
-        let round = self.core.physical.tick().rotate_left(21)
-            ^ self.core.elapsed_millis().ok_or("no physical interval")?;
+        let round = self.core.decision_time_key();
         #[cfg(feature = "profile")]
         let select_span = game_diagnostics::span("choice.select");
         let selected = game_personal_choice::select(people, &proposals, self.core.seed, round)

@@ -31,8 +31,7 @@ impl CoreHost {
         busy.par_sort_unstable();
         busy.dedup();
         let tick = self.core.physical.tick();
-        let round =
-            tick.rotate_left(21) ^ self.core.elapsed_millis().ok_or("no physical interval")?;
+        let round = self.core.decision_time_key();
         game_economy_agriculture::opportunities::discover(
             owner,
             &self.core.people,

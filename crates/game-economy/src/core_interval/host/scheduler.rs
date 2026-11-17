@@ -1538,7 +1538,7 @@ impl CoreHost {
                         if !idle.is_empty() {
                             run.events.push(CoreRunEvent::PersonalChoices(idle));
                         }
-                        let round = self.core.physical.tick().rotate_left(21) ^ offset;
+                        let round = self.core.decision_time_key();
                         let has_maintenance = people.par_iter().any(|person| {
                             person
                                 .preferences
@@ -1712,7 +1712,7 @@ impl CoreHost {
                         intents,
                         remaining,
                     } => {
-                        let round = self.core.physical.tick().rotate_left(21) ^ offset;
+                        let round = self.core.decision_time_key();
                         let domain = [1u32, 2, 3, 4, 6, 7, 8, 9, 10, 12, 13, 15, 16, 17, 18, 19]
                             .into_iter()
                             .filter(|domain| remaining & (1u64 << domain) != 0)
