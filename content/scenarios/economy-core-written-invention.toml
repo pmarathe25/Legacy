@@ -81,7 +81,7 @@ minds = []
 [[personal_choices]]
 id = 1
 idle = 0
-preferences = [{ domain = 17, enabled = true, bias = 10 }]
+preferences = [{ domain = 17, enabled = true, bias = 10 }, { domain = 18, enabled = true, bias = 20 }]
 
 [[personal_choices]]
 id = 2

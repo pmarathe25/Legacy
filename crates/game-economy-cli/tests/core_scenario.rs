@@ -5670,6 +5670,89 @@ fn people_independently_choose_whether_to_invent_written_forms() {
 }
 
 #[test]
+fn people_independently_choose_whether_to_inscribe_their_forms() {
+    use game_economy::core_interval::{CoreChoiceOutcome, CoreHost, CoreRunEvent};
+    fn run(workers: usize, willing: bool) -> serde_json::Value {
+        rayon::ThreadPoolBuilder::new().num_threads(workers).build().unwrap().install(|| {
+            let root = root();
+            let mut state = game_economy_cli::core_scenario(
+                &root.join("content/scenarios/economy-core-written-invention.toml"), &root.join("content")
+            ).unwrap().snapshot();
+            let people = std::sync::Arc::make_mut(state.schedule.as_mut().unwrap().personal_choices.as_mut().unwrap());
+            people[0].preferences[1].enabled = willing;
+            let mut host = CoreHost::resume(state).unwrap();
+            let result = host.advance_continuous(4_500_001, &[]).unwrap();
+            assert_eq!(result.failure, None);
+            let state = host.snapshot();
+            let forms = state.social.as_ref().unwrap().language.as_ref().unwrap().writing.as_ref().unwrap();
+            assert_eq!(forms.minds[0].person, 1);
+            let pages = &state.writing.as_ref().unwrap().pages;
+            assert_eq!(pages.len(), usize::from(willing));
+            assert_eq!(result.events.iter().any(|event| matches!(event, CoreRunEvent::PersonalChoices(rows)
+                if rows.iter().any(|row| row.actor == 1 && row.key.is_some_and(|key| key.domain == 18) && row.outcome == CoreChoiceOutcome::Accepted))), willing);
+            if willing {
+                assert_eq!(pages[0].marks.as_deref(), Some(forms.minds[0].associations[0].marks.as_slice()));
+                assert_eq!(host.observe_marked_page(1, pages[0].item).unwrap().marks, forms.minds[0].associations[0].marks);
+            }
+            let restored = CoreHost::resume(serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap()).unwrap();
+            assert_eq!(state, restored.snapshot());
+            serde_json::to_value(state).unwrap()
+        })
+    }
+    for willing in [false, true] {
+        assert_eq!(run(1, willing), run(4, willing));
+    }
+}
+
+#[test]
+fn saved_inscription_does_not_substitute_changed_marks() {
+    use game_economy::core_interval::{CoreChoiceOutcome, CoreHost, CoreRunEvent, DecisionPhase};
+    let root = root();
+    let mut host = game_economy_cli::core_scenario(
+        &root.join("content/scenarios/economy-core-written-invention.toml"),
+        &root.join("content"),
+    )
+    .unwrap();
+    assert_eq!(
+        host.advance_continuous(2_700_001, &[]).unwrap().failure,
+        None
+    );
+    let (intents, _) = host.preview_personal_choices(&[]).unwrap();
+    let intent = intents
+        .iter()
+        .find(|row| row.actor == 1 && row.key.domain == 18)
+        .unwrap()
+        .clone();
+    let old_marks = intent.written_form.as_ref().unwrap().marks.clone();
+    let mut state = host.snapshot();
+    let schedule = state.schedule.as_mut().unwrap();
+    schedule.next_decision_millis = Some(1);
+    schedule.phase = DecisionPhase::ChosenMarkInscription {
+        meal_people: vec![],
+        intents: std::sync::Arc::new(vec![intent]),
+        remaining: 0,
+    };
+    let language = state.social.as_mut().unwrap().language.as_mut().unwrap();
+    let forms = std::sync::Arc::make_mut(language.writing.as_mut().unwrap());
+    forms.minds[0].associations[0].marks = vec![if old_marks == [1] { 2 } else { 1 }];
+    let saved = serde_json::to_string(&state).unwrap();
+    let mut host = CoreHost::resume(serde_json::from_str(&saved).unwrap()).unwrap();
+    let before = host.snapshot().core.physical.custody;
+    let result = host.advance_continuous(1, &[]).unwrap();
+    assert_eq!(result.failure, None);
+    assert!(
+        result
+            .events
+            .iter()
+            .any(|event| matches!(event, CoreRunEvent::PersonalChoices(rows)
+        if rows.iter().any(|row| row.actor == 1 && row.outcome == CoreChoiceOutcome::Stale)))
+    );
+    let state = host.snapshot();
+    assert!(state.writing.unwrap().pages.is_empty());
+    assert_eq!(state.core.physical.custody, before);
+}
+
+#[test]
 fn saved_written_invention_does_not_replace_a_stale_intention() {
     use game_economy::core_interval::{CoreChoiceOutcome, CoreHost, CoreRunEvent, DecisionPhase};
     let root = root();

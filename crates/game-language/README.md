@@ -15,11 +15,12 @@ different forms, and one reader can associate the same marks with multiple
 sounds. The interval host permits an explicit choice for a form already in
 that person's vocabulary. With a domain 17 personal-choice preference, an
 individual can also choose to invent a form for a word they know or remain
-idle; other activities compete in the same choice round. The interval host can explicitly inscribe that
-person's marks on a physical page using carried paper and ink. A person who
+idle; other activities compete in the same choice round. A separate domain 18
+preference lets a person choose whether to inscribe their known marks. The
+interval host inscribes them on a physical page using carried paper and ink. A person who
 actually carries the page can observe its marks and interpret them through
 their own associations and vocabulary, including ambiguity. This does not yet
-teach another person or schedule an autonomous inscription choice.
+teach another person or remember an observation of marks.
 `content/scenarios/economy-core-written-invention.toml` illustrates one
 person choosing to invent marks and another preferring idleness after a real
 conversation has established their spoken vocabulary.
