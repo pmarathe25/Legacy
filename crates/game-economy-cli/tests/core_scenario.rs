@@ -1495,6 +1495,7 @@ fn witnessed_experiments_can_ground_personal_outcome_words() {
                     outcome: 0,
                 };
                 let mut language = game_language::Language {
+                    writing: None,
                     rules: game_language::Rules {
                         sounds: vec!["a".into()],
                         word_length: 1,
@@ -1662,6 +1663,7 @@ fn mechanical_testimony_follows_individual_choices_and_can_be_false() {
                 let claim = game_language::Meaning::MechanicalResult { apparatus: 1, outcome: u8::from(lie) };
                 if mapping != 3 {
                     let mut language = game_language::Language {
+                        writing: None,
                         rules: game_language::Rules { sounds: vec!["a".into()], word_length: 1, capacity: 4 },
                         minds: vec![], events: vec![],
                     };
@@ -5355,6 +5357,96 @@ fn authored_language_runs_in_meetings_and_survives_resume() {
                     );
                 }
                 assert_eq!(host.snapshot(), resumed.snapshot());
+                serde_json::to_value(host.snapshot()).unwrap()
+            })
+    }
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
+fn people_choose_written_forms_for_their_own_spoken_words() {
+    use game_economy::core_interval::CoreHost;
+    use game_language::writing::Association;
+    fn run(workers: usize) -> serde_json::Value {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let root = root();
+                let mut host = game_economy_cli::core_scenario(
+                    &root.join("content/scenarios/economy-core-language-topics.toml"),
+                    &root.join("content"),
+                )
+                .unwrap();
+                assert_eq!(host.advance_continuous(900_001, &[]).unwrap().failure, None);
+                let before = host.snapshot();
+                let language = before.social.as_ref().unwrap().language.as_ref().unwrap();
+                let spoken = language
+                    .minds
+                    .iter()
+                    .find(|mind| mind.person == 1)
+                    .unwrap()
+                    .words[0]
+                    .sounds
+                    .clone();
+                assert!(language.writing.as_ref().unwrap().minds.is_empty());
+                assert!(
+                    host.choose_written_form(
+                        1,
+                        Association {
+                            sounds: vec![255],
+                            marks: vec![1]
+                        }
+                    )
+                    .is_err()
+                );
+                assert_eq!(host.snapshot(), before);
+                host.choose_written_form(
+                    1,
+                    Association {
+                        sounds: spoken.clone(),
+                        marks: vec![7],
+                    },
+                )
+                .unwrap();
+                let state = host.snapshot();
+                let writing = state
+                    .social
+                    .as_ref()
+                    .unwrap()
+                    .language
+                    .as_ref()
+                    .unwrap()
+                    .writing
+                    .as_ref()
+                    .unwrap();
+                assert_eq!(writing.interpretations(1, &[7]), vec![spoken]);
+                assert!(writing.interpretations(2, &[7]).is_empty());
+                let mut restored = CoreHost::resume(
+                    serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap(),
+                )
+                .unwrap();
+                assert_eq!(host.advance_continuous(900_000, &[]).unwrap().failure, None);
+                assert_eq!(
+                    restored.advance_continuous(900_000, &[]).unwrap().failure,
+                    None
+                );
+                assert_eq!(host.snapshot(), restored.snapshot());
+                assert!(
+                    host.snapshot()
+                        .social
+                        .as_ref()
+                        .unwrap()
+                        .language
+                        .as_ref()
+                        .unwrap()
+                        .writing
+                        .as_ref()
+                        .unwrap()
+                        .interpretations(2, &[7])
+                        .is_empty()
+                );
                 serde_json::to_value(host.snapshot()).unwrap()
             })
     }

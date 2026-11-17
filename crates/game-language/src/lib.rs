@@ -4,8 +4,10 @@
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 mod names;
+pub mod writing;
 pub use names::{Namesake, NamingPolicy};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -204,6 +206,8 @@ pub struct Event {
 #[serde(deny_unknown_fields)]
 pub struct Language {
     pub rules: Rules,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub writing: Option<Arc<writing::Writing>>,
     #[serde(default)]
     pub minds: Vec<Mind>,
     #[serde(default)]
@@ -523,6 +527,11 @@ impl Language {
 
     pub fn validate(&self, people: &HashSet<u64>, now: u64) -> Result<(), &'static str> {
         let r = &self.rules;
+        if let Some(writing) = &self.writing {
+            let mut ids: Vec<_> = people.iter().copied().collect();
+            ids.par_sort_unstable();
+            writing.validate(r.sounds.len(), &ids)?;
+        }
         if r.sounds.is_empty()
             || r.sounds.len() > 256
             || r.sounds
@@ -703,6 +712,7 @@ impl Language {
         }
         let mut next = Self {
             rules: self.rules.clone(),
+            writing: self.writing.clone(),
             minds: self.minds.par_iter().cloned().collect(),
             events: Vec::new(),
         };

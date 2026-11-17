@@ -349,6 +349,7 @@ fn specific_topic_refusal_overrides_general_mechanical_interest() {
 
 fn language() -> Language {
     Language {
+        writing: None,
         rules: Rules {
             sounds: vec!["a".into(), "k".into(), "m".into()],
             word_length: 3,

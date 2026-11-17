@@ -9,6 +9,13 @@ vocabulary is inherited, and a listener can misunderstand an unfamiliar form.
 Updates are prepared from an immutable opening view in parallel and committed
 as a sorted, deterministic batch. Events preserve the heard and adopted forms.
 
+Optional `writing` state stores each person's chosen associations between
+spoken forms and sequences of visible marks. Different people can choose
+different forms, and one reader can associate the same marks with multiple
+sounds. The interval host permits an explicit choice for a form already in
+that person's vocabulary. This does not yet create or decode physical pages,
+teach another person, or schedule an autonomous writing choice.
+
 `prepare_ungrounded` stages explicitly selected assertions whose referents are
 not jointly observable. It lets the speaker use or coin a personal sound form
 and records the listener's interpretation from their opening vocabulary, but

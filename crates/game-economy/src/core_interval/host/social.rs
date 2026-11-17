@@ -53,6 +53,51 @@ pub struct CoreDynamicsResults {
 }
 
 impl CoreHost {
+    /// A person chooses a visible form for a sound they personally know.
+    /// This does not create a page or teach anyone else the association.
+    pub fn choose_written_form(
+        &mut self,
+        person: u64,
+        association: game_language::writing::Association,
+    ) -> Result<(), String> {
+        let actor = self
+            .core
+            .people
+            .binary_search_by_key(&person, |row| row.id)
+            .ok()
+            .map(|index| &self.core.people[index])
+            .ok_or("unknown person")?;
+        if actor.health == 0 {
+            return Err("person cannot choose a written form while incapacitated".into());
+        }
+        let language = self
+            .social
+            .as_mut()
+            .and_then(|social| social.language.as_mut())
+            .ok_or("personal language is disabled")?;
+        let known = language
+            .minds
+            .binary_search_by_key(&person, |mind| mind.person)
+            .ok()
+            .is_some_and(|index| {
+                language.minds[index]
+                    .words
+                    .iter()
+                    .any(|word| word.sounds == association.sounds)
+            });
+        if !known {
+            return Err("person does not know that spoken form".into());
+        }
+        std::sync::Arc::make_mut(
+            language
+                .writing
+                .as_mut()
+                .ok_or("personal writing forms are disabled")?,
+        )
+        .assign(person, association, language.rules.sounds.len())
+        .map_err(str::to_owned)
+    }
+
     /// Run at most one personal social generation per physical tick.
     pub fn meet_autonomously(
         &mut self,
