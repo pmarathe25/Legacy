@@ -35,6 +35,28 @@ consent or assign authority to institutions.
 - Allow unrelated caregivers and individual decisions about claimed food,
   preserving physical access, custody, scarcity, care consequences, and
   pressure-motivated help.
+- Preserve each recipient's comparative trade valuation through selection,
+  permit signed responses to fear, and offer bounded known-counterparty
+  choices and voluntary withdrawal. Retain false readiness reports and
+  physically atomic settlement.
+- Make reporting a person's own sharing choice and limit food knowledge to
+  attributable observations or estimates. Preserve withholding,
+  misstatements, involuntary perception, and listener-specific credibility.
+- Complete individual food and route preferences, including stale information,
+  risk, and opportunities to reconsider travel where physical position allows.
+  Keep current physical custody, travel progress, closures, and observed
+  failures.
+- Ground purpose and its effects in each person's appraisal of meaningful
+  events, including care, discovery, social activity, or refusing an unwanted
+  commitment; production must not be a universal source of well-being.
+- Add bounded animal encounter and reproductive behavior that respects
+  physical separation and individual or species dispositions, while retaining
+  biological inheritance, scarcity, and existing animal responses.
+- When migrating currently unsupported missions and campaign guardians,
+  distinguish each person's choices about joining, leaving, returning,
+  mentoring, or pursuing from the player's viewpoint and social roles. Review
+  automatic tactical defense as a separate active choice, retaining physical
+  effects and existing surrender and withdrawal outcomes.
 
 Use feature-owned opportunities, subjective evaluation, typed intentions,
 revalidation, and staged commits. Test differing choices in the same

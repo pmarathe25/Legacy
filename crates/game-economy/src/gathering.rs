@@ -9,6 +9,14 @@ use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
+/// Renewable units per explicit elapsed duration.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RenewalRate {
+    pub units: u64,
+    pub per_millis: u64,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Node {
@@ -17,11 +25,21 @@ pub struct Node {
     pub good: u32,
     pub available: u64,
     pub capacity: u64,
+    /// Legacy units per physical boundary; omit when using `renewal_rate`.
+    #[serde(default)]
     pub regrowth: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub renewal_rate: Option<RenewalRate>,
+    /// Fractional numerator over `per_millis * 1000`.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub renewal_remainder: u64,
     /// Scale renewal by the current season's food-growth factor.
     #[serde(default)]
     pub seasonal: bool,
     pub yield_per_action: u64,
+}
+fn is_zero(value: &u64) -> bool {
+    *value == 0
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -113,6 +131,14 @@ impl Gathering {
                     || n.available > n.capacity
                     || n.yield_per_action == 0
                     || n.yield_per_action > n.capacity
+                    || n.renewal_rate.is_some_and(|rate| {
+                        rate.per_millis == 0
+                            || rate.per_millis.checked_mul(1000).is_none()
+                            || n.regrowth != 0
+                            || n.renewal_remainder >= rate.per_millis * 1000
+                    })
+                    || (n.renewal_rate.is_none() && n.renewal_remainder != 0)
+                    || (n.available == n.capacity && n.renewal_remainder != 0)
                     || !goods.contains(&n.good)
                     || view
                         .container(Place::Stock {
@@ -139,6 +165,7 @@ pub struct Plan {
     pub actors: Vec<u64>,
     pub actions: Vec<Transaction>,
     records: Vec<(u64, u64, u64, u64)>,
+    elapsed_millis: u64,
 }
 /// One person's possible local gathering action before resource arbitration.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -359,6 +386,7 @@ impl Context<'_> {
             actors,
             actions,
             records,
+            elapsed_millis: self.tick_millis,
         })
     }
 }
@@ -458,20 +486,35 @@ impl Plan {
                         |a, b| a.checked_add(b).ok_or("gathering quantity overflow"),
                     )?;
                 let mut next = node.clone();
-                next.available = node
+                let after_gathering = node
                     .available
                     .checked_sub(gathered)
-                    .ok_or("gathering exceeds resource")?
-                    .saturating_add(if node.seasonal {
-                        renewal(
-                            node.regrowth,
-                            season.map_or(1000, |s| s.food_growth_per_thousand),
-                            events.tick,
-                        )
-                    } else {
-                        node.regrowth
-                    })
-                    .min(node.capacity);
+                    .ok_or("gathering exceeds resource")?;
+                let factor = if node.seasonal {
+                    season.map_or(1000, |s| s.food_growth_per_thousand)
+                } else {
+                    1000
+                };
+                if let Some(rate) = node.renewal_rate {
+                    let (available, remainder) = elapsed_renewal(
+                        rate,
+                        node.renewal_remainder,
+                        self.elapsed_millis,
+                        factor,
+                        after_gathering,
+                        node.capacity,
+                    )?;
+                    next.available = available;
+                    next.renewal_remainder = remainder;
+                } else {
+                    next.available = after_gathering
+                        .saturating_add(if node.seasonal {
+                            renewal(node.regrowth, factor, events.tick)
+                        } else {
+                            node.regrowth
+                        })
+                        .min(node.capacity);
+                }
                 Ok(next)
             })
             .collect::<Result<Vec<_>, _>>()?;
@@ -484,6 +527,38 @@ impl Plan {
     }
 }
 
+fn elapsed_renewal(
+    rate: RenewalRate,
+    remainder: u64,
+    elapsed_millis: u64,
+    factor: u32,
+    available: u64,
+    capacity: u64,
+) -> Result<(u64, u64), String> {
+    let denominator = rate
+        .per_millis
+        .checked_mul(1000)
+        .filter(|value| *value > 0)
+        .ok_or("invalid renewal period")?;
+    if remainder >= denominator || available > capacity {
+        return Err("invalid renewal state".into());
+    }
+    let numerator = u128::from(rate.units)
+        .checked_mul(u128::from(elapsed_millis))
+        .and_then(|value| value.checked_mul(u128::from(factor)))
+        .and_then(|value| value.checked_add(u128::from(remainder)))
+        .ok_or("renewal overflow")?;
+    let quantity = numerator / u128::from(denominator);
+    let room = u128::from(capacity - available);
+    if quantity >= room {
+        return Ok((capacity, 0));
+    }
+    Ok((
+        available + quantity as u64,
+        (numerator % u128::from(denominator)) as u64,
+    ))
+}
+
 /// Distribute fractional renewal deterministically without losing low rates to rounding.
 fn renewal(rate: u64, factor: u32, tick: u64) -> u64 {
     let scaled = u128::from(rate) * u128::from(factor);
@@ -492,4 +567,46 @@ fn renewal(rate: u64, factor: u32, tick: u64) -> u64 {
     let fraction = (u128::from(tick) * remainder / 1000)
         - (u128::from(tick.saturating_sub(1)) * remainder / 1000);
     (whole + fraction).min(u128::from(u64::MAX)) as u64
+}
+
+#[cfg(test)]
+mod elapsed_tests {
+    use super::*;
+
+    #[test]
+    fn renewal_preserves_fraction_across_arbitrary_partitions_and_saturation() {
+        let rate = RenewalRate {
+            units: 3,
+            per_millis: 3_600_000,
+        };
+        let whole = elapsed_renewal(rate, 0, 3_600_000, 1000, 0, 20).unwrap();
+        let mut split = (0, 0);
+        let mut elapsed = 0;
+        while elapsed < 3_600_000 {
+            let duration = 17_000.min(3_600_000 - elapsed);
+            split = elapsed_renewal(rate, split.1, duration, 1000, split.0, 20).unwrap();
+            elapsed += duration;
+        }
+        assert_eq!(whole, (3, 0));
+        assert_eq!(split, whole);
+        assert_eq!(
+            elapsed_renewal(rate, 0, 3_600_000, 1000, 19, 20).unwrap(),
+            (20, 0)
+        );
+        assert!(
+            elapsed_renewal(
+                RenewalRate {
+                    units: 1,
+                    per_millis: 0
+                },
+                0,
+                1,
+                1000,
+                0,
+                1
+            )
+            .is_err()
+        );
+        assert!(elapsed_renewal(rate, 3_600_000_000, 1, 1000, 0, 1).is_err());
+    }
 }

@@ -1590,7 +1590,7 @@ good = "timber"
 seasonal = false
 available = 1000
 capacity = 1000
-regrowth = 2
+renewal_rate = { units = 2, per_millis = 3600000 }
 yield_per_action = 5
 
 [care]

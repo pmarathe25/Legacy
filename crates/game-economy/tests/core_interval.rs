@@ -5884,7 +5884,7 @@ fn irrigation_consumes_contested_water_and_gates_next_growth() {
         combined.core.physical.custody.containers.push(Container::new(Place::Person(4), 1, vec![]).unwrap());
         combined.core.physical.custody.containers.sort_by_key(|row| row.place);
         combined.gathering = Some(game_economy::Gathering {max_hunger: 10, inherit_births: false,
-            nodes: vec![game_economy::ResourceNode {id: 1, region: 1, good: 2, available: 1, capacity: 1, regrowth: 0, seasonal: false, yield_per_action: 1}],
+            nodes: vec![game_economy::ResourceNode {id: 1, region: 1, good: 2, available: 1, capacity: 1, regrowth: 0, renewal_rate: None, renewal_remainder: 0, seasonal: false, yield_per_action: 1}],
             policies: vec![game_economy::GatherPolicy {person: 4, node: 1, willing: true, pressured_by: None, pressure_threshold: None}]});
         let mut combined = CoreHost::begin(combined, &[(1, 1)]).unwrap();
         combined.progress(1000).unwrap();
@@ -5970,6 +5970,8 @@ fn gathering_depletes_resources_into_real_personal_custody() {
                         available: 1,
                         capacity: 2,
                         regrowth: 0,
+                        renewal_rate: None,
+                        renewal_remainder: 0,
                         seasonal: false,
                         yield_per_action: 1,
                     }],
@@ -7111,7 +7113,7 @@ fn core_host_cultivation_benchmark() {
                 good: 2,
                 available: count / 2,
                 capacity: count,
-                regrowth: 0,
+                regrowth: 0, renewal_rate: None, renewal_remainder: 0,
                 seasonal: false,
                 yield_per_action: 1,
             }],
@@ -13747,7 +13749,7 @@ fn family_birth_custody_and_worker_death_commit_atomically() {
             })).unwrap());
             inherited.gathering = Some(game_economy::Gathering { max_hunger: 10, inherit_births: true,
                 nodes: vec![game_economy::ResourceNode { id: 1, region: 1, good: 2, available: 1,
-                    capacity: 1, regrowth: 0, seasonal: false, yield_per_action: 1 }],
+                    capacity: 1, regrowth: 0, renewal_rate: None, renewal_remainder: 0, seasonal: false, yield_per_action: 1 }],
                 policies: vec![game_economy::GatherPolicy { person: 2, node: 1, willing: true,
                     pressured_by: Some(1), pressure_threshold: Some(1) }] });
             inherited.agriculture = Some(game_economy_agriculture::Agriculture { provenance: None,

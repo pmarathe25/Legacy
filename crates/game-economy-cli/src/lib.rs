@@ -646,7 +646,10 @@ struct ResourceConfig {
     good: String,
     available: u64,
     capacity: u64,
+    #[serde(default)]
     regrowth: u64,
+    #[serde(default)]
+    renewal_rate: Option<game_economy::ResourceRenewalRate>,
     #[serde(default)]
     seasonal: bool,
     yield_per_action: u64,
@@ -2283,6 +2286,8 @@ fn scenario_with_options_inner(
                         available: node.available,
                         capacity: node.capacity,
                         regrowth: node.regrowth,
+                        renewal_rate: node.renewal_rate,
+                        renewal_remainder: 0,
                         seasonal: node.seasonal,
                         yield_per_action: node.yield_per_action,
                     })

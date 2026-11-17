@@ -4594,6 +4594,91 @@ fn food_pickups_are_personal_choices_with_shared_stock_and_claim_consequences() 
 }
 
 #[test]
+fn elapsed_resource_renewal_survives_subdivision_and_resume() {
+    use game_economy::core_interval::CoreHost;
+    fn run(quantum: u64, chunk: u64, workers: usize) -> game_economy::ResourceNode {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let root = root();
+                let host = game_economy_cli::core_scenario(
+                    &root.join("content/scenarios/economy-core-personal-choices.toml"),
+                    &root.join("content"),
+                )
+                .unwrap();
+                let mut state = host.snapshot();
+                state.core.physical.tick_millis = quantum;
+                state.core.rules.starvation_damage = 0;
+                let grain = state
+                    .core
+                    .physical
+                    .goods
+                    .iter()
+                    .find(|good| good.name == "grain")
+                    .unwrap()
+                    .id;
+                state.gathering = Some(game_economy::Gathering {
+                    max_hunger: 100,
+                    inherit_births: false,
+                    nodes: vec![game_economy::ResourceNode {
+                        id: 1,
+                        region: 1,
+                        good: grain,
+                        available: 0,
+                        capacity: 20,
+                        regrowth: 0,
+                        renewal_rate: Some(game_economy::ResourceRenewalRate {
+                            units: 3,
+                            per_millis: 3_600_000,
+                        }),
+                        renewal_remainder: 0,
+                        seasonal: false,
+                        yield_per_action: 1,
+                    }],
+                    policies: vec![],
+                });
+                let people = std::sync::Arc::make_mut(
+                    state
+                        .schedule
+                        .as_mut()
+                        .unwrap()
+                        .personal_choices
+                        .as_mut()
+                        .unwrap(),
+                );
+                for person in people {
+                    person.idle = 10_000;
+                }
+                let mut host = CoreHost::resume(state).unwrap();
+                let mut elapsed = 0;
+                while elapsed < 3_600_000 {
+                    let duration = chunk.min(3_600_000 - elapsed);
+                    assert_eq!(
+                        host.advance_continuous(duration, &[]).unwrap().failure,
+                        None
+                    );
+                    elapsed += duration;
+                    if elapsed == chunk {
+                        host = CoreHost::resume(
+                            serde_json::from_str(&serde_json::to_string(&host.snapshot()).unwrap())
+                                .unwrap(),
+                        )
+                        .unwrap();
+                    }
+                }
+                host.snapshot().gathering.unwrap().nodes.remove(0)
+            })
+    }
+    let whole = run(3_600_000, 3_600_000, 1);
+    assert_eq!(whole.available, 3);
+    assert_eq!(whole.renewal_remainder, 0);
+    assert_eq!(run(60_000, 17_000, 1), whole);
+    assert_eq!(run(60_000, 31_000, 4), whole);
+}
+
+#[test]
 fn gathering_is_chosen_then_settles_contended_physical_resources() {
     use game_economy::core_interval::{CoreChoiceOutcome, CoreHost, CoreRunEvent};
     use game_lots::Place;
@@ -4605,7 +4690,7 @@ fn gathering_is_chosen_then_settles_contended_physical_resources() {
             let grain = state.core.physical.goods.iter().find(|good| good.name == "grain").unwrap().id;
             state.gathering = Some(game_economy::Gathering {
                 max_hunger: 20, inherit_births: false,
-                nodes: vec![game_economy::ResourceNode { id: 1, region: 1, good: grain, available: 2, capacity: 2, regrowth: 0, seasonal: false, yield_per_action: 2 }, game_economy::ResourceNode { id: 2, region: 1, good: grain, available: 2, capacity: 2, regrowth: 0, seasonal: false, yield_per_action: 2 }],
+                nodes: vec![game_economy::ResourceNode { id: 1, region: 1, good: grain, available: 2, capacity: 2, regrowth: 0, renewal_rate: None, renewal_remainder: 0, seasonal: false, yield_per_action: 2 }, game_economy::ResourceNode { id: 2, region: 1, good: grain, available: 2, capacity: 2, regrowth: 0, renewal_rate: None, renewal_remainder: 0, seasonal: false, yield_per_action: 2 }],
                 policies: (1..=3).map(|person| game_economy::GatherPolicy { person, node: 1, willing: true, pressured_by: None, pressure_threshold: None }).chain(std::iter::once(game_economy::GatherPolicy { person: 1, node: 2, willing: true, pressured_by: None, pressure_threshold: None })).collect(),
             });
             let people = std::sync::Arc::make_mut(state.schedule.as_mut().unwrap().personal_choices.as_mut().unwrap());

@@ -21,14 +21,21 @@ threshold then use that duration instead of the physical quantum. The saved
 fractional remainder uses the same rate denominator. An optional
 `decision_period_millis` separately specifies how often the interval host
 opens autonomous decision rounds; it does not determine owner rates or
-physical settlement. Older saves without the
-field retain their original quantum-based semantics. Interval snapshots also
+physical settlement. Renewable gathering nodes can also specify
+`renewal_rate = { units = ..., per_millis = ... }`; their fractional renewal
+is retained in the node rather than rounded separately at each boundary.
+Renewal is still settled at a physical boundary, alongside gathering, using
+the season selected for that boundary. Changing boundaries can therefore
+change the ordering of gathering and renewal or cross a season transition;
+the explicit rate alone does not make those interactions subdivision-invariant.
+Older saves without these explicit rates retain their original quantum-based
+semantics. Interval snapshots also
 retain absolute milliseconds at the current boundary; an older snapshot
 derives this value from its original tick and quantum when loaded. This clock
 does not by itself convert other owners' tick-based state when a quantum
 changes. This does not yet convert
 starvation damage, recovery, nutrition, fatigue, work and travel rates, family
-and animal clocks, ecological renewal, disease, or social randomness. In
+and animal clocks, other ecological processes, disease, or social randomness. In
 particular, a short physical quantum must not be advertised as a faithful
 minute-world until those owners have independent elapsed-time rules.
 

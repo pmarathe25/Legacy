@@ -156,7 +156,9 @@ pub mod core_interval;
 mod purpose;
 mod recovery;
 pub use game_purpose::Purpose;
-pub use gathering::{Gathering, Node as ResourceNode, Policy as GatherPolicy};
+pub use gathering::{
+    Gathering, Node as ResourceNode, Policy as GatherPolicy, RenewalRate as ResourceRenewalRate,
+};
 pub use recovery::Rules as RecoveryRules;
 mod state;
 mod teaching;
