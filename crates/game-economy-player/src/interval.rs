@@ -73,6 +73,14 @@ impl<'a> Player<'a> {
         self.host.abandon_work(&[(job, self.person)])
     }
 
+    pub fn stop_assisting(&mut self) -> Result<(), String> {
+        let person = self.host.controlled_person(self.person)?;
+        if person.health == 0 {
+            return Err("the controlled person cannot stop assisting while incapacitated".into());
+        }
+        self.host.withdraw_shared_helpers(&[self.person])
+    }
+
     pub fn treat_wound(&mut self, good: u32) -> Result<bool, String> {
         self.host.controlled_person(self.person)?;
         let result = self.host.treat_wounds(

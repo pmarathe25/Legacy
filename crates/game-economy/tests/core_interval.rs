@@ -14406,6 +14406,83 @@ fn helpers_contribute_actual_fractional_time_and_resume_deterministically() {
 }
 
 #[test]
+fn individual_helpers_can_withdraw_without_stopping_others() {
+    fn run(workers: usize) -> serde_json::Value {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut initial = shared_interval_fixture(false);
+                let mut third = initial.core.people[1].clone();
+                third.id = 3;
+                initial.core.people.push(third);
+                initial.core.physical.recipes[0].ticks = 4;
+                initial.core.physical.work[0].job.remaining = 4;
+                let sites = &mut initial.sites.as_mut().unwrap().facilities;
+                sites.sites[0].capacity = 3;
+                sites.requirements[0].slots = 3;
+                sites.bindings[0].slots = 3;
+                let shared = &mut initial.shared_work.as_mut().unwrap().owner;
+                shared.rules[0].max_helpers = 2;
+                let mut preference = shared.preferences[0].clone();
+                preference.person = 3;
+                shared.preferences.push(preference);
+                let mut host = CoreHost::begin(initial, &[(1, 1)]).unwrap();
+                assert_eq!(host.assist_work_autonomously(&[]).unwrap(), vec![2, 3]);
+                host.progress(100).unwrap();
+                let before = host.snapshot();
+                assert!(host.withdraw_shared_helpers(&[2, 4]).is_err());
+                assert_eq!(host.snapshot(), before);
+                host.withdraw_shared_helpers(&[2]).unwrap();
+                let state = host.snapshot();
+                assert_eq!(
+                    state.core.physical.work_interval.as_ref().unwrap().rates,
+                    vec![(1, 2)]
+                );
+                let shared = state.shared_work.as_ref().unwrap();
+                assert_eq!(shared.sessions.len(), 1);
+                assert_eq!(
+                    (
+                        shared.sessions[0].event.person,
+                        shared.sessions[0].elapsed_millis
+                    ),
+                    (3, 100)
+                );
+                assert_eq!(
+                    (
+                        shared.records[0].event.person,
+                        shared.records[0].elapsed_millis,
+                        shared.records[0].event.interrupted
+                    ),
+                    (2, 100, true)
+                );
+                let mut restored = CoreHost::resume(
+                    serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap(),
+                )
+                .unwrap();
+                host.progress(900).unwrap();
+                restored.progress(900).unwrap();
+                host.settle().unwrap();
+                restored.settle().unwrap();
+                let settled = host.snapshot();
+                assert_eq!(settled, restored.snapshot());
+                let records = &settled.shared_work.as_ref().unwrap().records;
+                assert!(records.iter().any(|row| row.event.person == 2
+                    && row.event.interrupted
+                    && row.elapsed_millis == 100));
+                assert!(
+                    records
+                        .iter()
+                        .any(|row| row.event.person == 3 && row.elapsed_millis == 1000)
+                );
+                serde_json::to_value(settled).unwrap()
+            })
+    }
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
 fn scheduled_helpers_are_reconsidered_and_do_not_carry_extra_rate_across_boundaries() {
     let run = |workers| {
         rayon::ThreadPoolBuilder::new().num_threads(workers).build().unwrap().install(|| {

@@ -6891,6 +6891,36 @@ fn authored_shared_work_resolves_recipe_and_produces_real_output() {
 }
 
 #[test]
+fn controlled_helper_can_leave_their_own_assignment() {
+    use game_economy::core_interval::CoreHost;
+    use game_economy_player::interval::Player;
+    let root = root();
+    let mut host = game_economy_cli::core_scenario(
+        &root.join("content/scenarios/economy-core-shared-work.toml"),
+        &root.join("content"),
+    )
+    .unwrap();
+    assert_eq!(host.advance_continuous(1000, &[]).unwrap().failure, None);
+    let mut state = host.snapshot();
+    assert_eq!(
+        state.shared_work.as_ref().unwrap().sessions[0].event.person,
+        1
+    );
+    state.core.people[0].controlled = true;
+    host = CoreHost::resume(state).unwrap();
+    Player::new(&mut host, 1).unwrap().stop_assisting().unwrap();
+    assert!(
+        host.snapshot()
+            .shared_work
+            .as_ref()
+            .unwrap()
+            .sessions
+            .is_empty()
+    );
+    assert!(Player::new(&mut host, 1).unwrap().stop_assisting().is_err());
+}
+
+#[test]
 fn authored_succession_keeps_real_site_and_inputs_until_personal_takeover() {
     fn run(workers: usize) -> serde_json::Value {
         rayon::ThreadPoolBuilder::new().num_threads(workers).build().unwrap().install(|| {

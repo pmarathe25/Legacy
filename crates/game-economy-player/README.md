@@ -14,7 +14,8 @@ production work, and use a carried wound remedy. Chosen work uses configured
 physical capability rather than a universal age or hunger refusal; its base rate
 currently comes from the host schedule rather than a personal effort choice. Where
 fatigue is enabled, the person can see their own fatigue and choose when to rest
-or wake; resting pauses ongoing work. Time
+or wake; resting pauses ongoing work. A controlled helper can leave their own
+shared-work assignment without dismissing the other helpers. Time
 advancement reports elapsed time and failures without returning administrative
 events. A limited `--interval-player PERSON` CLI exposes this adapter. It does
 not yet provide campaign succession or the full player command set, and the

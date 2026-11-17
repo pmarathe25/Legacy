@@ -330,6 +330,101 @@ impl CoreSharedWork {
     }
 }
 impl CoreHost {
+    /// End only the named helpers' current contributions, preserving other helpers.
+    /// The sorted list represents personal decisions, not a lead's instruction.
+    pub fn withdraw_shared_helpers(&mut self, people: &[u64]) -> Result<(), String> {
+        if people.par_windows(2).any(|pair| pair[0] >= pair[1]) {
+            return Err("invalid withdrawing people".into());
+        }
+        if people.is_empty() {
+            return Ok(());
+        }
+        let owner = self.shared_work.as_ref().ok_or("shared work is disabled")?;
+        let mut selected: Vec<_> = owner
+            .sessions
+            .par_iter()
+            .filter(|session| people.binary_search(&session.event.person).is_ok())
+            .collect();
+        if selected.len() != people.len() {
+            return Err("person is not assisting".into());
+        }
+        let offset = self.core.elapsed_millis().ok_or("no physical interval")?;
+        if offset >= self.core.physical.tick_millis()
+            || self.core.next_deadline(None)?.after_millis == 0
+        {
+            return Err("publish pending interval events before withdrawing".into());
+        }
+        selected.par_sort_unstable_by_key(|session| (session.event.job, session.event.person));
+        let removed: Vec<(u64, u64)> = selected
+            .par_chunk_by(|a, b| a.event.job == b.event.job)
+            .map(|group| {
+                let sum: u128 = group
+                    .par_iter()
+                    .map(|session| u128::from(session.event.progress))
+                    .sum();
+                u64::try_from(sum)
+                    .map(|sum| (group[0].event.job, sum))
+                    .map_err(|_| "shared work rate overflow".to_owned())
+            })
+            .collect::<Result<_, _>>()?;
+        let mut rates = self
+            .core
+            .physical
+            .work_interval()
+            .ok_or("no physical interval")?
+            .rates
+            .clone();
+        removed
+            .par_iter()
+            .try_for_each(|&(job, amount)| -> Result<(), String> {
+                let index = rates
+                    .binary_search_by_key(&job, |row| row.0)
+                    .map_err(|_| "missing shared rate")?;
+                rates[index]
+                    .1
+                    .checked_sub(amount)
+                    .filter(|rate| *rate > 0)
+                    .ok_or("invalid shared rate")?;
+                Ok(())
+            })?;
+        rates.par_iter_mut().for_each(|row| {
+            if let Ok(index) = removed.binary_search_by_key(&row.0, |entry| entry.0) {
+                row.1 -= removed[index].1;
+            }
+        });
+        let quantum = self.core.physical.tick_millis();
+        let mut records: Vec<_> = selected
+            .par_iter()
+            .filter(|session| session.elapsed_millis > 0)
+            .map(|session| {
+                let mut event = session.event.clone();
+                event.progress = ((u128::from(event.offered) * u128::from(session.elapsed_millis))
+                    / u128::from(quantum)) as u64;
+                event.interrupted = true;
+                CoreAssistRecord {
+                    event,
+                    elapsed_millis: session.elapsed_millis,
+                }
+            })
+            .collect();
+        records.par_sort_unstable_by_key(|record| (record.event.job, record.event.person));
+        self.core.physical.replace_interval_rates(&rates)?;
+        let owner = self.shared_work.as_mut().expect("shared work checked");
+        owner
+            .owner
+            .events
+            .par_extend(records.par_iter().map(|record| record.event.clone()));
+        owner.records.par_extend(records);
+        owner.sessions = owner
+            .sessions
+            .par_iter()
+            .filter(|session| people.binary_search(&session.event.person).is_err())
+            .cloned()
+            .collect();
+        self.work_checked_revision = None;
+        Ok(())
+    }
+
     pub(super) fn assist_durations(&self, consumed: u64) -> Result<Vec<u64>, String> {
         let Some(owner) = &self.shared_work else {
             return Ok(Vec::new());
@@ -450,9 +545,9 @@ impl CoreHost {
         next.owner
             .events
             .par_iter_mut()
-            .for_each(|event| event.interrupted = interrupted.binary_search(&event.job).is_ok());
+            .for_each(|event| event.interrupted |= interrupted.binary_search(&event.job).is_ok());
         next.records.par_iter_mut().for_each(|record| {
-            record.event.interrupted = interrupted.binary_search(&record.event.job).is_ok()
+            record.event.interrupted |= interrupted.binary_search(&record.event.job).is_ok()
         });
         Some(next)
     }

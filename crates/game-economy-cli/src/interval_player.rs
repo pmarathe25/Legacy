@@ -9,7 +9,7 @@ fn command(host: &mut CoreHost, person: u64, words: &[&str]) -> Result<bool, Str
     match words {
         [] => {}
         ["help"] => println!(
-            "look | wait MILLISECONDS | move REGION | eat GOOD | treat GOOD | work RECIPE UNITS | stop JOB | rest on|off | save PATH | load PATH | quit"
+            "look | wait MILLISECONDS | move REGION | eat GOOD | treat GOOD | work RECIPE UNITS | stop JOB | stop-assist | rest on|off | save PATH | load PATH | quit"
         ),
         ["quit"] | ["exit"] => return Ok(false),
         ["look"] => {
@@ -84,6 +84,10 @@ fn command(host: &mut CoreHost, person: u64, words: &[&str]) -> Result<bool, Str
             let job = job.parse::<u64>().map_err(|_| "invalid job")?;
             Player::new(host, person)?.stop_work(job)?;
             println!("stopped");
+        }
+        ["stop-assist"] => {
+            Player::new(host, person)?.stop_assisting()?;
+            println!("stopped assisting");
         }
         ["rest", choice @ ("on" | "off")] => {
             let resting = *choice == "on";
