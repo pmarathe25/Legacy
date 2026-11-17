@@ -65,21 +65,19 @@ fn observations(events: &[CoreRunEvent], current_tick: &mut u64) -> Vec<Value> {
         CoreRunEvent::WrittenPages(rows) if !rows.is_empty() => Some(json!({"kind":"written_pages","items":rows})),
         CoreRunEvent::Boundary(row) => {
             *current_tick = row.tick;
-            Some(json!({"kind":"boundary","tick":row.tick,"finished":row.finished,"delivered":row.delivered,"interrupted":row.interrupted}))
+            Some(json!({"kind":"boundary","tick":row.tick,"finished":row.finished,"delivered":row.delivered,"interrupted":row.interrupted,"spoiled":row.spoiled,"physical_actions":row.physical_actions}))
         },
         _ => None,
     }).collect()
 }
 
 fn animals(host: &CoreHost) -> BTreeSet<u64> {
-    host.snapshot().fauna.map_or_else(BTreeSet::new, |fauna| {
-        fauna
-            .animals
-            .iter()
-            .filter(|animal| animal.health > 0)
-            .map(|animal| animal.id)
-            .collect()
-    })
+    host.history_view()
+        .animals
+        .iter()
+        .filter(|animal| animal.health > 0)
+        .map(|animal| animal.id)
+        .collect()
 }
 
 fn run(
@@ -155,7 +153,7 @@ fn run(
     }
     line(
         &mut writer,
-        &json!({"kind":"metadata","schema":1,"years_requested":years,"start_year":start_year,"tick_millis":tick_millis,"ticks_per_year":ticks_per_year,"calendar":"365-day years","seed":initial.core.seed,"workers":workers,"git_revision":revision(root),"git_revision_scope":"checkout at run time; executable build provenance is not verified","tracked_source_modified":tracked_changes(root),"executable":std::env::current_exe().ok(),"source":source,"source_kind":if resume {"checkpoint"} else {"scenario"},"scenario":scenario_text,"limitations":limitations}),
+        &json!({"kind":"metadata","schema":2,"years_requested":years,"start_year":start_year,"tick_millis":tick_millis,"ticks_per_year":ticks_per_year,"calendar":"365-day years","seed":initial.core.seed,"workers":workers,"git_revision":revision(root),"git_revision_scope":"checkout at run time; executable build provenance is not verified","tracked_source_modified":tracked_changes(root),"executable":std::env::current_exe().ok(),"source":source,"source_kind":if resume {"checkpoint"} else {"scenario"},"scenario":scenario_text,"limitations":limitations}),
     )?;
     line(
         &mut writer,
@@ -167,9 +165,10 @@ fn run(
     let mut observation_tick = initial.core.physical.custody.tick;
     let mut previous_animals = animals(&host);
     for year in start_year + 1..=end_year {
-        let mut yearly_observations = Vec::new();
+        // Bound in-memory history even for hourly or finer simulations.
+        let mut observation_batch = Vec::new();
         let mut previous_step_animals = previous_animals.clone();
-        for _ in 0..ticks_per_year {
+        for step in 0..ticks_per_year {
             let result = match host.advance_continuous(tick_millis, &[]) {
                 Ok(result) => result,
                 Err(error) => {
@@ -196,49 +195,37 @@ fn run(
                     "year {year}: unexpected elapsed time or boundary count"
                 ));
             }
-            yearly_observations.extend(observations(&result.events, &mut observation_tick));
+            observation_batch.extend(observations(&result.events, &mut observation_tick));
             let opinion_events = host.take_opinion_events();
             if !opinion_events.is_empty() {
-                yearly_observations
-                    .push(json!({"kind":"opinion_changes", "events":opinion_events}));
+                observation_batch.push(json!({"kind":"opinion_changes", "events":opinion_events}));
             }
-            let tick_snapshot = host.snapshot();
-            if let Some(language) = tick_snapshot
-                .social
-                .as_ref()
-                .and_then(|social| social.language.as_ref())
-                && !language.events.is_empty()
-            {
-                yearly_observations
-                    .push(json!({"kind":"language_events", "events":language.events}));
+            let history = host.history_view();
+            if !history.language_events.is_empty() {
+                observation_batch
+                    .push(json!({"kind":"language_events", "events":history.language_events}));
             }
-            if let Some(signals) = tick_snapshot
-                .social
-                .as_ref()
-                .and_then(|social| social.signals.as_ref())
             {
-                if !signals.events.is_empty() {
-                    yearly_observations
-                        .push(json!({"kind":"signal_events", "events":signals.events}));
+                if !history.signal_events.is_empty() {
+                    observation_batch
+                        .push(json!({"kind":"signal_events", "events":history.signal_events}));
                 }
-                let learning: Vec<_> = signals
-                    .learning_events
+                let learning: Vec<_> = history
+                    .signal_learning
                     .iter()
-                    .filter(|event| event.tick == tick_snapshot.core.physical.custody.tick)
+                    .filter(|event| event.tick == history.tick)
                     .collect();
                 if !learning.is_empty() {
-                    yearly_observations.push(json!({"kind":"signal_learning", "events":learning}));
+                    observation_batch.push(json!({"kind":"signal_learning", "events":learning}));
                 }
             }
             if ticks_per_year > 1 {
-                if let Some(family) = &tick_snapshot.family
-                    && !family.events.is_empty()
-                {
-                    yearly_observations
-                        .push(json!({"kind":"family_events", "events":family.events}));
+                if !history.family_events.is_empty() {
+                    observation_batch
+                        .push(json!({"kind":"family_events", "events":history.family_events}));
                 }
-                if let Some(fauna) = &tick_snapshot.fauna {
-                    let current: BTreeSet<_> = fauna
+                {
+                    let current: BTreeSet<_> = history
                         .animals
                         .iter()
                         .filter(|animal| animal.health > 0)
@@ -253,15 +240,23 @@ fn run(
                         .copied()
                         .collect();
                     if !appeared.is_empty() || !inactive.is_empty() {
-                        let newborns: Vec<_> = fauna
+                        let newborns: Vec<_> = history
                             .animals
                             .iter()
                             .filter(|animal| appeared.binary_search(&animal.id).is_ok())
                             .collect();
-                        yearly_observations.push(json!({"kind":"animal_population","tick":tick_snapshot.core.physical.custody.tick,"appeared":newborns,"inactive":inactive}));
+                        observation_batch.push(json!({"kind":"animal_population","tick":history.tick,"appeared":newborns,"inactive":inactive}));
                     }
                     previous_step_animals = current;
                 }
+            }
+            if ((step + 1) % 24 == 0 || step + 1 == ticks_per_year) && !observation_batch.is_empty()
+            {
+                line(
+                    &mut writer,
+                    &json!({"kind":"observation_batch","year":year,"observations":observation_batch}),
+                )?;
+                observation_batch.clear();
             }
         }
         let snapshot = host.snapshot();
@@ -302,7 +297,7 @@ fn run(
         let animal_count = current_animals.len();
         line(
             &mut writer,
-            &json!({"kind":"year","year":year,"living_people":living,"living_animals":animal_count,"animal_ids_appeared":appeared,"animal_ids_no_longer_alive":inactive,"observations":yearly_observations,"snapshot":snapshot}),
+            &json!({"kind":"year","year":year,"living_people":living,"living_animals":animal_count,"animal_ids_appeared":appeared,"animal_ids_no_longer_alive":inactive,"observations":[],"snapshot":snapshot}),
         )?;
         previous_animals = current_animals;
         if ticks_per_year >= 8_760 || year % 50 == 0 || year == end_year {
@@ -379,11 +374,23 @@ mod tests {
     use game_economy::core_interval::CoreHostSnapshot;
 
     fn records(path: &Path) -> Vec<Value> {
-        fs::read_to_string(path)
-            .unwrap()
-            .lines()
-            .map(|line| serde_json::from_str(line).unwrap())
-            .collect()
+        let mut pending = Vec::new();
+        let mut result = Vec::new();
+        for line in fs::read_to_string(path).unwrap().lines() {
+            let mut row: Value = serde_json::from_str(line).unwrap();
+            if row["kind"] == "observation_batch" {
+                pending.append(row["observations"].as_array_mut().unwrap());
+            } else {
+                if row["kind"] == "year" {
+                    let events = row["observations"].as_array_mut().unwrap();
+                    pending.append(events);
+                    *events = std::mem::take(&mut pending);
+                }
+                result.push(row);
+            }
+        }
+        assert!(pending.is_empty());
+        result
     }
 
     #[test]
@@ -663,6 +670,18 @@ mod tests {
         }
         let serial = records(&one);
         let parallel = records(&four);
+        let batches: Vec<Value> = fs::read_to_string(&one)
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .filter(|row: &Value| row["kind"] == "observation_batch")
+            .collect();
+        assert_eq!(batches.len(), 2);
+        assert!(
+            batches
+                .iter()
+                .all(|row| !row["observations"].as_array().unwrap().is_empty())
+        );
         assert_eq!(serial[0]["ticks_per_year"], 12);
         assert_eq!(
             serial[3]["snapshot"]["core"]["physical"]["custody"]["tick"],

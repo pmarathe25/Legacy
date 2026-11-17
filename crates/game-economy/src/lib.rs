@@ -4591,7 +4591,11 @@ impl Economy {
                     endpoint: LocalEndpoint::Store { id },
                     ..
                 } => Some(Some(id)),
-                LocalLocation::Walking { .. } => None,
+                LocalLocation::At {
+                    endpoint: LocalEndpoint::Person,
+                    ..
+                }
+                | LocalLocation::Walking { .. } => None,
             };
         // `people` is projected in the same order as `self.people`. Its
         // indexed lookup can use dense ID ranges without changing locations.
@@ -8719,6 +8723,10 @@ impl Economy {
                     endpoint: LocalEndpoint::Store { id },
                     ..
                 } => (1, id),
+                Location::At {
+                    endpoint: LocalEndpoint::Person,
+                    ..
+                } => (3, id),
                 Location::Walking {
                     region,
                     from,

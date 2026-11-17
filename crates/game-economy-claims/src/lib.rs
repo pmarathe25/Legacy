@@ -420,7 +420,11 @@ macro_rules! prepare_pickup {
                 endpoint: game_economy_local_transport::Endpoint::Store { id },
                 ..
             } => Some(game_lots::Place::Inventory(id)),
-            game_economy_local_transport::walking::Location::Walking { .. } => None,
+            game_economy_local_transport::walking::Location::At {
+                endpoint: game_economy_local_transport::Endpoint::Person,
+                ..
+            }
+            | game_economy_local_transport::walking::Location::Walking { .. } => None,
         };
         let access = walking.map(|_| &at as &(dyn Fn(u64, u64) -> Option<game_lots::Place> + Sync));
         let plan = game_economy_person::provision::prepare(

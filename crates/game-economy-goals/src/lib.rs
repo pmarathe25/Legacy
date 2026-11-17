@@ -53,7 +53,11 @@ macro_rules! prepare_work {
                     endpoint: game_economy_local_transport::Endpoint::Store { id },
                     ..
                 } => Some(Some(id)),
-                game_economy_local_transport::walking::Location::Walking { .. } => None,
+                game_economy_local_transport::walking::Location::At {
+                    endpoint: game_economy_local_transport::Endpoint::Person,
+                    ..
+                }
+                | game_economy_local_transport::walking::Location::Walking { .. } => None,
             };
         let result = $world
             .autowork

@@ -78,6 +78,186 @@ fn animal_species_samples(animals: &[Value], species: &[Value]) -> Vec<Value> {
     }).collect()
 }
 
+struct ObservationSink<'a> {
+    focus: Focus,
+    meetings: &'a mut BTreeMap<u64, u64>,
+    meeting_count: &'a mut u64,
+    focal_events: &'a mut Vec<Value>,
+    focal_opinions: &'a mut Vec<Value>,
+    focal_language: &'a mut Vec<Value>,
+    focal_signals: &'a mut Vec<Value>,
+    focal_signal_learning: &'a mut Vec<Value>,
+    focal_choices: &'a mut Vec<Value>,
+    focal_mechanics: &'a mut Vec<Value>,
+    focal_strikes: &'a mut Vec<Value>,
+    focal_meetings: &'a mut Vec<Value>,
+}
+impl ObservationSink<'_> {
+    fn record(&mut self, events: &[Value], year: u64) -> Result<(), String> {
+        for event in events {
+            if event["kind"] == "animal_population" {
+                if let Focus::Animal(animal) = self.focus {
+                    let appeared = event["appeared"]
+                        .as_array()
+                        .is_some_and(|rows| rows.iter().any(|row| id(row) == Some(animal)));
+                    let inactive = event["inactive"]
+                        .as_array()
+                        .is_some_and(|rows| rows.iter().any(|row| row.as_u64() == Some(animal)));
+                    if appeared || inactive {
+                        self.focal_events.push(event.clone());
+                    }
+                }
+                continue;
+            }
+            if event["kind"] == "family_events" {
+                if let Focus::Person(person) = self.focus
+                    && let Some(rows) = event["events"].as_array()
+                {
+                    self.focal_events.extend(
+                        rows.iter()
+                            .filter(|row| {
+                                row["people"].as_array().is_some_and(|people| {
+                                    people.iter().any(|id| id.as_u64() == Some(person))
+                                })
+                            })
+                            .cloned(),
+                    );
+                }
+                continue;
+            }
+            if event["kind"] == "opinion_changes" {
+                if let Focus::Person(person) = self.focus
+                    && let Some(rows) = event["events"].as_array()
+                {
+                    self.focal_opinions.extend(
+                        rows.iter()
+                            .filter(|row| {
+                                row["observer"].as_u64() == Some(person)
+                                    || row["target"].as_u64() == Some(person)
+                            })
+                            .cloned(),
+                    );
+                }
+                continue;
+            }
+            if event["kind"] == "language_events" {
+                if let Focus::Person(person) = self.focus
+                    && let Some(rows) = event["events"].as_array()
+                {
+                    self.focal_language.extend(
+                        rows.iter()
+                            .filter(|row| {
+                                row["speaker"].as_u64() == Some(person)
+                                    || row["listener"].as_u64() == Some(person)
+                            })
+                            .cloned(),
+                    );
+                }
+                continue;
+            }
+            if event["kind"] == "signal_events" {
+                if let Focus::Person(person) = self.focus
+                    && let Some(rows) = event["events"].as_array()
+                {
+                    self.focal_signals.extend(
+                        rows.iter()
+                            .filter(|row| {
+                                row["actor"].as_u64() == Some(person)
+                                    || row["observer"].as_u64() == Some(person)
+                            })
+                            .cloned(),
+                    );
+                }
+                continue;
+            }
+            if event["kind"] == "signal_learning" {
+                if let Focus::Person(person) = self.focus
+                    && let Some(rows) = event["events"].as_array()
+                {
+                    self.focal_signal_learning.extend(
+                        rows.iter()
+                            .filter(|row| {
+                                row["actor"].as_u64() == Some(person)
+                                    || row["observer"].as_u64() == Some(person)
+                            })
+                            .cloned(),
+                    );
+                }
+                continue;
+            }
+            if event["kind"] == "personal_choices" {
+                if let Focus::Person(person) = self.focus
+                    && let Some(rows) = event["events"].as_array()
+                {
+                    self.focal_choices.extend(
+                        rows.iter()
+                            .filter(|row| row["actor"].as_u64() == Some(person))
+                            .cloned(),
+                    );
+                }
+                continue;
+            }
+            if event["kind"] == "mechanical_experiments" {
+                if let Focus::Person(person) = self.focus
+                    && let Some(rows) = event["events"].as_array()
+                {
+                    self.focal_mechanics.extend(
+                        rows.iter()
+                            .filter(|row| row["actor"].as_u64() == Some(person))
+                            .cloned(),
+                    );
+                }
+                continue;
+            }
+            if event["kind"] == "personal_strikes" {
+                if let Focus::Person(person) = self.focus
+                    && let Some(rows) = event["events"].as_array()
+                {
+                    let strikes: Vec<_> = rows
+                        .iter()
+                        .filter(|row| {
+                            row["actor"].as_u64() == Some(person)
+                                || row["target"].as_u64() == Some(person)
+                        })
+                        .cloned()
+                        .collect();
+                    if !strikes.is_empty() {
+                        let harm: Vec<_> = event["harm"]
+                            .as_array()
+                            .into_iter()
+                            .flatten()
+                            .filter(|row| row["target"].as_u64() == Some(person))
+                            .cloned()
+                            .collect();
+                        self.focal_strikes.push(
+                                            json!({"year":year,"tick":event.get("tick"),"events":strikes,"harm":harm}),
+                                        );
+                    }
+                }
+                continue;
+            }
+            if event["kind"] != "meetings" {
+                continue;
+            }
+            if let Some(encounters) = event["events"].as_array() {
+                for encounter in encounters {
+                    let (Some(a), Some(b)) = (encounter["a"].as_u64(), encounter["b"].as_u64())
+                    else {
+                        return Err("invalid meeting identity".into());
+                    };
+                    *self.meetings.entry(a).or_default() += 1;
+                    *self.meetings.entry(b).or_default() += 1;
+                    *self.meeting_count += 1;
+                    if matches!(self.focus,Focus::Person(person) if person==a||person==b) {
+                        self.focal_meetings.push(encounter.clone());
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
 fn inspect(path: &Path, focus: Focus) -> Result<Value, String> {
     let input = BufReader::new(File::open(path).map_err(|e| e.to_string())?);
     let mut metadata = Value::Null;
@@ -111,6 +291,27 @@ fn inspect(path: &Path, focus: Focus) -> Result<Value, String> {
     let mut focal_mechanics = Vec::new();
     let mut focal_strikes = Vec::new();
     let mut previous_year = None;
+    let mut pending_year = None;
+    let mut batch_has_family_events = false;
+    macro_rules! record_observations {
+        ($events:expr, $year:expr) => {{
+            let mut sink = ObservationSink {
+                focus,
+                meetings: &mut meetings,
+                meeting_count: &mut meeting_count,
+                focal_events: &mut focal_events,
+                focal_opinions: &mut focal_opinions,
+                focal_language: &mut focal_language,
+                focal_signals: &mut focal_signals,
+                focal_signal_learning: &mut focal_signal_learning,
+                focal_choices: &mut focal_choices,
+                focal_mechanics: &mut focal_mechanics,
+                focal_strikes: &mut focal_strikes,
+                focal_meetings: &mut focal_meetings,
+            };
+            sink.record($events, $year)?;
+        }};
+    }
     for (index, line) in input.lines().enumerate() {
         let line = line.map_err(|e| e.to_string())?;
         if line.trim().is_empty() {
@@ -122,6 +323,24 @@ fn inspect(path: &Path, focus: Focus) -> Result<Value, String> {
             return Err("history contains data after its completion record".into());
         }
         match row.get("kind").and_then(Value::as_str) {
+            Some("observation_batch") => {
+                let year = row["year"]
+                    .as_u64()
+                    .ok_or("observation batch has no year")?;
+                if previous_year.is_none_or(|previous: u64| previous.checked_add(1) != Some(year)) {
+                    return Err("observation batch is outside its annual interval".into());
+                }
+                if pending_year.is_some_and(|previous| previous != year) {
+                    return Err("observation batches cross annual snapshots".into());
+                }
+                pending_year = Some(year);
+                let events = row["observations"]
+                    .as_array()
+                    .ok_or("invalid observation batch")?;
+                batch_has_family_events |=
+                    events.iter().any(|event| event["kind"] == "family_events");
+                record_observations!(events, year);
+            }
             Some("metadata") => {
                 if !metadata.is_null() {
                     return Err("history has duplicate metadata".into());
@@ -138,6 +357,9 @@ fn inspect(path: &Path, focus: Focus) -> Result<Value, String> {
                 metadata = json!({"calendar":row["calendar"],"tick_millis":row["tick_millis"],"ticks_per_year":row["ticks_per_year"],"seed":row["seed"],"git_revision":row["git_revision"],"git_revision_scope":row["git_revision_scope"],"tracked_source_modified":row["tracked_source_modified"],"executable":row["executable"],"source_kind":row["source_kind"],"limitations":row["limitations"]});
             }
             Some("complete") => {
+                if pending_year.is_some() {
+                    return Err("history ends before its annual snapshot".into());
+                }
                 complete = true;
                 completed_years = row["years"].as_u64();
             }
@@ -146,6 +368,12 @@ fn inspect(path: &Path, focus: Focus) -> Result<Value, String> {
                     .get("year")
                     .and_then(Value::as_u64)
                     .ok_or("history row has no year")?;
+                if row["kind"] == "year"
+                    && let Some(batch_year) = pending_year.take()
+                    && batch_year != year
+                {
+                    return Err("observation batch has the wrong year".into());
+                }
                 if previous_year.is_some_and(|old: u64| old.checked_add(1) != Some(year)) {
                     return Err("history years are not consecutive".into());
                 }
@@ -265,176 +493,13 @@ fn inspect(path: &Path, focus: Focus) -> Result<Value, String> {
                 }
                 if row["kind"] == "year" {
                     if let Some(events) = row["observations"].as_array() {
-                        for event in events {
-                            if event["kind"] == "animal_population" {
-                                if let Focus::Animal(animal) = focus {
-                                    let appeared =
-                                        event["appeared"].as_array().is_some_and(|rows| {
-                                            rows.iter().any(|row| id(row) == Some(animal))
-                                        });
-                                    let inactive =
-                                        event["inactive"].as_array().is_some_and(|rows| {
-                                            rows.iter().any(|row| row.as_u64() == Some(animal))
-                                        });
-                                    if appeared || inactive {
-                                        focal_events.push(event.clone());
-                                    }
-                                }
-                                continue;
-                            }
-                            if event["kind"] == "family_events" {
-                                if let Focus::Person(person) = focus
-                                    && let Some(rows) = event["events"].as_array()
-                                {
-                                    focal_events.extend(
-                                        rows.iter()
-                                            .filter(|row| {
-                                                row["people"].as_array().is_some_and(|people| {
-                                                    people
-                                                        .iter()
-                                                        .any(|id| id.as_u64() == Some(person))
-                                                })
-                                            })
-                                            .cloned(),
-                                    );
-                                }
-                                continue;
-                            }
-                            if event["kind"] == "opinion_changes" {
-                                if let Focus::Person(person) = focus
-                                    && let Some(rows) = event["events"].as_array()
-                                {
-                                    focal_opinions.extend(
-                                        rows.iter()
-                                            .filter(|row| {
-                                                row["observer"].as_u64() == Some(person)
-                                                    || row["target"].as_u64() == Some(person)
-                                            })
-                                            .cloned(),
-                                    );
-                                }
-                                continue;
-                            }
-                            if event["kind"] == "language_events" {
-                                if let Focus::Person(person) = focus
-                                    && let Some(rows) = event["events"].as_array()
-                                {
-                                    focal_language.extend(
-                                        rows.iter()
-                                            .filter(|row| {
-                                                row["speaker"].as_u64() == Some(person)
-                                                    || row["listener"].as_u64() == Some(person)
-                                            })
-                                            .cloned(),
-                                    );
-                                }
-                                continue;
-                            }
-                            if event["kind"] == "signal_events" {
-                                if let Focus::Person(person) = focus
-                                    && let Some(rows) = event["events"].as_array()
-                                {
-                                    focal_signals.extend(
-                                        rows.iter()
-                                            .filter(|row| {
-                                                row["actor"].as_u64() == Some(person)
-                                                    || row["observer"].as_u64() == Some(person)
-                                            })
-                                            .cloned(),
-                                    );
-                                }
-                                continue;
-                            }
-                            if event["kind"] == "signal_learning" {
-                                if let Focus::Person(person) = focus
-                                    && let Some(rows) = event["events"].as_array()
-                                {
-                                    focal_signal_learning.extend(
-                                        rows.iter()
-                                            .filter(|row| {
-                                                row["actor"].as_u64() == Some(person)
-                                                    || row["observer"].as_u64() == Some(person)
-                                            })
-                                            .cloned(),
-                                    );
-                                }
-                                continue;
-                            }
-                            if event["kind"] == "personal_choices" {
-                                if let Focus::Person(person) = focus
-                                    && let Some(rows) = event["events"].as_array()
-                                {
-                                    focal_choices.extend(
-                                        rows.iter()
-                                            .filter(|row| row["actor"].as_u64() == Some(person))
-                                            .cloned(),
-                                    );
-                                }
-                                continue;
-                            }
-                            if event["kind"] == "mechanical_experiments" {
-                                if let Focus::Person(person) = focus
-                                    && let Some(rows) = event["events"].as_array()
-                                {
-                                    focal_mechanics.extend(
-                                        rows.iter()
-                                            .filter(|row| row["actor"].as_u64() == Some(person))
-                                            .cloned(),
-                                    );
-                                }
-                                continue;
-                            }
-                            if event["kind"] == "personal_strikes" {
-                                if let Focus::Person(person) = focus
-                                    && let Some(rows) = event["events"].as_array()
-                                {
-                                    let strikes: Vec<_> = rows
-                                        .iter()
-                                        .filter(|row| {
-                                            row["actor"].as_u64() == Some(person)
-                                                || row["target"].as_u64() == Some(person)
-                                        })
-                                        .cloned()
-                                        .collect();
-                                    if !strikes.is_empty() {
-                                        let harm: Vec<_> = event["harm"]
-                                            .as_array()
-                                            .into_iter()
-                                            .flatten()
-                                            .filter(|row| row["target"].as_u64() == Some(person))
-                                            .cloned()
-                                            .collect();
-                                        focal_strikes.push(
-                                            json!({"year":year,"tick":event.get("tick"),"events":strikes,"harm":harm}),
-                                        );
-                                    }
-                                }
-                                continue;
-                            }
-                            if event["kind"] != "meetings" {
-                                continue;
-                            }
-                            if let Some(encounters) = event["events"].as_array() {
-                                for encounter in encounters {
-                                    let (Some(a), Some(b)) =
-                                        (encounter["a"].as_u64(), encounter["b"].as_u64())
-                                    else {
-                                        return Err("invalid meeting identity".into());
-                                    };
-                                    *meetings.entry(a).or_default() += 1;
-                                    *meetings.entry(b).or_default() += 1;
-                                    meeting_count += 1;
-                                    if matches!(focus,Focus::Person(person) if person==a||person==b)
-                                    {
-                                        focal_meetings.push(encounter.clone());
-                                    }
-                                }
-                            }
-                        }
+                        record_observations!(events, year);
                     }
-                    if !row["observations"].as_array().is_some_and(|events| {
-                        events.iter().any(|event| event["kind"] == "family_events")
-                    }) && let Focus::Person(person) = focus
+                    if !batch_has_family_events
+                        && !row["observations"].as_array().is_some_and(|events| {
+                            events.iter().any(|event| event["kind"] == "family_events")
+                        })
+                        && let Focus::Person(person) = focus
                         && let Some(events) =
                             state.pointer("/family/events").and_then(Value::as_array)
                     {
@@ -449,6 +514,7 @@ fn inspect(path: &Path, focus: Focus) -> Result<Value, String> {
                                 .cloned(),
                         );
                     }
+                    batch_has_family_events = false;
                 }
                 match focus {
                     Focus::Person(person) => {
@@ -586,6 +652,7 @@ mod tests {
         for mut row in [
             json!({"kind":"metadata","calendar":"annual","seed":1,"limitations":["animal parentage is not recorded by the current fauna owner"]}),
             json!({"kind":"initial","year":0,"snapshot":snapshot(true)}),
+            json!({"kind":"observation_batch","year":1,"observations":[{"kind":"mechanical_experiments","events":[{"actor":1,"outcome":"stalled","tick":1}]}]}),
             json!({"kind":"year","year":1,"snapshot":snapshot(true),"observations":[{"kind":"meetings","events":[{"a":1,"b":2,"tick":1}]},{"kind":"opinion_changes","events":[{"observer":1,"target":2,"tick":1,"before":0,"after":1}]},{"kind":"language_events","events":[{"speaker":1,"listener":2,"tick":1,"sounds":[0]}]},{"kind":"signal_events","events":[{"actor":2,"observer":1,"tick":1,"form":1,"noticed":true,"interpreted":2}]},{"kind":"signal_learning","events":[{"actor":2,"observer":1,"tick":1,"form":1,"good":4,"meaning":2}]},{"kind":"personal_choices","events":[{"actor":1,"outcome":"accepted","tick":1}]},{"kind":"mechanical_experiments","events":[{"actor":1,"outcome":"moved","tick":1}]},{"kind":"animal_population","tick":1,"appeared":[{"id":1,"parents":[2,3]}],"inactive":[]}]}),
             json!({"kind":"year","year":2,"snapshot":snapshot(false),"observations":[]}),
             json!({"kind":"complete","years":2}),
@@ -668,7 +735,7 @@ mod tests {
         assert_eq!(target["personal_strikes"][0]["harm"][0]["after"], 1);
         assert_eq!(
             person["mechanical_experiments"].as_array().unwrap().len(),
-            1
+            2
         );
         let animal = inspect(&path, Focus::Animal(1)).unwrap();
         assert_eq!(animal["last_year_alive"], 1);

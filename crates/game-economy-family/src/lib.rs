@@ -1,7 +1,7 @@
 //! Apply birth and mortality to staged people and their existing travel.
 use game_economy_person::{Person, travel::Travel};
-pub use game_families::Families;
 use game_families::LifeInput;
+pub use game_families::{Families, FamilyEvent};
 pub use game_family_model::MateFeelings;
 use game_family_model::{ContactPartition, PhysicalView};
 use rayon::prelude::*;

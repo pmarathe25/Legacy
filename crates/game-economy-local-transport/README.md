@@ -2,6 +2,13 @@
 
 Distinct named stores have their own capacity and dated physical custody. Individuals can choose to pick up goods and deposit them at another store or regional stock on separate boundaries. The actor retains custody between actions and may stop, while physical transactions resolve competing uses and preserve expiry. Fear or felt obligation may independently motivate a carrier; no organization or agreement compels them.
 
+A policy can use `{ kind = "person" }` as its destination to express an
+individual's preference to keep up to `quantity` of a good in their own
+custody, or as its source to offer goods they carry for deposit. The other
+endpoint is regional stock or a named store; movement and physical access
+still apply. This expresses a possible choice rather than automatically
+replenishing a person's supplies.
+
 Optional individual goal-fetching preferences allow people to seek missing inputs for their own active work goals in observed stores in their current region. They carry and deposit the actual goods across separate boundaries, can stop at any time, and do not gain knowledge of remote stores. Existing direct work choices take precedence.
 
 When personal input planning is enabled, the search also follows bounded recipe dependencies to locate supplies for intermediate work. Cycles and the number of alternatives explored per person are bounded, and available alternatives rotate between reviews.

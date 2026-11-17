@@ -1320,6 +1320,7 @@ pub fn core_scenario_with_options(
                         good,
                     },
                     game_economy::LocalEndpoint::Store { id } => game_lots::Place::Inventory(id),
+                    game_economy::LocalEndpoint::Person => game_lots::Place::Person(row.person),
                 };
                 Ok(game_economy::core_interval::MechanicalLoadPolicy {
                     id: row.id,

@@ -21,13 +21,18 @@ pub struct Store {
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Endpoint {
     Stock,
-    Store { id: u64 },
+    Store {
+        id: u64,
+    },
+    /// The acting person's own carried goods, never another person's custody.
+    Person,
 }
 impl Endpoint {
-    fn place(self, region: u64, good: u32) -> Place {
+    fn place(self, region: u64, good: u32, person: u64) -> Place {
         match self {
             Self::Stock => Place::Stock { region, good },
             Self::Store { id } => Place::Inventory(id),
+            Self::Person => Place::Person(person),
         }
     }
 }
@@ -153,8 +158,9 @@ impl LocalTransport {
                 _ => None,
             })
             .collect();
-        let endpoint = |end: Endpoint, region, good| match end {
-            Endpoint::Stock => view.container(end.place(region, good)).is_some(),
+        let endpoint = |end: Endpoint, region, good, person| match end {
+            Endpoint::Stock => view.container(end.place(region, good, person)).is_some(),
+            Endpoint::Person => view.container(Place::Person(person)).is_some(),
             Endpoint::Store { id } => self
                 .stores
                 .binary_search_by_key(&id, |store| store.id)
@@ -169,7 +175,7 @@ impl LocalTransport {
             || self.goal_fetchers.par_iter().any(|p| !people.contains(&p.person) || p.max_quantity == 0
                 || p.search.as_ref().is_some_and(|search| !self.valid_goal_search(search)))
             || self.policies.par_iter().any(|p| !people.contains(&p.person) || !goods.contains(&p.good) || p.quantity == 0
-                || p.source == p.destination || !endpoint(p.source, p.region, p.good) || !endpoint(p.destination, p.region, p.good)
+                || p.source == p.destination || !endpoint(p.source, p.region, p.good, p.person) || !endpoint(p.destination, p.region, p.good, p.person)
                 || p.pressured_by.is_some() != p.pressure_threshold.is_some() || p.pressure_threshold == Some(0)
                 || p.pressured_by.is_some_and(|id| id == p.person || !people.contains(&id)))
             || self.events.par_iter().any(|e| {
@@ -259,18 +265,26 @@ impl Context<'_> {
         }
         let holder = self.view.container(Place::Person(person.id))?;
         let carrying = holder.quantity(p.good);
-        let endpoint = if carrying == 0 {
-            p.source
+        let pickup = if p.destination == Endpoint::Person {
+            carrying < p.quantity
+        } else if p.source == Endpoint::Person {
+            false
         } else {
-            p.destination
+            carrying == 0
         };
+        if (p.destination == Endpoint::Person && !pickup)
+            || (p.source == Endpoint::Person && carrying == 0)
+        {
+            return None;
+        }
+        let endpoint = if pickup { p.source } else { p.destination };
         if self
             .walking
             .is_some_and(|walking| !walking.present(person.id, p.region, endpoint))
         {
             return None;
         }
-        let (from, to, quantity) = if carrying == 0 {
+        let (from, to, quantity) = if pickup {
             if !p.disregard_claims
                 && matches!(p.source, Endpoint::Stock)
                 && self
@@ -279,17 +293,21 @@ impl Context<'_> {
             {
                 return None;
             }
-            let source = p.source.place(p.region, p.good);
+            let source = p.source.place(p.region, p.good, person.id);
             let stock = self.view.container(source)?;
             (
                 source,
                 Place::Person(person.id),
-                p.quantity
-                    .min(stock.quantity(p.good))
-                    .min(holder.capacity.saturating_sub(holder.used)),
+                (if p.destination == Endpoint::Person {
+                    p.quantity.saturating_sub(carrying)
+                } else {
+                    p.quantity
+                })
+                .min(stock.quantity(p.good))
+                .min(holder.capacity.saturating_sub(holder.used)),
             )
         } else {
-            let destination = p.destination.place(p.region, p.good);
+            let destination = p.destination.place(p.region, p.good, person.id);
             let store = self.view.container(destination)?;
             (
                 Place::Person(person.id),

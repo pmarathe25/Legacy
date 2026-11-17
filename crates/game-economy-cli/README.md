@@ -344,6 +344,13 @@ command still uses the separate whole-boundary host.
 
 The history runner archives opinion-change events in annual observations and removes those events from active state after each tick; directed opinions continue to influence decisions. The person inspector reports archived opinion changes separately from family events. Events already present in a resumed checkpoint remain in the initial snapshot. Hourly runs also write a checkpoint each year.
 
+History schema 2 streams observations in batches of at most 24 simulation
+ticks between annual snapshots. The inspector accepts both schema 2 batches
+and earlier annual observation arrays. The runner reads latest events through
+a borrowed host view instead of cloning the entire world every tick.
+
+For shorter diagnostics, `cargo run -p game-economy-cli --example history_probe -- content/scenarios/economy-history-integrated-hourly.toml runs/history/probe.ndjson 48 24 1` advances 48 hourly ticks, writes summaries and a checkpoint every 24 ticks, and leaves scarcity and individual decisions active. To continue, use `history_probe --resume CHECKPOINT NEW_OUTPUT TICKS INTERVAL WORKERS`. These reports are exploratory, not evidence that the world is calibrated or feature complete. See `docs/research/integrated-history-milestone.md` for the unfinished chains and long-run plan.
+
 Personal strikes are archived as simultaneous events alongside target-grouped health changes. The person inspector shows strikes involving that individual and, when they were the target, the group's actual health loss. Individual strike harm is potential harm before health is capped; it does not identify which attacker caused a death.
 
 `content/scenarios/economy-history-monthly.toml` is an exploratory monthly scenario with subjective mating, inherited mate desire, food and animal scarcity, gathering, caregiving, social participation, directed opinions, recovery, animal products, and disease definitions. Ages and lifecycle durations are expressed in monthly ticks. It is not calibrated, and not every implemented owner is configured or supported by the interval host. Run it with `cargo run -p game-economy-cli --example history -- content/scenarios/economy-history-monthly.toml runs/history/monthly/history.ndjson 300 6`. Inspect intermediate family events with the history inspector; annual population and animal observations can miss births and deaths that both occur within the same year.

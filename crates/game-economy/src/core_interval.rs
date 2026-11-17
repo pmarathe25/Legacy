@@ -21,7 +21,7 @@ mod host;
 pub use host::{
     CoreAssistRecord, CoreAssistSession, CoreChoiceEvent, CoreChoiceIntent, CoreChoiceOutcome,
     CoreConstructionResults, CoreDeliveryResults, CoreDynamicsResults, CoreFoodProvision,
-    CoreFoodSearch, CoreHaulingResults, CoreHealth, CoreHost, CoreHostSnapshot,
+    CoreFoodSearch, CoreHaulingResults, CoreHealth, CoreHistoryView, CoreHost, CoreHostSnapshot,
     CoreLocalTransportResults, CoreMarkInscription, CoreMarkObservation, CoreMarketResults,
     CoreMechanics, CorePersonalConflict, CorePlayerFatigue, CorePlayerJob, CorePlayerLanguage,
     CorePlayerMarkedPage, CorePlayerView, CorePlayerWound, CorePracticeWorkEvidence, CorePurpose,

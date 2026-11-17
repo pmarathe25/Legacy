@@ -4594,6 +4594,49 @@ fn food_pickups_are_personal_choices_with_shared_stock_and_claim_consequences() 
 }
 
 #[test]
+fn personal_supply_is_chosen_then_enables_repair_and_resume() {
+    use game_economy::core_interval::{CoreHost, CoreRunEvent};
+    use game_lots::Place;
+
+    fn run(workers: usize) -> serde_json::Value {
+        rayon::ThreadPoolBuilder::new().num_threads(workers).build().unwrap().install(|| {
+            let root = root();
+            let mut host = game_economy_cli::core_scenario(
+                &root.join("content/scenarios/economy-core-personal-supply.toml"),
+                &root.join("content"),
+            ).unwrap();
+            let initial = host.snapshot();
+            let mut declined = initial.clone();
+            let profiles = std::sync::Arc::make_mut(declined.schedule.as_mut().unwrap().personal_choices.as_mut().unwrap());
+            profiles.iter_mut().find(|row| row.id == 2).unwrap().preferences.iter_mut().find(|row| row.domain == 2).unwrap().enabled = false;
+            let mut declined = CoreHost::resume(declined).unwrap();
+            assert_ne!(declined.preview_personal_choices(&[]).unwrap().0.iter().find(|row| row.actor == 2).unwrap().key.domain, 2);
+            assert_eq!(declined.advance_continuous(1, &[]).unwrap().failure, None);
+            assert_eq!(declined.snapshot().tool_wear.unwrap().conditions[1].damage, 5);
+
+            assert_eq!(host.preview_personal_choices(&[]).unwrap().0.iter().find(|row| row.actor == 2).unwrap().key.domain, 2);
+            assert_eq!(host.advance_continuous(1, &[]).unwrap().failure, None);
+            let snapshot = host.snapshot();
+            let timber = snapshot.core.physical.goods.iter().find(|row| row.name == "timber").unwrap().id;
+            let holder = snapshot.core.physical.custody.containers.iter().find(|row| row.place == Place::Person(2)).unwrap();
+            assert_eq!(
+                holder.lots.iter().filter(|lot| lot.good == timber).map(|lot| lot.quantity).sum::<u64>(),
+                1
+            );
+            let mut resumed = CoreHost::resume(serde_json::from_str(&serde_json::to_string(&snapshot).unwrap()).unwrap()).unwrap();
+            let result = host.advance_continuous(900_000, &[]).unwrap();
+            assert_eq!(result.failure, None);
+            assert!(result.events.iter().any(|event| matches!(event, CoreRunEvent::ToolRepairs(rows) if rows.iter().any(|row| row.person == 2 && row.accepted))));
+            assert_eq!(resumed.advance_continuous(900_000, &[]).unwrap().failure, None);
+            assert_eq!(host.snapshot(), resumed.snapshot());
+            assert_eq!(host.snapshot().tool_wear.unwrap().conditions[1].damage, 0);
+            serde_json::to_value(host.snapshot()).unwrap()
+        })
+    }
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
 fn tool_repairs_compete_with_other_choices_and_revalidate() {
     use game_economy::core_interval::{CoreChoiceOutcome, CoreHost, CoreRunEvent, DecisionPhase};
     fn run(workers: usize) -> serde_json::Value {
@@ -5588,6 +5631,69 @@ fn run_scenario(workers: usize) -> serde_json::Value {
 #[test]
 fn authored_core_scenario_runs_and_survives_save_resume() {
     assert_eq!(run_scenario(1), run_scenario(6));
+}
+
+#[test]
+fn integrated_hourly_world_runs_with_personal_choices_and_borrowed_history() {
+    use game_economy::core_interval::CoreHost;
+    fn run(workers: usize) -> serde_json::Value {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let root = root();
+                let mut host = game_economy_cli::core_scenario(
+                    &root.join("content/scenarios/economy-history-integrated-hourly.toml"),
+                    &root.join("content"),
+                )
+                .unwrap();
+                let initial = host.snapshot();
+                assert_eq!(
+                    initial
+                        .schedule
+                        .as_ref()
+                        .unwrap()
+                        .personal_choices
+                        .as_ref()
+                        .unwrap()
+                        .len(),
+                    60
+                );
+                assert!(initial.schedule.as_ref().unwrap().birth_choices.is_some());
+                assert!(initial.mechanics.is_some());
+                assert!(
+                    initial
+                        .agriculture
+                        .as_ref()
+                        .unwrap()
+                        .provenance
+                        .as_ref()
+                        .unwrap()
+                        .genetics
+                        .is_some()
+                );
+                let result = host.advance_continuous(48 * 3_600_000, &[]).unwrap();
+                assert_eq!(result.failure, None);
+                let snapshot = host.snapshot();
+                let view = host.history_view();
+                assert_eq!(view.tick, snapshot.core.physical.custody.tick);
+                assert_eq!(view.animals, snapshot.fauna.as_ref().unwrap().animals);
+                assert_eq!(view.family_events, snapshot.family.as_ref().unwrap().events);
+                let social = snapshot.social.as_ref().unwrap();
+                assert_eq!(
+                    view.language_events,
+                    social.language.as_ref().unwrap().events
+                );
+                let restored = CoreHost::resume(
+                    serde_json::from_str(&serde_json::to_string(&snapshot).unwrap()).unwrap(),
+                )
+                .unwrap();
+                assert_eq!(restored.snapshot(), snapshot);
+                serde_json::to_value(snapshot).unwrap()
+            })
+    }
+    assert_eq!(run(1), run(4));
 }
 
 #[test]

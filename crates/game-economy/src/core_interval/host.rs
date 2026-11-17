@@ -80,6 +80,17 @@ pub use writing::{
     CoreMarkInscription, CoreMarkObservation, CoreWritingPracticeResults, CoreWritingResults,
 };
 
+/// Borrowed, latest-boundary observations for external history recorders.
+/// Reading this view does not clone the world or change simulation state.
+pub struct CoreHistoryView<'a> {
+    pub tick: u64,
+    pub language_events: &'a [game_language::Event],
+    pub signal_events: &'a [game_signals::Event],
+    pub signal_learning: &'a [game_signals::LearningEvent],
+    pub family_events: &'a [game_economy_family::FamilyEvent],
+    pub animals: &'a [game_fauna::Animal],
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CoreHostSnapshot {
@@ -1370,6 +1381,28 @@ impl CoreHost {
         self.opinions
             .as_mut()
             .map_or_else(Vec::new, |owner| std::mem::take(&mut owner.events))
+    }
+
+    /// Borrow only the latest history inputs; callers may stream them before
+    /// advancing again, without materializing a full checkpoint every tick.
+    pub fn history_view(&self) -> CoreHistoryView<'_> {
+        let social = self.social.as_ref();
+        let language = social.and_then(|owner| owner.language.as_ref());
+        let signals = social.and_then(|owner| owner.signals.as_ref());
+        CoreHistoryView {
+            tick: self.core.physical.tick(),
+            language_events: language.map_or(&[], |owner| owner.events.as_slice()),
+            signal_events: signals.map_or(&[], |owner| owner.events.as_slice()),
+            signal_learning: signals.map_or(&[], |owner| owner.learning_events.as_slice()),
+            family_events: self
+                .family
+                .as_ref()
+                .map_or(&[], |owner| owner.events.as_slice()),
+            animals: self
+                .fauna
+                .as_ref()
+                .map_or(&[], |owner| owner.animals.as_slice()),
+        }
     }
 
     pub fn snapshot(&self) -> CoreHostSnapshot {

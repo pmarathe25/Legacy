@@ -121,6 +121,7 @@ impl Walking {
     ) -> Result<(), String> {
         let endpoint = |region, end| match end {
             Endpoint::Stock => regions.contains(&region),
+            Endpoint::Person => false,
             Endpoint::Store { id } => stores
                 .binary_search_by_key(&id, |s| s.id)
                 .ok()
@@ -446,7 +447,17 @@ pub fn personal_requests(
             let held = view
                 .container(Place::Person(person.id))?
                 .quantity(policy.good);
-            let destination = if held == 0 {
+            let destination = if policy.destination == Endpoint::Person {
+                if held >= policy.quantity {
+                    return None;
+                }
+                policy.source
+            } else if policy.source == Endpoint::Person {
+                if held == 0 {
+                    return None;
+                }
+                policy.destination
+            } else if held == 0 {
                 policy.source
             } else {
                 policy.destination
