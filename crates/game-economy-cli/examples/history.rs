@@ -42,6 +42,7 @@ fn tracked_changes(root: &Path) -> Option<bool> {
 fn observations(events: &[CoreRunEvent], current_tick: &mut u64) -> Vec<Value> {
     events.iter().filter_map(|event| match event {
         CoreRunEvent::Meetings(rows) if !rows.is_empty() => Some(json!({"kind":"meetings","events":rows})),
+        CoreRunEvent::WrittenExplanations(rows) if !rows.is_empty() => Some(json!({"kind":"written_explanations","events":rows})),
         CoreRunEvent::Disease(rows) if !rows.is_empty() => Some(json!({"kind":"disease","events":rows})),
         CoreRunEvent::Meals(rows) if !rows.is_empty() => Some(json!({"kind":"meals","events":rows})),
         CoreRunEvent::Treatments(rows) if !rows.is_empty() => Some(json!({"kind":"treatments","events":rows})),
@@ -418,6 +419,27 @@ mod tests {
         fs::remove_file(scenario).unwrap();
         fs::remove_file(&output).unwrap();
         fs::remove_file(output.with_extension("year-1.json")).unwrap();
+    }
+
+    #[test]
+    fn written_explanations_are_recorded_from_actual_meetings() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let mut host = game_economy_cli::core_scenario(
+            &root.join("content/scenarios/economy-core-written-invention.toml"),
+            &root.join("content"),
+        )
+        .unwrap();
+        let run = host.advance_continuous(5_400_001, &[]).unwrap();
+        assert_eq!(run.failure, None);
+        let mut tick = 0;
+        let records = observations(&run.events, &mut tick);
+        let explanation = records
+            .iter()
+            .find(|row| row["kind"] == "written_explanations")
+            .unwrap();
+        assert_eq!(explanation["events"][0]["speaker"], 1);
+        assert_eq!(explanation["events"][0]["listener"], 2);
+        assert!(explanation["events"][0]["page"].as_u64().unwrap() > 0);
     }
 
     #[test]

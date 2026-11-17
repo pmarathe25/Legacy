@@ -42,6 +42,7 @@ mod taking;
 mod tools;
 mod treatment;
 mod writing;
+mod written_social;
 pub use conflict::{
     CorePersonalConflict, PersonalAttackPolicy, PersonalDefensePolicy, PersonalHarm,
     PersonalStrikeReaction, StrikeCapability, StrikeFeeling, StrikeInterpretation, WoundCarePolicy,

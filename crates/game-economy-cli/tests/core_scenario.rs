@@ -5705,6 +5705,82 @@ fn people_independently_choose_whether_to_inscribe_their_forms() {
 }
 
 #[test]
+fn written_explanations_require_real_pages_and_independent_choices() {
+    use game_economy::core_interval::{CoreHost, CoreRunEvent};
+    fn run(workers: usize, case: &str) -> serde_json::Value {
+        rayon::ThreadPoolBuilder::new().num_threads(workers).build().unwrap().install(|| {
+            let root = root();
+            let mut state = game_economy_cli::core_scenario(
+                &root.join("content/scenarios/economy-core-written-invention.toml"), &root.join("content")
+            ).unwrap().snapshot();
+            if case == "no_page" {
+                std::sync::Arc::make_mut(state.schedule.as_mut().unwrap().personal_choices.as_mut().unwrap())[0].preferences[1].enabled = false;
+            }
+            let language = state.social.as_mut().unwrap().language.as_mut().unwrap();
+            let forms = std::sync::Arc::make_mut(language.writing.as_mut().unwrap());
+            if case == "silent" { forms.sharing[0].show = false; }
+            if case == "refuse" { forms.sharing[1].adopt = false; }
+            if case == "lie" { forms.sharing[0].claimed_sounds = Some(vec![0]); }
+            if case == "modify" { forms.sharing[1].adopted_marks = Some(vec![99]); }
+            if case == "deaf" { language.minds[1].hear = false; }
+            if matches!(case, "pressure" | "no_feelings") {
+                forms.sharing[0].show = false;
+                forms.sharing[0].show_fear_at_least = Some(1);
+                forms.sharing[1].adopt = false;
+                forms.sharing[1].adopt_obligation_at_least = Some(1);
+            }
+            if case == "pressure" {
+                state.opinions = Some(serde_json::from_value(serde_json::json!({
+                    "rules":{"minimum":-10,"maximum":10,"initial":0,"fulfilled_gain":1,"default_loss":1},
+                    "records":[{"observer":1,"target":2,"trust":0,"fear":2}, {"observer":2,"target":1,"trust":0,"obligation":2}]
+                })).unwrap());
+            }
+            let mut host = CoreHost::resume(state).unwrap();
+            let run = host.advance_continuous(5_400_001, &[]).unwrap();
+            assert_eq!(run.failure, None);
+            let state = host.snapshot();
+            let language = state.social.as_ref().unwrap().language.as_ref().unwrap();
+            let forms = language.writing.as_ref().unwrap();
+            let explanation = forms.explanations.first();
+            let shown = !matches!(case, "no_page" | "silent" | "no_feelings");
+            assert_eq!(explanation.is_some(), shown, "case={case}");
+            if let Some(event) = explanation {
+                assert_eq!((event.speaker, event.listener), (1, 2));
+                let page = state.writing.as_ref().unwrap().pages.iter().find(|page| page.item == event.page).unwrap();
+                assert_eq!(page.marks.as_ref(), Some(&event.marks));
+                assert!(run.events.iter().any(|row| matches!(row, CoreRunEvent::WrittenExplanations(events) if events.contains(event))));
+                let adopted = !matches!(case, "refuse" | "deaf");
+                assert_eq!(event.adopted.is_some(), adopted, "case={case}");
+                if case == "lie" {
+                    assert_eq!(event.spoken, vec![0]);
+                    assert_ne!(event.spoken, forms.minds[0].associations[0].sounds);
+                }
+                if case == "modify" { assert_eq!(event.adopted.as_ref().unwrap().marks, vec![99]); }
+                if case == "deaf" { assert!(!event.heard); }
+            }
+            let recipient = forms.minds.iter().find(|mind| mind.person == 2);
+            assert_eq!(recipient.is_some(), !matches!(case, "no_page" | "silent" | "refuse" | "deaf" | "no_feelings"));
+            let restored = CoreHost::resume(serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap()).unwrap();
+            assert_eq!(state, restored.snapshot());
+            serde_json::to_value(state).unwrap()
+        })
+    }
+    for case in [
+        "normal",
+        "no_page",
+        "silent",
+        "refuse",
+        "lie",
+        "modify",
+        "deaf",
+        "pressure",
+        "no_feelings",
+    ] {
+        assert_eq!(run(1, case), run(4, case), "case={case}");
+    }
+}
+
+#[test]
 fn saved_inscription_does_not_substitute_changed_marks() {
     use game_economy::core_interval::{CoreChoiceOutcome, CoreHost, CoreRunEvent, DecisionPhase};
     let root = root();

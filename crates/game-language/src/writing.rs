@@ -20,12 +20,56 @@ pub struct Mind {
     pub associations: Vec<Association>,
 }
 
+/// Each person's own choice to show a carried page and/or adopt an explanation.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SharingPolicy {
+    pub person: u64,
+    #[serde(default)]
+    pub show: bool,
+    #[serde(default)]
+    pub adopt: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub show_fear_at_least: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub show_obligation_at_least: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub adopt_fear_at_least: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub adopt_obligation_at_least: Option<u64>,
+    /// An optional deliberately stated sound, which need not match their own mapping.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub claimed_sounds: Option<Vec<u8>>,
+    /// The receiver may deliberately adopt a different visible form.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub adopted_marks: Option<Vec<u32>>,
+}
+
+/// A physical page was shown during an actual meeting; intended meaning is private.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Explanation {
+    pub tick: u64,
+    pub speaker: u64,
+    pub listener: u64,
+    pub page: u64,
+    pub marks: Vec<u32>,
+    pub spoken: Vec<u8>,
+    pub heard: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub adopted: Option<Association>,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Writing {
     pub capacity: usize,
     #[serde(default)]
     pub minds: Vec<Mind>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sharing: Vec<SharingPolicy>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub explanations: Vec<Explanation>,
 }
 
 impl Writing {
@@ -46,6 +90,32 @@ impl Writing {
                         .windows(2)
                         .any(|row| row[0].sounds >= row[1].sounds)
                     || mind.associations.iter().any(|row| !valid(row, sounds))
+            })
+            || self
+                .sharing
+                .par_windows(2)
+                .any(|row| row[0].person >= row[1].person)
+            || self.sharing.par_iter().any(|policy| {
+                people.binary_search(&policy.person).is_err()
+                    || policy.claimed_sounds.as_ref().is_some_and(|form| {
+                        form.is_empty()
+                            || form.len() > 16
+                            || form.iter().any(|sound| usize::from(*sound) >= sounds)
+                    })
+                    || policy.adopted_marks.as_ref().is_some_and(|marks| {
+                        marks.is_empty() || marks.len() > 16 || marks.contains(&0)
+                    })
+            })
+            || self.explanations.par_iter().any(|event| {
+                event.speaker == event.listener
+                    || people.binary_search(&event.speaker).is_err()
+                    || people.binary_search(&event.listener).is_err()
+                    || event.page == 0
+                    || !valid_parts(&event.spoken, &event.marks, sounds)
+                    || event
+                        .adopted
+                        .as_ref()
+                        .is_some_and(|form| !event.heard || !valid(form, sounds))
             })
         {
             return Err("invalid personal writing associations");
@@ -185,10 +255,14 @@ impl Writing {
 }
 
 fn valid(row: &Association, sounds: usize) -> bool {
-    !row.sounds.is_empty()
-        && row.sounds.len() <= 16
-        && row.sounds.iter().all(|&sound| usize::from(sound) < sounds)
-        && !row.marks.is_empty()
-        && row.marks.len() <= 16
-        && row.marks.iter().all(|&mark| mark != 0)
+    valid_parts(&row.sounds, &row.marks, sounds)
+}
+
+fn valid_parts(form: &[u8], marks: &[u32], sounds: usize) -> bool {
+    !form.is_empty()
+        && form.len() <= 16
+        && form.iter().all(|&sound| usize::from(sound) < sounds)
+        && !marks.is_empty()
+        && marks.len() <= 16
+        && !marks.contains(&0)
 }

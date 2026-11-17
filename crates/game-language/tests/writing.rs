@@ -4,6 +4,8 @@ use game_language::writing::{Association, Mind, Writing};
 fn marks_remain_personal_ambiguous_and_replaceable() {
     let mut writing = Writing {
         capacity: 2,
+        sharing: vec![],
+        explanations: vec![],
         minds: vec![
             Mind {
                 person: 1,
@@ -53,6 +55,8 @@ fn disjoint_mark_choices_are_atomic_and_worker_invariant() {
                 };
                 let mut writing = Writing {
                     capacity: 1,
+                    sharing: vec![],
+                    explanations: vec![],
                     minds: vec![Mind {
                         person: 2,
                         associations: vec![form(0, 5)],

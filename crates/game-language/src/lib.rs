@@ -531,6 +531,13 @@ impl Language {
             let mut ids: Vec<_> = people.iter().copied().collect();
             ids.par_sort_unstable();
             writing.validate(r.sounds.len(), &ids)?;
+            if writing
+                .explanations
+                .par_iter()
+                .any(|event| event.tick > now)
+            {
+                return Err("invalid written explanation time");
+            }
         }
         if r.sounds.is_empty()
             || r.sounds.len() > 256

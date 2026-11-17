@@ -19,8 +19,14 @@ idle; other activities compete in the same choice round. A separate domain 18
 preference lets a person choose whether to inscribe their known marks. The
 interval host inscribes them on a physical page using carried paper and ink. A person who
 actually carries the page can observe its marks and interpret them through
-their own associations and vocabulary, including ambiguity. This does not yet
-teach another person or remember an observation of marks.
+their own associations and vocabulary, including ambiguity. Optional personal
+sharing policies allow a speaker to show a page they actually carry during a
+meeting and state a sound, including a deliberately false one. A listener can
+independently decline, adopt, or choose modified marks; hearing and an actual
+meeting are required for adoption. Either choice can optionally respond to the
+person's own directed fear or felt obligation; absent thresholds impose no
+such motive. Explanations are retained for the current
+social generation, but long-term personal observation memory is not yet modeled.
 `content/scenarios/economy-core-written-invention.toml` illustrates one
 person choosing to invent marks and another preferring idleness after a real
 conversation has established their spoken vocabulary.

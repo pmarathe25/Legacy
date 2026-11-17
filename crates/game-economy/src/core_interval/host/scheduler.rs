@@ -592,6 +592,7 @@ pub enum CoreRunEvent {
     Treatments(Vec<game_lots::TransactionOutcome>),
     Provisions(Vec<game_lots::TransactionOutcome>),
     Meetings(Vec<game_social::Encounter>),
+    WrittenExplanations(Vec<game_language::writing::Explanation>),
     Disease(Vec<game_disease::Event>),
     Repairs(Vec<game_economy_building::maintenance::Event>),
     ToolRepairs(Vec<game_economy_work::tool_wear::RepairEvent>),
@@ -939,6 +940,11 @@ impl CoreHost {
                     if !dynamics.meetings.is_empty() {
                         run.events.push(CoreRunEvent::Meetings(dynamics.meetings));
                     }
+                    if !dynamics.written_explanations.is_empty() {
+                        run.events.push(CoreRunEvent::WrittenExplanations(
+                            dynamics.written_explanations,
+                        ));
+                    }
                     if !dynamics.disease_events.is_empty() {
                         run.events
                             .push(CoreRunEvent::Disease(dynamics.disease_events));
@@ -1084,6 +1090,11 @@ impl CoreHost {
                             meal_people.par_sort_unstable();
                             meal_people.dedup();
                             run.events.push(CoreRunEvent::Meetings(meetings));
+                        }
+                        if !dynamics.written_explanations.is_empty() {
+                            run.events.push(CoreRunEvent::WrittenExplanations(
+                                dynamics.written_explanations,
+                            ));
                         }
                         if !dynamics.disease_events.is_empty() {
                             run.events

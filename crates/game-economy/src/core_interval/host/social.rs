@@ -50,6 +50,7 @@ impl Clone for CoreHealth {
 pub struct CoreDynamicsResults {
     pub meetings: Vec<game_social::Encounter>,
     pub disease_events: Vec<game_disease::Event>,
+    pub written_explanations: Vec<game_language::writing::Explanation>,
 }
 
 impl CoreHost {
@@ -222,7 +223,7 @@ impl CoreHost {
         let mechanical_claims = social
             .and_then(|owner| owner.language.as_ref())
             .and_then(|_| self.mechanical_claim_offers(&meetings));
-        let language = social
+        let mut language = social
             .and_then(|social| social.language.as_ref())
             .map(|language| {
                 if language
@@ -408,6 +409,15 @@ impl CoreHost {
                     .map_err(str::to_owned)
             })
             .transpose()?;
+        let written_explanations = match (
+            social.and_then(|owner| owner.language.as_ref()),
+            language.as_mut(),
+        ) {
+            (Some(opening), Some(next)) => {
+                self.stage_written_explanations(opening, next, &meetings, tick)?
+            }
+            _ => Vec::new(),
+        };
         let signals = social
             .and_then(|social| social.signals.as_ref())
             .map(|signals| {
@@ -633,6 +643,7 @@ impl CoreHost {
         Ok(CoreDynamicsResults {
             meetings,
             disease_events,
+            written_explanations,
         })
     }
 }
