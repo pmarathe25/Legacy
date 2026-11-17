@@ -22,6 +22,7 @@ fn batched_route_reports_keep_newest_evidence_and_a_bounded_personal_history() {
             .unwrap()
             .install(|| {
                 let mut travel = Travel {
+                    travel_unit_millis: None,
                     observation_limit: 2,
                     ..Travel::default()
                 };
@@ -55,6 +56,7 @@ fn independent_replacements_keep_newer_evidence_and_deterministic_ties() {
             .unwrap()
             .install(|| {
                 let mut travel = Travel {
+                    travel_unit_millis: None,
                     observations: vec![
                         report(1, 1, 2, false),
                         report(2, 1, 1, false),

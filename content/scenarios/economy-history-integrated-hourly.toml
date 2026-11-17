@@ -3,6 +3,7 @@
 seed = 1701
 tick_millis = 3600000
 work_rate_period_millis = 3600000
+travel_unit_millis = 3600000
 decision_period_millis = 3600000
 stock_capacity = 100000
 food_relief_divisor = 1

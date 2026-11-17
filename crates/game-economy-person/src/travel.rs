@@ -137,6 +137,10 @@ pub struct RouteSharing {
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Travel {
+    /// Elapsed duration of one route-distance unit. Older saves use the
+    /// physical boundary duration until explicitly migrated.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub travel_unit_millis: Option<u64>,
     pub routes: Vec<Route>,
     #[serde(default)]
     pub journeys: Vec<Journey>,
@@ -160,6 +164,7 @@ fn default_observation_limit() -> usize {
 impl Default for Travel {
     fn default() -> Self {
         Self {
+            travel_unit_millis: None,
             routes: Vec::new(),
             journeys: Vec::new(),
             closures: Vec::new(),
@@ -288,6 +293,7 @@ impl Colocation {
 impl Clone for Travel {
     fn clone(&self) -> Self {
         Self {
+            travel_unit_millis: self.travel_unit_millis,
             routes: self.routes.par_iter().cloned().collect(),
             journeys: self.journeys.par_iter().cloned().collect(),
             closures: self.closures.par_iter().cloned().collect(),
@@ -317,10 +323,14 @@ pub fn validate_world(
     tick: u64,
     quantum_millis: u64,
 ) -> Result<(), String> {
+    let period = travel.unit_millis(quantum_millis);
+    if period == 0 {
+        return Err("invalid travel unit duration".into());
+    }
     if travel
         .journeys
         .par_iter()
-        .any(|journey| journey.arrival_after(quantum_millis).is_err())
+        .any(|journey| journey.arrival_after(period).is_err())
     {
         return Err("invalid journey progress".into());
     }
@@ -336,6 +346,11 @@ pub fn validate_world(
 }
 
 impl Travel {
+    /// Duration used to interpret route distance and saved journey progress.
+    pub fn unit_millis(&self, boundary_millis: u64) -> u64 {
+        self.travel_unit_millis.unwrap_or(boundary_millis)
+    }
+
     /// Progress existing journeys without publishing arrival. The caller owns
     /// the world interval, generation and any later settlement. All input is
     /// validated before mutation; incapacitated travelers remain in place.
@@ -345,6 +360,7 @@ impl Travel {
         elapsed_millis: u64,
         quantum_millis: u64,
     ) -> Result<(), &'static str> {
+        let quantum_millis = self.unit_millis(quantum_millis);
         if quantum_millis == 0
             || people.par_windows(2).any(|pair| pair[0].id >= pair[1].id)
             || self
@@ -765,6 +781,17 @@ impl Travel {
         self.settle_journeys(people, journeys)
     }
 
+    /// Advance a boundary by its actual elapsed duration and publish arrivals.
+    pub fn advance_boundary(
+        &self,
+        people: &mut [Person],
+        elapsed_millis: u64,
+    ) -> Result<Self, &'static str> {
+        let mut next = self.clone();
+        next.progress_elapsed(people, elapsed_millis, elapsed_millis)?;
+        Ok(next.settle_elapsed(people))
+    }
+
     /// Publish pending arrivals and place mortal bodies without adding travel time.
     pub fn settle_elapsed(&self, people: &mut [Person]) -> Self {
         self.settle_journeys(people, self.journeys.par_iter().cloned().collect())
@@ -826,6 +853,7 @@ impl Travel {
             })
             .collect();
         Self {
+            travel_unit_millis: self.travel_unit_millis,
             routes: self.routes.clone(),
             journeys,
             closures: self.closures.par_iter().cloned().collect(),
@@ -881,6 +909,46 @@ mod elapsed_tests {
     }
 
     #[test]
+    fn explicit_travel_duration_is_independent_of_boundary_and_resume() {
+        fn run(boundary: u64, workers: usize) -> (Travel, Vec<Person>) {
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(workers)
+                .build()
+                .unwrap()
+                .install(|| {
+                    let mut travel = Travel {
+                        travel_unit_millis: Some(1000),
+                        journeys: vec![journey(1)],
+                        ..Travel::default()
+                    };
+                    let mut people = vec![Person {
+                        id: 1,
+                        region: None,
+                        health: 100,
+                        hunger: 0,
+                        hunger_remainder: 0,
+                        immortal: None,
+                        willing_to_work: false,
+                        seek_meals: false,
+                        controlled: false,
+                    }];
+                    for step in 0..(2000 / boundary) {
+                        travel = travel.advance_boundary(&mut people, boundary).unwrap();
+                        if step == 0 {
+                            let json = serde_json::to_string(&travel).unwrap();
+                            travel = serde_json::from_str(&json).unwrap();
+                        }
+                    }
+                    (travel, people)
+                })
+        }
+        let whole = run(1000, 1);
+        assert_eq!(whole.1[0].region, Some(2));
+        assert!(whole.0.journeys.is_empty());
+        assert_eq!(run(100, 4), whole);
+    }
+
+    #[test]
     fn early_arrivals_do_not_settle_dead_or_unfinished_travelers() {
         let person = |id, health| Person {
             id,
@@ -898,6 +966,7 @@ mod elapsed_tests {
         rows[0].advance_elapsed(2000, 1000).unwrap();
         rows[1].advance_elapsed(2000, 1000).unwrap();
         let mut travel = Travel {
+            travel_unit_millis: None,
             journeys: rows,
             ..Travel::default()
         };
@@ -919,6 +988,7 @@ mod elapsed_tests {
         let mut second = journey(2);
         first.advance_elapsed(333, 1000).unwrap();
         let travel = Travel {
+            travel_unit_millis: None,
             journeys: vec![first.clone(), second.clone()],
             ..Travel::default()
         };
@@ -930,6 +1000,7 @@ mod elapsed_tests {
         second.advance_elapsed(1000, 1000).unwrap();
         assert_eq!(first.arrival_after(1000).unwrap(), 1000);
         let travel = Travel {
+            travel_unit_millis: None,
             journeys: vec![first.clone(), second],
             ..Travel::default()
         };
@@ -971,6 +1042,7 @@ mod elapsed_tests {
         let mut row = journey(1);
         row.advance_elapsed(250, 1000).unwrap();
         let travel = Travel {
+            travel_unit_millis: None,
             journeys: vec![row],
             ..Travel::default()
         };
@@ -1008,6 +1080,7 @@ mod elapsed_tests {
         let saved = serde_json::to_string(&row).unwrap();
         let row: Journey = serde_json::from_str(&saved).unwrap();
         let travel = Travel {
+            travel_unit_millis: None,
             routes: vec![Route {
                 source: 1,
                 destination: 2,
@@ -1041,6 +1114,7 @@ mod elapsed_tests {
         let mut row = journey(1);
         row.advance_elapsed(500, 1000).unwrap();
         let travel = Travel {
+            travel_unit_millis: None,
             journeys: vec![row.clone()],
             ..Travel::default()
         };
@@ -1080,6 +1154,7 @@ mod elapsed_tests {
         let mut first = journey(1);
         first.remaining = 1;
         let initial = Travel {
+            travel_unit_millis: None,
             journeys: vec![first, journey(2), journey(3)],
             ..Travel::default()
         };
@@ -1118,6 +1193,7 @@ mod elapsed_tests {
                         })
                         .collect();
                     let mut travel = Travel {
+                        travel_unit_millis: None,
                         journeys: (1..=4096).map(journey).collect(),
                         ..Travel::default()
                     };

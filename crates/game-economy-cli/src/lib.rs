@@ -25,6 +25,9 @@ struct Scenario {
     /// Duration represented by a unit of the configured work rate.
     #[serde(default)]
     work_rate_period_millis: Option<u64>,
+    /// Elapsed duration of one route-distance unit.
+    #[serde(default)]
+    travel_unit_millis: Option<u64>,
     /// Autonomous decision cadence, independent of the physical quantum.
     #[serde(default)]
     decision_period_millis: Option<u64>,
@@ -2727,6 +2730,7 @@ fn scenario_with_options_inner(
         nutrition: None,
         pending_food: vec![],
         travel: (!scenario.routes.is_empty()).then_some(Travel {
+            travel_unit_millis: scenario.travel_unit_millis,
             closures: scenario.route_closures,
             observations: scenario.route_observations,
             observation_limit: 8,

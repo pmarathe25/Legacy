@@ -335,7 +335,7 @@ impl CoreInterval {
                             .ok()
                             .is_some_and(|i| self.people[i].health > 0)
                     })
-                    .map(|journey| journey.arrival_after(quantum).map(Some))
+                    .map(|journey| journey.arrival_after(travel.unit_millis(quantum)).map(Some))
                     .try_reduce(|| None, |left, right| Ok(earliest(left, right)))
             })
             .map_err(str::to_owned)?;

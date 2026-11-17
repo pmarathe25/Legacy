@@ -8989,7 +8989,8 @@ impl Economy {
         let mut travel = self
             .travel
             .as_ref()
-            .map(|travel| travel.advance(&mut person.people));
+            .map(|travel| travel.advance_boundary(&mut person.people, self.physical.tick_millis()))
+            .transpose()?;
         if let (Some(opening), Some(current), Some(social)) = (
             self.travel.as_ref(),
             travel.as_mut(),

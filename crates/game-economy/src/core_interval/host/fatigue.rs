@@ -156,7 +156,7 @@ impl CoreHost {
                 .par_iter()
                 .map(|journey| {
                     journey
-                        .arrival_after(quantum)
+                        .arrival_after(travel.unit_millis(quantum))
                         .map(|after| (journey.person, after.min(u128::from(consumed)) as u64))
                         .map_err(str::to_owned)
                 })

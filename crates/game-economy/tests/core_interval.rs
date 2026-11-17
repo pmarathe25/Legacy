@@ -28,6 +28,22 @@ fn work_deadline_uses_explicit_rate_period() {
 }
 
 #[test]
+fn travel_deadline_uses_explicit_elapsed_duration() {
+    let mut state = fixture();
+    state.nutrition = None;
+    state.pending_food.clear();
+    state.travel.as_mut().unwrap().travel_unit_millis = Some(500);
+    let mut core = CoreInterval::begin(state, &[]).unwrap();
+    let deadline = core.next_deadline(None).unwrap();
+    assert_eq!(deadline.after_millis, 500);
+    assert!(deadline.arrival);
+    assert_eq!(core.progress(250).unwrap(), 250);
+    let saved = serde_json::to_string(&core.snapshot()).unwrap();
+    let resumed = CoreInterval::resume(serde_json::from_str(&saved).unwrap()).unwrap();
+    assert_eq!(resumed.next_deadline(None).unwrap().after_millis, 250);
+}
+
+#[test]
 fn a_fatal_strike_pauses_a_workers_physical_progress_and_survives_reload() {
     use game_economy::core_interval::PersonalStrike;
     for with_family in [false, true] {
@@ -254,6 +270,7 @@ fn fixture() -> CoreSnapshot {
             max_work_hunger: 10,
         },
         travel: Some(Travel {
+            travel_unit_millis: None,
             routes: vec![Route {
                 source: 1,
                 destination: 2,
