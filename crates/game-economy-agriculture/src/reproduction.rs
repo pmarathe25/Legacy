@@ -20,10 +20,16 @@ pub struct Reproduction {
     /// Permit pollen from actual planted cohorts in the same field.
     #[serde(default, skip_serializing_if = "is_false")]
     pub recombine: bool,
+    /// Permit compatible ripe fields in the same region to contribute pollen.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub cross_field_pollen: bool,
 }
 impl Reproduction {
     pub fn validate(&self) -> Result<(), &'static str> {
-        if self.mutation_per_million > 1_000_000 || self.mutation_step > 1000 {
+        if self.mutation_per_million > 1_000_000
+            || self.mutation_step > 1000
+            || (self.cross_field_pollen && !self.recombine)
+        {
             return Err("invalid seed reproduction rules");
         }
         Ok(())
@@ -65,8 +71,27 @@ pub(crate) fn candidates(
     field: u64,
     planted_at: u64,
 ) -> Result<Vec<Candidate>, String> {
+    candidates_with_pollen(rules, genetics, seeds, None, world_seed, field, planted_at)
+}
+
+struct PollenPool {
+    key: (u64, u32),
+    seeds: Vec<Lot>,
+    offsets: Vec<u128>,
+}
+
+fn candidates_with_pollen(
+    rules: Reproduction,
+    genetics: &crate::genetics::Genetics,
+    seeds: &[Lot],
+    pool: Option<&PollenPool>,
+    world_seed: u64,
+    field: u64,
+    planted_at: u64,
+) -> Result<Vec<Candidate>, String> {
     rules.validate().map_err(str::to_owned)?;
-    let offsets = if rules.recombine && seeds.len() > 1 {
+    let pollen_seeds = pool.map_or(seeds, |pool| pool.seeds.as_slice());
+    let local_offsets = if pool.is_none() && rules.recombine && pollen_seeds.len() > 1 {
         let quantities: Vec<_> = if seeds.len() < 256 {
             seeds.iter().map(|lot| lot.quantity).collect()
         } else {
@@ -76,15 +101,16 @@ pub(crate) fn candidates(
     } else {
         Vec::new()
     };
+    let offsets = pool.map_or(local_offsets.as_slice(), |pool| pool.offsets.as_slice());
     let total = offsets
         .last()
-        .zip(seeds.last())
+        .zip(pollen_seeds.last())
         .map_or(0, |(offset, lot)| *offset + u128::from(lot.quantity));
     let derive = |(index, lot, quantity): (usize, &Lot, u128)| {
         let quantity = u64::try_from(quantity).map_err(|_| "offspring seed quantity overflow")?;
         let maternal = lot.batch.and_then(|batch| genetics.alleles(batch));
-        let pollen = if rules.recombine && seeds.len() == 1 && lot.quantity > 0 {
-            Some(lot)
+        let pollen = if rules.recombine && pollen_seeds.len() == 1 && pollen_seeds[0].quantity > 0 {
+            Some(&pollen_seeds[0])
         } else if rules.recombine && total > 0 {
             let a = game_genetics::random(
                 world_seed ^ 0x706f_6c6c_656e_0001 ^ index as u64,
@@ -100,7 +126,7 @@ pub(crate) fn candidates(
             let index = offsets
                 .partition_point(|offset| *offset <= ticket)
                 .saturating_sub(1);
-            Some(&seeds[index])
+            Some(&pollen_seeds[index])
         } else {
             None
         };
@@ -205,6 +231,61 @@ pub(crate) fn prepare_maturation(
         .map(|field| (field.id, field.phase))
         .collect();
     phases.par_sort_unstable_by_key(|row| row.0);
+    if !provenance.plantings.par_iter().any(|record| {
+        record.offspring.is_none()
+            && phases
+                .binary_search_by_key(&record.field, |row| row.0)
+                .ok()
+                .is_some_and(|index| phases[index].1 == crate::Phase::Ripe)
+    }) {
+        return Ok(None);
+    }
+    // One immutable, quantity-weighted pollen pool per region and crop. This
+    // avoids comparing every field to every other field in crowded regions.
+    let pools: Vec<PollenPool> = if rules.cross_field_pollen {
+        let mut donors: Vec<_> = fields
+            .par_iter()
+            .filter(|field| field.phase == crate::Phase::Ripe)
+            .flat_map_iter(|field| {
+                provenance
+                    .plantings
+                    .binary_search_by_key(&field.id, |row| row.field)
+                    .ok()
+                    .into_iter()
+                    .flat_map(move |index| {
+                        provenance.plantings[index].seeds.iter().enumerate().map(
+                            move |(position, lot)| {
+                                ((field.region, field.crop), field.id, position, lot.clone())
+                            },
+                        )
+                    })
+            })
+            .collect();
+        donors.par_sort_unstable_by_key(|row| (row.0, row.1, row.2));
+        donors
+            .par_chunk_by(|a, b| a.0 == b.0)
+            .map(|group| {
+                let seeds: Vec<_> = group.par_iter().map(|row| row.3.clone()).collect();
+                let quantities: Vec<_> = seeds.par_iter().map(|lot| lot.quantity).collect();
+                PollenPool {
+                    key: group[0].0,
+                    seeds,
+                    offsets: game_lot_planning::prefixes(&quantities),
+                }
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let mut locations: Vec<_> = if rules.cross_field_pollen {
+        fields
+            .par_iter()
+            .map(|field| (field.id, (field.region, field.crop)))
+            .collect()
+    } else {
+        Vec::new()
+    };
+    locations.par_sort_unstable_by_key(|row| row.0);
     let mut entries: Vec<_> = provenance
         .plantings
         .par_iter()
@@ -216,14 +297,35 @@ pub(crate) fn prepare_maturation(
             (phase == Some(crate::Phase::Ripe) && record.offspring.is_none()).then_some(record)
         })
         .map(|record| {
-            candidates(
-                rules,
-                genetics,
-                &record.seeds,
-                world_seed,
-                record.field,
-                record.tick,
-            )
+            let pool = locations
+                .binary_search_by_key(&record.field, |row| row.0)
+                .ok()
+                .and_then(|index| {
+                    pools
+                        .binary_search_by_key(&locations[index].1, |row| row.key)
+                        .ok()
+                })
+                .map(|index| &pools[index]);
+            if let Some(pool) = pool {
+                candidates_with_pollen(
+                    rules,
+                    genetics,
+                    &record.seeds,
+                    Some(pool),
+                    world_seed,
+                    record.field,
+                    record.tick,
+                )
+            } else {
+                candidates(
+                    rules,
+                    genetics,
+                    &record.seeds,
+                    world_seed,
+                    record.field,
+                    record.tick,
+                )
+            }
             .map(|children| (record.field, children))
         })
         .collect::<Result<_, _>>()?;
@@ -321,6 +423,7 @@ mod tests {
             mutation_per_million: 1_000_000,
             mutation_step: 100,
             recombine: false,
+            cross_field_pollen: false,
         };
         let seeds = vec![
             Lot {
@@ -378,6 +481,7 @@ mod tests {
             mutation_per_million: 0,
             mutation_step: 0,
             recombine: true,
+            cross_field_pollen: false,
         };
         let seeds = vec![
             Lot {
@@ -428,6 +532,110 @@ mod tests {
     }
 
     #[test]
+    fn ripe_compatible_fields_share_real_pollen_without_crossing_regions_or_crops() {
+        use crate::{
+            Field, Phase,
+            provenance::{Planting, Provenance},
+        };
+        let rules = Reproduction {
+            seed_per_thousand: 1000,
+            mutation_per_million: 0,
+            mutation_step: 0,
+            recombine: true,
+            cross_field_pollen: true,
+        };
+        let genetics = Genetics {
+            growth_weight: 0,
+            min_factor: 1000,
+            max_factor: 1000,
+            season_effects: vec![],
+            strains: Arc::new(
+                (11..=15)
+                    .map(|batch| Strain {
+                        batch,
+                        alleles: [batch as u16 * 10, batch as u16 * 10],
+                    })
+                    .collect(),
+            ),
+            descendants: Arc::default(),
+            reproduction: Some(rules),
+        };
+        let fields: Vec<_> = [
+            (1, 1, 1, Phase::Ripe),
+            (2, 1, 1, Phase::Ripe),
+            (3, 2, 1, Phase::Ripe),
+            (4, 1, 2, Phase::Ripe),
+            (5, 1, 1, Phase::Growing),
+        ]
+        .into_iter()
+        .map(|(id, region, crop, phase)| Field {
+            id,
+            region,
+            crop,
+            phase,
+            remaining: u32::from(phase == Phase::Growing),
+        })
+        .collect();
+        let plantings = (1..=5)
+            .map(|field| Planting {
+                field,
+                tick: 1,
+                planter: None,
+                seeds: vec![Lot {
+                    good: 1,
+                    quantity: 10,
+                    batch: Some(field + 10),
+                    item: None,
+                    expires_at: None,
+                }],
+                offspring: None,
+            })
+            .collect();
+        let provenance = Provenance {
+            plantings: Arc::new(plantings),
+            profiles: Arc::default(),
+            genetics: Some(Arc::new(genetics)),
+        };
+        let mut crossed = false;
+        for seed in 0..64 {
+            let result = |workers| {
+                rayon::ThreadPoolBuilder::new()
+                    .num_threads(workers)
+                    .build()
+                    .unwrap()
+                    .install(|| {
+                        prepare_maturation(&fields, &provenance, seed)
+                            .unwrap()
+                            .unwrap()
+                            .entries
+                    })
+            };
+            let entries = result(1);
+            assert_eq!(entries, result(4));
+            for (field, rows) in entries {
+                let parent = rows[0].pollen_parent.unwrap();
+                match field {
+                    1 | 2 => {
+                        assert!([11, 12].contains(&parent));
+                        crossed |= parent != field + 10;
+                    }
+                    3 | 4 => assert_eq!(parent, field + 10),
+                    _ => panic!("only ripe fields mature"),
+                }
+            }
+        }
+        assert!(crossed);
+        assert!(
+            Reproduction {
+                recombine: false,
+                ..rules
+            }
+            .validate()
+            .is_err()
+        );
+    }
+
+    #[test]
     #[ignore = "concentrated within-field pollen scaling measurement"]
     fn concentrated_pollen_scaling() {
         let count = std::env::var("LEGACY_POLLEN_COHORTS")
@@ -455,6 +663,7 @@ mod tests {
             mutation_per_million: 1000,
             mutation_step: 10,
             recombine: true,
+            cross_field_pollen: false,
         };
         let seeds: Vec<_> = (1..=count)
             .map(|batch| Lot {

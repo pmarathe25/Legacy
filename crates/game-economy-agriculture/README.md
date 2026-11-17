@@ -81,10 +81,14 @@ identities are retained where known. The physical batch identity and
 lineage are reserved at maturation and survive save/load and failed harvests.
 An accepted harvest creates its food and seed cohorts in one physical
 transaction. The farmer still chooses whether to cultivate or harvest.
-This slice does not yet model pollen between fields or selection among
-individual plants within a cohort. See
+With `cross_field_pollen = true` and `recombine = true`, compatible ripe
+fields in the same region share a quantity-weighted pollen pool; other crops,
+regions, and fields that are not ripe cannot contribute. Selfing remains
+possible. Ripe fields are a simplified flowering proxy; the simulation does
+not yet model pollen transport or selection among individual plants within a cohort. See
 `content/scenarios/economy-core-seed-reproduction.toml` and
-`content/scenarios/economy-core-seed-crossing.toml`.
+`content/scenarios/economy-core-seed-crossing.toml`; cross-field settings are
+shown in `content/scenarios/economy-core-cross-field-pollen.toml`.
 
 Optional `[cultivation.soil]` content specifies `capacity`, `loss_per_harvest`, `recovery_per_fallow`, and sorted `fields = [{ field, fertility }, ...]`. A configured field's harvest yields its crop's ordinary output multiplied by fertility over capacity, rounded down with a minimum of one unit. A successful physical harvest depletes fertility; a field that starts a boundary fallow recovers up to capacity. Failed harvests cause no depletion. Fields without a soil record keep their ordinary yield. This is a basic fertility model, not a complete treatment of soils or nutrients.
 

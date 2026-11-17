@@ -2339,6 +2339,134 @@ fn chosen_mechanical_loads_use_real_custody_and_physics() {
 }
 
 #[test]
+fn compatible_fields_exchange_pollen_into_real_seed_lineages() {
+    use game_economy::core_interval::CoreHost;
+    use game_economy_agriculture::Phase;
+    fn run(workers: usize, world_seed: u64) -> serde_json::Value {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let root = root();
+                let mut host = game_economy_cli::core_scenario(
+                    &root.join("content/scenarios/economy-core-cross-field-pollen.toml"),
+                    &root.join("content"),
+                )
+                .unwrap();
+                assert_eq!(host.advance_continuous(900_001, &[]).unwrap().failure, None);
+                for _ in 0..5 {
+                    if host
+                        .snapshot()
+                        .agriculture
+                        .as_ref()
+                        .unwrap()
+                        .provenance
+                        .as_ref()
+                        .unwrap()
+                        .plantings
+                        .len()
+                        == 2
+                    {
+                        break;
+                    }
+                    assert_eq!(host.advance_continuous(900_000, &[]).unwrap().failure, None);
+                }
+                let mut state = host.snapshot();
+                state.core.seed = world_seed;
+                let agriculture = state.agriculture.as_mut().unwrap();
+                assert_eq!(agriculture.provenance.as_ref().unwrap().plantings.len(), 2);
+                for policy in &mut agriculture.policies {
+                    policy.willing = false;
+                }
+                for field in &mut agriculture.fields {
+                    assert_eq!(field.phase, Phase::Growing);
+                    field.remaining = 1;
+                }
+                let mut host = CoreHost::resume(
+                    serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap(),
+                )
+                .unwrap();
+                assert_eq!(host.advance_continuous(900_000, &[]).unwrap().failure, None);
+                let state = host.snapshot();
+                let agriculture = state.agriculture.as_ref().unwrap();
+                assert!(
+                    agriculture
+                        .fields
+                        .iter()
+                        .all(|field| field.phase == Phase::Ripe)
+                );
+                let records = &agriculture.provenance.as_ref().unwrap().plantings;
+                assert_eq!(records.len(), 2);
+                let mut parents: Vec<_> = records
+                    .iter()
+                    .map(|row| row.seeds[0].batch.unwrap())
+                    .collect();
+                parents.sort_unstable();
+                assert_eq!(parents, vec![11, 12]);
+                for record in records.iter() {
+                    let offspring = record.offspring.as_ref().unwrap();
+                    assert_eq!(offspring.len(), 1);
+                    assert_eq!(offspring[0].parent, record.seeds[0].batch);
+                    assert!(matches!(offspring[0].pollen_parent, Some(11 | 12)));
+                }
+                let children: Vec<_> = records
+                    .iter()
+                    .map(|row| row.offspring.as_ref().unwrap()[0].batch)
+                    .collect();
+                let mut harvesting = state.clone();
+                for policy in &mut harvesting.agriculture.as_mut().unwrap().policies {
+                    policy.willing = true;
+                }
+                let mut harvesting = CoreHost::resume(harvesting).unwrap();
+                assert_eq!(
+                    harvesting
+                        .advance_continuous(1_800_000, &[])
+                        .unwrap()
+                        .failure,
+                    None
+                );
+                let harvested = harvesting.snapshot();
+                for child in children {
+                    assert!(
+                        harvested
+                            .core
+                            .physical
+                            .custody
+                            .containers
+                            .iter()
+                            .any(|container| container
+                                .lots
+                                .iter()
+                                .any(|lot| lot.batch == Some(child) && lot.quantity > 0))
+                    );
+                }
+                assert_eq!(
+                    CoreHost::resume(
+                        serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap()
+                    )
+                    .unwrap()
+                    .snapshot(),
+                    state
+                );
+                serde_json::to_value(state).unwrap()
+            })
+    }
+    let mut observed_cross = false;
+    for seed in 0..8 {
+        let state = run(1, seed);
+        assert_eq!(state, run(4, seed));
+        let records = state["agriculture"]["provenance"]["plantings"]
+            .as_array()
+            .unwrap();
+        observed_cross |= records
+            .iter()
+            .any(|row| row["offspring"][0]["parent"] != row["offspring"][0]["pollen_parent"]);
+    }
+    assert!(observed_cross);
+}
+
+#[test]
 fn planted_seed_cohorts_can_cross_and_preserve_both_lineages() {
     use game_economy::core_interval::CoreHost;
     use game_economy_agriculture::Phase;
