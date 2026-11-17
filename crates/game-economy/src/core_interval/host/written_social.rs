@@ -1,6 +1,6 @@
 //! Independent choices to explain visible marks during actual meetings.
 use super::*;
-use game_language::writing::{Association, Explanation};
+use game_language::writing::{Association, Explanation, Observation};
 
 impl CoreHost {
     pub(super) fn stage_written_explanations(
@@ -146,6 +146,22 @@ impl CoreHost {
             .filter_map(|event| event.adopted.clone().map(|form| (event.listener, form)))
             .collect();
         adoption.par_sort_unstable_by_key(|row| row.0);
+        let observations: Vec<_> = events
+            .par_iter()
+            .filter(|event| {
+                policy(event.listener).is_some_and(|policy| policy.remember_capacity.is_some())
+                    && actor(event.listener).is_some_and(|person| !person.controlled)
+            })
+            .map(|event| Observation {
+                person: event.listener,
+                page: event.page,
+                speaker: event.speaker,
+                marks: event.marks.clone(),
+                heard: event.heard.then(|| event.spoken.clone()),
+                first_seen_at: tick,
+                seen_at: tick,
+            })
+            .collect();
         let target = std::sync::Arc::make_mut(
             next.writing
                 .as_mut()
@@ -156,6 +172,9 @@ impl CoreHost {
                 .assign_batch(&adoption, opening.rules.sounds.len())
                 .map_err(str::to_owned)?;
         }
+        target
+            .remember(&observations, opening.rules.sounds.len())
+            .map_err(str::to_owned)?;
         target.explanations = events.par_iter().cloned().collect();
         Ok(events)
     }

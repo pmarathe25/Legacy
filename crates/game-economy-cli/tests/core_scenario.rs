@@ -5781,6 +5781,86 @@ fn written_explanations_require_real_pages_and_independent_choices() {
 }
 
 #[test]
+fn people_can_remember_seen_marks_without_adopting_them() {
+    use game_economy::core_interval::CoreHost;
+    fn run(workers: usize, hears: bool, remembers: bool) -> serde_json::Value {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let root = root();
+                let mut state = game_economy_cli::core_scenario(
+                    &root.join("content/scenarios/economy-core-written-invention.toml"),
+                    &root.join("content"),
+                )
+                .unwrap()
+                .snapshot();
+                let language = state.social.as_mut().unwrap().language.as_mut().unwrap();
+                language.minds[1].hear = hears;
+                let forms = std::sync::Arc::make_mut(language.writing.as_mut().unwrap());
+                forms.sharing[1].adopt = false;
+                if !remembers {
+                    forms.sharing[1].remember_capacity = None;
+                }
+                let mut host = CoreHost::resume(state).unwrap();
+                assert_eq!(
+                    host.advance_continuous(5_400_001, &[]).unwrap().failure,
+                    None
+                );
+                let state = host.snapshot();
+                let forms = state
+                    .social
+                    .as_ref()
+                    .unwrap()
+                    .language
+                    .as_ref()
+                    .unwrap()
+                    .writing
+                    .as_ref()
+                    .unwrap();
+                assert_eq!(forms.observations.len(), usize::from(remembers));
+                assert!(forms.minds.iter().all(|mind| mind.person != 2));
+                if remembers {
+                    let memory = &forms.observations[0];
+                    assert_eq!((memory.person, memory.speaker), (2, 1));
+                    assert_eq!(memory.heard.is_some(), hears);
+                    assert_eq!(memory.marks, forms.explanations[0].marks);
+                }
+                let mut resumed = CoreHost::resume(
+                    serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap(),
+                )
+                .unwrap();
+                assert_eq!(host.advance_continuous(900_000, &[]).unwrap().failure, None);
+                assert_eq!(
+                    resumed.advance_continuous(900_000, &[]).unwrap().failure,
+                    None
+                );
+                assert_eq!(host.snapshot(), resumed.snapshot());
+                let state = host.snapshot();
+                let forms = state
+                    .social
+                    .as_ref()
+                    .unwrap()
+                    .language
+                    .as_ref()
+                    .unwrap()
+                    .writing
+                    .as_ref()
+                    .unwrap();
+                assert!(forms.explanations.is_empty());
+                assert_eq!(forms.observations.len(), usize::from(remembers));
+                serde_json::to_value(state).unwrap()
+            })
+    }
+    for hears in [false, true] {
+        for remembers in [false, true] {
+            assert_eq!(run(1, hears, remembers), run(4, hears, remembers));
+        }
+    }
+}
+
+#[test]
 fn saved_inscription_does_not_substitute_changed_marks() {
     use game_economy::core_interval::{CoreChoiceOutcome, CoreHost, CoreRunEvent, DecisionPhase};
     let root = root();

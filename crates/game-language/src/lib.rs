@@ -538,6 +538,13 @@ impl Language {
             {
                 return Err("invalid written explanation time");
             }
+            if writing
+                .observations
+                .par_iter()
+                .any(|event| event.seen_at > now)
+            {
+                return Err("invalid written observation time");
+            }
         }
         if r.sounds.is_empty()
             || r.sounds.len() > 256

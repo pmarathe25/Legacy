@@ -25,8 +25,11 @@ meeting and state a sound, including a deliberately false one. A listener can
 independently decline, adopt, or choose modified marks; hearing and an actual
 meeting are required for adoption. Either choice can optionally respond to the
 person's own directed fear or felt obligation; absent thresholds impose no
-such motive. Explanations are retained for the current
-social generation, but long-term personal observation memory is not yet modeled.
+such motive. An optional personal retention capacity lets a listener remember
+visible marks and, if heard, the stated sounds even when they decline adoption.
+Older observations are evicted within that person's own bounded memory.
+Explanation events are retained for the current social generation and can be
+archived by the history runner.
 `content/scenarios/economy-core-written-invention.toml` illustrates one
 person choosing to invent marks and another preferring idleness after a real
 conversation has established their spoken vocabulary.

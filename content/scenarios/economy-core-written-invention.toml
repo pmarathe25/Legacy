@@ -24,6 +24,7 @@ show = true
 [[language.writing.sharing]]
 person = 2
 adopt = true
+remember_capacity = 2
 [[language.minds]]
 person = 1
 initiative = 1000
