@@ -4471,6 +4471,80 @@ fn authored_mechanics_loads_content_and_uses_identified_parts() {
 }
 
 #[test]
+fn people_compare_their_own_memories_of_carried_devices() {
+    use game_economy::core_interval::{CoreHost, MechanicalReactions};
+    use game_mechanics::{Apparatus, Experiment, Outcome};
+    fn run(workers: usize) -> serde_json::Value {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let root = root();
+                let mut state = game_economy_cli::core_scenario(
+                    &root.join("content/scenarios/economy-core-mechanics.toml"),
+                    &root.join("content"),
+                )
+                .unwrap()
+                .snapshot();
+                let mechanics = state.mechanics.as_mut().unwrap();
+                mechanics.policies.clear();
+                mechanics.memories[0].reactions = Some(MechanicalReactions {
+                    moved: 100,
+                    stalled: -100,
+                    ..Default::default()
+                });
+                let parts = std::sync::Arc::make_mut(&mut mechanics.world.apparatus[0].parts);
+                let mut second = parts.pop().unwrap();
+                second.parent = None;
+                mechanics.world.apparatus.push(Apparatus {
+                    id: 2,
+                    parts: std::sync::Arc::new(vec![second]),
+                });
+                let mut host = CoreHost::resume(state).unwrap();
+                for (apparatus, output_part, load_force, outcome) in [
+                    (1, 1001, 1000, Outcome::Stalled),
+                    (2, 1002, 1, Outcome::Moved),
+                ] {
+                    let result = host
+                        .experiment_mechanics(
+                            &[Experiment {
+                                actor: 1,
+                                apparatus,
+                                output_part,
+                                input_force: 100,
+                                input_distance: 100,
+                                load_force,
+                            }],
+                            &[],
+                        )
+                        .unwrap();
+                    assert_eq!(result[0].outcome, outcome);
+                }
+                let saved = host.snapshot();
+                let host = CoreHost::resume(
+                    serde_json::from_str(&serde_json::to_string(&saved).unwrap()).unwrap(),
+                )
+                .unwrap();
+                let trials = host.preview_personal_device_trials(&[1], &[]).unwrap();
+                assert_eq!(
+                    trials
+                        .iter()
+                        .map(|trial| (trial.id, trial.value))
+                        .collect::<Vec<_>>(),
+                    vec![(1, -99), (2, 101)]
+                );
+                let choices = host.preview_personal_choices(&[]).unwrap().0;
+                assert!(choices.iter().any(|choice| choice.actor == 1
+                    && choice.key.domain == 6
+                    && choice.key.action == 2));
+                serde_json::to_value(host.snapshot()).unwrap()
+            })
+    }
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
 fn people_choose_mechanical_experiments_and_can_reconsider() {
     use game_economy::core_interval::{CoreChoiceOutcome, CoreHost, CoreRunEvent, DecisionPhase};
     fn run(workers: usize) -> serde_json::Value {

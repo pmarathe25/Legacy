@@ -28,7 +28,9 @@ these timings exclude physical-custody and personal-choice processing.
 The caller supplies actual chosen experiments and is responsible for verifying
 people's locations, effort, part custody and access. The interval host offers an
 explicit experiment API that checks actors' carried identified items and effort
-limits. The interval host can offer personally willing experiment policies in
+limits. A person without authored trial policies can consider one generated
+trial for each carried apparatus; their own remembered outcomes can influence
+the value of each candidate. The interval host can offer personally willing experiment policies in
 its opt-in choice round. The interval host also offers an explicit chosen-load
 action using data-defined force per unit of a real good. It stages physical
 access, evaluates the apparatus, and transfers the actual lot only when the

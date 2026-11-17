@@ -856,7 +856,7 @@ impl CoreHost {
             .memories = memories;
     }
 
-    /// Propose a simple trial of a carried apparatus for opted-in people who
+    /// Propose one simple trial per carried apparatus for opted-in people who
     /// have no authored experiment policy. No component strength is consulted.
     pub fn preview_personal_device_trials(
         &self,
@@ -892,77 +892,83 @@ impl CoreHost {
             .collect();
         Ok(people
             .par_iter()
-            .filter_map(|&actor| {
-                let person = indexed(&self.core.people, actor, |row| row.id)?;
-                let index = owner
-                    .policies
-                    .partition_point(|row| row.experiment.actor < actor);
-                if person.controlled
-                    || owner
+            .flat_map_iter(|&actor| {
+                (|| -> Option<Vec<MechanicalPolicy>> {
+                    let person = indexed(&self.core.people, actor, |row| row.id)?;
+                    let index = owner
                         .policies
-                        .get(index)
-                        .is_some_and(|row| row.experiment.actor == actor)
-                {
-                    return None;
-                }
-                let capability = indexed(&owner.capabilities, actor, |row| row.person)?;
-                let container = self
-                    .core
-                    .physical
-                    .custody(game_lots::Place::Person(actor))?;
-                container
-                    .lots
-                    .iter()
-                    .filter_map(|lot| parts.get(&lot.item?).copied())
-                    .filter_map(|machine| {
-                        let experiment = game_mechanics::Experiment {
-                            actor,
-                            apparatus: machine.id,
-                            output_part: machine.parts.last()?.id,
-                            input_force: capability.max_force.min(100),
-                            input_distance: capability.max_distance.min(100),
-                            load_force: 1,
-                        };
-                        let reaction = indexed(&owner.memories, actor, |row| row.person)
-                            .and_then(|memory| {
-                                let reactions = memory.reactions?;
-                                let outcome = memory
-                                    .observations
-                                    .iter()
-                                    .rev()
-                                    .find(|row| row.apparatus == machine.id)
-                                    .map(|row| row.outcome)
-                                    .or_else(|| {
-                                        memory
-                                            .communication
-                                            .filter(|policy| policy.use_testimony)
-                                            .and_then(|_| {
-                                                memory
-                                                    .testimony
-                                                    .iter()
-                                                    .rev()
-                                                    .find(|row| row.apparatus == machine.id)
-                                                    .map(|row| row.claimed_outcome)
-                                            })
-                                    })?;
-                                Some(match outcome {
-                                    game_mechanics::Outcome::Moved => reactions.moved,
-                                    game_mechanics::Outcome::Stalled => reactions.stalled,
-                                    game_mechanics::Outcome::Broken => reactions.broken,
-                                    game_mechanics::Outcome::Contended => reactions.contended,
+                        .partition_point(|row| row.experiment.actor < actor);
+                    if person.controlled
+                        || owner
+                            .policies
+                            .get(index)
+                            .is_some_and(|row| row.experiment.actor == actor)
+                    {
+                        return None;
+                    }
+                    let capability = indexed(&owner.capabilities, actor, |row| row.person)?;
+                    let container = self
+                        .core
+                        .physical
+                        .custody(game_lots::Place::Person(actor))?;
+                    let mut trials: Vec<_> = container
+                        .lots
+                        .iter()
+                        .filter_map(|lot| parts.get(&lot.item?).copied())
+                        .filter_map(|machine| {
+                            let experiment = game_mechanics::Experiment {
+                                actor,
+                                apparatus: machine.id,
+                                output_part: machine.parts.last()?.id,
+                                input_force: capability.max_force.min(100),
+                                input_distance: capability.max_distance.min(100),
+                                load_force: 1,
+                            };
+                            let reaction = indexed(&owner.memories, actor, |row| row.person)
+                                .and_then(|memory| {
+                                    let reactions = memory.reactions?;
+                                    let outcome = memory
+                                        .observations
+                                        .iter()
+                                        .rev()
+                                        .find(|row| row.apparatus == machine.id)
+                                        .map(|row| row.outcome)
+                                        .or_else(|| {
+                                            memory
+                                                .communication
+                                                .filter(|policy| policy.use_testimony)
+                                                .and_then(|_| {
+                                                    memory
+                                                        .testimony
+                                                        .iter()
+                                                        .rev()
+                                                        .find(|row| row.apparatus == machine.id)
+                                                        .map(|row| row.claimed_outcome)
+                                                })
+                                        })?;
+                                    Some(match outcome {
+                                        game_mechanics::Outcome::Moved => reactions.moved,
+                                        game_mechanics::Outcome::Stalled => reactions.stalled,
+                                        game_mechanics::Outcome::Broken => reactions.broken,
+                                        game_mechanics::Outcome::Contended => reactions.contended,
+                                    })
                                 })
-                            })
-                            .unwrap_or_default();
-                        owner
-                            .eligible(&self.core, &experiment, occupied, &active)
-                            .then_some(MechanicalPolicy {
-                                id: machine.id,
-                                experiment,
-                                value: 1i64.saturating_add(reaction),
-                                willing: true,
-                            })
-                    })
-                    .min_by_key(|policy| policy.id)
+                                .unwrap_or_default();
+                            owner
+                                .eligible(&self.core, &experiment, occupied, &active)
+                                .then_some(MechanicalPolicy {
+                                    id: machine.id,
+                                    experiment,
+                                    value: 1i64.saturating_add(reaction),
+                                    willing: true,
+                                })
+                        })
+                        .collect();
+                    trials.sort_unstable_by_key(|policy| policy.id);
+                    trials.dedup_by_key(|policy| policy.id);
+                    Some(trials)
+                })()
+                .unwrap_or_default()
             })
             .collect())
     }
