@@ -92,6 +92,9 @@ pub struct CoreChoiceIntent {
     pub tool_damage: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub health_value: Option<i64>,
+    /// The actor's projected fatigue when considering rest.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fatigue_value: Option<i64>,
 }
 
 impl CoreChoiceIntent {
@@ -106,6 +109,7 @@ impl CoreChoiceIntent {
             .experiment_value
             .or(self.meal_value)
             .or(self.health_value)
+            .or(self.fatigue_value)
         {
             return value;
         }
@@ -231,6 +235,10 @@ impl CoreHost {
                     return Vec::new();
                 }
                 let is_resting = resting.binary_search(&actor.id).is_ok();
+                let job = jobs.binary_search_by_key(&actor.id, |row| row.0).ok();
+                if !is_resting && job.is_none() {
+                    return Vec::new();
+                }
                 let fatigue = projected
                     .fatigue
                     .people
@@ -249,8 +257,7 @@ impl CoreHost {
                         fatigue
                     } as i64,
                 }];
-                if !is_resting && let Ok(index) = jobs.binary_search_by_key(&actor.id, |row| row.0)
-                {
+                if !is_resting && let Some(index) = job {
                     options.push(Proposal {
                         actor: actor.id,
                         key: Key {
@@ -825,6 +832,7 @@ impl CoreHost {
                     .opportunities(u32::MAX)
                     .into_par_iter()
                     .map(|opportunity| CoreChoiceIntent {
+                        fatigue_value: None,
                         actor: opportunity.person,
                         key: Key {
                             domain: GATHERING,
@@ -885,6 +893,7 @@ impl CoreHost {
                 .map_err(str::to_owned)?
                 .into_par_iter()
                 .map(|opportunity| CoreChoiceIntent {
+                    fatigue_value: None,
                     written_form: None,
                     strike: None,
                     watch: None,
@@ -963,6 +972,7 @@ impl CoreHost {
                             }
                         });
                         CoreChoiceIntent {
+                            fatigue_value: None,
                             written_form: None,
                             strike: None,
                             watch: None,
@@ -1016,6 +1026,7 @@ impl CoreHost {
                 let rows: Vec<_> = opportunities
                     .into_par_iter()
                     .map(|opportunity| CoreChoiceIntent {
+                        fatigue_value: None,
                         written_form: None,
                         strike: None,
                         watch: None,
@@ -1071,6 +1082,7 @@ impl CoreHost {
                 .direct_opportunities()
                 .into_par_iter()
                 .map(|opportunity| CoreChoiceIntent {
+                    fatigue_value: None,
                     written_form: None,
                     strike: None,
                     watch: None,
@@ -1120,6 +1132,7 @@ impl CoreHost {
                     .preview_work_with_hunger_limit(&busy, schedule.work_rate, u32::MAX, true)?
                     .into_par_iter()
                     .map(|opportunity| CoreChoiceIntent {
+                        fatigue_value: None,
                         written_form: None,
                         strike: None,
                         watch: None,
@@ -1182,6 +1195,7 @@ impl CoreHost {
                 Ok(policies
                     .into_par_iter()
                     .map(|policy| CoreChoiceIntent {
+                        fatigue_value: None,
                         written_form: None,
                         strike: None,
                         watch: None,
@@ -1231,6 +1245,7 @@ impl CoreHost {
                 .preview_personal_attacks(&busy)?
                 .into_par_iter()
                 .map(|policy| CoreChoiceIntent {
+                    fatigue_value: None,
                     actor: policy.actor,
                     key: Key {
                         domain: PERSONAL_ATTACK,
@@ -1281,6 +1296,7 @@ impl CoreHost {
                 .preview_mechanical_watching(&busy)?
                 .into_par_iter()
                 .map(|policy| CoreChoiceIntent {
+                    fatigue_value: None,
                     written_form: None,
                     strike: None,
                     actor: policy.observer,
@@ -1334,6 +1350,7 @@ impl CoreHost {
                 .preview_mechanical_designs(&designers, &busy)?
                 .into_par_iter()
                 .map(|assembly| CoreChoiceIntent {
+                    fatigue_value: None,
                     written_form: None,
                     strike: None,
                     watch: None,
@@ -1373,6 +1390,7 @@ impl CoreHost {
                     .preview_mechanical_loads(&busy)?
                     .into_par_iter()
                     .map(|policy| CoreChoiceIntent {
+                        fatigue_value: None,
                         written_form: None,
                         strike: None,
                         watch: None,
@@ -1424,6 +1442,7 @@ impl CoreHost {
                     let person = index_by_person(&self.core.people, opportunity.person, |p| p.id)
                         .expect("known person");
                     CoreChoiceIntent {
+                        fatigue_value: None,
                         written_form: None,
                         strike: None,
                         watch: None,
@@ -1495,6 +1514,7 @@ impl CoreHost {
                     let mut movement = action.movements[0];
                     movement.id = 0;
                     CoreChoiceIntent {
+                        fatigue_value: None,
                         written_form: None,
                         strike: None,
                         watch: None,
@@ -1538,6 +1558,7 @@ impl CoreHost {
                 let person = index_by_person(&self.core.people, opportunity.person, |p| p.id)
                     .expect("known person");
                 CoreChoiceIntent {
+                    fatigue_value: None,
                     written_form: None,
                     strike: None,
                     watch: None,
@@ -1600,6 +1621,7 @@ impl CoreHost {
             )?
             .into_par_iter()
             .map(|opportunity| CoreChoiceIntent {
+                fatigue_value: None,
                 written_form: None,
                 strike: None,
                 watch: None,
@@ -1716,6 +1738,7 @@ impl CoreHost {
                         .binary_search_by_key(&choice.person, |row| row.person)
                         .expect("known wound")];
                     CoreChoiceIntent {
+                        fatigue_value: None,
                         actor: choice.person,
                         key: Key {
                             domain: WOUND_CARE,
@@ -1805,6 +1828,7 @@ impl CoreHost {
                                     ) as u32)
                                         .max(1);
                                     Some(CoreChoiceIntent {
+                                        fatigue_value: None,
                                         actor: person.id,
                                         key: Key {
                                             domain: WRITTEN_FORM,
@@ -1879,6 +1903,7 @@ impl CoreHost {
                                 .filter_map(move |(index, form)| {
                                     let action = u64::try_from(index).ok()?.checked_add(1)?;
                                     Some(CoreChoiceIntent {
+                                        fatigue_value: None,
                                         actor: person.id,
                                         key: Key {
                                             domain: MARK_INSCRIPTION,
@@ -1956,6 +1981,7 @@ impl CoreHost {
                                 return None;
                             }
                             Some(CoreChoiceIntent {
+                                fatigue_value: None,
                                 actor: person.id,
                                 key: Key {
                                     domain: REMEMBERED_FORM,
@@ -1983,6 +2009,84 @@ impl CoreHost {
                 })
                 .collect();
             intents.par_extend(proposed);
+        }
+        if domain.is_none_or(|domain| domain == REST)
+            && self
+                .schedule
+                .as_ref()
+                .and_then(|schedule| schedule.personal_choices.as_ref())
+                .is_some_and(|people| {
+                    people.par_iter().any(|person| {
+                        person
+                            .preferences
+                            .par_iter()
+                            .any(|preference| preference.domain == REST && preference.enabled)
+                    })
+                })
+            && let Some(owner) = &self.fatigue
+        {
+            let projected = owner
+                .prepare(
+                    &self.activity,
+                    self.core.physical.tick_millis(),
+                    |id| {
+                        self.core
+                            .people
+                            .binary_search_by_key(&id, |person| person.id)
+                            .ok()
+                            .is_some_and(|index| self.core.people[index].health > 0)
+                    },
+                    |id| {
+                        self.core
+                            .people
+                            .binary_search_by_key(&id, |person| person.id)
+                            .ok()
+                            .is_some_and(|index| self.core.people[index].controlled)
+                    },
+                )?
+                .state;
+            let rest: Vec<_> = self
+                .core
+                .people
+                .par_iter()
+                .filter(|person| {
+                    person.health > 0
+                        && !person.controlled
+                        && person.region.is_some()
+                        && busy.binary_search(&person.id).is_err()
+                })
+                .map(|person| {
+                    let fatigue = projected
+                        .fatigue
+                        .people
+                        .binary_search_by_key(&person.id, |row| row.id)
+                        .ok()
+                        .map_or(0, |index| projected.fatigue.people[index].fatigue);
+                    CoreChoiceIntent {
+                        actor: person.id,
+                        key: Key {
+                            domain: REST,
+                            action: 1,
+                        },
+                        fatigue_value: Some(i64::from(fatigue)),
+                        written_form: None,
+                        strike: None,
+                        watch: None,
+                        assembly: None,
+                        cultivation: None,
+                        mechanical_load: None,
+                        movement: None,
+                        second_movement: None,
+                        work: None,
+                        experiment: None,
+                        experiment_value: None,
+                        meal_value: None,
+                        tool_damage: None,
+                        health_value: None,
+                    }
+                })
+                .collect();
+            intents.par_extend(rest);
         }
         if intents
             .par_windows(2)
@@ -2076,6 +2180,7 @@ impl CoreHost {
                         && current[i].meal_value == intent.meal_value
                         && current[i].tool_damage == intent.tool_damage
                         && current[i].health_value == intent.health_value
+                        && current[i].fatigue_value == intent.fatigue_value
                         && current[i].cultivation == intent.cultivation
                         && current[i].mechanical_load == intent.mechanical_load
                         && current[i].assembly == intent.assembly

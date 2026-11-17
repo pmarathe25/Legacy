@@ -7698,6 +7698,76 @@ fn people_choose_between_competing_physical_actions_or_idleness() {
 }
 
 #[test]
+fn idle_people_compare_rest_with_other_personal_opportunities() {
+    fn run(rest_bias: i64, workers: usize) -> u32 {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let root = root();
+                let mut snapshot = game_economy_cli::core_scenario(
+                    &root.join("content/scenarios/economy-core-personal-choices.toml"),
+                    &root.join("content"),
+                )
+                .unwrap()
+                .snapshot();
+                snapshot.fatigue = Some(
+                    serde_json::from_value(serde_json::json!({
+                        "fatigue": {
+                            "rules": {"capacity": 10, "work_gain": 1, "idle_recovery": 0,
+                                "rest_recovery": 1, "rest_at": 2, "resume_at": 0,
+                                "exhaustion_at": 10, "exhaustion_damage": 0},
+                            "people": [{"id": 1, "fatigue": 5, "resting": false}]
+                        },
+                        "remainders": []
+                    }))
+                    .unwrap(),
+                );
+                let profiles = std::sync::Arc::make_mut(
+                    snapshot
+                        .schedule
+                        .as_mut()
+                        .unwrap()
+                        .personal_choices
+                        .as_mut()
+                        .unwrap(),
+                );
+                profiles[0]
+                    .preferences
+                    .push(game_personal_choice::Preference {
+                        domain: 21,
+                        enabled: true,
+                        bias: rest_bias,
+                        weight: 1000,
+                    });
+                let mut host = game_economy::core_interval::CoreHost::resume(snapshot).unwrap();
+                let selected = host.preview_personal_choices(&[]).unwrap().0;
+                let domain = selected
+                    .iter()
+                    .find(|intent| intent.actor == 1)
+                    .unwrap()
+                    .key
+                    .domain;
+                assert_eq!(host.advance_continuous(1, &[]).unwrap().failure, None);
+                let state = host.snapshot();
+                let resting = state
+                    .fatigue
+                    .unwrap()
+                    .fatigue
+                    .people
+                    .iter()
+                    .any(|person| person.id == 1 && person.resting);
+                assert_eq!(resting, domain == 21);
+                domain
+            })
+    }
+    assert_eq!(run(-100, 1), 1);
+    assert_eq!(run(100, 1), 21);
+    assert_eq!(run(100, 4), 21);
+}
+
+#[test]
 fn hungry_people_can_choose_construction_or_carrying_or_decline_both() {
     use game_economy::core_interval::{CoreChoiceOutcome, CoreHost, CoreRunEvent};
     fn run(workers: usize) -> serde_json::Value {
@@ -7795,6 +7865,7 @@ fn stale_saved_carrying_intention_is_reported_without_substituting_an_action() {
         remaining: None,
         meal_people: vec![],
         intents: std::sync::Arc::new(vec![CoreChoiceIntent {
+            fatigue_value: None,
             strike: None,
             written_form: None,
             watch: None,

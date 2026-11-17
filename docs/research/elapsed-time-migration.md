@@ -44,9 +44,9 @@ person remains incapacitated. Recovery itself does not decide whether they rest.
 An interval-host scenario may set `fatigue_rate_period_millis` so saved
 fatigue fractions use a stable rate period. Interval-host rest and resumption
 are individual choices, evaluated from signed personal preferences and current
-projected fatigue. Fatigue and exhaustion still settle at physical boundaries,
-and rest choices currently precede other local opportunities rather than
-competing with all of them in one selection. The legacy whole-boundary runner
+projected fatigue. Idle people compare rest with their other local options;
+workers compare it with a continuation preference. Fatigue and exhaustion
+still settle at physical boundaries, and the legacy whole-boundary runner
 still applies automatic rest thresholds.
 Renewal is still settled at a physical boundary, alongside gathering, using
 the season selected for that boundary. Changing boundaries can therefore

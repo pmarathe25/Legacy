@@ -13,9 +13,10 @@ consent or assign authority to institutions.
 - Fatigue and injury can limit physical capability. The interval host now
   leaves rest and resumption to signed individual preferences or an explicit
   personal choice, rather than automatically applying shared thresholds.
-  Rest choices currently precede other local opportunities rather than
-  competing with all of them; integrate those comparisons. The legacy
-  whole-boundary runner still has automatic rest and must also be migrated.
+  Idle people compare rest with other local opportunities, and workers compare
+  it with their own work-continuation preference. Broader alternatives for
+  people already occupied remain to be integrated. The legacy whole-boundary
+  runner still has automatic rest and must also be migrated.
 - Replace general hunger and age gates on negotiation, delivery, and other
   discretionary actions with individual evaluation and relevant physical
   constraints. Existing personally chosen work already bypasses some legacy

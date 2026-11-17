@@ -440,6 +440,7 @@ impl CoreSchedule {
                 || intents.par_iter().any(|intent| {
                     intent.actor == 0
                         || intent.key.action == 0
+                        || intent.fatigue_value.is_some()
                         || intent.cultivation.is_some()
                         || (intent.key.domain != personal_choice::MECHANICAL_LOAD && intent.mechanical_load.is_some())
                         || (intent.key.domain != personal_choice::MECHANICAL_DESIGN && intent.assembly.is_some())
@@ -748,6 +749,7 @@ impl CoreHost {
             .as_ref()
             .is_some_and(|schedule| schedule.personal_choices.is_some())
             && (self.construction.is_some()
+                || self.fatigue.is_some()
                 || self.local_transport.is_some()
                 || self.sites.is_some()
                 || self.autowork.is_some()
@@ -1538,6 +1540,22 @@ impl CoreHost {
                         let people = schedule.personal_choices.as_ref().expect("choice profile");
                         let (intents, idle) =
                             attempt!('run, self.choose_local_actions(&busy, people));
+                        let rest: Vec<_> = intents
+                            .par_iter()
+                            .filter(|intent| intent.key.domain == personal_choice::REST)
+                            .map(|intent| game_economy_fatigue::RestChoice {
+                                person: intent.actor,
+                                resting: true,
+                            })
+                            .collect();
+                        if !rest.is_empty() {
+                            let events = attempt!('run, self.choose_personal_rest(&rest, &busy));
+                            rest_dirty = true;
+                            meal_people.par_extend(rest.par_iter().map(|choice| choice.person));
+                            meal_people.par_sort_unstable();
+                            meal_people.dedup();
+                            run.events.push(CoreRunEvent::PersonalChoices(events));
+                        }
                         let (actors, pending) = self.queue_cultivation(&intents);
                         meal_people.par_extend(actors.into_par_iter());
                         meal_people.par_sort_unstable();
@@ -1558,7 +1576,9 @@ impl CoreHost {
                                 .filter(|intent| {
                                     !matches!(
                                         intent.key.domain,
-                                        personal_choice::CULTIVATION | personal_choice::GATHERING
+                                        personal_choice::CULTIVATION
+                                            | personal_choice::GATHERING
+                                            | personal_choice::REST
                                     )
                                 })
                                 .collect::<Vec<_>>(),
