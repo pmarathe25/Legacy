@@ -361,6 +361,92 @@ fn language() -> Language {
 }
 
 #[test]
+fn people_choose_private_word_forms_in_atomic_independent_batches() {
+    fn run(workers: usize) -> Language {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut state = language();
+                state
+                    .configure_topics(&[
+                        (
+                            1,
+                            TopicPolicy {
+                                idle: 0,
+                                act_on_tie: false,
+                                preferences: vec![],
+                            },
+                        ),
+                        (
+                            2,
+                            TopicPolicy {
+                                idle: 0,
+                                act_on_tie: false,
+                                preferences: vec![],
+                            },
+                        ),
+                    ])
+                    .unwrap();
+                let choices = [
+                    (
+                        1,
+                        Word {
+                            meaning: Meaning::Place(1),
+                            sounds: vec![0, 1],
+                        },
+                    ),
+                    (
+                        2,
+                        Word {
+                            meaning: Meaning::Place(1),
+                            sounds: vec![2],
+                        },
+                    ),
+                ];
+                state.assign_words(&choices).unwrap();
+                assert_eq!(state.minds[0].words[0].sounds, vec![0, 1]);
+                assert_eq!(state.minds[1].words[0].sounds, vec![2]);
+                let before = state.clone();
+                assert!(
+                    state
+                        .assign_words(&[
+                            (
+                                1,
+                                Word {
+                                    meaning: Meaning::Object(1),
+                                    sounds: vec![0]
+                                }
+                            ),
+                            (
+                                2,
+                                Word {
+                                    meaning: Meaning::Place(1),
+                                    sounds: vec![9]
+                                }
+                            )
+                        ])
+                        .is_err()
+                );
+                assert_eq!(state, before);
+                state
+                    .assign_words(&[(
+                        1,
+                        Word {
+                            meaning: Meaning::Place(1),
+                            sounds: vec![2, 2],
+                        },
+                    )])
+                    .unwrap();
+                assert_eq!(state.minds[1], before.minds[1]);
+                state
+            })
+    }
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
 fn namesake_choice_uses_the_speakers_subjective_affinity_and_confusion() {
     let mut state = language();
     state

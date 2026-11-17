@@ -9,6 +9,13 @@ vocabulary is inherited, and a listener can misunderstand an unfamiliar form.
 Updates are prepared from an immutable opening view in parallel and committed
 as a sorted, deterministic batch. Events preserve the heard and adopted forms.
 
+Explicit word choices are staged per person and committed atomically. Each
+person can choose or replace a form without changing anyone else's vocabulary;
+the calling host is responsible for grounding the meaning in that person's
+experience. The interval player can currently name their present place, a
+nearby person, or a carried kind of object. Choosing a word does not teach it
+to anyone else.
+
 Optional `writing` state stores each person's chosen associations between
 spoken forms and sequences of visible marks. Different people can choose
 different forms, and one reader can associate the same marks with multiple

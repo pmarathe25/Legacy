@@ -67,6 +67,15 @@ impl<'a> Player<'a> {
         )
     }
 
+    pub fn choose_word(
+        &mut self,
+        meaning: game_language::Meaning,
+        sounds: Vec<u8>,
+    ) -> Result<(), String> {
+        self.host
+            .choose_controlled_word(self.person, game_language::Word { meaning, sounds })
+    }
+
     pub fn inscribe(&mut self, sounds: Vec<u8>) -> Result<Option<u64>, String> {
         self.host.controlled_person(self.person)?;
         let result = self.host.inscribe_marks(&[CoreMarkInscription {

@@ -18,7 +18,8 @@ or wake; resting pauses ongoing work. A controlled helper can leave their own
 shared-work assignment without dismissing the other helpers.
 The interval view also includes only that person's own spoken vocabulary,
 written-form associations and retained observations, along with marked pages
-they actually carry. The player can choose a form, inscribe it with physical
+they actually carry. The player can choose spoken words for their present place,
+a nearby person, or a carried object, choose a written form, inscribe it with physical
 supplies, interpret a carried page, or adopt their own remembered observation.
 Time advancement reports elapsed time and failures without returning administrative
 events. A limited `--interval-player PERSON` CLI exposes this adapter. It does

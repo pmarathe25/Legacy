@@ -6585,6 +6585,90 @@ fn inventing_marks_competes_with_another_personal_opportunity() {
 }
 
 #[test]
+fn interval_player_can_choose_spoken_forms_for_visible_referents() {
+    use game_economy::core_interval::CoreHost;
+    use game_economy_player::interval::Player;
+    use game_language::Meaning;
+    fn run(workers: usize) -> serde_json::Value {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let root = root();
+                let mut host = game_economy_cli::core_scenario(
+                    &root.join("content/scenarios/economy-core-player-language.toml"),
+                    &root.join("content"),
+                )
+                .unwrap();
+                let before_other = host
+                    .snapshot()
+                    .social
+                    .as_ref()
+                    .unwrap()
+                    .language
+                    .as_ref()
+                    .unwrap()
+                    .minds[1]
+                    .clone();
+                let grain = host
+                    .snapshot()
+                    .core
+                    .physical
+                    .goods
+                    .iter()
+                    .find(|good| good.name == "grain")
+                    .unwrap()
+                    .id;
+                {
+                    let mut player = Player::new(&mut host, 1).unwrap();
+                    player.choose_word(Meaning::Place(1), vec![2, 0]).unwrap();
+                    player.choose_word(Meaning::Person(2), vec![1, 2]).unwrap();
+                    player
+                        .choose_word(Meaning::Object(grain), vec![0, 2])
+                        .unwrap();
+                    let before = player.view().unwrap();
+                    assert!(player.choose_word(Meaning::Place(999), vec![0]).is_err());
+                    assert!(player.choose_word(Meaning::Person(999), vec![0]).is_err());
+                    assert!(player.choose_word(Meaning::Object(grain), vec![9]).is_err());
+                    assert_eq!(player.view().unwrap(), before);
+                    assert!(
+                        before
+                            .language
+                            .unwrap()
+                            .words
+                            .iter()
+                            .any(|word| word.meaning == Meaning::Person(2)
+                                && word.sounds == vec![1, 2])
+                    );
+                }
+                let state = host.snapshot();
+                assert_eq!(
+                    state
+                        .social
+                        .as_ref()
+                        .unwrap()
+                        .language
+                        .as_ref()
+                        .unwrap()
+                        .minds[1],
+                    before_other
+                );
+                assert_eq!(
+                    CoreHost::resume(
+                        serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap()
+                    )
+                    .unwrap()
+                    .snapshot(),
+                    state
+                );
+                serde_json::to_value(state).unwrap()
+            })
+    }
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
 fn interval_player_sees_only_their_own_written_knowledge() {
     use game_economy::core_interval::CoreHost;
     use game_economy_player::interval::Player;

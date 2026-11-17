@@ -334,7 +334,8 @@ observation, time, travel, eating, work, leaving shared work, voluntary rest,
 self-treatment, personal written forms, and save/load commands. In
 `content/scenarios/economy-core-player-language.toml`, `look` shows the
 controlled person's own words, remembered observations, and carried marked
-pages; `form 0,1 7,8` chooses marks for a known sound sequence, `inscribe 0,1`
+pages; `word person 2 2,1` associates phonemes with a nearby person,
+`form 0,1 7,8` chooses marks for a known sound sequence, `inscribe 0,1`
 uses carried materials, `read 1` interprets a carried page, and `recall 1`
 adopts a remembered observation. Saving
 requires a new path and does not overwrite an existing file. This path does not

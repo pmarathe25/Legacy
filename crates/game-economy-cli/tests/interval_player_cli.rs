@@ -90,7 +90,7 @@ fn interval_player_can_create_and_read_their_own_written_form() {
         .stdin
         .take()
         .unwrap()
-        .write_all(b"look\nform 0,1 7,8\ninscribe 0,1\nlook\nread 1\ninscribe 0,1\nquit\n")
+        .write_all(b"look\nword person 2 2,1\nform 0,1 7,8\ninscribe 0,1\nlook\nread 1\ninscribe 0,1\nquit\n")
         .unwrap();
     let output = child.wait_with_output().unwrap();
     assert!(output.status.success());
@@ -98,6 +98,10 @@ fn interval_player_can_create_and_read_their_own_written_form() {
     let stderr = String::from_utf8(output.stderr).unwrap();
     assert!(stderr.is_empty(), "{stderr}");
     assert!(stdout.contains("word=Place(1) sounds=[0, 1]"), "{stdout}");
+    assert!(
+        stdout.contains("word chosen") && stdout.contains("word=Person(2) sounds=[2, 1]"),
+        "{stdout}"
+    );
     assert!(
         stdout.contains("form chosen") && stdout.contains("inscribed_page=1"),
         "{stdout}"

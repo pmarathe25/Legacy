@@ -15,7 +15,7 @@ fn command(host: &mut CoreHost, person: u64, words: &[&str]) -> Result<bool, Str
     match words {
         [] => {}
         ["help"] => println!(
-            "look | wait MILLISECONDS | move REGION | eat GOOD | treat GOOD | work RECIPE UNITS | stop JOB | stop-assist | rest on|off | form SOUNDS MARKS | inscribe SOUNDS | read PAGE | recall PAGE | save PATH | load PATH | quit (SOUNDS and MARKS are comma-separated numbers)"
+            "look | wait MILLISECONDS | move REGION | eat GOOD | treat GOOD | work RECIPE UNITS | stop JOB | stop-assist | rest on|off | word place|person|object ID SOUNDS | form SOUNDS MARKS | inscribe SOUNDS | read PAGE | recall PAGE | save PATH | load PATH | quit (SOUNDS and MARKS are comma-separated numbers)"
         ),
         ["quit"] | ["exit"] => return Ok(false),
         ["look"] => {
@@ -120,6 +120,22 @@ fn command(host: &mut CoreHost, person: u64, words: &[&str]) -> Result<bool, Str
         ["form", sounds, marks] => {
             Player::new(host, person)?.choose_written_form(numbers(sounds)?, numbers(marks)?)?;
             println!("form chosen");
+        }
+        ["word", kind, referent, sounds] => {
+            let meaning = match *kind {
+                "place" => {
+                    game_language::Meaning::Place(referent.parse().map_err(|_| "invalid place")?)
+                }
+                "person" => {
+                    game_language::Meaning::Person(referent.parse().map_err(|_| "invalid person")?)
+                }
+                "object" => {
+                    game_language::Meaning::Object(referent.parse().map_err(|_| "invalid object")?)
+                }
+                _ => return Err("unknown word referent".into()),
+            };
+            Player::new(host, person)?.choose_word(meaning, numbers(sounds)?)?;
+            println!("word chosen");
         }
         ["inscribe", sounds] => {
             if let Some(item) = Player::new(host, person)?.inscribe(numbers(sounds)?)? {

@@ -57,6 +57,36 @@ pub struct CorePlayerView {
 }
 
 impl CoreHost {
+    /// A controlled person may choose a spoken form for a personally visible
+    /// referent. The association remains private until they communicate it.
+    pub fn choose_controlled_word(
+        &mut self,
+        id: u64,
+        word: game_language::Word,
+    ) -> Result<(), String> {
+        let view = self.player_view(id)?;
+        let grounded = match word.meaning {
+            game_language::Meaning::Place(region) => view.person.region == Some(region),
+            game_language::Meaning::Person(other) => {
+                other == id || view.nearby.iter().any(|person| person.id == other)
+            }
+            game_language::Meaning::Object(good) => view
+                .possessions
+                .iter()
+                .any(|lot| lot.good == good && lot.quantity > 0),
+            _ => false,
+        };
+        if !grounded {
+            return Err("the referent is not personally visible".into());
+        }
+        let language = self
+            .social
+            .as_mut()
+            .and_then(|social| social.language.as_mut())
+            .ok_or("personal language is disabled")?;
+        language.assign_words(&[(id, word)]).map_err(str::to_owned)
+    }
+
     /// Start the controlled person's chosen work using actual capability and supplies.
     pub fn start_controlled_work(
         &mut self,

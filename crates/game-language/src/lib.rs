@@ -247,6 +247,56 @@ fn random(mut x: u64) -> u64 {
 }
 
 impl Language {
+    /// Assign individually chosen sound forms. The caller validates that each
+    /// meaning is grounded in the person's own experience or present context.
+    /// A batch changes at most one word per person and commits atomically.
+    pub fn assign_words(&mut self, choices: &[(u64, Word)]) -> Result<(), &'static str> {
+        if self
+            .minds
+            .par_windows(2)
+            .any(|rows| rows[0].person >= rows[1].person)
+            || choices.par_windows(2).any(|rows| rows[0].0 >= rows[1].0)
+        {
+            return Err("invalid word choices");
+        }
+        let changes: Vec<_> = choices
+            .par_iter()
+            .map(|(person, word)| {
+                if !word.meaning.valid()
+                    || word.sounds.is_empty()
+                    || word.sounds.len() > 16
+                    || word
+                        .sounds
+                        .iter()
+                        .any(|sound| usize::from(*sound) >= self.rules.sounds.len())
+                {
+                    return Err("invalid word form");
+                }
+                let index = self
+                    .minds
+                    .binary_search_by_key(person, |mind| mind.person)
+                    .map_err(|_| "unknown language mind")?;
+                let mut mind = self.minds[index].clone();
+                match mind
+                    .words
+                    .binary_search_by_key(&word.meaning, |row| row.meaning)
+                {
+                    Ok(index) => mind.words[index] = word.clone(),
+                    Err(index) if mind.words.len() < self.rules.capacity => {
+                        mind.words.insert(index, word.clone())
+                    }
+                    Err(_) => return Err("personal vocabulary is full"),
+                }
+                Ok((*person, mind))
+            })
+            .collect::<Result<_, _>>()?;
+        self.minds.par_iter_mut().for_each(|mind| {
+            if let Ok(index) = changes.binary_search_by_key(&mind.person, |row| row.0) {
+                *mind = changes[index].1.clone();
+            }
+        });
+        Ok(())
+    }
     fn new_form<F: Fn(u64, u64) -> i32 + Sync>(
         &self,
         mind: &Mind,
