@@ -80,3 +80,13 @@ ending at hours 960 and 1,680 record 341 and 110 completed jobs respectively;
 the samples from hour 2,400 onward show no starts and repeated denied work
 choices. These are observations from one seed, not a sustainability or
 scaling result.
+
+The subsequent `recipe-learning-counted.ndjson` diagnostic enables specific
+recipe knowledge for a few founders, learners, and newborns. Over its first
+240 hours, four configured learners acquired the tool recipe during actual
+meetings; the two configured people who declined learning retained no recipe.
+The history probe records four learning events, and the saved state preserves
+the specific learners. This does not establish that they obtained tools or
+were able to complete that work. `recipe-learning.ndjson` and
+`recipe-learning-debug.ndjson` used an earlier incorrect event-tick filter and
+underreported these events; their saved knowledge states are unaffected.

@@ -3,6 +3,7 @@ use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 mod automatic;
+pub mod recipe_knowledge;
 mod teaching;
 pub use automatic::{TeacherPolicy, TeachingDraft};
 pub use game_skill_model::{Alias, Attribution, CatalogTraining, Completion, Event, Record, Rule};
@@ -24,6 +25,8 @@ pub struct Skills {
     pub lessons: Vec<Lesson>,
     #[serde(default)]
     pub teachers: Vec<TeacherPolicy>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recipe_knowledge: Option<recipe_knowledge::Knowledge>,
     #[serde(default)]
     pub inherit_teachers: bool,
 }
@@ -110,6 +113,9 @@ impl Skills {
             return Err("invalid skill event".into());
         }
         teaching::validate(&self.lessons, people, &rules, now)?;
+        if let Some(knowledge) = &self.recipe_knowledge {
+            knowledge.validate(people, recipes, now)?;
+        }
         automatic::validate(&self.teachers, people, &rules)?;
         Ok(())
     }
@@ -291,6 +297,10 @@ impl Skills {
             events,
             lessons: self.lessons.par_iter().cloned().collect(),
             teachers: self.teachers.par_iter().cloned().collect(),
+            recipe_knowledge: self
+                .recipe_knowledge
+                .as_ref()
+                .map(recipe_knowledge::Knowledge::parallel_copy),
             inherit_teachers: self.inherit_teachers,
         }
     }

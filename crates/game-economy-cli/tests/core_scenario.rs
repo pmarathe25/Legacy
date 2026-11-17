@@ -5165,6 +5165,196 @@ fn work_intentions_compete_with_carrying_and_share_scarce_inputs() {
                         enabled: true,
                         bias: 100,
                     });
+                let mut before_meeting = alternatives.clone();
+                let profiles = std::sync::Arc::make_mut(
+                    before_meeting
+                        .schedule
+                        .as_mut()
+                        .unwrap()
+                        .personal_choices
+                        .as_mut()
+                        .unwrap(),
+                );
+                for profile in profiles {
+                    profile.idle = 10_000;
+                }
+                let mut before_meeting = CoreHost::resume(before_meeting).unwrap();
+                assert_eq!(
+                    before_meeting
+                        .advance_continuous(900_000, &[])
+                        .unwrap()
+                        .failure,
+                    None
+                );
+                let mut lesson_state = before_meeting.snapshot();
+                lesson_state.schedule.as_mut().unwrap().personal_choices = alternatives
+                    .schedule
+                    .as_ref()
+                    .unwrap()
+                    .personal_choices
+                    .clone();
+                let profiles = std::sync::Arc::make_mut(
+                    lesson_state
+                        .schedule
+                        .as_mut()
+                        .unwrap()
+                        .personal_choices
+                        .as_mut()
+                        .unwrap(),
+                );
+                profiles[1]
+                    .actions
+                    .push(game_personal_choice::ActionPreference {
+                        key: game_personal_choice::Key {
+                            domain: 4,
+                            action: u64::from(recipe + 1),
+                        },
+                        enabled: true,
+                        bias: 100,
+                    });
+                use game_economy_skills::recipe_knowledge::{
+                    Knowledge as RecipeKnowledge, Mind as RecipeMind,
+                };
+                lesson_state.skills = Some(game_economy::core_interval::CoreSkills {
+                    owner: game_economy_skills::Skills {
+                        rules: vec![],
+                        aliases: vec![],
+                        catalog_training: None,
+                        records: vec![],
+                        events: vec![],
+                        lessons: vec![],
+                        teachers: vec![],
+                        inherit_teachers: false,
+                        recipe_knowledge: Some(RecipeKnowledge {
+                            minds: vec![
+                                RecipeMind {
+                                    person: 1,
+                                    known: vec![recipe + 1],
+                                    share: vec![recipe + 1],
+                                    share_learned: false,
+                                    willing_to_share: true,
+                                    willing_to_learn: false,
+                                    capacity: 2,
+                                },
+                                RecipeMind {
+                                    person: 2,
+                                    known: vec![],
+                                    share: vec![],
+                                    share_learned: true,
+                                    willing_to_share: true,
+                                    willing_to_learn: true,
+                                    capacity: 2,
+                                },
+                            ],
+                            birth_profile: None,
+                            events: vec![],
+                        }),
+                    },
+                    practiced: vec![],
+                    completed: vec![],
+                });
+                lesson_state.social = Some(game_economy::core_interval::CoreSocial {
+                    owner: game_social::Social {
+                        rules: game_social::Rules {
+                            interval: 1,
+                            min_health: 1,
+                            max_hunger: 100,
+                            familiarity_gain: 1,
+                            familiarity_max: 10,
+                            relationship_retention: None,
+                        },
+                        inherit_births: false,
+                        participants: vec![
+                            game_social::Participant {
+                                person: 1,
+                                willing: true,
+                            },
+                            game_social::Participant {
+                                person: 2,
+                                willing: true,
+                            },
+                        ],
+                        pressures: vec![],
+                        relationships: vec![],
+                        events: vec![],
+                        needs: None,
+                    },
+                    last_tick: None,
+                    language: None,
+                    signals: None,
+                });
+                let mut refusing = lesson_state.clone();
+                refusing
+                    .skills
+                    .as_mut()
+                    .unwrap()
+                    .owner
+                    .recipe_knowledge
+                    .as_mut()
+                    .unwrap()
+                    .minds[1]
+                    .willing_to_learn = false;
+                let mut refusing = CoreHost::resume(refusing).unwrap();
+                assert_eq!(refusing.meet_autonomously(&[]).unwrap().len(), 1);
+                assert!(
+                    refusing
+                        .snapshot()
+                        .skills
+                        .unwrap()
+                        .owner
+                        .recipe_knowledge
+                        .unwrap()
+                        .minds[1]
+                        .known
+                        .is_empty()
+                );
+                let mut learning = CoreHost::resume(lesson_state).unwrap();
+                assert_eq!(
+                    learning
+                        .preview_personal_choices(&[])
+                        .unwrap()
+                        .0
+                        .iter()
+                        .find(|row| row.actor == 2)
+                        .unwrap()
+                        .key
+                        .action,
+                    u64::from(recipe)
+                );
+                assert_eq!(learning.meet_autonomously(&[]).unwrap().len(), 1);
+                assert_eq!(
+                    learning
+                        .snapshot()
+                        .skills
+                        .as_ref()
+                        .unwrap()
+                        .owner
+                        .recipe_knowledge
+                        .as_ref()
+                        .unwrap()
+                        .minds[1]
+                        .known,
+                    vec![recipe + 1]
+                );
+                assert_eq!(
+                    learning
+                        .preview_personal_choices(&[])
+                        .unwrap()
+                        .0
+                        .iter()
+                        .find(|row| row.actor == 2)
+                        .unwrap()
+                        .key
+                        .action,
+                    u64::from(recipe + 1)
+                );
+                let saved = serde_json::to_string(&learning.snapshot()).unwrap();
+                assert_eq!(
+                    CoreHost::resume(serde_json::from_str(&saved).unwrap())
+                        .unwrap()
+                        .snapshot(),
+                    learning.snapshot()
+                );
                 let mut chooser = CoreHost::resume(alternatives).unwrap();
                 let chosen = chooser.preview_personal_choices(&[]).unwrap().0;
                 assert_eq!(
@@ -5750,6 +5940,24 @@ fn integrated_hourly_world_runs_with_personal_choices_and_borrowed_history() {
                     60
                 );
                 assert!(initial.schedule.as_ref().unwrap().birth_choices.is_some());
+                let known = initial
+                    .skills
+                    .as_ref()
+                    .unwrap()
+                    .owner
+                    .recipe_knowledge
+                    .as_ref()
+                    .unwrap();
+                let fixture = initial
+                    .core
+                    .physical
+                    .recipes
+                    .iter()
+                    .find(|recipe| recipe.name == "fixture-tool")
+                    .unwrap()
+                    .id;
+                assert_eq!(known.minds[0].known, vec![fixture]);
+                assert!(known.birth_profile.is_some());
                 assert!(initial.mechanics.is_some());
                 assert!(
                     initial

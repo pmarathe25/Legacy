@@ -585,6 +585,65 @@ impl CoreHost {
             .social
             .as_ref()
             .and_then(|social| self.stage_skill_teaching(social, tick));
+        let recipe_learning = if let Some(knowledge) = self
+            .skills
+            .as_ref()
+            .and_then(|skills| skills.owner.recipe_knowledge.as_ref())
+        {
+            let pairs: Vec<_> = meetings
+                .par_iter()
+                .filter(|event| {
+                    [event.a, event.b].into_iter().all(|person| {
+                        self.core
+                            .people
+                            .binary_search_by_key(&person, |row| row.id)
+                            .ok()
+                            .is_some_and(|index| {
+                                !self.core.people[index].controlled
+                                    && self.core.people[index].health > 0
+                            })
+                    })
+                })
+                .map(|event| (event.a, event.b))
+                .collect();
+            let pressured: std::collections::HashSet<_> = meetings
+                .par_iter()
+                .flat_map_iter(|event| {
+                    event
+                        .pressured_people()
+                        .map(|person| (person, if person == event.a { event.b } else { event.a }))
+                })
+                .collect();
+            let policies: std::collections::HashMap<_, _> = next
+                .social
+                .as_ref()
+                .into_iter()
+                .flat_map(|social| social.pressures.iter())
+                .filter(|policy| policy.enabled)
+                .map(|policy| (policy.person, policy))
+                .collect();
+            let opinions = self.opinions.as_ref().map(|owner| owner.index());
+            let staged = knowledge
+                .meet(&pairs, tick, |teacher, student| {
+                    pressured.contains(&(teacher, student))
+                        || policies.get(&teacher).is_some_and(|policy| {
+                            opinions.as_ref().is_some_and(|opinions| {
+                                let (fear, obligation) = opinions.feelings(teacher, student);
+                                policy.responds(fear, obligation)
+                            })
+                        })
+                })
+                .map_err(str::to_owned)?;
+            staged.or_else(|| {
+                (!knowledge.events.is_empty()).then(|| {
+                    let mut cleared = knowledge.parallel_copy();
+                    cleared.events.clear();
+                    cleared
+                })
+            })
+        } else {
+            None
+        };
         let mechanical_testimony =
             language
                 .as_ref()
@@ -674,6 +733,13 @@ impl CoreHost {
                 self.skill_rates = Some(frame.skills.owner.index());
             }
             self.skills = Some(frame.skills);
+        }
+        if let Some(knowledge) = recipe_learning {
+            self.skills
+                .as_mut()
+                .expect("recipe knowledge has a skill owner")
+                .owner
+                .recipe_knowledge = Some(knowledge);
         }
         if let Some(memories) = mechanical_testimony {
             self.publish_mechanical_testimony(memories);

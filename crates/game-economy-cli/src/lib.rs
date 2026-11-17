@@ -113,7 +113,7 @@ struct Scenario {
     #[serde(default)]
     campaign: Option<game_economy::Campaign>,
     #[serde(default)]
-    skills: Option<game_economy::Skills>,
+    skills: Option<toml::Value>,
     #[serde(default)]
     knowledge: Option<game_economy::Knowledge>,
     #[serde(default)]
@@ -1655,7 +1655,41 @@ fn scenario_with_options_inner(
         scenario.stock_capacity,
         scenario.food_relief_divisor,
     )?;
-    let mut skills = scenario.skills;
+    let mut skills: Option<game_economy::Skills> = scenario
+        .skills
+        .map(|mut value| {
+            let recipes: BTreeMap<_, _> = production
+                .recipes
+                .iter()
+                .map(|recipe| (recipe.name.as_str(), recipe.id))
+                .collect();
+            if let Some(minds) = value
+                .get_mut("recipe_knowledge")
+                .and_then(|knowledge| knowledge.get_mut("minds"))
+                .and_then(toml::Value::as_array_mut)
+            {
+                for mind in minds {
+                    for field in ["known", "share"] {
+                        if let Some(rows) = mind.get_mut(field).and_then(toml::Value::as_array_mut)
+                        {
+                            for row in rows {
+                                if let Some(name) = row.as_str() {
+                                    *row = toml::Value::Integer(i64::from(
+                                        *recipes.get(name).ok_or_else(|| {
+                                            format!("unknown recipe knowledge {name}")
+                                        })?,
+                                    ));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            value
+                .try_into()
+                .map_err(|error: toml::de::Error| error.to_string())
+        })
+        .transpose()?;
     if let Some(skills) = &mut skills {
         game_skill_catalog::configure(skills, &production.recipe_categories)?;
     }

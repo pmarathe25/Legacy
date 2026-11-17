@@ -1684,6 +1684,24 @@ target = 1
 
 [skills]
 rules = []
+[skills.recipe_knowledge]
+minds = [
+  { person = 1, known = ["fixture-tool"], share = ["fixture-tool"], willing_to_learn = true, capacity = 8 },
+  { person = 2, known = ["fixture-tool"], share = ["fixture-tool"], willing_to_learn = true, capacity = 8 },
+  { person = 3, known = ["fixture-tool"], share = ["fixture-tool"], willing_to_learn = true, capacity = 8 },
+  { person = 4, known = ["fixture-tool"], share = ["fixture-tool"], willing_to_learn = true, capacity = 8 },
+  { person = 5, known = [], share = [], willing_to_learn = true, capacity = 8 },
+  { person = 6, known = [], share = [], willing_to_learn = true, capacity = 8 },
+  { person = 7, known = [], share = [], willing_to_learn = false, capacity = 8 },
+  { person = 8, known = [], share = [], willing_to_learn = true, capacity = 8 },
+  { person = 9, known = [], share = [], willing_to_learn = false, capacity = 8 },
+  { person = 10, known = [], share = [], willing_to_learn = true, capacity = 8 },
+]
+[skills.recipe_knowledge.birth_profile]
+willing_to_learn = true
+willing_to_share = true
+share_learned = true
+capacity = 8
 [skills.catalog_training]
 completions_per_level = 1
 max_level = 5

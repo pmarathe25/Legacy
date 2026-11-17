@@ -4,6 +4,7 @@ use game_economy_person::Person;
 use game_families::Families;
 use game_lot_runtime::{Events, Work};
 use game_opinions::Opinions;
+pub use game_skills::recipe_knowledge;
 pub use game_skills::{Completion, Index, Record, Rule, Skills, TeacherPolicy};
 use game_social::Social;
 use rayon::prelude::*;

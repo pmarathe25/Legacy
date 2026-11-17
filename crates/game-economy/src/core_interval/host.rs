@@ -87,6 +87,7 @@ pub struct CoreHistoryView<'a> {
     pub language_events: &'a [game_language::Event],
     pub signal_events: &'a [game_signals::Event],
     pub signal_learning: &'a [game_signals::LearningEvent],
+    pub recipe_learning: &'a [game_economy_skills::recipe_knowledge::Learned],
     pub family_events: &'a [game_economy_family::FamilyEvent],
     pub animals: &'a [game_fauna::Animal],
 }
@@ -1394,6 +1395,11 @@ impl CoreHost {
             language_events: language.map_or(&[], |owner| owner.events.as_slice()),
             signal_events: signals.map_or(&[], |owner| owner.events.as_slice()),
             signal_learning: signals.map_or(&[], |owner| owner.learning_events.as_slice()),
+            recipe_learning: self
+                .skills
+                .as_ref()
+                .and_then(|skills| skills.owner.recipe_knowledge.as_ref())
+                .map_or(&[], |knowledge| knowledge.events.as_slice()),
             family_events: self
                 .family
                 .as_ref()
@@ -1887,6 +1893,45 @@ impl CoreHost {
         busy.dedup();
         let effective = self.effective_autonomous_work(&busy)?;
         let effective = effective.policy.as_ref().unwrap_or(owner);
+        // Learned recipes add opportunities only to the personal chooser. An
+        // existing explicit policy, including a disabled one, takes precedence.
+        let expanded = if personal {
+            self.skills
+                .as_ref()
+                .and_then(|skills| skills.owner.recipe_knowledge.as_ref())
+                .and_then(|knowledge| {
+                    let existing: std::collections::HashSet<_> = effective
+                        .policies
+                        .par_iter()
+                        .map(|row| (row.person, row.recipe))
+                        .collect();
+                    let additions: Vec<_> = knowledge
+                        .minds
+                        .par_iter()
+                        .flat_map_iter(|mind| {
+                            mind.known.iter().filter_map(|&recipe| {
+                                (!existing.contains(&(mind.person, recipe))).then_some(
+                                    game_autowork::Policy {
+                                        person: mind.person,
+                                        recipe,
+                                        enabled: true,
+                                        disregard_claims: false,
+                                    },
+                                )
+                            })
+                        })
+                        .collect();
+                    if additions.is_empty() {
+                        return None;
+                    }
+                    let mut result = effective.clone();
+                    result.policies.extend(additions);
+                    Some(result)
+                })
+        } else {
+            None
+        };
+        let effective = expanded.as_ref().unwrap_or(effective);
         let filtered = self.claim_aware_work_policies(effective);
         let offset = self.core.elapsed_millis().ok_or("no physical interval")?;
         let opportunities = self.core.autonomous_work_opportunities_with_hunger_limit(

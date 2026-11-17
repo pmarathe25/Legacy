@@ -15,3 +15,19 @@ Lessons are explicit encounters that consume a tick. A teacher with a higher app
 Enabled `teachers` policies let NPCs teach a weaker person during an already-consenting social encounter. Each encounter produces at most one lesson and uses committed skill levels; a controlled ruler is excluded from automatic teaching choices. The composed campaign includes teachable crafts.
 
 When `inherit_teachers = true`, children of opted-in teachers inherit those teaching roles but no skill. An inherited role becomes eligible at the authored adult age; the child must still learn a higher skill before teaching anyone.
+
+Optional `[skills.recipe_knowledge]` is separate from those skill levels. Each
+mind has a bounded, sorted set of specifically known recipes, an ordered list
+of recipes it may explain, and its own willingness to share or learn. A real
+meeting can communicate one known recipe in each direction, subject to those
+personal choices; the host can also supply the teacher's response to fear or
+felt obligation. Learning a recipe offers it to the interval host's personal
+work chooser, but does not start a job, guarantee the person's capability or
+supplies, or imply knowledge of other recipes in the same skill category.
+An optional `birth_profile` enrolls newborns with empty knowledge and their
+own configured learning inclination. The CLI accepts content recipe names in
+the `known` and `share` lists. Someone may also opt to share other recipes they
+subsequently learn; this can allow knowledge to pass between generations. The
+integrated hourly scenario demonstrates the
+configuration. Recipe knowledge currently has no invention, forgetting, or
+model of how an individual changes its sharing preferences.

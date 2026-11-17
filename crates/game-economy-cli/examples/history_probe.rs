@@ -125,6 +125,11 @@ fn run(
             *counts.entry(kind).or_default() += count as u64;
         }
         let view = host.history_view();
+        *counts.entry("recipe_learning").or_default() += view
+            .recipe_learning
+            .iter()
+            .filter(|event| event.tick == view.tick)
+            .count() as u64;
         *counts.entry("family_events").or_default() += view.family_events.len() as u64;
         *counts.entry("language_events").or_default() += view.language_events.len() as u64;
         *counts.entry("signal_events").or_default() += view.signal_events.len() as u64;
@@ -297,6 +302,7 @@ mod tests {
             .find(|row| row["kind"] == "sample")
             .unwrap();
         assert!(sample["events"]["work_finished"].as_u64().unwrap() > 3);
+        assert!(sample["events"]["recipe_learning"].as_u64().unwrap() > 0);
         std::fs::remove_file(output.with_extension("tick-96.json")).unwrap();
         std::fs::remove_file(output).unwrap();
     }

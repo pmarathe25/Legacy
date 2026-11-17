@@ -22,6 +22,7 @@ fn skills() -> Skills {
         events: vec![],
         lessons: vec![],
         teachers: vec![],
+        recipe_knowledge: None,
         inherit_teachers: false,
     }
 }

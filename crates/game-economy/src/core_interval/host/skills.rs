@@ -39,6 +39,10 @@ impl CoreSkills {
                 events: original.events.par_iter().cloned().collect(),
                 lessons: original.lessons.par_iter().cloned().collect(),
                 teachers: original.teachers.par_iter().cloned().collect(),
+                recipe_knowledge: original
+                    .recipe_knowledge
+                    .as_ref()
+                    .map(game_economy_skills::recipe_knowledge::Knowledge::parallel_copy),
                 inherit_teachers: original.inherit_teachers,
             },
             practiced: self.practiced.par_iter().copied().collect(),
@@ -420,14 +424,23 @@ impl CoreHost {
         else {
             return Ok(staged);
         };
-        let Some(original) = self
-            .skills
-            .as_ref()
-            .filter(|owner| owner.owner.inherit_teachers)
-        else {
+        let Some(original) = self.skills.as_ref().filter(|owner| {
+            owner.owner.inherit_teachers
+                || owner
+                    .owner
+                    .recipe_knowledge
+                    .as_ref()
+                    .is_some_and(|knowledge| knowledge.birth_profile.is_some())
+        }) else {
             return Ok(staged);
         };
         let mut next = staged.unwrap_or_else(|| original.parallel_copy());
+        if let Some(knowledge) = &mut next.owner.recipe_knowledge {
+            knowledge.enroll_births(&family.newborns);
+        }
+        if !next.owner.inherit_teachers {
+            return Ok(Some(next));
+        }
         let mut owner = Some(next.owner);
         game_economy_skills::inherit(&mut owner, &family.owner, &family.newborns, tick)?;
         next.owner = owner.expect("staged skill owner");

@@ -87,6 +87,7 @@ struct ObservationSink<'a> {
     focal_language: &'a mut Vec<Value>,
     focal_signals: &'a mut Vec<Value>,
     focal_signal_learning: &'a mut Vec<Value>,
+    focal_recipe_learning: &'a mut Vec<Value>,
     focal_choices: &'a mut Vec<Value>,
     focal_mechanics: &'a mut Vec<Value>,
     focal_strikes: &'a mut Vec<Value>,
@@ -179,6 +180,21 @@ impl ObservationSink<'_> {
                             .filter(|row| {
                                 row["actor"].as_u64() == Some(person)
                                     || row["observer"].as_u64() == Some(person)
+                            })
+                            .cloned(),
+                    );
+                }
+                continue;
+            }
+            if event["kind"] == "recipe_learning" {
+                if let Focus::Person(person) = self.focus
+                    && let Some(rows) = event["events"].as_array()
+                {
+                    self.focal_recipe_learning.extend(
+                        rows.iter()
+                            .filter(|row| {
+                                row["teacher"].as_u64() == Some(person)
+                                    || row["student"].as_u64() == Some(person)
                             })
                             .cloned(),
                     );
@@ -287,6 +303,7 @@ fn inspect(path: &Path, focus: Focus) -> Result<Value, String> {
     let mut focal_language = Vec::new();
     let mut focal_signals = Vec::new();
     let mut focal_signal_learning = Vec::new();
+    let mut focal_recipe_learning = Vec::new();
     let mut focal_choices = Vec::new();
     let mut focal_mechanics = Vec::new();
     let mut focal_strikes = Vec::new();
@@ -304,6 +321,7 @@ fn inspect(path: &Path, focus: Focus) -> Result<Value, String> {
                 focal_language: &mut focal_language,
                 focal_signals: &mut focal_signals,
                 focal_signal_learning: &mut focal_signal_learning,
+                focal_recipe_learning: &mut focal_recipe_learning,
                 focal_choices: &mut focal_choices,
                 focal_mechanics: &mut focal_mechanics,
                 focal_strikes: &mut focal_strikes,
@@ -580,7 +598,7 @@ fn inspect(path: &Path, focus: Focus) -> Result<Value, String> {
                 return Err(format!("person {person} was not found in this history"));
             }
             Ok(
-                json!({"scope":scope,"person":person,"first_observed_year":focal_first,"last_year_alive":focal_last_alive,"last_recorded_person_state":focal_person_state,"last_recorded_family_state":focal_last,"family_events":focal_events,"opinion_changes":focal_opinions,"language_events":focal_language,"signal_events":focal_signals,"signal_learning":focal_signal_learning,"personal_choices":focal_choices,"mechanical_experiments":focal_mechanics,"personal_strikes":focal_strikes,"recorded_meetings":focal_meetings}),
+                json!({"scope":scope,"person":person,"first_observed_year":focal_first,"last_year_alive":focal_last_alive,"last_recorded_person_state":focal_person_state,"last_recorded_family_state":focal_last,"family_events":focal_events,"opinion_changes":focal_opinions,"language_events":focal_language,"signal_events":focal_signals,"signal_learning":focal_signal_learning,"recipe_learning":focal_recipe_learning,"personal_choices":focal_choices,"mechanical_experiments":focal_mechanics,"personal_strikes":focal_strikes,"recorded_meetings":focal_meetings}),
             )
         }
         Focus::Animal(animal) => {
@@ -665,6 +683,9 @@ mod tests {
             }
             if row["kind"] == "year" && row["year"] == 1 {
                 row["observations"].as_array_mut().unwrap().push(json!({
+                    "kind":"recipe_learning", "events":[{"teacher":1,"student":2,"recipe":3,"tick":1}]
+                }));
+                row["observations"].as_array_mut().unwrap().push(json!({
                     "kind":"personal_strikes",
                     "events":[{"actor":1,"target":2,"force":8,"defended":2,"harm":6},
                         {"actor":3,"target":2,"force":5,"defended":2,"harm":3}],
@@ -709,6 +730,7 @@ mod tests {
         assert_eq!(person["language_events"].as_array().unwrap().len(), 1);
         assert_eq!(person["signal_events"].as_array().unwrap().len(), 1);
         assert_eq!(person["signal_learning"].as_array().unwrap().len(), 1);
+        assert_eq!(person["recipe_learning"].as_array().unwrap().len(), 1);
         assert_eq!(person["personal_choices"].as_array().unwrap().len(), 1);
         assert_eq!(person["personal_strikes"][0]["year"], 1);
         assert_eq!(

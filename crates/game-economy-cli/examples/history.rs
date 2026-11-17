@@ -201,6 +201,14 @@ fn run(
                 observation_batch.push(json!({"kind":"opinion_changes", "events":opinion_events}));
             }
             let history = host.history_view();
+            let recipe_learning: Vec<_> = history
+                .recipe_learning
+                .iter()
+                .filter(|event| event.tick == history.tick)
+                .collect();
+            if !recipe_learning.is_empty() {
+                observation_batch.push(json!({"kind":"recipe_learning", "events":recipe_learning}));
+            }
             if !history.language_events.is_empty() {
                 observation_batch
                     .push(json!({"kind":"language_events", "events":history.language_events}));
