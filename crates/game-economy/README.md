@@ -339,6 +339,8 @@ For affinity-guided meetings, each person can give affinity a positive, negative
 
 Individuals can gather finite or renewable local resources, subject to personal choice or social pressure and actual stock capacity. Only successfully delivered output depletes a site or supports a personal claim. Health can recover under authored rules, with rest providing an additional benefit. Purpose deprivation tracks completed work and blocked goals.
 
+In the interval host, personal-choice domain `21` represents beginning rest and domain `22` represents resuming activity. Each person's signed preference evaluates their projected fatigue or remaining fatigue capacity against their own idle value; absent or disabled preferences do not cause a choice. A worker can compare rest with a configured work-continuation preference, and a selected rest choice pauses work without binding the person to remain at rest. These rest decisions currently precede other local choices rather than competing with every available activity. The legacy whole-boundary path still uses automatic fatigue thresholds.
+
 In the interval host, people with personal-choice profiles can consider their
 own configured gathering sites under domain `20`, including specific site
 preferences. A selected intention waits for the next physical boundary and can

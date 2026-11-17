@@ -3,6 +3,70 @@ use super::*;
 use game_economy_fatigue::TimedActivity;
 
 impl CoreHost {
+    /// Apply already selected, individual rest choices after checking the actors.
+    pub fn choose_personal_rest(
+        &mut self,
+        choices: &[game_economy_fatigue::RestChoice],
+        blocked: &[u64],
+    ) -> Result<Vec<CoreChoiceEvent>, String> {
+        if blocked.par_windows(2).any(|rows| rows[0] >= rows[1])
+            || choices
+                .par_windows(2)
+                .any(|rows| rows[0].person >= rows[1].person)
+        {
+            return Err("invalid personal rest choices".into());
+        }
+        let owner = self.fatigue.as_ref().ok_or("fatigue is disabled")?;
+        let resting = owner.fatigue.resting();
+        let tick = self.core.physical.tick();
+        let offset_millis = self.core.elapsed_millis().ok_or("no physical interval")?;
+        if choices.par_iter().any(|choice| {
+            let current = resting.binary_search(&choice.person).is_ok();
+            current == choice.resting
+                || blocked.binary_search(&choice.person).is_ok()
+                || self
+                    .core
+                    .people
+                    .binary_search_by_key(&choice.person, |person| person.id)
+                    .ok()
+                    .is_none_or(|index| {
+                        let person = &self.core.people[index];
+                        person.controlled || person.health == 0 || person.region.is_none()
+                    })
+        }) {
+            return Err("person cannot choose that rest state".into());
+        }
+        let people: std::collections::HashSet<_> = self
+            .core
+            .people
+            .par_iter()
+            .map(|person| person.id)
+            .collect();
+        let staged = owner.fatigue.choose_rest(choices, &people)?;
+        let events = choices
+            .par_iter()
+            .map(|choice| CoreChoiceEvent {
+                tick,
+                offset_millis,
+                actor: choice.person,
+                key: Some(game_personal_choice::Key {
+                    domain: if choice.resting {
+                        super::personal_choice::REST
+                    } else {
+                        super::personal_choice::RESUME
+                    },
+                    action: 1,
+                }),
+                outcome: CoreChoiceOutcome::Accepted,
+            })
+            .collect();
+        self.fatigue.as_mut().expect("checked fatigue").fatigue = staged;
+        if !choices.is_empty() {
+            self.work_checked_revision = None;
+        }
+        Ok(events)
+    }
+
     pub(super) fn stage_fatigue(
         &self,
         people: &mut [Person],

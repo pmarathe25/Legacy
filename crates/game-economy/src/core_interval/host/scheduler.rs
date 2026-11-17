@@ -854,14 +854,6 @@ impl CoreHost {
             return Err("invalid occupied people".into());
         }
         let external_blocked = blocked;
-        let occupied = self.fatigue.as_ref().map(|owner| {
-            let mut people = blocked.to_vec();
-            people.extend(owner.fatigue.resting());
-            people.par_sort_unstable();
-            people.dedup();
-            people
-        });
-        let blocked = occupied.as_deref().unwrap_or(blocked);
         self.schedule
             .as_ref()
             .ok_or("no core schedule")?
@@ -869,6 +861,14 @@ impl CoreHost {
         let start = self.core.elapsed_millis().ok_or("no physical interval")?;
         let quantum = self.core.physical.tick_millis();
         let mut run = CoreRun::default();
+        let mut occupied = self.fatigue.as_ref().map(|owner| {
+            let mut people = external_blocked.to_vec();
+            people.par_extend(owner.fatigue.resting());
+            people.par_sort_unstable();
+            people.dedup();
+            people
+        });
+        let mut rest_dirty = false;
         macro_rules! attempt {
             ($label:lifetime, $operation:expr) => {
                 match $operation {
@@ -881,6 +881,17 @@ impl CoreHost {
             };
         }
         'run: loop {
+            if rest_dirty {
+                occupied = self.fatigue.as_ref().map(|owner| {
+                    let mut people = external_blocked.to_vec();
+                    people.par_extend(owner.fatigue.resting());
+                    people.par_sort_unstable();
+                    people.dedup();
+                    people
+                });
+                rest_dirty = false;
+            }
+            let blocked = occupied.as_deref().unwrap_or(external_blocked);
             let pending_busy = self
                 .schedule
                 .as_ref()
@@ -1002,8 +1013,22 @@ impl CoreHost {
             if schedule.next_decision_millis == Some(u128::from(offset)) {
                 match schedule.phase {
                     DecisionPhase::Meals => {
+                        let (rest_choices, rest_events) =
+                            if let Some(people) = &schedule.personal_choices {
+                                attempt!('run, self.reconsider_rest(people, external_blocked))
+                            } else {
+                                (Vec::new(), Vec::new())
+                            };
+                        if !rest_events.is_empty() {
+                            rest_dirty = true;
+                            run.events.push(CoreRunEvent::PersonalChoices(rest_events));
+                        }
+                        let mut rest_blocked = external_blocked.to_vec();
+                        rest_blocked.par_extend(rest_choices.par_iter().copied());
+                        rest_blocked.par_sort_unstable();
+                        rest_blocked.dedup();
                         let (stopped, choices) = if let Some(people) = &schedule.personal_choices {
-                            attempt!('run, self.reconsider_ordinary_work(people, external_blocked))
+                            attempt!('run, self.reconsider_ordinary_work(people, &rest_blocked))
                         } else {
                             (Vec::new(), Vec::new())
                         };
@@ -1027,17 +1052,20 @@ impl CoreHost {
                                     .map(|p| p.id)
                                     .collect()
                             });
-                        let occupied =
-                            (!stopped.is_empty() || !deferred_meals.is_empty()).then(|| {
-                                let mut occupied = external_blocked.to_vec();
-                                occupied.extend(stopped.iter().copied());
-                                occupied.extend(deferred_meals.iter().copied());
-                                occupied.par_sort_unstable();
-                                occupied.dedup();
-                                occupied
-                            });
+                        let occupied = (!rest_choices.is_empty()
+                            || !stopped.is_empty()
+                            || !deferred_meals.is_empty())
+                        .then(|| {
+                            let mut occupied = rest_blocked;
+                            occupied.extend(stopped.iter().copied());
+                            occupied.extend(deferred_meals.iter().copied());
+                            occupied.par_sort_unstable();
+                            occupied.dedup();
+                            occupied
+                        });
                         let meals = attempt!('run, self.eat_autonomously(occupied.as_deref().unwrap_or(external_blocked)));
                         let mut people = stopped;
+                        people.extend(rest_choices);
                         people.extend(meals.iter().map(|meal| meal.person));
                         people.par_sort_unstable();
                         people.dedup();

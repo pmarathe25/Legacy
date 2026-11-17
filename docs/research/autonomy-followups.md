@@ -10,10 +10,12 @@ consent or assign authority to institutions.
   preserve standing intentions and meaningful interruption costs. Continue to
   distinguish accidental encounters, deliberate approaches, and independent
   responses, including unwanted approaches and pressure.
-- Fatigue and injury can limit physical capability, but shared fatigue
-  thresholds should not automatically decide voluntary rest or waking. The
-  elapsed-time migration must model physical transitions separately from a
-  person's choice to rest.
+- Fatigue and injury can limit physical capability. The interval host now
+  leaves rest and resumption to signed individual preferences or an explicit
+  personal choice, rather than automatically applying shared thresholds.
+  Rest choices currently precede other local opportunities rather than
+  competing with all of them; integrate those comparisons. The legacy
+  whole-boundary runner still has automatic rest and must also be migrated.
 - Replace general hunger and age gates on negotiation, delivery, and other
   discretionary actions with individual evaluation and relevant physical
   constraints. Existing personally chosen work already bypasses some legacy

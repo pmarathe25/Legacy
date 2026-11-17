@@ -1402,6 +1402,225 @@ fn elapsed_fatigue_matches_across_physical_boundaries_and_resume() {
 }
 
 #[test]
+fn personally_chosen_rest_pauses_and_resumes_work_without_binding_the_person() {
+    use game_economy_fatigue::RestChoice;
+    let snapshot: CoreHostSnapshot = serde_json::from_value(serde_json::json!({
+        "core": fixture(), "fatigue": timed_fatigue()
+    }))
+    .unwrap();
+    let mut host = CoreHost::begin(snapshot, &[(1, 1)]).unwrap();
+    let before = host.snapshot();
+    assert!(
+        host.choose_personal_rest(
+            &[RestChoice {
+                person: 2,
+                resting: true
+            }],
+            &[]
+        )
+        .is_err()
+    );
+    assert_eq!(host.snapshot(), before);
+    let events = host
+        .choose_personal_rest(
+            &[RestChoice {
+                person: 1,
+                resting: true,
+            }],
+            &[],
+        )
+        .unwrap();
+    assert_eq!(events[0].actor, 1);
+    let saved = serde_json::to_string(&host.snapshot()).unwrap();
+    let mut host = CoreHost::resume(serde_json::from_str(&saved).unwrap()).unwrap();
+    assert_eq!(host.progress(500).unwrap(), 500);
+    assert_eq!(host.snapshot().core.physical.work[0].progress_remainder, 0);
+    host.choose_personal_rest(
+        &[RestChoice {
+            person: 1,
+            resting: false,
+        }],
+        &[],
+    )
+    .unwrap();
+    assert_eq!(host.progress(500).unwrap(), 500);
+    assert_eq!(
+        host.snapshot().core.physical.work[0].progress_remainder,
+        500
+    );
+}
+
+#[test]
+fn individual_rest_inclinations_can_disagree_at_the_same_fatigue() {
+    use game_personal_choice::{Person as ChoicePerson, Preference};
+    fn run(workers: usize) -> CoreHostSnapshot {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut core = fixture();
+                core.people[1].region = Some(1);
+                core.travel = None;
+                core.nutrition = None;
+                core.pending_food.clear();
+                let mut fatigue = timed_fatigue();
+                fatigue.fatigue.people = vec![
+                    game_economy_fatigue::FatiguePerson {
+                        id: 1,
+                        fatigue: 5,
+                        resting: false,
+                    },
+                    game_economy_fatigue::FatiguePerson {
+                        id: 2,
+                        fatigue: 5,
+                        resting: false,
+                    },
+                ];
+                let snapshot: CoreHostSnapshot = serde_json::from_value(serde_json::json!({
+                    "core": core, "fatigue": fatigue
+                }))
+                .unwrap();
+                let mut host = CoreHost::begin(snapshot, &[(1, 1)]).unwrap();
+                host.enable_schedule(1000, 1).unwrap();
+                let profile = |id, weight| ChoicePerson {
+                    id,
+                    idle: 0,
+                    act_on_tie: false,
+                    preferences: vec![Preference {
+                        domain: 21,
+                        enabled: true,
+                        bias: 0,
+                        weight,
+                    }],
+                    actions: vec![],
+                };
+                host.enable_personal_choices(vec![profile(1, 1000), profile(2, -1000)])
+                    .unwrap();
+                let result = host.advance_continuous(1, &[]).unwrap();
+                assert_eq!(result.failure, None);
+                let state = host.snapshot();
+                let people = &state.fatigue.as_ref().unwrap().fatigue.people;
+                assert!(people[0].resting);
+                assert!(!people[1].resting);
+                assert!(
+                    state
+                        .core
+                        .physical
+                        .work_interval
+                        .as_ref()
+                        .unwrap()
+                        .rates
+                        .is_empty()
+                );
+                let json = serde_json::to_string(&state).unwrap();
+                assert_eq!(
+                    CoreHost::resume(serde_json::from_str(&json).unwrap())
+                        .unwrap()
+                        .snapshot(),
+                    state
+                );
+                state
+            })
+    }
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
+fn personally_chosen_resumption_is_independent_of_advance_partitioning() {
+    use game_personal_choice::{Person as ChoicePerson, Preference};
+    fn run(chunks: &[u64]) -> CoreHostSnapshot {
+        let mut core = fixture();
+        core.people[1].region = Some(1);
+        core.travel = None;
+        core.nutrition = None;
+        core.pending_food.clear();
+        let mut fatigue = timed_fatigue();
+        fatigue.fatigue.people = vec![game_economy_fatigue::FatiguePerson {
+            id: 1,
+            fatigue: 5,
+            resting: true,
+        }];
+        let snapshot: CoreHostSnapshot = serde_json::from_value(serde_json::json!({
+            "core": core, "fatigue": fatigue
+        }))
+        .unwrap();
+        let mut host = CoreHost::begin(snapshot, &[(1, 1)]).unwrap();
+        host.enable_schedule(1000, 1).unwrap();
+        host.enable_personal_choices(vec![ChoicePerson {
+            id: 1,
+            idle: 0,
+            act_on_tie: false,
+            preferences: vec![Preference {
+                domain: 22,
+                enabled: true,
+                bias: 0,
+                weight: 1000,
+            }],
+            actions: vec![],
+        }])
+        .unwrap();
+        for &chunk in chunks {
+            assert_eq!(host.advance_continuous(chunk, &[]).unwrap().failure, None);
+        }
+        let state = host.snapshot();
+        assert!(!state.fatigue.as_ref().unwrap().fatigue.people[0].resting);
+        assert_eq!(state.core.physical.work[0].progress_remainder, 500);
+        state
+    }
+    assert_eq!(run(&[500]), run(&[250, 250]));
+}
+
+#[test]
+fn a_worker_compares_rest_with_their_own_work_continuation_preference() {
+    use game_personal_choice::{Person as ChoicePerson, Preference};
+    fn run(work_bias: i64) -> bool {
+        let mut core = fixture();
+        core.people[1].region = Some(1);
+        core.travel = None;
+        core.nutrition = None;
+        core.pending_food.clear();
+        let mut fatigue = timed_fatigue();
+        fatigue.fatigue.people = vec![game_economy_fatigue::FatiguePerson {
+            id: 1,
+            fatigue: 5,
+            resting: false,
+        }];
+        let snapshot: CoreHostSnapshot = serde_json::from_value(serde_json::json!({
+            "core": core, "fatigue": fatigue
+        }))
+        .unwrap();
+        let mut host = CoreHost::begin(snapshot, &[(1, 1)]).unwrap();
+        host.enable_schedule(1000, 1).unwrap();
+        host.enable_personal_choices(vec![ChoicePerson {
+            id: 1,
+            idle: 0,
+            act_on_tie: false,
+            preferences: vec![
+                Preference {
+                    domain: 5,
+                    enabled: true,
+                    bias: work_bias,
+                    weight: 0,
+                },
+                Preference {
+                    domain: 21,
+                    enabled: true,
+                    bias: 0,
+                    weight: 1000,
+                },
+            ],
+            actions: vec![],
+        }])
+        .unwrap();
+        assert_eq!(host.advance_continuous(1, &[]).unwrap().failure, None);
+        host.snapshot().fatigue.unwrap().fatigue.people[0].resting
+    }
+    assert!(!run(10));
+    assert!(run(-1));
+}
+
+#[test]
 fn timed_fatigue_tracks_early_completion_across_save_and_workers() {
     let run = |workers, split| {
         rayon::ThreadPoolBuilder::new()
@@ -1632,7 +1851,7 @@ fn timed_fatigue_tracks_early_completion_across_save_and_workers() {
                 assert!(state.purpose.as_ref().unwrap().progress.is_empty());
                 let owner = state.fatigue.as_ref().unwrap();
                 let worker = owner.fatigue.people.iter().find(|row| row.id == 1).unwrap();
-                assert_eq!((worker.fatigue, worker.resting), (2, true));
+                assert_eq!((worker.fatigue, worker.resting), (2, false));
                 assert!(state.activity.iter().all(|row| row.alive_millis == 0));
                 state
             })
@@ -1703,7 +1922,7 @@ fn timed_fatigue_rest_pauses_and_resumes_unfinished_work() {
     assert_eq!(host.advance_continuous(1000, &[]).unwrap().failure, None);
     let state = host.snapshot();
     assert!(
-        state
+        !state
             .fatigue
             .unwrap()
             .fatigue
@@ -1714,6 +1933,14 @@ fn timed_fatigue_rest_pauses_and_resumes_unfinished_work() {
             .resting
     );
     assert_eq!(state.core.physical.work[0].job.remaining, 1);
+    host.choose_personal_rest(
+        &[game_economy_fatigue::RestChoice {
+            person: 1,
+            resting: true,
+        }],
+        &[],
+    )
+    .unwrap();
     assert_eq!(host.advance_continuous(1000, &[]).unwrap().failure, None);
     let state = host.snapshot();
     assert!(
@@ -1723,9 +1950,17 @@ fn timed_fatigue_rest_pauses_and_resumes_unfinished_work() {
             .fatigue
             .people
             .iter()
-            .all(|p| p.id != 1 || !p.resting)
+            .any(|p| p.id == 1 && p.resting)
     );
     assert_eq!(state.core.physical.work[0].job.remaining, 1);
+    host.choose_personal_rest(
+        &[game_economy_fatigue::RestChoice {
+            person: 1,
+            resting: false,
+        }],
+        &[],
+    )
+    .unwrap();
     assert_eq!(host.advance_continuous(1000, &[]).unwrap().failure, None);
     let state = host.snapshot();
     assert_eq!(state.core.physical.work[0].job.remaining, 0);

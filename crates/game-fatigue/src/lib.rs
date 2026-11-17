@@ -29,6 +29,13 @@ pub struct Person {
     #[serde(default)]
     pub resting: bool,
 }
+/// A person's own requested rest state; the host validates their circumstances.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RestChoice {
+    pub person: u64,
+    pub resting: bool,
+}
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Fatigue {
@@ -57,6 +64,65 @@ pub struct Draft {
     pub consequences: Vec<Consequence>,
 }
 impl Fatigue {
+    /// Stage independent personal rest choices without deciding for anyone.
+    pub fn choose_rest(
+        &self,
+        choices: &[RestChoice],
+        people: &HashSet<u64>,
+    ) -> Result<Self, String> {
+        if choices
+            .par_windows(2)
+            .any(|rows| rows[0].person >= rows[1].person)
+            || choices
+                .par_iter()
+                .any(|choice| choice.person == 0 || !people.contains(&choice.person))
+        {
+            return Err("invalid personal rest choices".into());
+        }
+        let mut old: Vec<_> = self.people.par_iter().cloned().collect();
+        old.par_sort_unstable_by_key(|person| person.id);
+        if old.par_windows(2).any(|rows| rows[0].id == rows[1].id)
+            || old.par_iter().any(|person| {
+                person.id == 0
+                    || !people.contains(&person.id)
+                    || person.fatigue > self.rules.capacity
+            })
+        {
+            return Err("duplicate fatigue person".into());
+        }
+        let mut next: Vec<_> = old
+            .par_iter()
+            .filter(|person| {
+                choices
+                    .binary_search_by_key(&person.id, |choice| choice.person)
+                    .is_err()
+            })
+            .cloned()
+            .collect();
+        next.par_extend(
+            choices
+                .par_iter()
+                .map(|choice| {
+                    let mut person = old
+                        .binary_search_by_key(&choice.person, |person| person.id)
+                        .ok()
+                        .map(|index| old[index].clone())
+                        .unwrap_or(Person {
+                            id: choice.person,
+                            fatigue: 0,
+                            resting: false,
+                        });
+                    person.resting = choice.resting;
+                    person
+                })
+                .filter(|person| person.fatigue != 0 || person.resting),
+        );
+        next.par_sort_unstable_by_key(|person| person.id);
+        Ok(Self {
+            rules: self.rules.clone(),
+            people: next,
+        })
+    }
     pub fn validate(&self, people: &HashSet<u64>) -> Result<(), String> {
         let r = &self.rules;
         if r.capacity == 0

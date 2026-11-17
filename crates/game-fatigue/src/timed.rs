@@ -60,7 +60,7 @@ impl TimedFatigue {
         activity: &[TimedActivity],
         quantum: u64,
         alive: impl Fn(u64) -> bool + Sync,
-        controlled: impl Fn(u64) -> bool + Sync,
+        _controlled: impl Fn(u64) -> bool + Sync,
     ) -> Result<TimedDraft, String> {
         let period = self.rate_period_millis.unwrap_or(quantum);
         if quantum == 0
@@ -126,17 +126,6 @@ impl TimedFatigue {
                     .min(u128::from(rules.capacity) * u128::from(period));
                 person.fatigue = (exact / u128::from(period)) as u32;
                 let fraction = (exact % u128::from(period)) as u64;
-                if !controlled(row.id) && row.alive_millis > 0 {
-                    if person.resting
-                        && row.rest_millis > 0
-                        && exact <= u128::from(rules.resume_at) * u128::from(period)
-                    {
-                        person.resting = false;
-                    }
-                    if exact >= u128::from(rules.rest_at) * u128::from(period) {
-                        person.resting = true;
-                    }
-                }
                 let consequence = (alive(row.id)
                     && exact >= u128::from(rules.exhaustion_at) * u128::from(period)
                     && rules.exhaustion_damage > 0)
@@ -281,8 +270,18 @@ mod tests {
                 .iter()
                 .map(|p| (p.fatigue, p.resting))
                 .collect::<Vec<_>>(),
-            vec![(3, true), (3, false)]
+            vec![(3, false), (3, false)]
         );
+        state.fatigue = state
+            .fatigue
+            .choose_rest(
+                &[crate::RestChoice {
+                    person: 1,
+                    resting: true,
+                }],
+                &HashSet::from([1, 2]),
+            )
+            .unwrap();
         let rest = TimedActivity {
             id: 1,
             alive_millis: 1000,
@@ -298,12 +297,22 @@ mod tests {
         let draft = state
             .prepare(&[rest, idle], 1000, |_| true, |id| id == 2)
             .unwrap();
-        assert_eq!(draft.state.fatigue.people.len(), 1);
+        assert_eq!(draft.state.fatigue.people.len(), 2);
+        assert!(draft.state.fatigue.people[0].resting);
+        let after_choice = draft
+            .state
+            .fatigue
+            .choose_rest(
+                &[crate::RestChoice {
+                    person: 1,
+                    resting: false,
+                }],
+                &HashSet::from([1, 2]),
+            )
+            .unwrap();
+        assert_eq!(after_choice.people.len(), 1);
         assert_eq!(
-            (
-                draft.state.fatigue.people[0].id,
-                draft.state.fatigue.people[0].fatigue
-            ),
+            (after_choice.people[0].id, after_choice.people[0].fatigue),
             (2, 2)
         );
     }

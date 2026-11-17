@@ -40,13 +40,14 @@ interval host.
 An immortal can also specify `recovery_rate = { units = ..., per_millis = ... }`.
 Its fractional recovery is saved and the interval coordinator schedules the
 return of physical capability, so work and travel cannot accrue while the
-person remains incapacitated. Recovery itself does not decide whether they
-rest; the existing automatic fatigue and rest behavior still needs redesign.
+person remains incapacitated. Recovery itself does not decide whether they rest.
 An interval-host scenario may set `fatigue_rate_period_millis` so saved
-fatigue fractions use a stable rate period. Fatigue still settles at physical
-boundaries, and the current automatic rest and exhaustion rules remain
-boundary-based; this setting does not yet make those choices or consequences
-independent of subdivision.
+fatigue fractions use a stable rate period. Interval-host rest and resumption
+are individual choices, evaluated from signed personal preferences and current
+projected fatigue. Fatigue and exhaustion still settle at physical boundaries,
+and rest choices currently precede other local opportunities rather than
+competing with all of them in one selection. The legacy whole-boundary runner
+still applies automatic rest thresholds.
 Renewal is still settled at a physical boundary, alongside gathering, using
 the season selected for that boundary. Changing boundaries can therefore
 change the ordering of gathering and renewal or cross a season transition;

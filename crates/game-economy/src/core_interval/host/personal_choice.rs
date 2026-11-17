@@ -23,6 +23,8 @@ pub(super) const WRITTEN_FORM: u32 = 17;
 pub(super) const MARK_INSCRIPTION: u32 = 18;
 pub(super) const REMEMBERED_FORM: u32 = 19;
 pub(super) const GATHERING: u32 = 20;
+pub(super) const REST: u32 = 21;
+pub(super) const RESUME: u32 = 22;
 
 fn index_by_person<T>(rows: &[T], id: u64, key: impl Fn(&T) -> u64) -> Option<usize> {
     rows.first()
@@ -149,6 +151,150 @@ pub(super) fn intention_permitted(person: &Person, intent: &CoreChoiceIntent) ->
 }
 
 impl CoreHost {
+    /// Let each person compare their own rest or resumption inclination with idleness.
+    pub(super) fn reconsider_rest(
+        &mut self,
+        people: &[Person],
+        blocked: &[u64],
+    ) -> Result<(Vec<u64>, Vec<CoreChoiceEvent>), String> {
+        let Some(owner) = &self.fatigue else {
+            return Ok((Vec::new(), Vec::new()));
+        };
+        if !people.par_iter().any(|person| {
+            person
+                .preferences
+                .par_iter()
+                .any(|preference| matches!(preference.domain, REST | RESUME) && preference.enabled)
+        }) {
+            return Ok((Vec::new(), Vec::new()));
+        }
+        let quantum = self.core.physical.tick_millis();
+        let projected = owner
+            .prepare(
+                &self.activity,
+                quantum,
+                |id| {
+                    self.core
+                        .people
+                        .binary_search_by_key(&id, |person| person.id)
+                        .ok()
+                        .is_some_and(|i| self.core.people[i].health > 0)
+                },
+                |id| {
+                    self.core
+                        .people
+                        .binary_search_by_key(&id, |person| person.id)
+                        .ok()
+                        .is_some_and(|i| self.core.people[i].controlled)
+                },
+            )?
+            .state;
+        let resting = owner.fatigue.resting();
+        let mut occupied = blocked.to_vec();
+        if let Some(schedule) = &self.schedule {
+            occupied.par_extend(
+                schedule
+                    .pending_cultivation
+                    .par_iter()
+                    .map(|row| row.person),
+            );
+            occupied.par_extend(schedule.pending_gathering.par_iter().map(|row| row.person));
+        }
+        occupied.par_sort_unstable();
+        occupied.dedup();
+        let mut jobs: Vec<_> = self
+            .core
+            .physical
+            .work()
+            .par_iter()
+            .filter(|work| work.phase == game_lot_runtime::Phase::Working)
+            .map(|work| (work.job.worker, work.job.id, work.job.remaining))
+            .collect();
+        jobs.par_sort_unstable_by_key(|row| row.0);
+        let proposals: Vec<_> = people
+            .par_iter()
+            .flat_map_iter(|profile| {
+                let Some(actor) = self
+                    .core
+                    .people
+                    .binary_search_by_key(&profile.id, |person| person.id)
+                    .ok()
+                    .map(|index| &self.core.people[index])
+                else {
+                    return Vec::new();
+                };
+                if actor.controlled
+                    || actor.health == 0
+                    || actor.region.is_none()
+                    || occupied.binary_search(&actor.id).is_ok()
+                {
+                    return Vec::new();
+                }
+                let is_resting = resting.binary_search(&actor.id).is_ok();
+                let fatigue = projected
+                    .fatigue
+                    .people
+                    .binary_search_by_key(&actor.id, |person| person.id)
+                    .ok()
+                    .map_or(0, |index| projected.fatigue.people[index].fatigue);
+                let mut options = vec![Proposal {
+                    actor: actor.id,
+                    key: Key {
+                        domain: if is_resting { RESUME } else { REST },
+                        action: 1,
+                    },
+                    value: if is_resting {
+                        projected.fatigue.rules.capacity.saturating_sub(fatigue)
+                    } else {
+                        fatigue
+                    } as i64,
+                }];
+                if !is_resting && let Ok(index) = jobs.binary_search_by_key(&actor.id, |row| row.0)
+                {
+                    options.push(Proposal {
+                        actor: actor.id,
+                        key: Key {
+                            domain: CONTINUE_WORK,
+                            action: jobs[index].1,
+                        },
+                        value: jobs[index].2.min(i64::MAX as u64) as i64,
+                    });
+                }
+                options
+            })
+            .collect();
+        let selections = game_personal_choice::select(
+            people,
+            &proposals,
+            self.core.seed,
+            self.core.decision_time_key(),
+        )
+        .map_err(str::to_owned)?;
+        let choices: Vec<_> = selections
+            .par_iter()
+            .filter_map(|selection| {
+                let key = selection.action?;
+                match key.domain {
+                    REST => Some(game_economy_fatigue::RestChoice {
+                        person: selection.actor,
+                        resting: true,
+                    }),
+                    RESUME => Some(game_economy_fatigue::RestChoice {
+                        person: selection.actor,
+                        resting: false,
+                    }),
+                    _ => None,
+                }
+            })
+            .collect();
+        if choices.is_empty() {
+            return Ok((Vec::new(), Vec::new()));
+        }
+        let events = self.choose_personal_rest(&choices, &occupied)?;
+        let actors = choices.par_iter().map(|choice| choice.person).collect();
+        Ok((actors, events))
+    }
+
     /// Withdraw a person's pending gathering intention before settlement.
     pub fn cancel_gathering_intention(
         &mut self,
