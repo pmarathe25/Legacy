@@ -105,6 +105,7 @@ impl CoreHostSnapshot {
                 .fatigue
                 .map(|fatigue| game_economy_fatigue::TimedFatigue {
                     fatigue,
+                    rate_period_millis: None,
                     remainders: vec![],
                 }),
             activity: vec![],

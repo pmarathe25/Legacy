@@ -6191,6 +6191,10 @@ fn integrated_hourly_world_runs_with_personal_choices_and_borrowed_history() {
                 .unwrap();
                 let initial = host.snapshot();
                 assert_eq!(
+                    initial.fatigue.as_ref().unwrap().rate_period_millis,
+                    Some(3_600_000)
+                );
+                assert_eq!(
                     initial.core.rules.hunger_rate,
                     Some(game_economy::core_interval::HungerRate {
                         units: 1,

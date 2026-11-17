@@ -20,7 +20,10 @@ pub struct TimedActivity {
 #[serde(deny_unknown_fields)]
 pub struct TimedFatigue {
     pub fatigue: Fatigue,
-    /// Nonnegative fractions, in units of one quantum, sorted by person.
+    /// Elapsed duration represented by the authored fatigue rates.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rate_period_millis: Option<u64>,
+    /// Nonnegative fractional numerators over the rate period, sorted by person.
     #[serde(default)]
     pub remainders: Vec<(u64, u64)>,
 }
@@ -33,7 +36,9 @@ pub struct TimedDraft {
 impl TimedFatigue {
     pub fn validate(&self, people: &HashSet<u64>, quantum: u64) -> Result<(), String> {
         self.fatigue.validate(people)?;
+        let period = self.rate_period_millis.unwrap_or(quantum);
         if quantum == 0
+            || period == 0
             || self
                 .remainders
                 .par_windows(2)
@@ -41,7 +46,7 @@ impl TimedFatigue {
             || self
                 .remainders
                 .par_iter()
-                .any(|&(id, value)| !people.contains(&id) || value == 0 || value >= quantum)
+                .any(|&(id, value)| !people.contains(&id) || value == 0 || value >= period)
         {
             return Err("invalid fractional fatigue".into());
         }
@@ -57,7 +62,17 @@ impl TimedFatigue {
         alive: impl Fn(u64) -> bool + Sync,
         controlled: impl Fn(u64) -> bool + Sync,
     ) -> Result<TimedDraft, String> {
+        let period = self.rate_period_millis.unwrap_or(quantum);
         if quantum == 0
+            || period == 0
+            || self
+                .remainders
+                .par_windows(2)
+                .any(|rows| rows[0].0 >= rows[1].0)
+            || self
+                .remainders
+                .par_iter()
+                .any(|&(_, value)| value == 0 || value >= period)
             || activity.par_windows(2).any(|rows| rows[0].id >= rows[1].id)
             || activity.par_iter().any(|row| {
                 row.alive_millis > quantum
@@ -99,7 +114,7 @@ impl TimedFatigue {
                     .ok()
                     .map_or(0, |index| self.remainders[index].1);
                 let mut exact =
-                    u128::from(person.fatigue) * u128::from(quantum) + u128::from(remainder);
+                    u128::from(person.fatigue) * u128::from(period) + u128::from(remainder);
                 let gain = u128::from(rules.baseline_gain) * u128::from(row.alive_millis)
                     + u128::from(rules.work_gain) * u128::from(row.work_millis)
                     + u128::from(rules.travel_gain) * u128::from(row.travel_millis);
@@ -108,22 +123,22 @@ impl TimedFatigue {
                 exact = exact
                     .saturating_add(gain)
                     .saturating_sub(recovery)
-                    .min(u128::from(rules.capacity) * u128::from(quantum));
-                person.fatigue = (exact / u128::from(quantum)) as u32;
-                let fraction = (exact % u128::from(quantum)) as u64;
+                    .min(u128::from(rules.capacity) * u128::from(period));
+                person.fatigue = (exact / u128::from(period)) as u32;
+                let fraction = (exact % u128::from(period)) as u64;
                 if !controlled(row.id) && row.alive_millis > 0 {
                     if person.resting
                         && row.rest_millis > 0
-                        && exact <= u128::from(rules.resume_at) * u128::from(quantum)
+                        && exact <= u128::from(rules.resume_at) * u128::from(period)
                     {
                         person.resting = false;
                     }
-                    if exact >= u128::from(rules.rest_at) * u128::from(quantum) {
+                    if exact >= u128::from(rules.rest_at) * u128::from(period) {
                         person.resting = true;
                     }
                 }
                 let consequence = (alive(row.id)
-                    && exact >= u128::from(rules.exhaustion_at) * u128::from(quantum)
+                    && exact >= u128::from(rules.exhaustion_at) * u128::from(period)
                     && rules.exhaustion_damage > 0)
                     .then_some(Consequence {
                         id: row.id,
@@ -149,6 +164,7 @@ impl TimedFatigue {
                     rules: rules.clone(),
                     people,
                 },
+                rate_period_millis: self.rate_period_millis,
                 remainders,
             },
             consequences,
@@ -163,6 +179,7 @@ mod tests {
 
     fn owner() -> TimedFatigue {
         TimedFatigue {
+            rate_period_millis: None,
             fatigue: Fatigue {
                 rules: Rules {
                     capacity: 10,
@@ -180,6 +197,54 @@ mod tests {
             },
             remainders: vec![],
         }
+    }
+
+    #[test]
+    fn explicit_fatigue_period_preserves_fraction_across_boundaries_and_resume() {
+        fn run(quantum: u64, workers: usize) -> TimedFatigue {
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(workers)
+                .build()
+                .unwrap()
+                .install(|| {
+                    let mut state = owner();
+                    state.rate_period_millis = Some(1000);
+                    let mut elapsed = 0;
+                    while elapsed < 500 {
+                        let duration = quantum.min(500 - elapsed);
+                        let activity = [TimedActivity {
+                            id: 1,
+                            alive_millis: duration,
+                            work_millis: duration,
+                            ..Default::default()
+                        }];
+                        state = state
+                            .prepare(&activity, quantum, |_| true, |_| true)
+                            .unwrap()
+                            .state;
+                        elapsed += duration;
+                        if elapsed == 200 {
+                            state = serde_json::from_str(&serde_json::to_string(&state).unwrap())
+                                .unwrap();
+                        }
+                    }
+                    state
+                })
+        }
+        let whole = run(1000, 1);
+        assert_eq!(whole.fatigue.people[0].fatigue, 1);
+        assert_eq!(whole.remainders, vec![(1, 500)]);
+        assert_eq!(run(100, 4), whole);
+        let mut invalid = whole;
+        invalid.rate_period_millis = Some(0);
+        let activity = [TimedActivity {
+            id: 1,
+            alive_millis: 100,
+            work_millis: 100,
+            ..Default::default()
+        }];
+        assert!(invalid.validate(&HashSet::from([1]), 100).is_err());
+        assert!(invalid.prepare(&activity, 100, |_| true, |_| true).is_err());
     }
     #[test]
     fn fractional_fatigue_accumulates_and_rest_is_personal() {

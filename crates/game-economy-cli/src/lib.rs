@@ -28,6 +28,9 @@ struct Scenario {
     /// Elapsed duration of one route-distance unit.
     #[serde(default)]
     travel_unit_millis: Option<u64>,
+    /// Duration represented by the authored fatigue rates.
+    #[serde(default)]
+    fatigue_rate_period_millis: Option<u64>,
     /// Autonomous decision cadence, independent of the physical quantum.
     #[serde(default)]
     decision_period_millis: Option<u64>,
@@ -1009,6 +1012,7 @@ pub fn core_scenario_with_options(
     let language_topic_profiles = authored.language_topic_profiles;
     let signals = authored.signals;
     let decision_period_millis = authored.decision_period_millis;
+    let fatigue_rate_period_millis = authored.fatigue_rate_period_millis;
     let hunger_rate = authored.rules.hunger_rate;
     let work_capabilities = authored.work_capabilities;
     let regions: HashSet<_> = authored.regions.iter().map(|region| region.id).collect();
@@ -1021,6 +1025,13 @@ pub fn core_scenario_with_options(
     let mut snapshot =
         game_economy::core_interval::CoreHostSnapshot::from_scenario(scenario.snapshot())?;
     snapshot.core.rules.hunger_rate = hunger_rate;
+    if let Some(period) = fatigue_rate_period_millis {
+        snapshot
+            .fatigue
+            .as_mut()
+            .ok_or("fatigue rate period requires fatigue")?
+            .rate_period_millis = Some(period);
+    }
     if let Some(owner) = &mut personal_conflict {
         owner
             .attacks
@@ -1432,8 +1443,12 @@ fn scenario_with_options_inner(
 ) -> Result<Economy, String> {
     let source = std::fs::read_to_string(path).map_err(|error| error.to_string())?;
     let mut scenario: Scenario = toml::from_str(&source).map_err(|error| error.to_string())?;
-    if scenario.decision_period_millis.is_some() && !interval_features {
-        return Err("elapsed decision cadence requires the interval simulation host".into());
+    if (scenario.decision_period_millis.is_some() || scenario.fatigue_rate_period_millis.is_some())
+        && !interval_features
+    {
+        return Err(
+            "elapsed decision cadence or fatigue rates require the interval simulation host".into(),
+        );
     }
     if scenario.rules.hunger_rate.is_some() {
         if !interval_features {

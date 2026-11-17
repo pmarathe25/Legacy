@@ -1335,6 +1335,7 @@ fn concentrated_work_continuation_benchmark() {
 
 fn timed_fatigue() -> game_economy_fatigue::TimedFatigue {
     game_economy_fatigue::TimedFatigue {
+        rate_period_millis: None,
         fatigue: game_economy_fatigue::Fatigue {
             rules: game_economy_fatigue::Rules {
                 capacity: 10,
@@ -1352,6 +1353,52 @@ fn timed_fatigue() -> game_economy_fatigue::TimedFatigue {
         },
         remainders: vec![],
     }
+}
+
+#[test]
+fn elapsed_fatigue_matches_across_physical_boundaries_and_resume() {
+    fn run(quantum: u64, workers: usize) -> game_economy_fatigue::TimedFatigue {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut core = fixture();
+                core.nutrition = None;
+                core.pending_food.clear();
+                core.travel = None;
+                core.people[1].region = Some(1);
+                core.people[0].controlled = true;
+                core.rules.hunger_per_tick = 0;
+                core.rules.starvation_damage = 0;
+                core.physical.tick_millis = quantum;
+                core.physical.work_rate_period_millis = Some(10_000);
+                let mut fatigue = timed_fatigue();
+                fatigue.rate_period_millis = Some(1000);
+                let snapshot: CoreHostSnapshot = serde_json::from_value(serde_json::json!({
+                    "core": core, "fatigue": fatigue
+                }))
+                .unwrap();
+                let mut host = CoreHost::begin(snapshot, &[(1, 1)]).unwrap();
+                let mut elapsed = 0;
+                while elapsed < 1000 {
+                    assert_eq!(host.progress(quantum).unwrap(), quantum);
+                    elapsed += quantum;
+                    if elapsed == 500 {
+                        let saved = serde_json::to_string(&host.snapshot()).unwrap();
+                        host = CoreHost::resume(serde_json::from_str(&saved).unwrap()).unwrap();
+                    }
+                    host.settle().unwrap();
+                    if elapsed < 1000 {
+                        host = CoreHost::begin(host.snapshot(), &[(1, 1)]).unwrap();
+                    }
+                }
+                host.snapshot().fatigue.unwrap()
+            })
+    }
+    let whole = run(1000, 1);
+    assert_eq!(whole.fatigue.people[0].fatigue, 4);
+    assert_eq!(run(100, 4), whole);
 }
 
 #[test]
