@@ -1412,8 +1412,21 @@ impl CoreHost {
                 .personal_conflict
                 .as_ref()
                 .and_then(|owner| owner.wounds.as_ref());
+            // A paused job still owns its inputs, but it does not physically
+            // occupy the worker. The care owner separately excludes active work.
+            let mut care_busy = blocked.to_vec();
+            if let Some(schedule) = &self.schedule {
+                care_busy.par_extend(
+                    schedule
+                        .pending_cultivation
+                        .par_iter()
+                        .map(|row| row.person),
+                );
+            }
+            care_busy.par_sort_unstable();
+            care_busy.dedup();
             let care: Vec<_> = self
-                .preview_wound_care(&busy)?
+                .preview_wound_care(&care_busy)?
                 .into_par_iter()
                 .map(|choice| {
                     let wounds = owner.expect("care requires wounds");

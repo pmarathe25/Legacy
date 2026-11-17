@@ -6409,6 +6409,22 @@ fn wounds_can_physically_pause_work_until_personal_treatment() {
                 );
                 if configured {
                     assert_eq!(state.paused_work_rates, vec![(1, 1)]);
+                    for willing in [false, true] {
+                        let mut autonomous = state.clone();
+                        autonomous.core.people.iter_mut().find(|person| person.id == 1).unwrap().controlled = false;
+                        autonomous.personal_conflict.as_mut().unwrap().wound_care = serde_json::from_value(serde_json::json!([{ "person": 1, "good": herb, "willing": willing }])).unwrap();
+                        let schedule = autonomous.schedule.as_mut().unwrap();
+                        schedule.personal_choices = Some(std::sync::Arc::new(vec![serde_json::from_value(serde_json::json!({"id": 1, "idle": 0, "preferences": [{"domain": 16, "enabled": true, "bias": 10}]})).unwrap()]));
+                        schedule.next_decision_millis = Some(100);
+                        schedule.phase = game_economy::core_interval::DecisionPhase::Meals;
+                        let mut autonomous = CoreHost::resume(autonomous).unwrap();
+                        let (choices, _) = autonomous.preview_personal_choices(&[]).unwrap();
+                        assert_eq!(choices.iter().any(|choice| choice.actor == 1 && choice.key.domain == 16), willing);
+                        assert_eq!(autonomous.advance_continuous(100, &[]).unwrap().failure, None);
+                        let after = autonomous.snapshot();
+                        assert_eq!(after.personal_conflict.unwrap().wounds.unwrap().cases.is_empty(), willing);
+                        assert_eq!(after.core.physical.work[0].progress_remainder, if willing { 100 } else { 0 });
+                    }
                     let mut decline = CoreHost::resume(state.clone()).unwrap();
                     assert_eq!(
                         Player::new(&mut decline, 1)
