@@ -1890,6 +1890,10 @@ impl CoreHost {
         let members = self.family.as_ref().map(|family| {
             game_family_index::MemberIndex::new(&family.members).expect("validated family")
         });
+        let wounds = self
+            .personal_conflict
+            .as_ref()
+            .and_then(|owner| owner.wounds.as_ref());
         attempts
             .par_iter()
             .map(|&(person, recipe)| {
@@ -1901,7 +1905,8 @@ impl CoreHost {
                         age: member.age,
                         vigor: member.genome.expressed(1),
                     });
-                capabilities.permits(body, recipe)
+                let loss = wounds.map_or(0, |wounds| wounds.work_strength_loss(person));
+                capabilities.permits_with_loss(body, recipe, loss)
             })
             .collect()
     }

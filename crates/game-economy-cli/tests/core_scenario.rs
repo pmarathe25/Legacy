@@ -6277,6 +6277,167 @@ fn interval_player_sees_only_their_own_written_knowledge() {
 }
 
 #[test]
+fn wounds_can_physically_pause_work_until_personal_treatment() {
+    use game_economy::core_interval::{CoreHost, PersonalStrike};
+    use game_economy_player::interval::Player;
+    fn run(workers: usize, configured: bool) -> serde_json::Value {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let root = root();
+                let mut state = game_economy_cli::core_scenario(
+                    &root.join("content/scenarios/economy-core-injured-work.toml"),
+                    &root.join("content"),
+                )
+                .unwrap()
+                .snapshot();
+                state.social = None;
+                let herb = state
+                    .core
+                    .physical
+                    .goods
+                    .iter()
+                    .find(|good| good.name == "healing-herbs")
+                    .unwrap()
+                    .id;
+                let recipe = state
+                    .core
+                    .physical
+                    .recipes
+                    .iter()
+                    .find(|recipe| recipe.name == "fixture-tool")
+                    .unwrap()
+                    .id;
+                let wounds = state
+                    .personal_conflict
+                    .as_mut()
+                    .unwrap()
+                    .wounds
+                    .as_mut()
+                    .unwrap();
+                wounds.remedies = serde_json::from_value(
+                    serde_json::json!([{"good":herb,"quantity":1,"severity_relief":6}]),
+                )
+                .unwrap();
+                if !configured {
+                    wounds.rules.work_strength_loss_per_severity = 0;
+                }
+                let mut host = CoreHost::resume(state).unwrap();
+                assert_eq!(
+                    Player::new(&mut host, 1)
+                        .unwrap()
+                        .start_work(recipe, 1)
+                        .unwrap(),
+                    Some(1)
+                );
+                let harm = host
+                    .strike_people(
+                        &[PersonalStrike {
+                            actor: 2,
+                            target: 1,
+                            force: 6,
+                        }],
+                        &[],
+                        &[],
+                    )
+                    .unwrap();
+                assert_eq!((harm[0].before, harm[0].after), (100, 94));
+                assert_eq!(
+                    Player::new(&mut host, 1)
+                        .unwrap()
+                        .advance(100)
+                        .unwrap()
+                        .failure,
+                    None
+                );
+                let state = host.snapshot();
+                assert_eq!(
+                    state.core.physical.work[0].progress_remainder,
+                    if configured { 0 } else { 100 }
+                );
+                if configured {
+                    assert_eq!(state.paused_work_rates, vec![(1, 1)]);
+                    let mut decline = CoreHost::resume(state.clone()).unwrap();
+                    assert_eq!(
+                        Player::new(&mut decline, 1)
+                            .unwrap()
+                            .advance(100)
+                            .unwrap()
+                            .failure,
+                        None
+                    );
+                    assert_eq!(
+                        decline.snapshot().core.physical.work[0].progress_remainder,
+                        0
+                    );
+                    assert_eq!(
+                        Player::new(&mut decline, 1)
+                            .unwrap()
+                            .advance(9_000_000)
+                            .unwrap()
+                            .failure,
+                        None
+                    );
+                    let healed = decline.snapshot();
+                    assert!(
+                        healed
+                            .personal_conflict
+                            .as_ref()
+                            .unwrap()
+                            .wounds
+                            .as_ref()
+                            .unwrap()
+                            .cases
+                            .is_empty()
+                    );
+                    assert!(healed.core.physical.work[0].progress_remainder > 0);
+                    let mut restored = CoreHost::resume(
+                        serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap(),
+                    )
+                    .unwrap();
+                    assert!(
+                        Player::new(&mut restored, 1)
+                            .unwrap()
+                            .treat_wound(herb)
+                            .unwrap()
+                    );
+                    assert!(
+                        restored
+                            .snapshot()
+                            .personal_conflict
+                            .as_ref()
+                            .unwrap()
+                            .wounds
+                            .as_ref()
+                            .unwrap()
+                            .cases
+                            .is_empty()
+                    );
+                    assert_eq!(
+                        Player::new(&mut restored, 1)
+                            .unwrap()
+                            .advance(100)
+                            .unwrap()
+                            .failure,
+                        None
+                    );
+                    assert_eq!(
+                        restored.snapshot().core.physical.work[0].progress_remainder,
+                        100
+                    );
+                    host = restored;
+                }
+                serde_json::to_value(host.snapshot()).unwrap()
+            })
+    }
+    for configured in [false, true] {
+        assert_eq!(run(1, configured), run(4, configured));
+    }
+}
+
+#[test]
 fn people_choose_between_competing_physical_actions_or_idleness() {
     use game_economy::core_interval::{CoreChoiceOutcome, CoreRunEvent};
     fn run(workers: usize) -> serde_json::Value {

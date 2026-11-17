@@ -1,0 +1,97 @@
+seed = 7
+tick_millis = 900000
+stock_capacity = 100
+food_relief_divisor = 20
+
+[rules]
+hunger_per_tick = 1
+meal_threshold = 5
+starvation_threshold = 50
+starvation_damage = 1
+max_health = 100
+carrying_capacity = 10
+max_work_hunger = 20
+
+[language.rules]
+sounds = ["a", "k", "m"]
+word_length = 2
+capacity = 8
+[language.writing]
+capacity = 4
+[[language.minds]]
+person = 1
+initiative = 1000
+adoption = 1000
+words = [{ meaning = { kind = "place", id = 1 }, sounds = [0, 1] }]
+[[language.minds]]
+person = 2
+initiative = 1000
+adoption = 1000
+
+[[language_topic_profiles]]
+person = 1
+idle = 0
+preferences = [{ object = "grain", enabled = true, value = 10 }]
+[[language_topic_profiles]]
+person = 2
+idle = 0
+preferences = []
+
+[[regions]]
+id = 1
+stock = { timber = 10 }
+
+[[people]]
+id = 1
+region = 1
+health = 100
+hunger = 0
+willing_to_work = false
+seek_meals = false
+goods = { grain = 1, paper = 1, ink = 1, "healing-herbs" = 1 }
+controlled = true
+[[people]]
+id = 2
+region = 1
+health = 100
+hunger = 0
+willing_to_work = false
+seek_meals = false
+
+[dynamics.social]
+participants = [{ person = 1, willing = true }, { person = 2, willing = true }]
+[dynamics.social.rules]
+interval = 1
+min_health = 1
+max_hunger = 100
+familiarity_gain = 1
+familiarity_max = 10
+
+[writing]
+paper = "paper"
+ink = "ink"
+page = "written-page"
+paper_quantity = 1
+ink_quantity = 1
+next_item = 1
+
+[knowledge]
+max_records = 4
+minds = []
+
+[work_capabilities]
+growth = [{ age = 0, strength = 10 }]
+vigor_base = 1000
+vigor_weight = 0
+default_strength = 5
+missing_strength = 10
+
+[personal_conflict]
+[[personal_conflict.capabilities]]
+person = 2
+max_force = 6
+
+[personal_conflict.wounds.rules]
+minimum_harm = 1
+recovery_ticks = 10
+work_strength_loss_per_severity = 1

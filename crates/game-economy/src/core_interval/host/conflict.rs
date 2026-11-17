@@ -250,7 +250,15 @@ impl CoreHost {
             .physical
             .work()
             .par_iter()
-            .filter(|row| row.phase == game_lot_runtime::Phase::Working)
+            .filter(|row| {
+                row.phase == game_lot_runtime::Phase::Working
+                    && self.core.physical.work_interval().is_some_and(|interval| {
+                        interval
+                            .rates
+                            .binary_search_by_key(&row.job.id, |rate| rate.0)
+                            .is_ok()
+                    })
+            })
             .map(|row| row.job.worker)
             .collect();
         let opinions = self.opinions.as_ref().map(|owner| owner.index());
@@ -347,7 +355,15 @@ impl CoreHost {
             .physical
             .work()
             .par_iter()
-            .filter(|row| row.phase == game_lot_runtime::Phase::Working)
+            .filter(|row| {
+                row.phase == game_lot_runtime::Phase::Working
+                    && self.core.physical.work_interval().is_some_and(|interval| {
+                        interval
+                            .rates
+                            .binary_search_by_key(&row.job.id, |rate| rate.0)
+                            .is_ok()
+                    })
+            })
             .map(|row| row.job.worker)
             .collect();
         let assisting = self.assisting_people();
@@ -430,6 +446,7 @@ impl CoreHost {
             self.writing = Some(writing);
         }
         self.personal_conflict.as_mut().expect("wound owner").wounds = Some(next);
+        self.work_checked_revision = None;
         Ok(CoreTreatmentResults {
             actors: choices.par_iter().map(|row| row.person).collect(),
             outcomes: result.transactions,

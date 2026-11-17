@@ -89,6 +89,11 @@ impl Capabilities {
     }
 
     pub fn permits(&self, body: Option<Body>, recipe: u32) -> bool {
+        self.permits_with_loss(body, recipe, 0)
+    }
+
+    /// Evaluate actual strength after a separately owned physical impairment.
+    pub fn permits_with_loss(&self, body: Option<Body>, recipe: u32, loss: u32) -> bool {
         let required = self
             .requirements
             .binary_search_by_key(&recipe, |row| row.recipe)
@@ -97,7 +102,7 @@ impl Capabilities {
                 self.requirements[index].strength
             });
         self.strength(body)
-            .is_some_and(|strength| strength >= required)
+            .is_some_and(|strength| strength.saturating_sub(loss) >= required)
     }
 
     /// Parallel pure filtering; callers provide actual individual body snapshots.

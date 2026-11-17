@@ -7,6 +7,7 @@ fn wounds_accumulate_capped_harm_and_recover_without_assigning_blame() {
             minimum_harm: 2,
             recovery_ticks: 3,
             force_loss_per_severity: 1,
+            work_strength_loss_per_severity: 0,
         },
         cases: vec![],
         remedies: vec![],
@@ -63,6 +64,7 @@ fn only_accepted_personal_treatments_change_wounds() {
             minimum_harm: 1,
             recovery_ticks: 3,
             force_loss_per_severity: 1,
+            work_strength_loss_per_severity: 0,
         },
         cases: vec![],
         remedies: vec![Remedy {

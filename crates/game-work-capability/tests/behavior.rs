@@ -34,6 +34,9 @@ fn growth_and_vigor_constrain_tasks_without_making_choices() {
     };
     assert_eq!(model.strength(Some(child)), Some(50));
     assert!(model.permits(Some(child), 1));
+    assert!(model.permits_with_loss(Some(child), 1, 30));
+    assert!(!model.permits_with_loss(Some(child), 1, 31));
+    assert!(!model.permits_with_loss(Some(child), 1, u32::MAX));
     assert!(!model.permits(Some(child), 2));
     assert!(!model.permits(Some(Body { age: 0, ..child }), 1));
     assert!(!model.permits(

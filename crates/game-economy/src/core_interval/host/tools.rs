@@ -11,6 +11,7 @@ impl CoreHost {
     /// Combine rest and tool blockers while retaining one desired work rate.
     pub(super) fn sync_work_rates(&mut self, blocked: &[u64]) -> Result<(), String> {
         if self.tool_requirements.is_empty()
+            && self.work_capabilities.is_none()
             && self.fatigue.is_none()
             && self.health.is_none()
             && self.personal_conflict.is_none()
@@ -43,6 +44,21 @@ impl CoreHost {
                 .map(|&(job, rate)| (job, rate, true)),
         );
         rates.par_sort_unstable_by_key(|row| row.0);
+        let attempts: Vec<_> = rates
+            .par_iter()
+            .map(|(id, _, _)| {
+                self.core
+                    .physical
+                    .work()
+                    .binary_search_by_key(id, |row| row.job.id)
+                    .ok()
+                    .map_or((0, 0), |index| {
+                        let job = &self.core.physical.work()[index].job;
+                        (job.worker, job.recipe)
+                    })
+            })
+            .collect();
+        let capable = self.work_capability_checks(&attempts);
         let view = if self.tool_requirements.is_empty() {
             None
         } else {
@@ -54,7 +70,8 @@ impl CoreHost {
             .map_or_else(Vec::new, |owner| owner.fatigue.resting());
         let choices: Vec<_> = rates
             .par_iter()
-            .filter_map(|&(id, rate, was_paused)| {
+            .enumerate()
+            .filter_map(|(rate_index, &(id, rate, was_paused))| {
                 let index = self
                     .core
                     .physical
@@ -89,7 +106,11 @@ impl CoreHost {
                         && blocked.binary_search(&person.id).is_err()
                 });
                 let dead = worker.is_none_or(|person| person.health == 0);
-                Some((id, rate, !present || rests || dead || (was_paused && !able)))
+                Some((
+                    id,
+                    rate,
+                    !present || rests || dead || !capable[rate_index] || (was_paused && !able),
+                ))
             })
             .collect();
         let mut unavailable: Vec<_> = self.shared_work.as_ref().map_or_else(Vec::new, |owner| {

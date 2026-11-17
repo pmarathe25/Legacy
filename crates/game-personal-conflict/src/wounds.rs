@@ -10,6 +10,9 @@ pub struct Rules {
     /// Physical force lost per point of wound severity; zero leaves force unchanged.
     #[serde(default)]
     pub force_loss_per_severity: u32,
+    /// Physical work strength lost per point of wound severity.
+    #[serde(default)]
+    pub work_strength_loss_per_severity: u32,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -48,6 +51,16 @@ pub struct Wounds {
 }
 
 impl Wounds {
+    pub fn work_strength_loss(&self, person: u64) -> u32 {
+        self.cases
+            .binary_search_by_key(&person, |case| case.person)
+            .ok()
+            .map_or(0, |index| {
+                self.cases[index]
+                    .severity
+                    .saturating_mul(self.rules.work_strength_loss_per_severity)
+            })
+    }
     pub fn available_force(&self, person: u64, maximum: u32) -> u32 {
         let loss = self
             .cases
