@@ -16,7 +16,8 @@ const SELECTED_DOMAINS: u64 = (1 << 1)
     | (1 << 15)
     | (1 << 16)
     | (1 << 17)
-    | (1 << 18);
+    | (1 << 18)
+    | (1 << 19);
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "phase", rename_all = "snake_case")]
@@ -135,6 +136,11 @@ pub enum DecisionPhase {
         remaining: u64,
     },
     ChosenMarkInscription {
+        meal_people: Vec<u64>,
+        intents: Arc<Vec<CoreChoiceIntent>>,
+        remaining: u64,
+    },
+    ChosenRememberedForm {
         meal_people: Vec<u64>,
         intents: Arc<Vec<CoreChoiceIntent>>,
         remaining: u64,
@@ -328,7 +334,8 @@ impl CoreSchedule {
             | DecisionPhase::ChosenAttack { remaining, .. }
             | DecisionPhase::ChosenWoundCare { remaining, .. }
             | DecisionPhase::ChosenWrittenForm { remaining, .. }
-            | DecisionPhase::ChosenMarkInscription { remaining, .. } => Some(*remaining),
+            | DecisionPhase::ChosenMarkInscription { remaining, .. }
+            | DecisionPhase::ChosenRememberedForm { remaining, .. } => Some(*remaining),
             DecisionPhase::ChosenConstruction { remaining, .. }
             | DecisionPhase::ChosenCarrying { remaining, .. }
             | DecisionPhase::ChosenMaintenance { remaining, .. }
@@ -362,6 +369,7 @@ impl CoreSchedule {
             DecisionPhase::ChosenWoundCare { .. } => Some(16),
             DecisionPhase::ChosenWrittenForm { .. } => Some(17),
             DecisionPhase::ChosenMarkInscription { .. } => Some(18),
+            DecisionPhase::ChosenRememberedForm { .. } => Some(19),
             _ => None,
         };
         if current_domain
@@ -385,7 +393,8 @@ impl CoreSchedule {
         | DecisionPhase::ChosenAttack { intents, .. }
         | DecisionPhase::ChosenWoundCare { intents, .. }
         | DecisionPhase::ChosenWrittenForm { intents, .. }
-        | DecisionPhase::ChosenMarkInscription { intents, .. } = &self.phase
+        | DecisionPhase::ChosenMarkInscription { intents, .. }
+        | DecisionPhase::ChosenRememberedForm { intents, .. } = &self.phase
         {
             let Some(people) = &self.personal_choices else {
                 return Err("selected actions require personal choices".into());
@@ -401,7 +410,7 @@ impl CoreSchedule {
                         || (intent.key.domain != personal_choice::MECHANICAL_DESIGN && intent.assembly.is_some())
                         || (intent.key.domain != personal_choice::MECHANICAL_WATCH && intent.watch.is_some())
                         || (intent.key.domain != personal_choice::PERSONAL_ATTACK && intent.strike.is_some())
-                        || (!matches!(intent.key.domain, personal_choice::WRITTEN_FORM | personal_choice::MARK_INSCRIPTION) && intent.written_form.is_some())
+                        || (!matches!(intent.key.domain, personal_choice::WRITTEN_FORM | personal_choice::MARK_INSCRIPTION | personal_choice::REMEMBERED_FORM) && intent.written_form.is_some())
                         || match (
                             intent.key.domain,
                             intent.movement,
@@ -510,7 +519,7 @@ impl CoreSchedule {
                                     || intent.experiment_value.is_none() || intent.second_movement.is_some()
                                     || strike.actor != intent.actor || strike.target == 0 || strike.target == strike.actor || strike.force == 0
                             }
-                            (17 | 18, None, None, None) => {
+                            (17..=19, None, None, None) => {
                                 let Some(form) = &intent.written_form else { return true; };
                                 intent.health_value.is_some() || intent.tool_damage.is_some() || intent.meal_value.is_some()
                                     || intent.experiment_value != Some(1) || intent.second_movement.is_some()
@@ -561,6 +570,7 @@ impl CoreSchedule {
         | DecisionPhase::ChosenWoundCare { meal_people, .. }
         | DecisionPhase::ChosenWrittenForm { meal_people, .. }
         | DecisionPhase::ChosenMarkInscription { meal_people, .. }
+        | DecisionPhase::ChosenRememberedForm { meal_people, .. }
         | DecisionPhase::ChosenConstruction { meal_people, .. }
         | DecisionPhase::ChosenCarrying { meal_people, .. }
         | DecisionPhase::ChosenMaintenance { meal_people, .. }
@@ -1532,6 +1542,9 @@ impl CoreHost {
                         let has_mark_inscriptions = intents
                             .par_iter()
                             .any(|intent| intent.key.domain == personal_choice::MARK_INSCRIPTION);
+                        let has_remembered_forms = intents
+                            .par_iter()
+                            .any(|intent| intent.key.domain == personal_choice::REMEMBERED_FORM);
                         let random = game_genetics::random(self.core.seed, 0x63686f696365, round);
                         let first = if has_work {
                             random % 4
@@ -1551,6 +1564,7 @@ impl CoreHost {
                             || has_wound_care
                             || has_written_forms
                             || has_mark_inscriptions
+                            || has_remembered_forms
                         {
                             let mut remaining = 0;
                             if has_experiments {
@@ -1585,6 +1599,9 @@ impl CoreHost {
                             }
                             if has_mark_inscriptions {
                                 remaining |= 1 << 18;
+                            }
+                            if has_remembered_forms {
+                                remaining |= 1 << 19;
                             }
                             if self.construction.is_some() {
                                 remaining |= 1 << 1;
@@ -1647,7 +1664,7 @@ impl CoreHost {
                         remaining,
                     } => {
                         let round = self.core.physical.tick().rotate_left(21) ^ offset;
-                        let domain = [1u32, 2, 3, 4, 6, 7, 8, 9, 10, 12, 13, 15, 16, 17, 18]
+                        let domain = [1u32, 2, 3, 4, 6, 7, 8, 9, 10, 12, 13, 15, 16, 17, 18, 19]
                             .into_iter()
                             .filter(|domain| remaining & (1u64 << domain) != 0)
                             .min_by_key(|domain| {
@@ -1747,8 +1764,61 @@ impl CoreHost {
                                 intents,
                                 remaining,
                             },
+                            19 => DecisionPhase::ChosenRememberedForm {
+                                meal_people,
+                                intents,
+                                remaining,
+                            },
                             _ => unreachable!("validated domain"),
                         };
+                    }
+                    DecisionPhase::ChosenRememberedForm {
+                        mut meal_people,
+                        intents,
+                        remaining,
+                    } => {
+                        let mut busy = blocked.to_vec();
+                        busy.extend(meal_people.iter().copied());
+                        busy.par_sort_unstable();
+                        busy.dedup();
+                        let people = schedule.personal_choices.as_ref().expect("choice profile");
+                        let (blocked_choice, mut choices) = attempt!('run, self.choice_blocked(&busy, people, &intents, personal_choice::REMEMBERED_FORM));
+                        let selected: Vec<_> = intents
+                            .par_iter()
+                            .filter(|intent| {
+                                intent.key.domain == personal_choice::REMEMBERED_FORM
+                                    && blocked_choice.binary_search(&intent.actor).is_err()
+                            })
+                            .map(|intent| {
+                                (
+                                    intent.actor,
+                                    intent.key.action,
+                                    intent
+                                        .written_form
+                                        .clone()
+                                        .expect("validated remembered form"),
+                                )
+                            })
+                            .collect();
+                        attempt!('run, self.choose_remembered_forms(&selected));
+                        choices.par_extend(selected.par_iter().map(|(actor, _, _)| {
+                            CoreChoiceEvent {
+                                tick: self.core.physical.tick(),
+                                offset_millis: offset,
+                                actor: *actor,
+                                key: personal_choice::selected_key(&intents, *actor),
+                                outcome: CoreChoiceOutcome::Accepted,
+                            }
+                        }));
+                        meal_people.par_extend(selected.par_iter().map(|(actor, _, _)| *actor));
+                        meal_people.par_sort_unstable();
+                        meal_people.dedup();
+                        if !choices.is_empty() {
+                            choices.par_sort_unstable_by_key(|choice| choice.actor);
+                            run.events.push(CoreRunEvent::PersonalChoices(choices));
+                        }
+                        self.schedule.as_mut().expect("active schedule").phase =
+                            self.after_selected_batch(meal_people, intents, remaining);
                     }
                     DecisionPhase::ChosenMarkInscription {
                         mut meal_people,

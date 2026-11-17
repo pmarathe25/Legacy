@@ -21,6 +21,7 @@ pub(super) const PERSONAL_ATTACK: u32 = 15;
 pub(super) const WOUND_CARE: u32 = 16;
 pub(super) const WRITTEN_FORM: u32 = 17;
 pub(super) const MARK_INSCRIPTION: u32 = 18;
+pub(super) const REMEMBERED_FORM: u32 = 19;
 
 fn index_by_person<T>(rows: &[T], id: u64, key: impl Fn(&T) -> u64) -> Option<usize> {
     rows.first()
@@ -1610,6 +1611,85 @@ impl CoreHost {
                                         health_value: None,
                                     })
                                 })
+                        })
+                })
+                .collect();
+            intents.par_extend(proposed);
+        }
+        if domain.is_none_or(|domain| domain == REMEMBERED_FORM)
+            && let Some(people) = self
+                .schedule
+                .as_ref()
+                .and_then(|schedule| schedule.personal_choices.as_ref())
+            && let Some(forms) = self
+                .social
+                .as_ref()
+                .and_then(|social| social.language.as_ref())
+                .and_then(|language| language.writing.as_ref())
+        {
+            let proposed: Vec<_> = people
+                .par_iter()
+                .flat_map_iter(|person| {
+                    let enabled = person
+                        .preferences
+                        .binary_search_by_key(&REMEMBERED_FORM, |row| row.domain)
+                        .ok()
+                        .is_some_and(|index| person.preferences[index].enabled);
+                    let actor = self
+                        .core
+                        .people
+                        .binary_search_by_key(&person.id, |row| row.id)
+                        .ok()
+                        .map(|index| &self.core.people[index]);
+                    let available = enabled
+                        && busy.binary_search(&person.id).is_err()
+                        && actor.is_some_and(|actor| actor.health > 0 && !actor.controlled);
+                    let full = forms
+                        .minds
+                        .binary_search_by_key(&person.id, |mind| mind.person)
+                        .ok()
+                        .is_some_and(|index| {
+                            forms.minds[index].associations.len() >= forms.capacity
+                        });
+                    let start = forms
+                        .observations
+                        .partition_point(|row| row.person < person.id);
+                    forms.observations[start..]
+                        .iter()
+                        .take_while(move |row| row.person == person.id)
+                        .filter_map(move |observation| {
+                            let sounds = observation.heard.as_ref()?;
+                            let current = forms.marks(person.id, sounds);
+                            if !available
+                                || current == Some(observation.marks.as_slice())
+                                || (full && current.is_none())
+                            {
+                                return None;
+                            }
+                            Some(CoreChoiceIntent {
+                                actor: person.id,
+                                key: Key {
+                                    domain: REMEMBERED_FORM,
+                                    action: observation.page,
+                                },
+                                written_form: Some(game_language::writing::Association {
+                                    sounds: sounds.clone(),
+                                    marks: observation.marks.clone(),
+                                }),
+                                strike: None,
+                                watch: None,
+                                assembly: None,
+                                cultivation: None,
+                                mechanical_load: None,
+                                movement: None,
+                                second_movement: None,
+                                work: None,
+                                experiment: None,
+                                experiment_value: Some(1),
+                                meal_value: None,
+                                tool_damage: None,
+                                health_value: None,
+                            })
                         })
                 })
                 .collect();

@@ -114,6 +114,58 @@ impl CoreHost {
         .map_err(str::to_owned)
     }
 
+    /// Choose an association supported by each person's own retained observation.
+    pub fn choose_remembered_forms(
+        &mut self,
+        choices: &[(u64, u64, game_language::writing::Association)],
+    ) -> Result<(), String> {
+        if choices.par_windows(2).any(|pair| pair[0].0 >= pair[1].0) {
+            return Err("invalid remembered-form choices".into());
+        }
+        if choices.is_empty() {
+            return Ok(());
+        }
+        let language = self
+            .social
+            .as_ref()
+            .and_then(|social| social.language.as_ref())
+            .ok_or("personal language is disabled")?;
+        let forms = language
+            .writing
+            .as_ref()
+            .ok_or("personal writing forms are disabled")?;
+        if choices.par_iter().any(|(person, page, form)| {
+            self.core
+                .people
+                .binary_search_by_key(person, |row| row.id)
+                .ok()
+                .is_none_or(|index| self.core.people[index].health == 0)
+                || forms
+                    .observations
+                    .binary_search_by_key(&(*person, *page), |row| (row.person, row.page))
+                    .ok()
+                    .is_none_or(|index| {
+                        let observation = &forms.observations[index];
+                        observation.heard.as_ref() != Some(&form.sounds)
+                            || observation.marks != form.marks
+                    })
+        }) {
+            return Err("person lacks that remembered observation".into());
+        }
+        let assignments: Vec<_> = choices
+            .par_iter()
+            .map(|(person, _, form)| (*person, form.clone()))
+            .collect();
+        let language = self
+            .social
+            .as_mut()
+            .and_then(|social| social.language.as_mut())
+            .expect("language checked");
+        std::sync::Arc::make_mut(language.writing.as_mut().expect("writing checked"))
+            .assign_batch(&assignments, language.rules.sounds.len())
+            .map_err(str::to_owned)
+    }
+
     /// Run at most one personal social generation per physical tick.
     pub fn meet_autonomously(
         &mut self,
