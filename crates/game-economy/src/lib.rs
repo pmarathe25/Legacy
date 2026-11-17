@@ -1408,7 +1408,7 @@ impl Economy {
     pub fn animal_affinity(&self, person: u64, animal: u64) -> Option<i32> {
         self.animal_feelings.as_ref()?.affinity(person, animal)
     }
-    /// Change one person's own gathering preference and chosen site.
+    /// Change one person's own gathering preference for a particular site.
     pub fn set_gathering_choice(
         &mut self,
         person: u64,
@@ -1427,8 +1427,11 @@ impl Economy {
         if !next.nodes.iter().any(|site| site.id == node) {
             return Err("unknown resource site".into());
         }
-        if let Some(policy) = next.policies.iter_mut().find(|p| p.person == person) {
-            policy.node = node;
+        if let Some(policy) = next
+            .policies
+            .iter_mut()
+            .find(|p| p.person == person && p.node == node)
+        {
             policy.willing = willing;
         } else {
             next.policies.push(GatherPolicy {

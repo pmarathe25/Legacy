@@ -5,6 +5,7 @@ impl CoreHost {
     pub(super) fn plan_gathering(
         &self,
         occupied: &[u64],
+        external: &[u64],
         cultivation: Option<&game_economy_agriculture::Plan>,
         irrigation: Option<&game_economy_agriculture::irrigation::Plan>,
         base: u64,
@@ -14,7 +15,22 @@ impl CoreHost {
         };
         let rest = self.blocked_with_rest(occupied);
         let occupied = rest.as_deref().unwrap_or(occupied);
-        let mut busy = occupied.to_vec();
+        let protected = self.blocked_with_rest(external);
+        let protected = protected.as_deref().unwrap_or(external);
+        let pending = self
+            .schedule
+            .as_ref()
+            .map_or(&[][..], |schedule| schedule.pending_gathering.as_slice());
+        let mut busy: Vec<_> = occupied
+            .par_iter()
+            .copied()
+            .filter(|person| {
+                protected.binary_search(person).is_ok()
+                    || pending
+                        .binary_search_by_key(person, |row| row.person)
+                        .is_err()
+            })
+            .collect();
         if let Some(plan) = cultivation {
             busy.par_extend(
                 plan.actors
@@ -43,7 +59,7 @@ impl CoreHost {
             .checked_add(1)
             .ok_or("tick overflow")?;
         let view = self.core.physical.view(tick)?;
-        let plan = crate::gathering::Context {
+        let context = crate::gathering::Context {
             owner,
             people: &self.core.people,
             opinions: self.opinions.as_ref(),
@@ -55,8 +71,15 @@ impl CoreHost {
             tick,
             manual: None,
             personal_output: true,
-        }
-        .prepare(base)?;
+        };
+        let profiled: Vec<_> = self
+            .schedule
+            .as_ref()
+            .and_then(|schedule| schedule.personal_choices.as_ref())
+            .map_or_else(Vec::new, |people| {
+                people.par_iter().map(|person| person.id).collect()
+            });
+        let plan = context.prepare_selected(base, &profiled, pending)?;
         let outputs = plan.carried_outputs(owner);
         Ok(Some((plan, outputs)))
     }

@@ -2138,17 +2138,18 @@ impl CoreHost {
         }
         let external = occupied;
         if next_schedule.is_none()
-            && self
-                .schedule
-                .as_ref()
-                .is_some_and(|schedule| !schedule.pending_cultivation.is_empty())
+            && self.schedule.as_ref().is_some_and(|schedule| {
+                !schedule.pending_cultivation.is_empty() || !schedule.pending_gathering.is_empty()
+            })
         {
             return Err("pending cultivation requires scheduled settlement".into());
         }
         let pending_busy = self
             .schedule
             .as_ref()
-            .filter(|schedule| !schedule.pending_cultivation.is_empty())
+            .filter(|schedule| {
+                !schedule.pending_cultivation.is_empty() || !schedule.pending_gathering.is_empty()
+            })
             .map(|schedule| {
                 let mut busy = occupied.to_vec();
                 busy.par_extend(
@@ -2157,6 +2158,7 @@ impl CoreHost {
                         .par_iter()
                         .map(|row| row.person),
                 );
+                busy.par_extend(schedule.pending_gathering.par_iter().map(|row| row.person));
                 busy.par_sort_unstable();
                 busy.dedup();
                 busy
@@ -2310,6 +2312,7 @@ impl CoreHost {
         };
         let gathering = self.plan_gathering(
             occupied,
+            external,
             cultivation.as_ref(),
             irrigation_plan.as_ref(),
             gathering_base,
@@ -2678,6 +2681,37 @@ impl CoreHost {
                     })
                     .collect()
             });
+        let gathering_outcomes = gathering
+            .as_ref()
+            .map_or_else(Vec::new, |(plan, _)| plan.outcomes(draft.events()));
+        let settled_gathering: Vec<_> = self.schedule.as_ref().map_or_else(Vec::new, |schedule| {
+            schedule
+                .pending_gathering
+                .par_iter()
+                .map(|intent| {
+                    let outcome = gathering_outcomes
+                        .binary_search_by_key(&intent.person, |row| row.0)
+                        .ok()
+                        .map_or(CoreChoiceOutcome::Stale, |index| {
+                            if gathering_outcomes[index].1 {
+                                CoreChoiceOutcome::Accepted
+                            } else {
+                                CoreChoiceOutcome::Denied
+                            }
+                        });
+                    CoreChoiceEvent {
+                        tick: self.core.physical.tick(),
+                        offset_millis: self.core.physical.tick_millis(),
+                        actor: intent.person,
+                        key: Some(game_personal_choice::Key {
+                            domain: personal_choice::GATHERING,
+                            action: intent.node,
+                        }),
+                        outcome,
+                    }
+                })
+                .collect()
+        });
         let (mut agriculture, mut claims) =
             self.stage_cultivation(cultivation, draft.events(), care_uses)?;
         if let Some(plan) = amendment_plan {
@@ -3006,6 +3040,8 @@ impl CoreHost {
             next.personal_choices = current.personal_choices.clone();
             next.pending_cultivation.clear();
             next.settled_cultivation = settled_cultivation;
+            next.pending_gathering.clear();
+            next.settled_gathering = settled_gathering;
         }
         self.schedule = None;
         Ok(events)

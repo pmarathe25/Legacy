@@ -22,6 +22,7 @@ pub(super) const WOUND_CARE: u32 = 16;
 pub(super) const WRITTEN_FORM: u32 = 17;
 pub(super) const MARK_INSCRIPTION: u32 = 18;
 pub(super) const REMEMBERED_FORM: u32 = 19;
+pub(super) const GATHERING: u32 = 20;
 
 fn index_by_person<T>(rows: &[T], id: u64, key: impl Fn(&T) -> u64) -> Option<usize> {
     rows.first()
@@ -93,6 +94,9 @@ pub struct CoreChoiceIntent {
 
 impl CoreChoiceIntent {
     pub(super) fn magnitude(&self) -> i64 {
+        if self.key.domain == GATHERING {
+            return 1;
+        }
         if self.cultivation.is_some() {
             return 1;
         }
@@ -145,6 +149,32 @@ pub(super) fn intention_permitted(person: &Person, intent: &CoreChoiceIntent) ->
 }
 
 impl CoreHost {
+    /// Withdraw a person's pending gathering intention before settlement.
+    pub fn cancel_gathering_intention(
+        &mut self,
+        person: u64,
+    ) -> Result<Option<CoreChoiceEvent>, String> {
+        let tick = self.core.physical.tick();
+        let offset_millis = self.core.elapsed_millis().ok_or("no physical interval")?;
+        let schedule = self.schedule.as_mut().ok_or("no core schedule")?;
+        let Ok(index) = schedule
+            .pending_gathering
+            .binary_search_by_key(&person, |row| row.person)
+        else {
+            return Ok(None);
+        };
+        let intention = schedule.pending_gathering.remove(index);
+        Ok(Some(CoreChoiceEvent {
+            tick,
+            offset_millis,
+            actor: person,
+            key: Some(Key {
+                domain: GATHERING,
+                action: intention.node,
+            }),
+            outcome: CoreChoiceOutcome::Cancelled,
+        }))
+    }
     /// Withdraw one person's pending cultivation intention before settlement.
     pub fn cancel_cultivation_intention(
         &mut self,
@@ -414,6 +444,7 @@ impl CoreHost {
         let schedule = self.schedule.as_ref().ok_or("no core schedule")?;
         if !matches!(schedule.phase, DecisionPhase::Meals)
             || !schedule.pending_cultivation.is_empty()
+            || !schedule.pending_gathering.is_empty()
         {
             return Err("finish the pending decision before changing personal choices".into());
         }
@@ -457,6 +488,7 @@ impl CoreHost {
                     .par_iter()
                     .map(|row| row.person),
             );
+            busy.par_extend(schedule.pending_gathering.par_iter().map(|row| row.person));
         }
         busy.par_extend(
             self.core
@@ -535,6 +567,53 @@ impl CoreHost {
         (actors, events)
     }
 
+    pub(super) fn queue_gathering(
+        &mut self,
+        intents: &[CoreChoiceIntent],
+    ) -> (Vec<u64>, Vec<CoreChoiceEvent>) {
+        let tick = self.core.physical.tick();
+        let offset = self.core.elapsed_millis().expect("active interval");
+        let Some(owner) = &self.gathering else {
+            return (Vec::new(), Vec::new());
+        };
+        let nodes: std::collections::HashMap<_, _> =
+            owner.nodes.par_iter().map(|node| (node.id, node)).collect();
+        let mut selected: Vec<_> = intents
+            .par_iter()
+            .filter(|intent| intent.key.domain == GATHERING)
+            .filter_map(|intent| {
+                let node = nodes.get(&intent.key.action)?;
+                Some(crate::gathering::Opportunity {
+                    person: intent.actor,
+                    node: node.id,
+                    good: node.good,
+                    quantity: node.yield_per_action,
+                })
+            })
+            .collect();
+        selected.par_sort_unstable_by_key(|row| row.person);
+        let actors = selected.par_iter().map(|row| row.person).collect();
+        let events = selected
+            .par_iter()
+            .map(|row| CoreChoiceEvent {
+                tick,
+                offset_millis: offset,
+                actor: row.person,
+                key: Some(Key {
+                    domain: GATHERING,
+                    action: row.node,
+                }),
+                outcome: CoreChoiceOutcome::Pending,
+            })
+            .collect();
+        let schedule = self.schedule.as_mut().expect("active schedule");
+        schedule.pending_gathering.par_extend(selected);
+        schedule
+            .pending_gathering
+            .par_sort_unstable_by_key(|row| row.person);
+        (actors, events)
+    }
+
     /// Read candidates against one opening state; no resource is reserved here.
     fn choice_candidates(
         &self,
@@ -566,6 +645,11 @@ impl CoreHost {
                 && self
                     .local_transport
                     .as_ref()
+                    .is_some_and(|owner| !owner.policies.is_empty()))
+            || (domain.is_none_or(|domain| domain == GATHERING)
+                && self
+                    .gathering
+                    .as_ref()
                     .is_some_and(|owner| !owner.policies.is_empty()));
         let view = if needs_view {
             Some(self.core.physical.view(tick)?)
@@ -573,6 +657,52 @@ impl CoreHost {
             None
         };
         let busy = self.choice_busy(blocked);
+        let gathering: Vec<_> = if domain.is_none_or(|domain| domain == GATHERING) {
+            self.gathering
+                .as_ref()
+                .filter(|owner| !owner.policies.is_empty())
+                .map_or_else(Vec::new, |owner| {
+                    crate::gathering::Context {
+                        owner,
+                        people: &self.core.people,
+                        opinions: self.opinions.as_ref(),
+                        busy: &busy,
+                        goods: self.core.physical.goods(),
+                        view: view.as_ref().expect("gathering view"),
+                        tick_millis: self.core.physical.tick_millis(),
+                        seed: self.core.seed,
+                        tick,
+                        manual: None,
+                        personal_output: true,
+                    }
+                    .opportunities(u32::MAX)
+                    .into_par_iter()
+                    .map(|opportunity| CoreChoiceIntent {
+                        actor: opportunity.person,
+                        key: Key {
+                            domain: GATHERING,
+                            action: opportunity.node,
+                        },
+                        written_form: None,
+                        strike: None,
+                        watch: None,
+                        assembly: None,
+                        cultivation: None,
+                        mechanical_load: None,
+                        movement: None,
+                        second_movement: None,
+                        work: None,
+                        experiment: None,
+                        experiment_value: None,
+                        meal_value: None,
+                        tool_damage: None,
+                        health_value: None,
+                    })
+                    .collect()
+                })
+        } else {
+            Vec::new()
+        };
         let cultivation = if domain.is_none_or(|domain| domain == CULTIVATION) {
             let mut eligible: Vec<_> = self
                 .schedule
@@ -1389,6 +1519,7 @@ impl CoreHost {
         intents.par_extend(food_pickups?);
         intents.par_extend(treatments?);
         intents.par_extend(cultivation);
+        intents.par_extend(gathering);
         intents.par_extend(mechanical_loads()?);
         intents.par_extend(mechanical_designs()?);
         intents.par_extend(mechanical_watching()?);

@@ -62,25 +62,30 @@ pub fn enroll(owner: Option<&mut Gathering>, family: Option<&crate::Families>, t
         return;
     };
     let mut preferences: Vec<_> = owner.policies.par_iter().collect();
-    preferences.par_sort_unstable_by_key(|p| p.person);
+    preferences.par_sort_unstable_by_key(|p| (p.person, p.node));
     let newborns: Vec<_> = family
         .members
         .par_iter()
         .filter(|m| m.born == Some(tick))
-        .filter_map(|m| {
-            let parent = m.parents.iter().find_map(|id| {
-                preferences
-                    .binary_search_by_key(id, |p| p.person)
-                    .ok()
-                    .map(|i| preferences[i])
-            })?;
-            Some(Policy {
-                person: m.id,
-                node: parent.node,
-                willing: parent.willing,
-                pressured_by: None,
-                pressure_threshold: None,
-            })
+        .flat_map_iter(|m| {
+            let parent = m
+                .parents
+                .iter()
+                .find(|id| preferences.binary_search_by_key(*id, |p| p.person).is_ok());
+            parent
+                .into_iter()
+                .flat_map(|id| {
+                    let start = preferences.partition_point(|policy| policy.person < *id);
+                    let end = preferences.partition_point(|policy| policy.person <= *id);
+                    preferences[start..end].iter().map(|policy| Policy {
+                        person: m.id,
+                        node: policy.node,
+                        willing: policy.willing,
+                        pressured_by: None,
+                        pressure_threshold: None,
+                    })
+                })
+                .collect::<Vec<_>>()
         })
         .collect();
     owner.policies.par_extend(newborns);
@@ -93,7 +98,11 @@ impl Gathering {
         view: &View,
     ) -> Result<(), String> {
         let mut nodes: Vec<_> = self.nodes.par_iter().map(|n| n.id).collect();
-        let mut policies: Vec<_> = self.policies.par_iter().map(|p| p.person).collect();
+        let mut policies: Vec<_> = self
+            .policies
+            .par_iter()
+            .map(|p| (p.person, p.node))
+            .collect();
         nodes.par_sort_unstable();
         policies.par_sort_unstable();
         if nodes.first() == Some(&0)
@@ -131,6 +140,15 @@ pub struct Plan {
     pub actions: Vec<Transaction>,
     records: Vec<(u64, u64, u64, u64)>,
 }
+/// One person's possible local gathering action before resource arbitration.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Opportunity {
+    pub person: u64,
+    pub node: u64,
+    pub good: u32,
+    pub quantity: u64,
+}
 pub struct Context<'a> {
     pub owner: &'a Gathering,
     pub people: &'a [Person],
@@ -146,27 +164,25 @@ pub struct Context<'a> {
     pub personal_output: bool,
 }
 impl Context<'_> {
-    pub fn prepare(&self, base: u64) -> Result<Plan, String> {
+    /// Expose individual alternatives without reserving a shared resource.
+    pub fn opportunities(&self, max_hunger: u32) -> Vec<Opportunity> {
         let mut nodes: Vec<_> = self.owner.nodes.par_iter().collect();
-        nodes.par_sort_unstable_by_key(|n| n.id);
-        let node = |id| {
-            nodes
-                .binary_search_by_key(&id, |n| n.id)
-                .ok()
-                .map(|i| nodes[i])
-        };
+        nodes.par_sort_unstable_by_key(|node| node.id);
         let opinions = self.opinions.map(Opinions::index);
-        let mut candidates: Vec<_> = self
+        let mut opportunities: Vec<_> = self
             .owner
             .policies
             .par_iter()
             .filter_map(|policy| {
                 let person = self
                     .people
-                    .binary_search_by_key(&policy.person, |p| p.id)
+                    .binary_search_by_key(&policy.person, |person| person.id)
                     .ok()
-                    .map(|i| &self.people[i])?;
-                let resource = node(policy.node)?;
+                    .map(|index| &self.people[index])?;
+                let resource = nodes
+                    .binary_search_by_key(&policy.node, |node| node.id)
+                    .ok()
+                    .map(|index| nodes[index])?;
                 let stock = self.view.container(Place::Stock {
                     region: resource.region,
                     good: resource.good,
@@ -174,15 +190,10 @@ impl Context<'_> {
                 let capacity = if self.personal_output {
                     self.view
                         .container(Place::Person(person.id))
-                        .map_or(0, |holding| holding.capacity.saturating_sub(holding.used))
+                        .map_or(0, |holder| holder.capacity.saturating_sub(holder.used))
                 } else {
                     stock.capacity.saturating_sub(stock.used)
                 };
-                if resource.available < resource.yield_per_action
-                    || capacity < resource.yield_per_action
-                {
-                    return None;
-                }
                 let pressured = policy
                     .pressured_by
                     .zip(policy.pressure_threshold)
@@ -192,17 +203,89 @@ impl Context<'_> {
                             fear.saturating_add(obligation) >= threshold
                         })
                     });
-                (person.health > 0
+                (resource.available >= resource.yield_per_action
+                    && capacity >= resource.yield_per_action
+                    && person.health > 0
                     && !person.controlled
                     && person.region == Some(resource.region)
-                    && person.hunger <= self.owner.max_hunger
+                    && person.hunger <= max_hunger
                     && self.busy.binary_search(&person.id).is_err()
                     && (policy.willing || pressured))
-                    .then_some((
-                        resource.id,
-                        game_genetics::random(self.seed ^ resource.id, person.id, self.tick),
-                        person.id,
-                    ))
+                    .then_some(Opportunity {
+                        person: person.id,
+                        node: resource.id,
+                        good: resource.good,
+                        quantity: resource.yield_per_action,
+                    })
+            })
+            .collect();
+        opportunities.par_sort_unstable_by_key(|row| (row.person, row.node));
+        opportunities
+    }
+
+    pub fn prepare(&self, base: u64) -> Result<Plan, String> {
+        self.prepare_selected(base, &[], &[])
+    }
+
+    /// Only exact, previously selected intentions may act for profiled people.
+    /// Other actors retain the legacy policy path until they receive profiles.
+    pub fn prepare_selected(
+        &self,
+        base: u64,
+        profiled: &[u64],
+        selected: &[Opportunity],
+    ) -> Result<Plan, String> {
+        let mut nodes: Vec<_> = self.owner.nodes.par_iter().collect();
+        nodes.par_sort_unstable_by_key(|n| n.id);
+        let node = |id| {
+            nodes
+                .binary_search_by_key(&id, |n| n.id)
+                .ok()
+                .map(|i| nodes[i])
+        };
+        let mut eligible: Vec<_> = self
+            .opportunities(if profiled.is_empty() {
+                self.owner.max_hunger
+            } else {
+                u32::MAX
+            })
+            .into_par_iter()
+            .filter(|opportunity| {
+                if profiled.binary_search(&opportunity.person).is_ok() {
+                    selected
+                        .binary_search_by_key(&opportunity.person, |row| row.person)
+                        .ok()
+                        .is_some_and(|index| selected[index] == *opportunity)
+                } else {
+                    self.people
+                        .binary_search_by_key(&opportunity.person, |row| row.id)
+                        .ok()
+                        .is_some_and(|index| self.people[index].hunger <= self.owner.max_hunger)
+                }
+            })
+            .collect();
+        // An unprofiled legacy actor with alternatives has not made a choice.
+        if eligible
+            .par_windows(2)
+            .any(|pair| pair[0].person == pair[1].person)
+        {
+            eligible = eligible
+                .par_chunk_by(|a, b| a.person == b.person)
+                .filter_map(|group| (group.len() == 1).then_some(group[0]))
+                .collect();
+        }
+        let mut candidates: Vec<_> = eligible
+            .into_par_iter()
+            .map(|opportunity| {
+                (
+                    opportunity.node,
+                    game_genetics::random(
+                        self.seed ^ opportunity.node,
+                        opportunity.person,
+                        self.tick,
+                    ),
+                    opportunity.person,
+                )
             })
             .collect();
         if let Some((actor, resource)) = self.manual {
@@ -280,6 +363,31 @@ impl Context<'_> {
     }
 }
 impl Plan {
+    pub fn outcomes(&self, events: &Events) -> Vec<(u64, bool)> {
+        let decisions: std::collections::HashMap<_, _> = events
+            .physical_actions
+            .par_iter()
+            .map(|row| (row.id, row.accepted))
+            .collect();
+        let accepted: HashSet<_> = self
+            .records
+            .par_iter()
+            .filter_map(|row| {
+                decisions
+                    .get(&row.1)
+                    .copied()
+                    .unwrap_or(false)
+                    .then_some(row.3)
+            })
+            .collect();
+        let mut outcomes: Vec<_> = self
+            .actors
+            .par_iter()
+            .map(|&actor| (actor, accepted.contains(&actor)))
+            .collect();
+        outcomes.par_sort_unstable_by_key(|row| row.0);
+        outcomes
+    }
     pub fn carried_outputs(&self, owner: &Gathering) -> Vec<game_lot_runtime::Gathered> {
         let mut nodes: Vec<_> = owner.nodes.par_iter().collect();
         nodes.par_sort_unstable_by_key(|node| node.id);

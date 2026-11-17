@@ -4594,6 +4594,67 @@ fn food_pickups_are_personal_choices_with_shared_stock_and_claim_consequences() 
 }
 
 #[test]
+fn gathering_is_chosen_then_settles_contended_physical_resources() {
+    use game_economy::core_interval::{CoreChoiceOutcome, CoreHost, CoreRunEvent};
+    use game_lots::Place;
+    fn run(workers: usize) -> serde_json::Value {
+        rayon::ThreadPoolBuilder::new().num_threads(workers).build().unwrap().install(|| {
+            let root = root();
+            let host = game_economy_cli::core_scenario(&root.join("content/scenarios/economy-core-personal-choices.toml"), &root.join("content")).unwrap();
+            let mut state = host.snapshot();
+            let grain = state.core.physical.goods.iter().find(|good| good.name == "grain").unwrap().id;
+            state.gathering = Some(game_economy::Gathering {
+                max_hunger: 20, inherit_births: false,
+                nodes: vec![game_economy::ResourceNode { id: 1, region: 1, good: grain, available: 2, capacity: 2, regrowth: 0, seasonal: false, yield_per_action: 2 }, game_economy::ResourceNode { id: 2, region: 1, good: grain, available: 2, capacity: 2, regrowth: 0, seasonal: false, yield_per_action: 2 }],
+                policies: (1..=3).map(|person| game_economy::GatherPolicy { person, node: 1, willing: true, pressured_by: None, pressure_threshold: None }).chain(std::iter::once(game_economy::GatherPolicy { person: 1, node: 2, willing: true, pressured_by: None, pressure_threshold: None })).collect(),
+            });
+            let people = std::sync::Arc::make_mut(state.schedule.as_mut().unwrap().personal_choices.as_mut().unwrap());
+            for person in people.iter_mut() {
+                person.preferences.push(game_personal_choice::Preference { domain: 20, enabled: person.id != 3, bias: 100, weight: 1000 });
+            }
+            people[0].actions.push(game_personal_choice::ActionPreference { key: game_personal_choice::Key { domain: 20, action: 1 }, enabled: true, bias: 100 });
+            let mut alternative = state.clone();
+            let people = std::sync::Arc::make_mut(alternative.schedule.as_mut().unwrap().personal_choices.as_mut().unwrap());
+            people[0].actions[0].key.action = 2;
+            let mut alternative = CoreHost::resume(alternative).unwrap();
+            assert_eq!(alternative.preview_personal_choices(&[]).unwrap().0.iter().find(|row| row.actor == 1).unwrap().key.action, 2);
+            assert_eq!(alternative.advance_continuous(900_000, &[]).unwrap().failure, None);
+            assert_eq!(alternative.snapshot().gathering.unwrap().nodes[1].available, 0);
+            let mut host = CoreHost::resume(state).unwrap();
+            let selected = host.preview_personal_choices(&[]).unwrap().0;
+            assert!(selected.iter().any(|row| row.actor == 1 && row.key.domain == 20));
+            assert!(selected.iter().any(|row| row.actor == 2 && row.key.domain == 20));
+            assert!(!selected.iter().any(|row| row.actor == 3 && row.key.domain == 20));
+            assert_eq!(host.advance_continuous(1, &[]).unwrap().failure, None);
+            let pending = host.snapshot();
+            assert_eq!(pending.schedule.as_ref().unwrap().pending_gathering.len(), 2);
+            let mut cancelled = CoreHost::resume(pending.clone()).unwrap();
+            assert_eq!(cancelled.cancel_gathering_intention(1).unwrap().unwrap().outcome, CoreChoiceOutcome::Cancelled);
+            assert_eq!(cancelled.advance_continuous(899_999, &[]).unwrap().failure, None);
+            let person_one = cancelled.snapshot().core.physical.custody.containers.iter().find(|row| row.place == Place::Person(1)).unwrap().clone();
+            assert!(!person_one.lots.iter().any(|lot| lot.good == grain));
+            let mut restored = CoreHost::resume(serde_json::from_str(&serde_json::to_string(&pending).unwrap()).unwrap()).unwrap();
+            let mut changed = pending.clone();
+            changed.gathering.as_mut().unwrap().policies[0].willing = false;
+            let mut changed = CoreHost::resume(changed).unwrap();
+            let changed_run = changed.advance_continuous(899_999, &[]).unwrap();
+            assert_eq!(changed_run.failure, None);
+            assert!(changed_run.events.iter().any(|event| matches!(event, CoreRunEvent::PersonalChoices(rows) if rows.iter().any(|row| row.actor == 1 && row.outcome == CoreChoiceOutcome::Stale))));
+            let result = host.advance_continuous(899_999, &[]).unwrap();
+            assert_eq!(result.failure, None);
+            assert_eq!(restored.advance_continuous(899_999, &[]).unwrap().failure, None);
+            assert_eq!(host.snapshot(), restored.snapshot());
+            let events: Vec<_> = result.events.iter().filter_map(|event| match event { CoreRunEvent::PersonalChoices(rows) => Some(rows), _ => None }).flatten().filter(|row| row.key.is_some_and(|key| key.domain == 20)).collect();
+            assert_eq!(events.iter().filter(|row| row.outcome == CoreChoiceOutcome::Accepted).count(), 1);
+            assert_eq!(events.iter().filter(|row| row.outcome == CoreChoiceOutcome::Denied).count(), 1);
+            assert_eq!(host.snapshot().gathering.unwrap().nodes[0].available, 0);
+            serde_json::to_value(host.snapshot()).unwrap()
+        })
+    }
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
 fn personal_supply_is_chosen_then_enables_repair_and_resume() {
     use game_economy::core_interval::{CoreHost, CoreRunEvent};
     use game_lots::Place;

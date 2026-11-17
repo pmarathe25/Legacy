@@ -90,3 +90,11 @@ the specific learners. This does not establish that they obtained tools or
 were able to complete that work. `recipe-learning.ndjson` and
 `recipe-learning-debug.ndjson` used an earlier incorrect event-tick filter and
 underreported these events; their saved knowledge states are unaffected.
+
+The 240-hour `gathering-choice.ndjson` diagnostic adds independent gathering
+choices and an optional timber-gathering/deposit path for two people. At hour
+240, regional timber stock was 3,086 (initially 3,000), while maximum human
+hunger reached 109. This is a different scenario, not a controlled comparison
+or evidence of long-term stability. Gathering strength requirements remain
+unmodeled, so a young person's willingness is not yet enough to establish
+their physical ability to gather.

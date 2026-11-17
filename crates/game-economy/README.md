@@ -339,6 +339,17 @@ For affinity-guided meetings, each person can give affinity a positive, negative
 
 Individuals can gather finite or renewable local resources, subject to personal choice or social pressure and actual stock capacity. Only successfully delivered output depletes a site or supports a personal claim. Health can recover under authored rules, with rest providing an additional benefit. Purpose deprivation tracks completed work and blocked goals.
 
+In the interval host, people with personal-choice profiles can consider their
+own configured gathering sites under domain `20`, including specific site
+preferences. A selected intention waits for the next physical boundary and can
+be cancelled; depletion, a changed policy, lack of capacity, and competing
+gatherers are resolved at settlement. Output enters the gatherer's actual
+custody. A person with a profile who chooses something else does not gather
+automatically. Unprofiled scenarios retain their earlier policy behavior;
+when an unprofiled person has multiple eligible sites, the legacy planner
+does not choose one for them. Newborns can inherit gathering inclinations when
+configured, but still need an individual choice profile to select an action.
+
 Optional individual wildlife grazes the same finite resource nodes after staged human gathering and regrowth. Each animal ages, feeds, can starve, and may reproduce with a local mate; young inherit diploid traits from actual parents. The animal generation and resource deductions commit atomically. Controlled people can observe local animals without seeing their hidden genetics or pregnancies.
 
 People can ask for food, give supplies, or provide medical care through real local contact and consumed medicine. Requests expire and do not require a response; actual food delivery satisfies them. Individual willingness and feelings influence autonomous help; treatment can expose a caregiver to infection and does not compel later cooperation. All distinct successful physical contacts can transmit disease, including several contacts involving the same person at one boundary.

@@ -228,6 +228,11 @@ pub struct CoreSchedule {
     /// Outcomes staged by the boundary and emitted by the scheduler.
     #[serde(skip)]
     pub settled_cultivation: Vec<CoreChoiceEvent>,
+    /// Chosen gathering intentions awaiting physical settlement.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pending_gathering: Vec<crate::gathering::Opportunity>,
+    #[serde(skip)]
+    pub settled_gathering: Vec<CoreChoiceEvent>,
     /// Optional authored inclinations for actual newborns.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub birth_choices: Option<game_personal_choice::BirthProfile>,
@@ -306,6 +311,36 @@ impl CoreSchedule {
                 })
             {
                 return Err("invalid pending cultivation".into());
+            }
+        }
+        if !self.pending_gathering.is_empty() {
+            let people = self
+                .personal_choices
+                .as_ref()
+                .ok_or("pending gathering requires personal choices")?;
+            if self
+                .pending_gathering
+                .par_windows(2)
+                .any(|rows| rows[0].person >= rows[1].person)
+                || self.pending_gathering.par_iter().any(|row| {
+                    row.person == 0
+                        || row.node == 0
+                        || row.good == 0
+                        || row.quantity == 0
+                        || self
+                            .pending_cultivation
+                            .binary_search_by_key(&row.person, |intent| intent.person)
+                            .is_ok()
+                        || people
+                            .binary_search_by_key(&row.person, |person| person.id)
+                            .is_err()
+                        || core
+                            .people
+                            .binary_search_by_key(&row.person, |person| person.id)
+                            .is_err()
+                })
+            {
+                return Err("invalid pending gathering".into());
             }
         }
         if let Some(profile) = &self.birth_choices {
@@ -787,6 +822,8 @@ impl CoreHost {
             personal_choices: None,
             pending_cultivation: Vec::new(),
             settled_cultivation: Vec::new(),
+            pending_gathering: Vec::new(),
+            settled_gathering: Vec::new(),
             birth_choices: None,
         };
         schedule.validate(&self.core)?;
@@ -1480,10 +1517,22 @@ impl CoreHost {
                         if !pending.is_empty() {
                             run.events.push(CoreRunEvent::PersonalChoices(pending));
                         }
+                        let (actors, pending) = self.queue_gathering(&intents);
+                        meal_people.par_extend(actors);
+                        meal_people.par_sort_unstable();
+                        meal_people.dedup();
+                        if !pending.is_empty() {
+                            run.events.push(CoreRunEvent::PersonalChoices(pending));
+                        }
                         let intents = Arc::new(
                             intents
                                 .into_par_iter()
-                                .filter(|intent| intent.key.domain != personal_choice::CULTIVATION)
+                                .filter(|intent| {
+                                    !matches!(
+                                        intent.key.domain,
+                                        personal_choice::CULTIVATION | personal_choice::GATHERING
+                                    )
+                                })
                                 .collect::<Vec<_>>(),
                         );
                         if !idle.is_empty() {
@@ -3053,6 +3102,13 @@ impl CoreHost {
                     .events
                     .push(CoreRunEvent::PersonalChoices(std::mem::take(
                         &mut schedule.settled_cultivation,
+                    )));
+            }
+            if !schedule.settled_gathering.is_empty() {
+                combined
+                    .events
+                    .push(CoreRunEvent::PersonalChoices(std::mem::take(
+                        &mut schedule.settled_gathering,
                     )));
             }
             let Some(boundaries) = combined.boundaries.checked_add(1) else {
