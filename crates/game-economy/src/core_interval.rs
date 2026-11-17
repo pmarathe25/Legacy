@@ -317,7 +317,8 @@ impl CoreInterval {
                     .work()
                     .binary_search_by_key(&id, |row| row.job.id)
                     .map_err(|_| "missing interval work")?;
-                self.physical.work()[index].completion_after(rate, quantum)
+                self.physical.work()[index]
+                    .completion_after(rate, self.physical.work_rate_period_millis())
             })
             .try_reduce(|| None, |left, right| Ok(earliest(left, right)))
             .map_err(str::to_owned)?;

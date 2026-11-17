@@ -197,6 +197,7 @@ fn fixture(perishable: bool, output_quantity: u64) -> Runtime {
             }],
         }],
         tick_millis: 1000,
+        work_rate_period_millis: None,
         work: vec![],
         work_interval: None,
     })
@@ -214,6 +215,64 @@ fn fixture(perishable: bool, output_quantity: u64) -> Runtime {
         )
         .unwrap();
     runtime
+}
+
+#[test]
+fn explicit_work_period_survives_physical_subdivision_and_resume() {
+    fn run(quantum: u64, workers: usize) -> (u64, u64, u64) {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut saved = fixture(false, 1).snapshot();
+                saved.tick_millis = quantum;
+                saved.work_rate_period_millis = Some(1000);
+                let mut runtime = Runtime::compile(saved).unwrap();
+                let mut elapsed = 0;
+                while elapsed < 500 {
+                    if runtime.work_interval().is_none() {
+                        runtime.begin_work_interval(&[(1, 1)]).unwrap();
+                    }
+                    let amount = 50.min(500 - elapsed);
+                    assert_eq!(runtime.progress_work_interval(amount).unwrap(), amount);
+                    elapsed += amount;
+                    if elapsed == 250 {
+                        let json = serde_json::to_string(&runtime.snapshot()).unwrap();
+                        runtime = Runtime::compile(serde_json::from_str(&json).unwrap()).unwrap();
+                    }
+                    if runtime.work_interval().unwrap().elapsed_millis == quantum {
+                        runtime.settle_work_interval(7).unwrap();
+                    }
+                }
+                let work = &runtime.work()[0];
+                (
+                    work.job.remaining,
+                    work.progress_remainder,
+                    work.completion_after(1, runtime.work_rate_period_millis())
+                        .unwrap()
+                        .unwrap() as u64,
+                )
+            })
+    }
+    assert_eq!(run(1000, 1), (1, 500, 500));
+    assert_eq!(run(100, 4), run(1000, 1));
+    let mut invalid = fixture(false, 1).snapshot();
+    invalid.work_rate_period_millis = Some(0);
+    assert!(Runtime::compile(invalid).is_err());
+}
+
+#[test]
+fn ordinary_boundary_advance_uses_explicit_work_period() {
+    let mut saved = fixture(false, 1).snapshot();
+    saved.work_rate_period_millis = Some(2000);
+    let mut runtime = Runtime::compile(saved).unwrap();
+    assert!(runtime.advance(&[(1, 1)], 7).unwrap().finished.is_empty());
+    assert_eq!(runtime.work()[0].job.remaining, 1);
+    assert_eq!(runtime.work()[0].progress_remainder, 1000);
+    let saved = serde_json::to_string(&runtime.snapshot()).unwrap();
+    runtime = Runtime::compile(serde_json::from_str(&saved).unwrap()).unwrap();
+    assert_eq!(runtime.advance(&[(1, 1)], 7).unwrap().finished, vec![1]);
 }
 
 #[test]

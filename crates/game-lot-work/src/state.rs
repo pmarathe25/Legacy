@@ -19,7 +19,7 @@ pub enum Phase {
 pub struct Work {
     pub job: Job,
     pub phase: Phase,
-    /// Fractional work already accumulated, in units of the time quantum.
+    /// Fractional work numerator over the configured work-rate period.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub progress_remainder: u64,
 }
@@ -106,6 +106,10 @@ pub struct Snapshot {
     pub goods: Vec<Good>,
     pub recipes: Vec<Recipe>,
     pub tick_millis: u64,
+    /// Duration represented by one unit of a work rate. Absent in older saves,
+    /// where rates were expressed per physical boundary.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub work_rate_period_millis: Option<u64>,
     pub work: Vec<Work>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub work_interval: Option<WorkInterval>,

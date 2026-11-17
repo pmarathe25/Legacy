@@ -9,6 +9,25 @@ use game_lots::{Container, Lot, Place, State};
 use game_production_model::{Amount, Good, Recipe, Start};
 
 #[test]
+fn work_deadline_uses_explicit_rate_period() {
+    let mut state = fixture();
+    state.travel = None;
+    state.people[1].region = Some(1);
+    state.nutrition = None;
+    state.pending_food.clear();
+    state.physical.tick_millis = 4000;
+    state.physical.work_rate_period_millis = Some(4000);
+    let mut core = CoreInterval::begin(state, &[(1, 2)]).unwrap();
+    let deadline = core.next_deadline(None).unwrap();
+    assert_eq!(deadline.after_millis, 2000);
+    assert!(deadline.work);
+    assert_eq!(core.progress(500).unwrap(), 500);
+    let saved = serde_json::to_string(&core.snapshot()).unwrap();
+    let resumed = CoreInterval::resume(serde_json::from_str(&saved).unwrap()).unwrap();
+    assert_eq!(resumed.next_deadline(None).unwrap().after_millis, 1500);
+}
+
+#[test]
 fn a_fatal_strike_pauses_a_workers_physical_progress_and_survives_reload() {
     use game_economy::core_interval::PersonalStrike;
     for with_family in [false, true] {
@@ -191,6 +210,7 @@ fn fixture() -> CoreSnapshot {
             }],
         }],
         tick_millis: 1000,
+        work_rate_period_millis: None,
         work: vec![],
         work_interval: None,
     })

@@ -97,6 +97,7 @@ fn runtime(capacity: u64, stock: u64) -> Runtime {
         }],
         recipes: vec![],
         tick_millis: 1000,
+        work_rate_period_millis: None,
         work: vec![],
         work_interval: None,
     })

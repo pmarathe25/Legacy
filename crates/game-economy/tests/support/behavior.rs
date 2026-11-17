@@ -100,6 +100,7 @@ fn fixture() -> State {
                 }],
             }],
             tick_millis: 86_400_000,
+            work_rate_period_millis: None,
             work: vec![],
             work_interval: None,
         },

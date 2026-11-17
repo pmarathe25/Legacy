@@ -22,6 +22,9 @@ use std::path::Path;
 struct Scenario {
     seed: u64,
     tick_millis: u64,
+    /// Duration represented by a unit of the configured work rate.
+    #[serde(default)]
+    work_rate_period_millis: Option<u64>,
     /// Autonomous decision cadence, independent of the physical quantum.
     #[serde(default)]
     decision_period_millis: Option<u64>,
@@ -2687,6 +2690,7 @@ fn scenario_with_options_inner(
             goods: production.goods,
             recipes: production.recipes,
             tick_millis: scenario.tick_millis,
+            work_rate_period_millis: scenario.work_rate_period_millis,
             work: vec![],
             work_interval: None,
         },

@@ -2,6 +2,7 @@
 # Durations and ages are in hourly ticks; rates are experimental and incompletely calibrated.
 seed = 1701
 tick_millis = 3600000
+work_rate_period_millis = 3600000
 decision_period_millis = 3600000
 stock_capacity = 100000
 food_relief_divisor = 1

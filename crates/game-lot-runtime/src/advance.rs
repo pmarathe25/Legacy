@@ -704,11 +704,17 @@ impl Runtime {
             .filter(|row| row.phase == Phase::Working)
             .for_each(|row| {
                 if let Ok(index) = rates.binary_search_by_key(&row.job.id, |rate| rate.0) {
-                    if row.progress_remainder == 0 {
+                    if row.progress_remainder == 0
+                        && self.work_rate_period_millis() == self.tick_millis
+                    {
                         row.job.remaining = row.job.remaining.saturating_sub(rates[index].1);
                     } else {
-                        row.advance_elapsed(rates[index].1, self.tick_millis, self.tick_millis)
-                            .expect("validated fractional work progress");
+                        row.advance_elapsed(
+                            rates[index].1,
+                            self.tick_millis,
+                            self.work_rate_period_millis(),
+                        )
+                        .expect("validated fractional work progress");
                     }
                 }
             });

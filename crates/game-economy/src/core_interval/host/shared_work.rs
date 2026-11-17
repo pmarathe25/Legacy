@@ -449,7 +449,10 @@ impl CoreHost {
                     .binary_search_by_key(&session.event.job, |rate| rate.0)
                     .map_err(|_| "missing shared rate")?;
                 let after = self.core.physical.work()[job]
-                    .completion_after(interval.rates[rate].1, self.core.physical.tick_millis())
+                    .completion_after(
+                        interval.rates[rate].1,
+                        self.core.physical.work_rate_period_millis(),
+                    )
                     .map_err(str::to_owned)?;
                 let duration =
                     after.map_or(consumed, |after| after.min(u128::from(consumed)) as u64);

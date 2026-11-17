@@ -40,6 +40,7 @@ fn runtime(expiry: u64) -> Runtime {
         goods: vec![food()],
         recipes: vec![],
         tick_millis: 86_400_000,
+        work_rate_period_millis: None,
         work: vec![],
         work_interval: None,
     })
@@ -224,6 +225,7 @@ fn many_dated_meals_produce_the_same_personal_effects_on_one_and_four_workers() 
         goods: vec![food()],
         recipes: vec![],
         tick_millis: 86_400_000,
+        work_rate_period_millis: None,
         work: vec![],
         work_interval: None,
     };

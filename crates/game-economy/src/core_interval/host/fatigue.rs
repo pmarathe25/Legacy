@@ -134,7 +134,7 @@ impl CoreHost {
                     .map_err(|_| "missing activity job")?;
                 let row = &self.core.physical.work()[index];
                 let duration = row
-                    .completion_after(rate, quantum)
+                    .completion_after(rate, self.core.physical.work_rate_period_millis())
                     .map_err(str::to_owned)?
                     .map_or(consumed, |after| after.min(u128::from(consumed)) as u64);
                 Ok((row.job.worker, duration))

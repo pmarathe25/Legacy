@@ -45,6 +45,10 @@ fn multiplier(actual: &[Amount], recipe: &[Amount]) -> Option<u64> {
         .then_some(units)
 }
 pub fn validate(state: &Snapshot, catalog: &Catalog) -> Result<(), String> {
+    let work_period = state.work_rate_period_millis.unwrap_or(state.tick_millis);
+    if work_period == 0 {
+        return Err("invalid work rate period".into());
+    }
     if let Some(interval) = &state.work_interval {
         let work: HashMap<_, _> = state
             .work
@@ -118,7 +122,7 @@ pub fn validate(state: &Snapshot, catalog: &Catalog) -> Result<(), String> {
         };
         !valid_items(&job.outputs, &goods)
             || job.remaining > u64::from(recipe.ticks) * units
-            || work.progress_remainder >= state.tick_millis
+            || work.progress_remainder >= work_period
             || (job.remaining == 0 && work.progress_remainder != 0)
             || match work.phase {
                 Phase::Working | Phase::Returning | Phase::Suspended { .. } => {

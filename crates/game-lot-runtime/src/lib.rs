@@ -30,6 +30,7 @@ pub struct Runtime {
     goods: Vec<Good>,
     recipes: Vec<Recipe>,
     tick_millis: u64,
+    work_rate_period_millis: Option<u64>,
     work: Vec<Work>,
     work_interval: Option<WorkInterval>,
     epoch: u64,
@@ -89,6 +90,7 @@ impl Runtime {
             goods: state.goods,
             recipes: state.recipes,
             tick_millis: state.tick_millis,
+            work_rate_period_millis: state.work_rate_period_millis,
             work: state.work,
             work_interval: state.work_interval,
             epoch: 0,
@@ -131,6 +133,10 @@ impl Runtime {
     pub fn tick_millis(&self) -> u64 {
         self.tick_millis
     }
+    /// Stable denominator of work rates and saved fractional work.
+    pub fn work_rate_period_millis(&self) -> u64 {
+        self.work_rate_period_millis.unwrap_or(self.tick_millis)
+    }
     pub fn goods(&self) -> &[Good] {
         &self.goods
     }
@@ -143,6 +149,7 @@ impl Runtime {
             goods: self.goods.clone(),
             recipes: self.recipes.clone(),
             tick_millis: self.tick_millis,
+            work_rate_period_millis: self.work_rate_period_millis,
             work: self.work.clone(),
             work_interval: self.work_interval.clone(),
         }
@@ -354,7 +361,7 @@ impl Runtime {
             .epoch
             .checked_add(1)
             .ok_or("physical work revision overflow")?;
-        let quantum = self.tick_millis;
+        let quantum = self.work_rate_period_millis();
         self.work.par_iter_mut().for_each(|row| {
             if let Ok(index) = rates.binary_search_by_key(&row.job.id, |rate| rate.0) {
                 row.advance_elapsed(rates[index].1, elapsed_millis, quantum)

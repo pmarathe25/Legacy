@@ -66,6 +66,7 @@ fn personal_work_decisions_use_expiry_aware_projection_and_physical_admission() 
         goods: goods.clone(),
         recipes: recipes.clone(),
         tick_millis: 86_400_000,
+        work_rate_period_millis: None,
         work: vec![],
         work_interval: None,
     })
@@ -162,6 +163,7 @@ fn fear_can_motivate_cooperation_but_only_actual_transfer_resolves_the_offer() {
         goods: goods.clone(),
         recipes: vec![],
         tick_millis: 86_400_000,
+        work_rate_period_millis: None,
         work: vec![],
         work_interval: None,
     };
@@ -317,6 +319,7 @@ fn promises_do_not_compel_delivery_but_fear_can_change_a_personal_choice() {
         goods,
         recipes: vec![],
         tick_millis: 86_400_000,
+        work_rate_period_millis: None,
         work: vec![],
         work_interval: None,
     };
@@ -470,6 +473,7 @@ fn many_individual_promises_can_deliver_to_one_busy_recipient() {
         goods,
         recipes: vec![],
         tick_millis: 86_400_000,
+        work_rate_period_millis: None,
         work: vec![],
         work_interval: None,
     };
@@ -590,6 +594,7 @@ fn concentrated_promise_delivery_benchmark() {
         }],
         recipes: vec![],
         tick_millis: 86_400_000,
+        work_rate_period_millis: None,
         work: vec![],
         work_interval: None,
     };
