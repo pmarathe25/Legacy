@@ -1,5 +1,7 @@
 //! Player-controlled actions on the interval host, without administrative events.
-use game_economy::core_interval::{CoreHost, CorePlayerView, WoundTreatment};
+use game_economy::core_interval::{
+    CoreHost, CoreMarkInscription, CoreMarkObservation, CorePlayerView, WoundTreatment,
+};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Advance {
@@ -55,6 +57,47 @@ impl<'a> Player<'a> {
 
     pub fn set_rest(&mut self, resting: bool) -> Result<(), String> {
         self.host.set_controlled_rest(self.person, resting)
+    }
+
+    pub fn choose_written_form(&mut self, sounds: Vec<u8>, marks: Vec<u32>) -> Result<(), String> {
+        self.host.controlled_person(self.person)?;
+        self.host.choose_written_form(
+            self.person,
+            game_language::writing::Association { sounds, marks },
+        )
+    }
+
+    pub fn inscribe(&mut self, sounds: Vec<u8>) -> Result<Option<u64>, String> {
+        self.host.controlled_person(self.person)?;
+        let result = self.host.inscribe_marks(&[CoreMarkInscription {
+            person: self.person,
+            sounds,
+        }])?;
+        Ok(result.first().and_then(|row| row.1))
+    }
+
+    pub fn observe_marked_page(&self, item: u64) -> Result<CoreMarkObservation, String> {
+        self.host.controlled_person(self.person)?;
+        self.host.observe_marked_page(self.person, item)
+    }
+
+    pub fn adopt_remembered_form(&mut self, page: u64) -> Result<(), String> {
+        let view = self.view()?;
+        let memory = view
+            .language
+            .as_ref()
+            .and_then(|language| language.observations.iter().find(|row| row.page == page))
+            .ok_or("the controlled person has no such observation")?;
+        let sounds = memory
+            .heard
+            .clone()
+            .ok_or("the controlled person did not hear a sound")?;
+        let form = game_language::writing::Association {
+            sounds,
+            marks: memory.marks.clone(),
+        };
+        self.host
+            .choose_remembered_forms(&[(self.person, page, form)])
     }
 
     pub fn start_work(&mut self, recipe: u32, units: u32) -> Result<Option<u64>, String> {

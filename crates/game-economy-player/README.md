@@ -15,8 +15,12 @@ physical capability rather than a universal age or hunger refusal; its base rate
 currently comes from the host schedule rather than a personal effort choice. Where
 fatigue is enabled, the person can see their own fatigue and choose when to rest
 or wake; resting pauses ongoing work. A controlled helper can leave their own
-shared-work assignment without dismissing the other helpers. Time
-advancement reports elapsed time and failures without returning administrative
+shared-work assignment without dismissing the other helpers.
+The interval view also includes only that person's own spoken vocabulary,
+written-form associations and retained observations, along with marked pages
+they actually carry. The player can choose a form, inscribe it with physical
+supplies, interpret a carried page, or adopt their own remembered observation.
+Time advancement reports elapsed time and failures without returning administrative
 events. A limited `--interval-player PERSON` CLI exposes this adapter. It does
 not yet provide campaign succession or the full player command set, and the
 ordinary `--player` CLI still uses the whole-boundary host.

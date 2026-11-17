@@ -6,6 +6,7 @@ license.workspace = true
 
 [dependencies]
 game-economy = { path = "../game-economy" }
+game-language = { path = "../game-language" }
 game-economy-campaign = { path = "../game-economy-campaign" }
 game-economy-knowledge = { path = "../game-economy-knowledge" }
 game-lots = { path = "../game-lots" }

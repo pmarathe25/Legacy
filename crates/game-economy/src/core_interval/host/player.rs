@@ -26,6 +26,20 @@ pub struct CorePlayerFatigue {
     pub resting: bool,
 }
 
+/// Only the controlled person's own learned and remembered forms.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CorePlayerLanguage {
+    pub words: Vec<game_language::Word>,
+    pub associations: Vec<game_language::writing::Association>,
+    pub observations: Vec<game_language::writing::Observation>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CorePlayerMarkedPage {
+    pub item: u64,
+    pub marks: Vec<u32>,
+}
+
 /// Only the controlled person's own state and physically co-located people.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CorePlayerView {
@@ -38,6 +52,8 @@ pub struct CorePlayerView {
     pub wound: Option<CorePlayerWound>,
     pub job: Option<CorePlayerJob>,
     pub fatigue: Option<CorePlayerFatigue>,
+    pub language: Option<CorePlayerLanguage>,
+    pub marked_pages: Vec<CorePlayerMarkedPage>,
 }
 
 impl CoreHost {
@@ -236,6 +252,51 @@ impl CoreHost {
                 resting: state.is_some_and(|row| row.resting),
             }
         });
+        let language = self
+            .social
+            .as_ref()
+            .and_then(|social| social.language.as_ref())
+            .map(|language| {
+                let words = language
+                    .minds
+                    .binary_search_by_key(&id, |mind| mind.person)
+                    .ok()
+                    .map_or_else(Vec::new, |index| language.minds[index].words.clone());
+                let associations = language
+                    .writing
+                    .as_ref()
+                    .and_then(|forms| {
+                        forms
+                            .minds
+                            .binary_search_by_key(&id, |mind| mind.person)
+                            .ok()
+                            .map(|index| forms.minds[index].associations.clone())
+                    })
+                    .unwrap_or_default();
+                let observations = language.writing.as_ref().map_or_else(Vec::new, |forms| {
+                    let start = forms.observations.partition_point(|row| row.person < id);
+                    forms.observations[start..]
+                        .iter()
+                        .take_while(|row| row.person == id)
+                        .cloned()
+                        .collect()
+                });
+                CorePlayerLanguage {
+                    words,
+                    associations,
+                    observations,
+                }
+            });
+        let marked_pages = self.writing.as_ref().map_or_else(Vec::new, |owner| {
+            possessions
+                .iter()
+                .filter_map(|lot| {
+                    let item = lot.item?;
+                    let marks = owner.page(item)?.marks.as_ref()?.clone();
+                    Some(CorePlayerMarkedPage { item, marks })
+                })
+                .collect()
+        });
         Ok(CorePlayerView {
             tick: self.core.physical.tick(),
             offset_millis: self.core.elapsed_millis().ok_or("no physical interval")?,
@@ -246,6 +307,8 @@ impl CoreHost {
             wound,
             job,
             fatigue,
+            language,
+            marked_pages,
         })
     }
 }

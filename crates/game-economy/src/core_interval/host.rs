@@ -64,7 +64,8 @@ pub use mechanics::{
 pub use offers::CoreSocialResults;
 pub use personal_choice::{CoreChoiceEvent, CoreChoiceIntent, CoreChoiceOutcome, CoreWorkIntent};
 pub use player::{
-    CorePlayerFatigue, CorePlayerJob, CorePlayerView, CorePlayerWound, CoreSeenPerson,
+    CorePlayerFatigue, CorePlayerJob, CorePlayerLanguage, CorePlayerMarkedPage, CorePlayerView,
+    CorePlayerWound, CoreSeenPerson,
 };
 pub use purpose::CorePurpose;
 pub use requests::{CoreDeliveryResults, CoreRequestResults};

@@ -5,11 +5,17 @@ use std::fs::{File, OpenOptions};
 use std::io::{self, BufRead, IsTerminal, Write};
 use std::path::Path;
 
+fn numbers<T: std::str::FromStr>(text: &str) -> Result<Vec<T>, String> {
+    text.split(',')
+        .map(|part| part.parse().map_err(|_| "invalid number list".to_owned()))
+        .collect()
+}
+
 fn command(host: &mut CoreHost, person: u64, words: &[&str]) -> Result<bool, String> {
     match words {
         [] => {}
         ["help"] => println!(
-            "look | wait MILLISECONDS | move REGION | eat GOOD | treat GOOD | work RECIPE UNITS | stop JOB | stop-assist | rest on|off | save PATH | load PATH | quit"
+            "look | wait MILLISECONDS | move REGION | eat GOOD | treat GOOD | work RECIPE UNITS | stop JOB | stop-assist | rest on|off | form SOUNDS MARKS | inscribe SOUNDS | read PAGE | recall PAGE | save PATH | load PATH | quit (SOUNDS and MARKS are comma-separated numbers)"
         ),
         ["quit"] | ["exit"] => return Ok(false),
         ["look"] => {
@@ -46,6 +52,23 @@ fn command(host: &mut CoreHost, person: u64, words: &[&str]) -> Result<bool, Str
             }
             if let Some(fatigue) = view.fatigue {
                 println!("fatigue={} resting={}", fatigue.fatigue, fatigue.resting);
+            }
+            if let Some(language) = view.language {
+                for word in language.words {
+                    println!("word={:?} sounds={:?}", word.meaning, word.sounds);
+                }
+                for form in language.associations {
+                    println!("form_sounds={:?} marks={:?}", form.sounds, form.marks);
+                }
+                for memory in language.observations {
+                    println!(
+                        "remembered_page={} marks={:?} heard={:?}",
+                        memory.page, memory.marks, memory.heard
+                    );
+                }
+            }
+            for page in view.marked_pages {
+                println!("marked_page={} marks={:?}", page.item, page.marks);
             }
         }
         ["wait", millis] => {
@@ -93,6 +116,30 @@ fn command(host: &mut CoreHost, person: u64, words: &[&str]) -> Result<bool, Str
             let resting = *choice == "on";
             Player::new(host, person)?.set_rest(resting)?;
             println!("resting={resting}");
+        }
+        ["form", sounds, marks] => {
+            Player::new(host, person)?.choose_written_form(numbers(sounds)?, numbers(marks)?)?;
+            println!("form chosen");
+        }
+        ["inscribe", sounds] => {
+            if let Some(item) = Player::new(host, person)?.inscribe(numbers(sounds)?)? {
+                println!("inscribed_page={item}");
+            } else {
+                println!("inscribed=false");
+            }
+        }
+        ["read", item] => {
+            let item = item.parse::<u64>().map_err(|_| "invalid page")?;
+            let observation = Player::new(host, person)?.observe_marked_page(item)?;
+            println!(
+                "marks={:?} meanings={:?}",
+                observation.marks, observation.meanings
+            );
+        }
+        ["recall", item] => {
+            let item = item.parse::<u64>().map_err(|_| "invalid page")?;
+            Player::new(host, person)?.adopt_remembered_form(item)?;
+            println!("remembered form adopted");
         }
         ["save", path @ ..] if !path.is_empty() => {
             host.controlled_person(person)?;

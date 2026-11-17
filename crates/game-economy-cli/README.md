@@ -331,7 +331,12 @@ An initial controlled-person interface for the interval host is available with
 `economy-core-player.toml` by default, or accepts another interval-compatible
 scenario containing that controlled person. Enter `help` for its limited
 observation, time, travel, eating, work, leaving shared work, voluntary rest,
-self-treatment, and save/load commands. Saving
+self-treatment, personal written forms, and save/load commands. In
+`content/scenarios/economy-core-player-language.toml`, `look` shows the
+controlled person's own words, remembered observations, and carried marked
+pages; `form 0,1 7,8` chooses marks for a known sound sequence, `inscribe 0,1`
+uses carried materials, `read 1` interprets a carried page, and `recall 1`
+adopts a remembered observation. Saving
 requires a new path and does not overwrite an existing file. This path does not
 yet provide campaign succession or the full command set; the ordinary `--player`
 command still uses the separate whole-boundary host.

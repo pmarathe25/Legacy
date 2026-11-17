@@ -6216,6 +6216,67 @@ fn inventing_marks_competes_with_another_personal_opportunity() {
 }
 
 #[test]
+fn interval_player_sees_only_their_own_written_knowledge() {
+    use game_economy::core_interval::CoreHost;
+    use game_economy_player::interval::Player;
+    let root = root();
+    let mut state = game_economy_cli::core_scenario(
+        &root.join("content/scenarios/economy-core-written-invention.toml"),
+        &root.join("content"),
+    )
+    .unwrap()
+    .snapshot();
+    let forms = std::sync::Arc::make_mut(
+        state
+            .social
+            .as_mut()
+            .unwrap()
+            .language
+            .as_mut()
+            .unwrap()
+            .writing
+            .as_mut()
+            .unwrap(),
+    );
+    forms.sharing[1].adopt = false;
+    let mut host = CoreHost::resume(state).unwrap();
+    assert_eq!(
+        host.advance_continuous(5_400_001, &[]).unwrap().failure,
+        None
+    );
+    let mut state = host.snapshot();
+    state.core.people[0].controlled = true;
+    state.core.people[1].controlled = true;
+    host = CoreHost::resume(state).unwrap();
+    let first = Player::new(&mut host, 1).unwrap().view().unwrap();
+    assert_eq!(first.marked_pages.len(), 1);
+    assert_eq!(first.language.as_ref().unwrap().associations.len(), 1);
+    assert!(first.language.as_ref().unwrap().observations.is_empty());
+    let page = first.marked_pages[0].item;
+    {
+        let mut second = Player::new(&mut host, 2).unwrap();
+        let view = second.view().unwrap();
+        assert!(view.marked_pages.is_empty());
+        assert!(view.language.as_ref().unwrap().associations.is_empty());
+        assert_eq!(view.language.as_ref().unwrap().observations.len(), 1);
+        assert!(second.observe_marked_page(page).is_err());
+        second.adopt_remembered_form(page).unwrap();
+        assert_eq!(
+            second.view().unwrap().language.unwrap().associations.len(),
+            1
+        );
+    }
+    assert_eq!(Player::new(&mut host, 1).unwrap().view().unwrap(), first);
+    let saved = host.snapshot();
+    assert_eq!(
+        CoreHost::resume(serde_json::from_str(&serde_json::to_string(&saved).unwrap()).unwrap())
+            .unwrap()
+            .snapshot(),
+        saved
+    );
+}
+
+#[test]
 fn people_choose_between_competing_physical_actions_or_idleness() {
     use game_economy::core_interval::{CoreChoiceOutcome, CoreRunEvent};
     fn run(workers: usize) -> serde_json::Value {

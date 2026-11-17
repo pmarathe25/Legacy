@@ -558,6 +558,7 @@ dependencies = [
  "game-economy-campaign",
  "game-economy-combat",
  "game-economy-knowledge",
+ "game-language",
  "game-lot-runtime",
  "game-lots",
  "game-missions",
