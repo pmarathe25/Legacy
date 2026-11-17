@@ -864,6 +864,22 @@ impl Context<'_> {
                         0
                     }
                 });
+                let genetic_factor = self
+                    .season
+                    .and_then(|season| {
+                        let provenance = self.agriculture.provenance.as_ref()?;
+                        let genetics = provenance.genetics.as_ref()?;
+                        let index = provenance
+                            .plantings
+                            .binary_search_by_key(&f.id, |row| row.field)
+                            .ok()?;
+                        Some(
+                            genetics
+                                .seasonal_factor(&season.name, &provenance.plantings[index].seeds),
+                        )
+                    })
+                    .unwrap_or(1000);
+                let factor = u64::from(factor) * u64::from(genetic_factor) / 1000;
                 let tick = u128::from(self.tick);
                 let growth = ((tick * u128::from(factor) / 1000)
                     - (tick.saturating_sub(1) * u128::from(factor) / 1000))

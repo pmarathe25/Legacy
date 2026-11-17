@@ -3589,6 +3589,151 @@ fn clonal_seed_offspring_mutate_once_and_survive_failed_harvests() {
 }
 
 #[test]
+fn seasonal_conditions_change_growth_of_actual_planted_genotypes() {
+    use game_economy::core_interval::CoreHost;
+    fn run(workers: usize, batch: u64, enabled: bool) -> serde_json::Value {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let root = root();
+                let mut opening = game_economy_cli::core_scenario(
+                    &root.join("content/scenarios/economy-core-seasonal-seeds.toml"),
+                    &root.join("content"),
+                )
+                .unwrap()
+                .snapshot();
+                let provenance = opening
+                    .agriculture
+                    .as_mut()
+                    .unwrap()
+                    .provenance
+                    .as_mut()
+                    .unwrap();
+                std::sync::Arc::make_mut(&mut provenance.profiles)[0].preferences[0].batch = batch;
+                if !enabled {
+                    std::sync::Arc::make_mut(provenance.genetics.as_mut().unwrap())
+                        .season_effects
+                        .clear();
+                }
+                let mut host = CoreHost::resume(opening).unwrap();
+                assert_eq!(host.advance_continuous(900_001, &[]).unwrap().failure, None);
+                let planted = host.snapshot();
+                assert_eq!(
+                    planted
+                        .agriculture
+                        .as_ref()
+                        .unwrap()
+                        .provenance
+                        .as_ref()
+                        .unwrap()
+                        .plantings[0]
+                        .seeds[0]
+                        .batch,
+                    Some(batch)
+                );
+                let mut restored = CoreHost::resume(
+                    serde_json::from_str(&serde_json::to_string(&planted).unwrap()).unwrap(),
+                )
+                .unwrap();
+                assert_eq!(
+                    host.advance_continuous(3_600_000, &[]).unwrap().failure,
+                    None
+                );
+                assert_eq!(
+                    restored.advance_continuous(3_600_000, &[]).unwrap().failure,
+                    None
+                );
+                assert_eq!(host.snapshot(), restored.snapshot());
+                serde_json::to_value(host.snapshot()).unwrap()
+            })
+    }
+    for batch in [11, 12] {
+        for enabled in [false, true] {
+            assert_eq!(run(1, batch, enabled), run(4, batch, enabled));
+        }
+    }
+    let remaining = |batch, enabled| {
+        run(1, batch, enabled)["agriculture"]["fields"][0]["remaining"]
+            .as_u64()
+            .unwrap()
+    };
+    assert!(remaining(11, true) > remaining(11, false));
+    assert!(remaining(12, true) < remaining(12, false));
+    assert_eq!(remaining(11, false), remaining(12, false));
+}
+
+#[test]
+fn seasonal_growth_changes_which_seed_lineage_matures_in_time() {
+    use game_economy::core_interval::CoreHost;
+    fn run(workers: usize, batch: u64) -> serde_json::Value {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let root = root();
+                let mut state = game_economy_cli::core_scenario(
+                    &root.join("content/scenarios/economy-core-seasonal-seeds.toml"),
+                    &root.join("content"),
+                )
+                .unwrap()
+                .snapshot();
+                let provenance = state
+                    .agriculture
+                    .as_mut()
+                    .unwrap()
+                    .provenance
+                    .as_mut()
+                    .unwrap();
+                std::sync::Arc::make_mut(&mut provenance.profiles)[0].preferences[0].batch = batch;
+                let mut host = CoreHost::resume(state).unwrap();
+                assert_eq!(
+                    host.advance_continuous(64_800_001, &[]).unwrap().failure,
+                    None
+                );
+                let state = host.snapshot();
+                let genetics = state
+                    .agriculture
+                    .as_ref()
+                    .unwrap()
+                    .provenance
+                    .as_ref()
+                    .unwrap()
+                    .genetics
+                    .as_ref()
+                    .unwrap();
+                let child = genetics
+                    .descendants
+                    .iter()
+                    .flat_map(|chunk| chunk.iter())
+                    .find(|row| row.parent == Some(batch));
+                assert_eq!(child.is_some(), batch == 12);
+                if let Some(child) = child {
+                    assert_eq!(child.alleles, Some([1000, 1000]));
+                    assert!(
+                        state
+                            .core
+                            .physical
+                            .custody
+                            .containers
+                            .iter()
+                            .any(|container| container
+                                .lots
+                                .iter()
+                                .any(|lot| lot.batch == Some(child.batch) && lot.quantity > 0))
+                    );
+                }
+                serde_json::to_value(state).unwrap()
+            })
+    }
+    for batch in [11, 12] {
+        assert_eq!(run(1, batch), run(4, batch));
+    }
+}
+
+#[test]
 fn actual_seed_genotypes_change_physical_growth_without_deciding_for_the_farmer() {
     use game_economy::core_interval::CoreHost;
     use game_economy_agriculture::Phase;

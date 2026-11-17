@@ -308,6 +308,7 @@ mod tests {
             growth_weight: 0,
             min_factor: 1000,
             max_factor: 1000,
+            season_effects: vec![],
             strains: Arc::new(vec![Strain {
                 batch: 11,
                 alleles: [500, 500],
@@ -358,6 +359,7 @@ mod tests {
             growth_weight: 0,
             min_factor: 1000,
             max_factor: 1000,
+            season_effects: vec![],
             strains: Arc::new(vec![
                 Strain {
                     batch: 11,
@@ -436,6 +438,7 @@ mod tests {
             growth_weight: 0,
             min_factor: 1000,
             max_factor: 1000,
+            season_effects: vec![],
             strains: Arc::new(
                 (1..=count)
                     .map(|batch| Strain {

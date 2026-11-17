@@ -27,6 +27,15 @@ pub struct Descendant {
     pub alleles: Option<[u16; 2]>,
 }
 
+/// Effect of the inherited trait on growth under one named season.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SeasonEffect {
+    pub season: String,
+    /// Signed change in growth per thousand units from neutral expression.
+    pub weight: i32,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Genetics {
@@ -35,6 +44,9 @@ pub struct Genetics {
     /// Physical limits for the duration multiplier, in thousandths.
     pub min_factor: u32,
     pub max_factor: u32,
+    /// Sorted season-specific responses; absent seasons are neutral.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub season_effects: Vec<SeasonEffect>,
     #[serde(default)]
     pub strains: Arc<Vec<Strain>>,
     /// Generated lineages are retained in bounded immutable chunks.
@@ -58,6 +70,14 @@ impl Genetics {
         }
         if self.min_factor == 0
             || self.min_factor > self.max_factor
+            || self
+                .season_effects
+                .iter()
+                .any(|row| row.season.trim().is_empty())
+            || self
+                .season_effects
+                .windows(2)
+                .any(|rows| rows[0].season >= rows[1].season)
             || self
                 .strains
                 .windows(2)
@@ -170,7 +190,7 @@ impl Genetics {
     }
     /// Express only the physical seed cohorts actually planted. Unknown genetic
     /// batches use neutral expression rather than inventing a known genotype.
-    pub fn duration(&self, base: u32, seeds: &[Lot]) -> u32 {
+    fn expression(&self, seeds: &[Lot]) -> Option<i128> {
         let mut sum = 0u128;
         let mut count = 0u128;
         for lot in seeds {
@@ -183,15 +203,34 @@ impl Genetics {
             sum += u128::from(expression) * u128::from(lot.quantity);
             count += u128::from(lot.quantity);
         }
-        if count == 0 {
+        (count != 0).then(|| (sum / count) as i128)
+    }
+
+    pub fn duration(&self, base: u32, seeds: &[Lot]) -> u32 {
+        let Some(expression) = self.expression(seeds) else {
             return base;
-        }
-        let expression = (sum / count) as i128;
+        };
         let factor = 1000i128 + (expression - 500) * i128::from(self.growth_weight) / 1000;
         Self::scaled(
             base,
             factor.clamp(i128::from(self.min_factor), i128::from(self.max_factor)) as u32,
         )
+    }
+
+    /// Physical growth multiplier from real planted cohorts and current season.
+    pub fn seasonal_factor(&self, season: &str, seeds: &[Lot]) -> u32 {
+        let Some(effect) = self
+            .season_effects
+            .binary_search_by(|row| row.season.as_str().cmp(season))
+            .ok()
+            .map(|i| &self.season_effects[i])
+        else {
+            return 1000;
+        };
+        let Some(expression) = self.expression(seeds) else {
+            return 1000;
+        };
+        (1000i128 + (expression - 500) * i128::from(effect.weight) / 1000).clamp(0, 10_000) as u32
     }
 }
 
@@ -213,6 +252,7 @@ mod tests {
             growth_weight: 1000,
             min_factor: 500,
             max_factor: 1500,
+            season_effects: vec![],
             strains: Arc::new(vec![
                 Strain {
                     batch: 11,
@@ -234,6 +274,29 @@ mod tests {
             96
         );
         assert_eq!(model.duration(96, &[lot(Some(999), 10)]), 96);
+        let seasonal = Genetics {
+            season_effects: vec![
+                SeasonEffect {
+                    season: "cold".into(),
+                    weight: -1000,
+                },
+                SeasonEffect {
+                    season: "warm".into(),
+                    weight: 1000,
+                },
+            ],
+            ..model.clone()
+        };
+        assert!(seasonal.validate().is_ok());
+        assert_eq!(seasonal.seasonal_factor("cold", &[lot(Some(11), 1)]), 1500);
+        assert_eq!(seasonal.seasonal_factor("warm", &[lot(Some(11), 1)]), 500);
+        assert_eq!(seasonal.seasonal_factor("warm", &[lot(Some(12), 1)]), 1500);
+        assert_eq!(seasonal.seasonal_factor("warm", &[lot(Some(999), 1)]), 1000);
+        assert_eq!(seasonal.seasonal_factor("other", &[lot(Some(11), 1)]), 1000);
+        assert_eq!(
+            seasonal.seasonal_factor("warm", &[lot(Some(11), 1), lot(Some(12), 1)]),
+            1000
+        );
         let reversed = Genetics {
             growth_weight: -1000,
             ..model
@@ -247,6 +310,7 @@ mod tests {
             growth_weight: 0,
             min_factor: 1000,
             max_factor: 1000,
+            season_effects: vec![],
             strains: Arc::new(vec![]),
             descendants: Arc::default(),
             reproduction: None,

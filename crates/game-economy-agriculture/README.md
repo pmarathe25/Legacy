@@ -56,6 +56,20 @@ expression. This does not give a farmer access to genetic values. It is a
 physical growth slice. See
 `content/scenarios/economy-core-seed-genetics.toml`.
 
+Optional `season_effects` give the same inherited trait a signed effect on
+growth in named seasons. Entries are sorted by season name; unlisted seasons,
+unknown genotypes, and missing provenance have neutral effects. The current
+season and actual planted cohorts determine the physical multiplier each tick,
+without exposing alleles to the farmer. For example:
+
+```toml
+season_effects = [{ season = "warm", weight = 1000 }]
+```
+
+This can favor different inherited traits in different seasons, but it does
+not by itself model wild plant mortality or guarantee natural selection. See
+`content/scenarios/economy-core-seasonal-seeds.toml`.
+
 Optional `[cultivation.seed_genetics.reproduction]` defines `seed_per_thousand`,
 `mutation_per_million`, and `mutation_step`. At maturation, each planted seed
 cohort produces a descendant, with deterministic mutations to known alleles;
