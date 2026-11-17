@@ -118,6 +118,7 @@ fn fixture() -> State {
             .collect(),
         rules: Rules {
             hunger_per_tick: 1,
+            hunger_rate: None,
             meal_threshold: 5,
             starvation_threshold: 100,
             starvation_damage: 1,

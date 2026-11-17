@@ -2470,6 +2470,9 @@ impl Economy {
         state
             .work_tools
             .par_sort_unstable_by_key(|row| (row.recipe, row.good));
+        if state.rules.hunger_rate.is_some() {
+            return Err("elapsed hunger rates require the interval simulation host".into());
+        }
         if state.rules.carrying_capacity == 0
             || state.rules.max_health == 0
             || state.rules.meal_threshold == 0

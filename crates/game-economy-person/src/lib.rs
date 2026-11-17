@@ -7,7 +7,7 @@ pub mod travel;
 use game_lot_diet::Effects;
 use game_nutrition::{Nutrition, Person as NutritionPerson};
 use game_production_model::FoodEffect;
-pub use model::{Immortal, Person, Rules};
+pub use model::{HungerRate, Immortal, Person, Rules};
 use rayon::prelude::*;
 
 /// Find the first personal hunger threshold without serially scanning people.

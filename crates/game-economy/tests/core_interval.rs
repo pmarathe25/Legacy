@@ -220,10 +220,12 @@ fn fixture() -> CoreSnapshot {
     };
     CoreSnapshot {
         seed: 7,
+        boundary_millis: None,
         physical: runtime.snapshot(),
         people: vec![person(1, Some(1)), person(2, None)],
         rules: Rules {
             hunger_per_tick: 1,
+            hunger_rate: None,
             meal_threshold: 1,
             starvation_threshold: 3,
             starvation_damage: 4,
@@ -275,6 +277,102 @@ fn fixture() -> CoreSnapshot {
             nutrients: [1; 6],
         }],
     }
+}
+
+#[test]
+fn explicit_hunger_rate_is_independent_of_boundary_and_advance_subdivision() {
+    use game_economy::core_interval::HungerRate;
+    fn run(quantum: u64, chunk: u64, workers: usize) -> (u32, u64, u64) {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut state = fixture();
+                state.physical.tick_millis = quantum;
+                state.travel = None;
+                state.people[1].region = Some(1);
+                state.nutrition = None;
+                state.pending_food.clear();
+                state.rules.starvation_threshold = 100;
+                state.rules.starvation_damage = 0;
+                state.rules.hunger_per_tick = 99;
+                state.rules.hunger_rate = Some(HungerRate {
+                    units: 3,
+                    per_millis: 3_600_000,
+                });
+                let mut elapsed = 0;
+                let mut threshold = None;
+                while elapsed < 3_600_000 {
+                    let mut core = CoreInterval::begin(state, &[]).unwrap();
+                    assert_eq!(core.simulated_millis(), u128::from(elapsed));
+                    let mut within = 0;
+                    while within < quantum {
+                        let deadline = core.next_deadline(Some(3)).unwrap();
+                        if threshold.is_none() && deadline.hunger {
+                            threshold = Some(elapsed + deadline.after_millis);
+                        }
+                        let advance = chunk.min(quantum - within);
+                        assert_eq!(core.progress(advance).unwrap(), advance);
+                        elapsed += advance;
+                        within += advance;
+                        assert_eq!(core.simulated_millis(), u128::from(elapsed));
+                        if within < quantum && within == chunk {
+                            let saved = serde_json::to_string(&core.snapshot()).unwrap();
+                            core = CoreInterval::resume(serde_json::from_str(&saved).unwrap())
+                                .unwrap();
+                        }
+                    }
+                    core.settle().unwrap();
+                    state = core.snapshot();
+                    assert_eq!(state.boundary_millis, Some(u128::from(elapsed)));
+                }
+                (
+                    state.people[0].hunger,
+                    state.people[0].hunger_remainder,
+                    threshold.unwrap(),
+                )
+            })
+    }
+    let expected = (5, 0, 1_200_000);
+    assert_eq!(run(3_600_000, 3_600_000, 1), expected);
+    assert_eq!(run(60_000, 17_000, 1), expected);
+    assert_eq!(run(60_000, 31_000, 4), expected);
+    let mut invalid = fixture();
+    invalid.rules.hunger_rate = Some(HungerRate {
+        units: 1,
+        per_millis: 0,
+    });
+    assert!(CoreInterval::begin(invalid, &[]).is_err());
+}
+
+#[test]
+fn saved_absolute_time_does_not_change_when_the_next_quantum_changes() {
+    let mut state = fixture();
+    state.physical.tick_millis = 60_000;
+    state.travel = None;
+    state.people[1].region = Some(1);
+    state.nutrition = None;
+    state.pending_food.clear();
+    state.rules.starvation_damage = 0;
+    state.rules.hunger_rate = Some(game_economy::core_interval::HungerRate {
+        units: 1,
+        per_millis: 3_600_000,
+    });
+    let mut core = CoreInterval::begin(state, &[]).unwrap();
+    core.progress(60_000).unwrap();
+    core.settle().unwrap();
+    let mut saved = core.snapshot();
+    assert_eq!(saved.boundary_millis, Some(60_000));
+    saved.physical.tick_millis = 120_000;
+    let mut resumed = CoreInterval::begin(saved, &[]).unwrap();
+    assert_eq!(resumed.simulated_millis(), 60_000);
+    resumed.progress(30_000).unwrap();
+    let restored = CoreInterval::resume(
+        serde_json::from_str(&serde_json::to_string(&resumed.snapshot()).unwrap()).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(restored.simulated_millis(), 90_000);
 }
 
 #[test]

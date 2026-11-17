@@ -5974,6 +5974,37 @@ fn authored_core_scenario_runs_and_survives_save_resume() {
 }
 
 #[test]
+fn authored_decision_cadence_is_independent_of_physical_quantum() {
+    let root = root();
+    let source =
+        std::fs::read_to_string(root.join("content/scenarios/economy-core-personal-choices.toml"))
+            .unwrap();
+    let scenario = source.replacen(
+        "tick_millis = 900000",
+        "tick_millis = 900000\ndecision_period_millis = 300000",
+        1,
+    );
+    let path = std::env::temp_dir().join(format!(
+        "legacy-decision-period-{}-{}.toml",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::write(&path, scenario).unwrap();
+    let mut host = game_economy_cli::core_scenario(&path, &root.join("content")).unwrap();
+    std::fs::remove_file(path).unwrap();
+    let initial = host.snapshot();
+    assert_eq!(initial.core.physical.tick_millis, 900_000);
+    assert_eq!(initial.schedule.unwrap().period_millis, 300_000);
+    let result = host.advance_continuous(600_001, &[]).unwrap();
+    assert_eq!(result.failure, None);
+    assert_eq!(result.decisions, 3);
+    assert_eq!(result.boundaries, 0);
+}
+
+#[test]
 fn integrated_hourly_world_runs_with_personal_choices_and_borrowed_history() {
     use game_economy::core_interval::CoreHost;
     fn run(workers: usize) -> serde_json::Value {
@@ -5989,6 +6020,14 @@ fn integrated_hourly_world_runs_with_personal_choices_and_borrowed_history() {
                 )
                 .unwrap();
                 let initial = host.snapshot();
+                assert_eq!(
+                    initial.core.rules.hunger_rate,
+                    Some(game_economy::core_interval::HungerRate {
+                        units: 1,
+                        per_millis: 3_600_000
+                    })
+                );
+                assert_eq!(initial.schedule.as_ref().unwrap().period_millis, 3_600_000);
                 assert_eq!(
                     initial
                         .schedule

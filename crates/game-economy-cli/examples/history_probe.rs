@@ -12,6 +12,7 @@ fn write_line(writer: &mut BufWriter<File>, value: &serde_json::Value) -> Result
     writer.flush().map_err(|error| error.to_string())
 }
 
+#[cfg(test)]
 fn run(
     root: &Path,
     source: &Path,
@@ -19,6 +20,18 @@ fn run(
     ticks: u64,
     interval: u64,
     resume: bool,
+) -> Result<(), String> {
+    run_steps(root, source, output, ticks, interval, resume, None)
+}
+
+fn run_steps(
+    root: &Path,
+    source: &Path,
+    output: &Path,
+    ticks: u64,
+    interval: u64,
+    resume: bool,
+    requested_step_millis: Option<u64>,
 ) -> Result<(), String> {
     let revision = std::process::Command::new("git")
         .args(["rev-parse", "HEAD"])
@@ -47,6 +60,12 @@ fn run(
     };
     let initial = host.snapshot();
     let tick_millis = initial.core.physical.tick_millis;
+    let step_millis = requested_step_millis.unwrap_or(tick_millis);
+    if step_millis == 0 || step_millis > tick_millis {
+        return Err(
+            "step duration must be positive and no longer than the physical quantum".into(),
+        );
+    }
     let file = OpenOptions::new()
         .write(true)
         .create_new(true)
@@ -59,13 +78,18 @@ fn run(
         .map_err(|error| error.to_string())?;
     write_line(
         &mut writer,
-        &json!({"kind":"metadata","source":source,"resume":resume,"ticks_requested":ticks,"tick_millis":tick_millis,"start_tick":initial.core.physical.custody.tick,"git_revision":revision,"tracked_source_modified":modified,"scenario":scenario_text,"note":"exploratory diagnostic; counts do not establish causation; executable build provenance is not verified"}),
+        &json!({"kind":"metadata","source":source,"resume":resume,"steps_requested":ticks,"ticks_requested":requested_step_millis.is_none().then_some(ticks),"tick_millis":tick_millis,"step_millis":step_millis,"start_tick":initial.core.physical.custody.tick,"git_revision":revision,"tracked_source_modified":modified,"scenario":scenario_text,"note":"exploratory diagnostic; physical owners may still settle per quantum; counts do not establish causation; executable build provenance is not verified"}),
     )?;
     host.take_opinion_events();
     let mut counts = BTreeMap::<&'static str, u64>::new();
     let mut choice_counts = BTreeMap::<String, u64>::new();
+    let initial_view = host.history_view();
+    let mut seen_family = (!initial_view.family_events.is_empty()).then_some(initial_view.tick);
+    let mut seen_language = (!initial_view.language_events.is_empty()).then_some(initial_view.tick);
+    let mut seen_signal = (!initial_view.signal_events.is_empty()).then_some(initial_view.tick);
+    let mut seen_recipe = (!initial_view.recipe_learning.is_empty()).then_some(initial_view.tick);
     for step in 1..=ticks {
-        let result = match host.advance_continuous(tick_millis, &[]) {
+        let result = match host.advance_continuous(step_millis, &[]) {
             Ok(result) => result,
             Err(error) => {
                 write_line(
@@ -82,7 +106,7 @@ fn run(
             )?;
             return Err(error);
         }
-        if result.elapsed_millis != tick_millis || result.boundaries != 1 {
+        if result.elapsed_millis != step_millis || result.boundaries > 1 {
             return Err("unexpected elapsed time or boundary count".into());
         }
         for event in &result.events {
@@ -125,14 +149,42 @@ fn run(
             *counts.entry(kind).or_default() += count as u64;
         }
         let view = host.history_view();
-        *counts.entry("recipe_learning").or_default() += view
+        let recipe_count = view
             .recipe_learning
             .iter()
             .filter(|event| event.tick == view.tick)
             .count() as u64;
-        *counts.entry("family_events").or_default() += view.family_events.len() as u64;
-        *counts.entry("language_events").or_default() += view.language_events.len() as u64;
-        *counts.entry("signal_events").or_default() += view.signal_events.len() as u64;
+        if recipe_count > 0 && seen_recipe != Some(view.tick) {
+            *counts.entry("recipe_learning").or_default() += recipe_count;
+            seen_recipe = Some(view.tick);
+        }
+        let family_count = view
+            .family_events
+            .iter()
+            .filter(|event| event.tick == view.tick)
+            .count() as u64;
+        if family_count > 0 && seen_family != Some(view.tick) {
+            *counts.entry("family_events").or_default() += family_count;
+            seen_family = Some(view.tick);
+        }
+        let language_count = view
+            .language_events
+            .iter()
+            .filter(|event| event.tick == view.tick)
+            .count() as u64;
+        if language_count > 0 && seen_language != Some(view.tick) {
+            *counts.entry("language_events").or_default() += language_count;
+            seen_language = Some(view.tick);
+        }
+        let signal_count = view
+            .signal_events
+            .iter()
+            .filter(|event| event.tick == view.tick)
+            .count() as u64;
+        if signal_count > 0 && seen_signal != Some(view.tick) {
+            *counts.entry("signal_events").or_default() += signal_count;
+            seen_signal = Some(view.tick);
+        }
         *counts.entry("opinion_changes").or_default() += host.take_opinion_events().len() as u64;
         if step % interval == 0 || step == ticks {
             let state = host.snapshot();
@@ -217,8 +269,21 @@ fn run(
                 }
             }
             let food_custody: Vec<_> = food_custody.into_iter().map(|((place, good), quantity)| json!({"place":place,"good":good,"quantity":quantity})).collect();
-            let checkpoint =
-                output.with_extension(format!("tick-{}.json", state.core.physical.custody.tick));
+            let offset_millis = state
+                .core
+                .physical
+                .work_interval
+                .as_ref()
+                .map_or(0, |interval| interval.elapsed_millis);
+            let simulated_millis =
+                state.core.boundary_millis.unwrap_or(
+                    u128::from(state.core.physical.custody.tick) * u128::from(tick_millis),
+                ) + u128::from(offset_millis);
+            let checkpoint = if requested_step_millis.is_some() {
+                output.with_extension(format!("time-{simulated_millis}.json"))
+            } else {
+                output.with_extension(format!("tick-{}.json", state.core.physical.custody.tick))
+            };
             let file = OpenOptions::new()
                 .write(true)
                 .create_new(true)
@@ -232,7 +297,7 @@ fn run(
                 .map_err(|error| error.to_string())?;
             write_line(
                 &mut writer,
-                &json!({"kind":"sample","tick":state.core.physical.custody.tick,"living_people":living.len(),"max_hunger":max_hunger,"mean_hunger":mean_hunger,"most_hungry":most_hungry,"at_starvation_threshold":hungry,"living_animals":animals,"food_stocks":food_stocks,"food_custody":food_custody,"family_totals":state.family.as_ref().map(|family| &family.totals),"events":counts,"choices":choice_counts,"checkpoint":checkpoint}),
+                &json!({"kind":"sample","tick":state.core.physical.custody.tick,"offset_millis":offset_millis,"simulated_millis":simulated_millis,"living_people":living.len(),"max_hunger":max_hunger,"mean_hunger":mean_hunger,"most_hungry":most_hungry,"at_starvation_threshold":hungry,"living_animals":animals,"food_stocks":food_stocks,"food_custody":food_custody,"family_totals":state.family.as_ref().map(|family| &family.totals),"events":counts,"choices":choice_counts,"checkpoint":checkpoint}),
             )?;
             counts.clear();
             choice_counts.clear();
@@ -240,7 +305,7 @@ fn run(
     }
     write_line(
         &mut writer,
-        &json!({"kind":"complete","ticks":ticks,"last_tick":host.history_view().tick}),
+        &json!({"kind":"complete","steps":ticks,"ticks":requested_step_millis.is_none().then_some(ticks),"last_tick":host.history_view().tick}),
     )
 }
 
@@ -248,7 +313,7 @@ fn main() -> Result<(), String> {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let mut args = std::env::args_os().skip(1);
     let first = args.next().ok_or(
-        "usage: history_probe [--resume] SOURCE OUTPUT TICKS [CHECKPOINT_INTERVAL] [WORKERS]",
+        "usage: history_probe [--resume] SOURCE OUTPUT STEPS [CHECKPOINT_INTERVAL] [WORKERS] [STEP_MILLIS]",
     )?;
     let resume = first == "--resume";
     let source = if resume {
@@ -266,6 +331,7 @@ fn main() -> Result<(), String> {
     let ticks = parse(args.next().ok_or("missing ticks")?)?;
     let interval = args.next().map(parse).transpose()?.unwrap_or(24);
     let workers = args.next().map(parse).transpose()?.unwrap_or(1);
+    let step_millis = args.next().map(parse).transpose()?;
     if ticks == 0 || interval == 0 || workers == 0 || args.next().is_some() {
         return Err("ticks, interval and workers must be positive, with no extra arguments".into());
     }
@@ -274,12 +340,96 @@ fn main() -> Result<(), String> {
         .num_threads(workers)
         .build()
         .map_err(|error| error.to_string())?
-        .install(|| run(&root, &source, &output, ticks, interval, resume))
+        .install(|| {
+            run_steps(
+                &root,
+                &source,
+                &output,
+                ticks,
+                interval,
+                resume,
+                step_millis,
+            )
+        })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn minute_observation_preserves_world_and_counts_across_resume() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let source = root.join("content/scenarios/economy-history-integrated-hourly.toml");
+        let token = format!(
+            "legacy-minute-probe-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+        let hourly = std::env::temp_dir().join(format!("{token}-hourly.ndjson"));
+        let minute = std::env::temp_dir().join(format!("{token}-minute.ndjson"));
+        let resumed = std::env::temp_dir().join(format!("{token}-resumed.ndjson"));
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(1)
+            .build()
+            .unwrap()
+            .install(|| run_steps(&root, &source, &hourly, 2, 2, false, None))
+            .unwrap();
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(4)
+            .build()
+            .unwrap()
+            .install(|| run_steps(&root, &source, &minute, 120, 30, false, Some(60_000)))
+            .unwrap();
+        let start = minute.with_extension("time-1800000.json");
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(1)
+            .build()
+            .unwrap()
+            .install(|| run_steps(&root, &start, &resumed, 90, 90, true, Some(60_000)))
+            .unwrap();
+        let read = |path: PathBuf| -> CoreHostSnapshot {
+            serde_json::from_reader(File::open(path).unwrap()).unwrap()
+        };
+        let expected = read(hourly.with_extension("tick-2.json"));
+        assert_eq!(read(minute.with_extension("time-7200000.json")), expected);
+        assert_eq!(read(resumed.with_extension("time-7200000.json")), expected);
+        let counts = |path: &Path, field: &str| -> u64 {
+            std::fs::read_to_string(path)
+                .unwrap()
+                .lines()
+                .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+                .filter(|row| row["kind"] == "sample")
+                .map(|row| row["events"][field].as_u64().unwrap_or(0))
+                .sum()
+        };
+        for field in [
+            "meetings",
+            "language_events",
+            "signal_events",
+            "recipe_learning",
+            "work_started",
+            "work_finished",
+        ] {
+            assert_eq!(counts(&hourly, field), counts(&minute, field), "{field}");
+        }
+        for path in [
+            hourly.clone(),
+            minute.clone(),
+            resumed.clone(),
+            hourly.with_extension("tick-2.json"),
+            minute.with_extension("time-1800000.json"),
+            minute.with_extension("time-3600000.json"),
+            minute.with_extension("time-5400000.json"),
+            minute.with_extension("time-7200000.json"),
+            resumed.with_extension("time-7200000.json"),
+        ] {
+            std::fs::remove_file(path).unwrap();
+        }
+    }
 
     #[test]
     fn probe_counts_work_completed_inside_an_hour() {

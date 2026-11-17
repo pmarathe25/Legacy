@@ -3,6 +3,7 @@
 //! This coordinator does not run economic decisions or other world owners.
 //! Its caller supplies already admitted work rates. Nonperishable work can be
 //! published early, as can completed travel; periodic effects settle at the boundary.
+pub use game_economy_person::HungerRate;
 use game_economy_person::{
     Person, Rules,
     travel::{self, Travel},
@@ -42,6 +43,10 @@ pub use host::{
 pub struct CoreSnapshot {
     pub seed: u64,
     pub physical: Snapshot,
+    /// Absolute simulated milliseconds at the current physical boundary.
+    /// Legacy snapshots derive this once from their tick and original quantum.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub boundary_millis: Option<u128>,
     pub people: Vec<Person>,
     pub rules: Rules,
     #[serde(default)]
@@ -56,6 +61,7 @@ pub struct CoreInterval {
     generation: u64,
     seed: u64,
     physical: Runtime,
+    boundary_millis: u128,
     people: Vec<Person>,
     rules: Rules,
     travel: Option<Travel>,
@@ -172,6 +178,7 @@ impl CoreInterval {
         let CoreSnapshot {
             seed,
             physical,
+            boundary_millis,
             people,
             rules,
             travel,
@@ -180,7 +187,14 @@ impl CoreInterval {
         } = snapshot;
         let physical = Runtime::compile(physical)?;
         let quantum = physical.tick_millis();
+        let boundary_millis =
+            boundary_millis.unwrap_or(u128::from(physical.tick()) * u128::from(quantum));
+        if boundary_millis.checked_add(u128::from(quantum)).is_none() {
+            return Err("simulation time overflow".into());
+        }
+        let hunger_period = rules.hunger_rate.map_or(quantum, |rate| rate.per_millis);
         if people.par_windows(2).any(|p| p[0].id >= p[1].id)
+            || hunger_period == 0
             || rules.max_health == 0
             || rules.carrying_capacity == 0
             || rules.starvation_threshold == 0
@@ -188,7 +202,7 @@ impl CoreInterval {
             || people.par_iter().any(|p| {
                 p.id == 0
                     || p.health > rules.max_health
-                    || p.hunger_remainder >= quantum
+                    || p.hunger_remainder >= hunger_period
                     || (p.hunger == u32::MAX && p.hunger_remainder != 0)
                     || p.immortal.as_ref().is_some_and(|immortal| {
                         immortal.recovery_per_tick == 0 || p.hunger != 0 || p.hunger_remainder != 0
@@ -248,6 +262,7 @@ impl CoreInterval {
             generation: 0,
             seed,
             physical,
+            boundary_millis,
             people,
             rules,
             travel,
@@ -259,6 +274,7 @@ impl CoreInterval {
         CoreSnapshot {
             seed: self.seed,
             physical: self.physical.snapshot(),
+            boundary_millis: Some(self.boundary_millis),
             people: self.people.par_iter().cloned().collect(),
             rules: self.rules.clone(),
             travel: self.travel.clone(),
@@ -270,6 +286,10 @@ impl CoreInterval {
         self.physical
             .work_interval()
             .map(|interval| interval.elapsed_millis)
+    }
+    /// Absolute simulated time, independent of the caller's advance partitions.
+    pub fn simulated_millis(&self) -> u128 {
+        self.boundary_millis + u128::from(self.elapsed_millis().unwrap_or(0))
     }
     /// Inspect the earliest work, travel, or optional hunger threshold. Early
     /// Work and travel can be published early under the restrictions below.
@@ -317,8 +337,12 @@ impl CoreInterval {
                 game_economy_person::next_hunger_threshold(
                     &self.people,
                     threshold,
-                    self.rules.hunger_per_tick,
-                    quantum,
+                    self.rules
+                        .hunger_rate
+                        .map_or(self.rules.hunger_per_tick, |rate| rate.units),
+                    self.rules
+                        .hunger_rate
+                        .map_or(quantum, |rate| rate.per_millis),
                 )
             })
             .transpose()
@@ -869,9 +893,13 @@ impl CoreInterval {
         }
         game_economy_person::progress_hunger(
             &mut people,
-            self.rules.hunger_per_tick,
+            self.rules
+                .hunger_rate
+                .map_or(self.rules.hunger_per_tick, |rate| rate.units),
             consumed,
-            quantum,
+            self.rules
+                .hunger_rate
+                .map_or(quantum, |rate| rate.per_millis),
         )
         .map_err(str::to_owned)?;
         let advanced = self.physical.progress_work_interval(consumed)?;
@@ -937,6 +965,10 @@ impl CoreInterval {
     /// Publish after all other owners have validated their own staged state.
     pub fn commit_settlement(&mut self, draft: CoreSettlementDraft) -> Result<Events, String> {
         self.validate_settlement(&draft)?;
+        let boundary_millis = self
+            .boundary_millis
+            .checked_add(u128::from(self.physical.tick_millis()))
+            .ok_or("simulation time overflow")?;
         let generation = self
             .generation
             .checked_add(1)
@@ -946,6 +978,7 @@ impl CoreInterval {
         self.nutrition = draft.people.nutrition;
         self.pending_food = draft.people.pending;
         self.travel = draft.travel;
+        self.boundary_millis = boundary_millis;
         self.generation = generation;
         Ok(events)
     }

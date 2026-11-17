@@ -22,6 +22,9 @@ use std::path::Path;
 struct Scenario {
     seed: u64,
     tick_millis: u64,
+    /// Autonomous decision cadence, independent of the physical quantum.
+    #[serde(default)]
+    decision_period_millis: Option<u64>,
     stock_capacity: u64,
     food_relief_divisor: u32,
     rules: Rules,
@@ -996,6 +999,8 @@ pub fn core_scenario_with_options(
     let language = authored.language;
     let language_topic_profiles = authored.language_topic_profiles;
     let signals = authored.signals;
+    let decision_period_millis = authored.decision_period_millis;
+    let hunger_rate = authored.rules.hunger_rate;
     let work_capabilities = authored.work_capabilities;
     let regions: HashSet<_> = authored.regions.iter().map(|region| region.id).collect();
     let mechanics = authored.mechanics;
@@ -1006,6 +1011,7 @@ pub fn core_scenario_with_options(
     let scenario = scenario_with_options_inner(path, content, seed, population_path, true)?;
     let mut snapshot =
         game_economy::core_interval::CoreHostSnapshot::from_scenario(scenario.snapshot())?;
+    snapshot.core.rules.hunger_rate = hunger_rate;
     if let Some(owner) = &mut personal_conflict {
         owner
             .attacks
@@ -1377,7 +1383,7 @@ pub fn core_scenario_with_options(
             observations: vec![],
         });
     }
-    let period = snapshot.core.physical.tick_millis;
+    let period = decision_period_millis.unwrap_or(snapshot.core.physical.tick_millis);
     let mut host = game_economy::core_interval::CoreHost::begin(snapshot, &[])?;
     host.enable_schedule(period, 1)?;
     if !personal_choices.is_empty() || birth_choices.is_some() {
@@ -1417,6 +1423,17 @@ fn scenario_with_options_inner(
 ) -> Result<Economy, String> {
     let source = std::fs::read_to_string(path).map_err(|error| error.to_string())?;
     let mut scenario: Scenario = toml::from_str(&source).map_err(|error| error.to_string())?;
+    if scenario.decision_period_millis.is_some() && !interval_features {
+        return Err("elapsed decision cadence requires the interval simulation host".into());
+    }
+    if scenario.rules.hunger_rate.is_some() {
+        if !interval_features {
+            return Err("elapsed hunger rates require the interval simulation host".into());
+        }
+        // The legacy loader constructs an Economy as a content bridge; the
+        // explicit elapsed-time rule is attached only to the interval host.
+        scenario.rules.hunger_rate = None;
+    }
     if (scenario.language.is_some() || !scenario.language_topic_profiles.is_empty())
         && !interval_features
     {

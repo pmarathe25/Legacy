@@ -89,6 +89,7 @@ impl CoreHostSnapshot {
             core: CoreSnapshot {
                 seed: state.seed,
                 physical: state.physical,
+                boundary_millis: None,
                 people: state.people,
                 rules: state.rules,
                 travel: state.travel,

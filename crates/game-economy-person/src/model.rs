@@ -1,4 +1,11 @@
 use serde::{Deserialize, Serialize};
+/// A physiological rate in hunger units per explicit elapsed duration.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HungerRate {
+    pub units: u32,
+    pub per_millis: u64,
+}
 /// An incapacitated immortal retains their body and recovers instead of dying.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -12,7 +19,7 @@ pub struct Person {
     pub region: Option<u64>,
     pub health: u32,
     pub hunger: u32,
-    /// Sub-unit hunger accumulated against the physical time quantum.
+    /// Sub-unit hunger accumulated against the configured hunger rate period.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub hunger_remainder: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -89,7 +96,12 @@ impl Person {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Rules {
+    /// Compatibility rate for older whole-boundary worlds.
+    #[serde(default)]
     pub hunger_per_tick: u32,
+    /// Explicit elapsed-time rate; absent retains legacy quantum-based behavior.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hunger_rate: Option<HungerRate>,
     pub meal_threshold: u32,
     pub starvation_threshold: u32,
     pub starvation_damage: u32,
@@ -253,6 +265,7 @@ mod tests {
         p.hunger_remainder = 500;
         let rules = Rules {
             hunger_per_tick: 1,
+            hunger_rate: None,
             meal_threshold: 1,
             starvation_threshold: 10,
             starvation_damage: 1,
@@ -330,6 +343,7 @@ mod tests {
         initial.hunger_remainder = 500;
         let rules = Rules {
             hunger_per_tick: 2,
+            hunger_rate: None,
             meal_threshold: 1,
             starvation_threshold: 3,
             starvation_damage: 4,
