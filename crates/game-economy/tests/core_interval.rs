@@ -14349,6 +14349,25 @@ fn shared_interval_fixture(pressure: bool) -> CoreHostSnapshot {
     })).unwrap()
 }
 
+fn two_helpers_fixture() -> CoreHostSnapshot {
+    let mut initial = shared_interval_fixture(false);
+    let mut third = initial.core.people[1].clone();
+    third.id = 3;
+    initial.core.people.push(third);
+    initial.core.physical.recipes[0].ticks = 4;
+    initial.core.physical.work[0].job.remaining = 4;
+    let sites = &mut initial.sites.as_mut().unwrap().facilities;
+    sites.sites[0].capacity = 3;
+    sites.requirements[0].slots = 3;
+    sites.bindings[0].slots = 3;
+    let shared = &mut initial.shared_work.as_mut().unwrap().owner;
+    shared.rules[0].max_helpers = 2;
+    let mut preference = shared.preferences[0].clone();
+    preference.person = 3;
+    shared.preferences.push(preference);
+    initial
+}
+
 #[test]
 fn helpers_contribute_actual_fractional_time_and_resume_deterministically() {
     fn run(workers: usize, pressure: bool) -> serde_json::Value {
@@ -14413,22 +14432,7 @@ fn individual_helpers_can_withdraw_without_stopping_others() {
             .build()
             .unwrap()
             .install(|| {
-                let mut initial = shared_interval_fixture(false);
-                let mut third = initial.core.people[1].clone();
-                third.id = 3;
-                initial.core.people.push(third);
-                initial.core.physical.recipes[0].ticks = 4;
-                initial.core.physical.work[0].job.remaining = 4;
-                let sites = &mut initial.sites.as_mut().unwrap().facilities;
-                sites.sites[0].capacity = 3;
-                sites.requirements[0].slots = 3;
-                sites.bindings[0].slots = 3;
-                let shared = &mut initial.shared_work.as_mut().unwrap().owner;
-                shared.rules[0].max_helpers = 2;
-                let mut preference = shared.preferences[0].clone();
-                preference.person = 3;
-                shared.preferences.push(preference);
-                let mut host = CoreHost::begin(initial, &[(1, 1)]).unwrap();
+                let mut host = CoreHost::begin(two_helpers_fixture(), &[(1, 1)]).unwrap();
                 assert_eq!(host.assist_work_autonomously(&[]).unwrap(), vec![2, 3]);
                 host.progress(100).unwrap();
                 let before = host.snapshot();
@@ -14477,6 +14481,53 @@ fn individual_helpers_can_withdraw_without_stopping_others() {
                         .any(|row| row.event.person == 3 && row.elapsed_millis == 1000)
                 );
                 serde_json::to_value(settled).unwrap()
+            })
+    }
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
+fn one_resting_helper_does_not_release_a_hungry_coworker() {
+    fn run(workers: usize) -> serde_json::Value {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut initial = two_helpers_fixture();
+                initial.fatigue = Some(timed_fatigue());
+                let mut host = CoreHost::begin(initial, &[(1, 1)]).unwrap();
+                assert_eq!(host.assist_work_autonomously(&[]).unwrap(), vec![2, 3]);
+                host.progress(100).unwrap();
+                let mut state = host.snapshot();
+                state.core.people[1].controlled = true;
+                state.core.people[2].hunger = state.core.rules.max_work_hunger + 1;
+                host = CoreHost::resume(state).unwrap();
+                host.set_controlled_rest(2, true).unwrap();
+                host.progress(100).unwrap();
+                let state = host.snapshot();
+                let shared = state.shared_work.as_ref().unwrap();
+                assert_eq!(shared.sessions.len(), 1);
+                assert_eq!(
+                    (
+                        shared.sessions[0].event.person,
+                        shared.sessions[0].elapsed_millis
+                    ),
+                    (3, 200)
+                );
+                assert_eq!(
+                    (
+                        shared.records[0].event.person,
+                        shared.records[0].elapsed_millis
+                    ),
+                    (2, 100)
+                );
+                assert_eq!(
+                    state.core.physical.work_interval.as_ref().unwrap().rates,
+                    vec![(1, 2)]
+                );
+                assert_eq!(CoreHost::resume(state.clone()).unwrap().snapshot(), state);
+                serde_json::to_value(state).unwrap()
             })
     }
     assert_eq!(run(1), run(4));

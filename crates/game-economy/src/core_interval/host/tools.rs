@@ -92,45 +92,51 @@ impl CoreHost {
                 Some((id, rate, !present || rests || dead || (was_paused && !able)))
             })
             .collect();
-        if self.shared_work.as_ref().is_some_and(|owner| {
-            owner.sessions.par_iter().any(|session| {
-                choices
-                    .binary_search_by_key(&session.event.job, |row| row.0)
-                    .ok()
-                    .is_none_or(|i| choices[i].2)
-                    || blocked.binary_search(&session.event.person).is_ok()
-                    || resting.binary_search(&session.event.person).is_ok()
-                    || view.as_ref().is_some_and(|view| {
-                        !game_economy_work::tools::available(
-                            &self.tool_requirements,
-                            view,
-                            session.event.person,
-                            session.event.recipe,
-                        )
-                    })
-                    || self
-                        .core
-                        .people
-                        .binary_search_by_key(&session.event.person, |person| person.id)
+        let mut unavailable: Vec<_> = self.shared_work.as_ref().map_or_else(Vec::new, |owner| {
+            owner
+                .sessions
+                .par_iter()
+                .filter(|session| {
+                    choices
+                        .binary_search_by_key(&session.event.job, |row| row.0)
                         .ok()
-                        .is_none_or(|i| {
-                            let helper = &self.core.people[i];
-                            helper.health == 0
-                                || helper.hunger > self.core.rules.max_work_hunger
-                                || self
-                                    .core
-                                    .physical
-                                    .work()
-                                    .binary_search_by_key(&session.event.job, |row| row.job.id)
-                                    .ok()
-                                    .is_none_or(|j| {
-                                        helper.region
-                                            != Some(self.core.physical.work()[j].job.region)
-                                    })
+                        .is_none_or(|i| choices[i].2)
+                        || blocked.binary_search(&session.event.person).is_ok()
+                        || resting.binary_search(&session.event.person).is_ok()
+                        || view.as_ref().is_some_and(|view| {
+                            !game_economy_work::tools::available(
+                                &self.tool_requirements,
+                                view,
+                                session.event.person,
+                                session.event.recipe,
+                            )
                         })
-            })
-        }) {
-            self.release_shared_helpers()?;
+                        || self
+                            .core
+                            .people
+                            .binary_search_by_key(&session.event.person, |person| person.id)
+                            .ok()
+                            .is_none_or(|i| {
+                                let helper = &self.core.people[i];
+                                helper.health == 0
+                                    || self
+                                        .core
+                                        .physical
+                                        .work()
+                                        .binary_search_by_key(&session.event.job, |row| row.job.id)
+                                        .ok()
+                                        .is_none_or(|j| {
+                                            helper.region
+                                                != Some(self.core.physical.work()[j].job.region)
+                                        })
+                            })
+                })
+                .map(|session| session.event.person)
+                .collect()
+        });
+        if !unavailable.is_empty() {
+            unavailable.par_sort_unstable();
+            self.withdraw_shared_helpers(&unavailable)?;
             return self.sync_work_rates(blocked);
         }
         let enabled: Vec<_> = choices
