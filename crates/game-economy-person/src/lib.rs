@@ -7,7 +7,7 @@ pub mod travel;
 use game_lot_diet::Effects;
 use game_nutrition::{Nutrition, Person as NutritionPerson};
 use game_production_model::FoodEffect;
-pub use model::{HungerRate, Immortal, Person, Rules, StarvationRate};
+pub use model::{HungerRate, Immortal, Person, RecoveryRate, Rules, StarvationRate};
 use rayon::prelude::*;
 
 /// Find the first personal hunger threshold without serially scanning people.
@@ -73,6 +73,20 @@ pub fn next_starvation_death(
         )
 }
 
+/// Earliest recovery of an incapacitated immortal.
+pub fn next_recovery(people: &[Person]) -> Result<Option<u128>, &'static str> {
+    people.par_iter().map(Person::recovery_after).try_reduce(
+        || None,
+        |left, right| {
+            Ok(match (left, right) {
+                (Some(a), Some(b)) => Some(a.min(b)),
+                (Some(a), None) | (None, Some(a)) => Some(a),
+                (None, None) => None,
+            })
+        },
+    )
+}
+
 /// Stage hunger and starvation from the same opening state.
 pub fn progress_vitals(
     people: &mut [Person],
@@ -103,6 +117,7 @@ pub fn progress_vitals(
             } else if result.starvation_remainder != 0 {
                 return Err("starvation remainder has no rate");
             }
+            result.advance_recovery(elapsed_millis, rules.max_health)?;
             result.hunger = hunger.hunger;
             result.hunger_remainder = hunger.hunger_remainder;
             Ok(result)
@@ -230,7 +245,9 @@ fn prepare_inner(
         .par_iter()
         .map(|person| {
             let mut person = person.clone();
-            if let Some(immortal) = &person.immortal {
+            if let Some(immortal) = &person.immortal
+                && (add_boundary_hunger || immortal.recovery_rate.is_none())
+            {
                 person.health = person
                     .health
                     .saturating_add(immortal.recovery_per_tick)

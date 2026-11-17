@@ -82,6 +82,138 @@ fn fatal_starvation_stops_work_at_its_elapsed_deadline_and_resumes() {
 }
 
 #[test]
+fn elapsed_recovery_restores_travel_capability_without_advancing_early() {
+    let mut state = fixture();
+    state.nutrition = None;
+    state.pending_food.clear();
+    state.people[1].health = 0;
+    state.people[1].hunger = 0;
+    state.people[1].immortal = Some(game_economy_person::Immortal {
+        recovery_per_tick: 0,
+        recovery_rate: Some(game_economy_person::RecoveryRate {
+            units: 4,
+            per_millis: 1000,
+        }),
+        recovery_remainder: 0,
+    });
+    let mut core = CoreInterval::begin(state, &[]).unwrap();
+    let deadline = core.next_deadline(None).unwrap();
+    assert!(deadline.recovery);
+    assert_eq!(deadline.after_millis, 250);
+    assert_eq!(core.progress(1000).unwrap(), 250);
+    let snapshot = core.snapshot();
+    assert_eq!(snapshot.people[1].health, 1);
+    assert_eq!(
+        snapshot.travel.as_ref().unwrap().journeys[0].progress_millis,
+        0
+    );
+    let saved = serde_json::to_string(&snapshot).unwrap();
+    let mut resumed = CoreInterval::resume(serde_json::from_str(&saved).unwrap()).unwrap();
+    assert_eq!(resumed.progress(250).unwrap(), 250);
+    let snapshot = resumed.snapshot();
+    assert_eq!(snapshot.people[1].health, 2);
+    assert_eq!(snapshot.travel.unwrap().journeys[0].progress_millis, 250);
+}
+
+#[test]
+fn recovery_and_travel_match_across_physical_subdivisions() {
+    fn run(quantum: u64, workers: usize) -> (u32, u64, u64) {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut state = fixture();
+                state.nutrition = None;
+                state.pending_food.clear();
+                state.rules.hunger_per_tick = 0;
+                state.rules.starvation_damage = 0;
+                state.physical.tick_millis = quantum;
+                state.travel.as_mut().unwrap().travel_unit_millis = Some(1000);
+                state.people[1].health = 0;
+                state.people[1].hunger = 0;
+                state.people[1].immortal = Some(game_economy_person::Immortal {
+                    recovery_per_tick: 0,
+                    recovery_rate: Some(game_economy_person::RecoveryRate {
+                        units: 4,
+                        per_millis: 1000,
+                    }),
+                    recovery_remainder: 0,
+                });
+                let mut core = CoreInterval::begin(state, &[]).unwrap();
+                let mut elapsed = 0;
+                while elapsed < 500 {
+                    let advanced = core.progress(500 - elapsed).unwrap();
+                    assert!(advanced > 0);
+                    elapsed += advanced;
+                    if core.elapsed_millis() == Some(quantum) && elapsed < 500 {
+                        core.settle().unwrap();
+                        core = CoreInterval::begin(core.snapshot(), &[]).unwrap();
+                    }
+                }
+                let snapshot = core.snapshot();
+                (
+                    snapshot.people[1].health,
+                    snapshot.people[1]
+                        .immortal
+                        .as_ref()
+                        .unwrap()
+                        .recovery_remainder,
+                    snapshot.travel.unwrap().journeys[0].progress_millis,
+                )
+            })
+    }
+    assert_eq!(run(1000, 1), (2, 0, 250));
+    assert_eq!(run(100, 4), run(1000, 1));
+}
+
+#[test]
+fn elapsed_recovery_restores_the_capability_to_continue_chosen_work() {
+    use game_economy::core_interval::PersonalStrike;
+    let mut state = fixture();
+    state.people[0].health = 1;
+    state.people[0].hunger = 0;
+    state.people[0].immortal = Some(game_economy_person::Immortal {
+        recovery_per_tick: 0,
+        recovery_rate: Some(game_economy_person::RecoveryRate {
+            units: 4,
+            per_millis: 1000,
+        }),
+        recovery_remainder: 0,
+    });
+    state.people[1].region = Some(1);
+    state.travel = None;
+    state.nutrition = None;
+    state.pending_food.clear();
+    let snapshot: CoreHostSnapshot = serde_json::from_value(serde_json::json!({
+        "core": state, "personal_conflict": {"capabilities": [{"person": 2, "max_force": 1}]}
+    }))
+    .unwrap();
+    let mut host = CoreHost::begin(snapshot, &[(1, 1)]).unwrap();
+    host.strike_people(
+        &[PersonalStrike {
+            actor: 2,
+            target: 1,
+            force: 1,
+        }],
+        &[],
+        &[],
+    )
+    .unwrap();
+    assert_eq!(host.snapshot().core.people[0].health, 0);
+    assert_eq!(host.progress(1000).unwrap(), 250);
+    let snapshot = host.snapshot();
+    assert_eq!(snapshot.core.people[0].health, 1);
+    assert_eq!(snapshot.core.physical.work[0].progress_remainder, 0);
+    let mut resumed = CoreHost::resume(snapshot).unwrap();
+    assert_eq!(resumed.progress(250).unwrap(), 250);
+    assert_eq!(
+        resumed.snapshot().core.physical.work[0].progress_remainder,
+        250
+    );
+}
+
+#[test]
 fn fatal_starvation_survives_resume_with_family_and_no_conflict_owner() {
     let mut state = fixture();
     state.nutrition = None;
@@ -13658,6 +13790,8 @@ fn incapacitated_immortal_does_not_travel_before_boundary_recovery() {
     initial.people[1].hunger = 0;
     initial.people[1].immortal = Some(game_economy_person::Immortal {
         recovery_per_tick: 5,
+        recovery_rate: None,
+        recovery_remainder: 0,
     });
     initial.pending_food.clear();
     let mut core = CoreInterval::begin(initial, &[(1, 2)]).unwrap();

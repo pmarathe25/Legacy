@@ -91,6 +91,9 @@ impl CoreHost {
     ) -> Result<u64, String> {
         let quantum = self.core.physical.tick_millis();
         let consumed = self.core.progress_limit(requested)?;
+        let recovery_due = game_economy_person::next_recovery(&self.core.people)
+            .map_err(str::to_owned)?
+            .is_some_and(|after| after <= u128::from(consumed));
         let deaths = game_economy_person::starvation_deaths_within(
             &self.core.people,
             &self.core.rules,
@@ -118,7 +121,7 @@ impl CoreHost {
             let advanced = self.core.progress_adjusting(consumed, &reductions)?;
             if advanced > 0 {
                 self.pending_vital_deaths = pending;
-                if !deaths.is_empty() {
+                if !deaths.is_empty() || recovery_due {
                     self.work_checked_revision = None;
                 }
                 if let Some(owner) = staged_shared {
@@ -261,7 +264,7 @@ impl CoreHost {
         let next = chunks.into_par_iter().flatten().collect();
         let advanced = self.core.progress_adjusting(consumed, &reductions)?;
         self.pending_vital_deaths = pending;
-        if !deaths.is_empty() {
+        if !deaths.is_empty() || recovery_due {
             self.work_checked_revision = None;
         }
         self.activity = next;

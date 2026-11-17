@@ -3,7 +3,7 @@
 //! This coordinator does not run economic decisions or other world owners.
 //! Its caller supplies already admitted work rates. Nonperishable work can be
 //! published early, as can completed travel; periodic effects settle at the boundary.
-pub use game_economy_person::HungerRate;
+pub use game_economy_person::{HungerRate, RecoveryRate, StarvationRate};
 use game_economy_person::{
     Person, Rules,
     travel::{self, Travel},
@@ -115,6 +115,7 @@ pub struct CoreDeadline {
     pub arrival: bool,
     pub hunger: bool,
     pub death: bool,
+    pub recovery: bool,
 }
 /// Travelers published at a partial-interval offset.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -222,7 +223,14 @@ impl CoreInterval {
                         })
                     || (p.hunger == u32::MAX && p.hunger_remainder != 0)
                     || p.immortal.as_ref().is_some_and(|immortal| {
-                        immortal.recovery_per_tick == 0 || p.hunger != 0 || p.hunger_remainder != 0
+                        immortal.recovery_rate.map_or(
+                            immortal.recovery_per_tick == 0 || immortal.recovery_remainder != 0,
+                            |rate| {
+                                rate.per_millis == 0
+                                    || immortal.recovery_remainder >= rate.per_millis
+                            },
+                        ) || p.hunger != 0
+                            || p.hunger_remainder != 0
                     })
             })
         {
@@ -230,6 +238,7 @@ impl CoreInterval {
         }
         game_economy_person::next_starvation_death(&people, &rules, quantum)
             .map_err(str::to_owned)?;
+        game_economy_person::next_recovery(&people).map_err(str::to_owned)?;
         let ids: HashSet<_> = people.par_iter().map(|p| p.id).collect();
         if physical.work().par_iter().any(|work| {
             work.phase == game_lot_runtime::Phase::Working
@@ -376,11 +385,19 @@ impl CoreInterval {
             .flatten();
         let death = game_economy_person::next_starvation_death(&self.people, &self.rules, quantum)
             .map_err(str::to_owned)?;
-        let after = [Some(u128::from(remaining)), work, arrival, hunger, death]
-            .into_iter()
-            .flatten()
-            .min()
-            .expect("quantum deadline");
+        let recovery = game_economy_person::next_recovery(&self.people).map_err(str::to_owned)?;
+        let after = [
+            Some(u128::from(remaining)),
+            work,
+            arrival,
+            hunger,
+            death,
+            recovery,
+        ]
+        .into_iter()
+        .flatten()
+        .min()
+        .expect("quantum deadline");
         Ok(CoreDeadline {
             after_millis: after as u64,
             quantum: after == u128::from(remaining),
@@ -388,6 +405,7 @@ impl CoreInterval {
             arrival: arrival == Some(after),
             hunger: hunger == Some(after),
             death: death == Some(after),
+            recovery: recovery == Some(after),
         })
     }
     /// Progress no farther than the next observed deadline. A zero result
@@ -904,11 +922,11 @@ impl CoreInterval {
             .checked_sub(elapsed)
             .ok_or("invalid interval elapsed time")?;
         let limit = requested_millis.min(remaining);
-        Ok(
-            game_economy_person::next_starvation_death(&self.people, &self.rules, quantum)
-                .map_err(str::to_owned)?
-                .map_or(limit, |death| death.min(u128::from(limit)) as u64),
-        )
+        let death = game_economy_person::next_starvation_death(&self.people, &self.rules, quantum)
+            .map_err(str::to_owned)?;
+        let recovery = game_economy_person::next_recovery(&self.people).map_err(str::to_owned)?;
+        Ok(earliest(death, recovery)
+            .map_or(limit, |deadline| deadline.min(u128::from(limit)) as u64))
     }
 
     /// Progress without repeating decisions, publishing arrivals, or completing work.
@@ -938,7 +956,14 @@ impl CoreInterval {
                 .progress_elapsed(&people, consumed, quantum)
                 .map_err(str::to_owned)?;
         }
-        if self.rules.starvation_rate.is_some() {
+        if self.rules.starvation_rate.is_some()
+            || self.people.par_iter().any(|person| {
+                person
+                    .immortal
+                    .as_ref()
+                    .is_some_and(|immortal| immortal.recovery_rate.is_some())
+            })
+        {
             game_economy_person::progress_vitals(&mut people, &self.rules, consumed, quantum)
                 .map_err(str::to_owned)?;
         } else {

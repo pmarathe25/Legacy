@@ -2479,6 +2479,14 @@ impl Economy {
             || state.rules.max_health == 0
             || state.rules.meal_threshold == 0
             || state
+                .rules
+                .hunger_rate
+                .is_some_and(|rate| rate.per_millis == 0)
+            || state
+                .rules
+                .starvation_rate
+                .is_some_and(|rate| rate.per_millis == 0)
+            || state
                 .people
                 .par_windows(2)
                 .any(|rows| rows[0].id == rows[1].id)
@@ -2486,11 +2494,25 @@ impl Economy {
                 person.id == 0
                     || person.region == Some(0)
                     || person.health > state.rules.max_health
-                    || person.hunger_remainder >= state.physical.tick_millis
+                    || person.hunger_remainder
+                        >= state
+                            .rules
+                            .hunger_rate
+                            .map_or(state.physical.tick_millis, |rate| rate.per_millis)
+                    || state
+                        .rules
+                        .starvation_rate
+                        .map_or(person.starvation_remainder != 0, |rate| {
+                            person.starvation_remainder >= rate.per_millis
+                        })
                     || (person.hunger == u32::MAX && person.hunger_remainder != 0)
                     || person.immortal.as_ref().is_some_and(|kind| {
-                        kind.recovery_per_tick == 0
-                            || person.hunger != 0
+                        kind.recovery_rate.map_or(
+                            kind.recovery_per_tick == 0 || kind.recovery_remainder != 0,
+                            |rate| {
+                                rate.per_millis == 0 || kind.recovery_remainder >= rate.per_millis
+                            },
+                        ) || person.hunger != 0
                             || person.hunger_remainder != 0
                     })
             })
@@ -3166,8 +3188,16 @@ impl Economy {
         player_meal: Option<person::meal::Choice>,
         player_transfer: Option<game_economy_interaction::PhysicalChoice>,
     ) -> Result<Draft, String> {
-        if self.rules.starvation_rate.is_some() {
-            return Err("elapsed starvation requires the interval host".into());
+        if self.rules.hunger_rate.is_some()
+            || self.rules.starvation_rate.is_some()
+            || self.people.par_iter().any(|person| {
+                person
+                    .immortal
+                    .as_ref()
+                    .is_some_and(|immortal| immortal.recovery_rate.is_some())
+            })
+        {
+            return Err("elapsed physiology requires the interval host".into());
         }
         #[cfg(feature = "profile")]
         let mut profile_phase = game_diagnostics::span("economy.setup");

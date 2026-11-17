@@ -17934,6 +17934,8 @@ fn embodied_guardian_fixture() -> State {
         starvation_remainder: 0,
         immortal: Some(Immortal {
             recovery_per_tick: 1,
+            recovery_rate: None,
+            recovery_remainder: 0,
         }),
         willing_to_work: false,
         seek_meals: false,
@@ -21911,6 +21913,8 @@ fn people_interpret_capture_and_release_in_their_own_way() {
     unconscious.people[3].health = 0;
     unconscious.people[3].immortal = Some(Immortal {
         recovery_per_tick: 1,
+        recovery_rate: None,
+        recovery_remainder: 0,
     });
     let mut world = Economy::compile(unconscious).unwrap();
     assert!(world.confine_person(1, 4, 1).unwrap());
@@ -21997,6 +22001,8 @@ fn immortal_person_recovers_in_place_without_mortal_death_or_metabolism() {
         starvation_remainder: 0,
         immortal: Some(Immortal {
             recovery_per_tick: 1,
+            recovery_rate: None,
+            recovery_remainder: 0,
         }),
         willing_to_work: false,
         seek_meals: false,
@@ -34652,6 +34658,8 @@ fn an_immortal_can_be_incapacitated_in_ordinary_combat_and_recover() {
         starvation_remainder: 0,
         immortal: Some(Immortal {
             recovery_per_tick: 1,
+            recovery_rate: None,
+            recovery_remainder: 0,
         }),
         willing_to_work: false,
         seek_meals: false,

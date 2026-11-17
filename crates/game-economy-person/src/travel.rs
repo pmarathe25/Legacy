@@ -1131,6 +1131,8 @@ mod elapsed_tests {
                 starvation_remainder: 0,
                 immortal: (id == 2).then_some(crate::Immortal {
                     recovery_per_tick: 1,
+                    recovery_rate: None,
+                    recovery_remainder: 0,
                 }),
                 willing_to_work: false,
                 seek_meals: false,
@@ -1173,6 +1175,8 @@ mod elapsed_tests {
                             starvation_remainder: 0,
                             immortal: (id == 1).then_some(crate::Immortal {
                                 recovery_per_tick: 1,
+                                recovery_rate: None,
+                                recovery_remainder: 0,
                             }),
                             willing_to_work: false,
                             seek_meals: false,

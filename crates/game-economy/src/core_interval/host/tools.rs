@@ -12,6 +12,7 @@ impl CoreHost {
     pub(super) fn sync_work_rates(&mut self, blocked: &[u64]) -> Result<(), String> {
         if self.tool_requirements.is_empty()
             && self.core.rules.starvation_rate.is_none()
+            && self.paused_work_rates.is_empty()
             && self.work_capabilities.is_none()
             && self.fatigue.is_none()
             && self.health.is_none()

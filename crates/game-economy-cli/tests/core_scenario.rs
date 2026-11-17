@@ -6146,6 +6146,35 @@ fn authored_decision_cadence_is_independent_of_physical_quantum() {
 }
 
 #[test]
+fn authored_elapsed_recovery_restores_physical_capability() {
+    let root = root();
+    let source =
+        std::fs::read_to_string(root.join("content/scenarios/economy-core-personal-choices.toml"))
+            .unwrap()
+            .replace("\r\n", "\n");
+    let scenario = source.replacen(
+        "health = 100\nhunger = 0",
+        "health = 0\nimmortal = { recovery_rate = { units = 4, per_millis = 1000 } }\nhunger = 0",
+        1,
+    );
+    let path = std::env::temp_dir().join(format!(
+        "legacy-elapsed-recovery-{}-{}.toml",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::write(&path, scenario).unwrap();
+    let mut host = game_economy_cli::core_scenario(&path, &root.join("content")).unwrap();
+    std::fs::remove_file(path).unwrap();
+    assert_eq!(host.snapshot().core.people[0].health, 0);
+    let result = host.advance_continuous(250, &[]).unwrap();
+    assert_eq!(result.failure, None);
+    assert_eq!(host.snapshot().core.people[0].health, 1);
+}
+
+#[test]
 fn integrated_hourly_world_runs_with_personal_choices_and_borrowed_history() {
     use game_economy::core_interval::CoreHost;
     fn run(workers: usize) -> serde_json::Value {

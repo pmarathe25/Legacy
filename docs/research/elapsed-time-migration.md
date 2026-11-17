@@ -35,7 +35,13 @@ An optional `rules.starvation_rate` uses elapsed exposure after each person's
 hunger crosses the starvation threshold. Fractional damage is saved, and the
 interval coordinator stops at fatal deadlines before advancing work or travel
 farther. Fatal helper withdrawals and family deaths are staged and saved. The
-older boundary-only economy runner rejects this rate; use the interval host.
+older boundary-only economy runner rejects elapsed physiology rates; use the
+interval host.
+An immortal can also specify `recovery_rate = { units = ..., per_millis = ... }`.
+Its fractional recovery is saved and the interval coordinator schedules the
+return of physical capability, so work and travel cannot accrue while the
+person remains incapacitated. Recovery itself does not decide whether they
+rest; the existing automatic fatigue and rest behavior still needs redesign.
 Renewal is still settled at a physical boundary, alongside gathering, using
 the season selected for that boundary. Changing boundaries can therefore
 change the ordering of gathering and renewal or cross a season transition;
@@ -46,7 +52,7 @@ retain absolute milliseconds at the current boundary; an older snapshot
 derives this value from its original tick and quantum when loaded. This clock
 does not by itself convert other owners' tick-based state when a quantum
 changes. This does not yet convert
-recovery, nutrition, fatigue, family
+nutrition, fatigue, family
 and animal clocks, other ecological processes, disease, or social randomness. In
 particular, a short physical quantum must not be advertised as a faithful
 minute-world until those owners have independent elapsed-time rules.

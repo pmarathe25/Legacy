@@ -13,11 +13,23 @@ pub struct StarvationRate {
     pub units: u32,
     pub per_millis: u64,
 }
+/// Health recovered per explicit elapsed duration.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RecoveryRate {
+    pub units: u32,
+    pub per_millis: u64,
+}
 /// An incapacitated immortal retains their body and recovers instead of dying.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Immortal {
+    #[serde(default)]
     pub recovery_per_tick: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recovery_rate: Option<RecoveryRate>,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub recovery_remainder: u64,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -45,6 +57,57 @@ fn is_zero(value: &u64) -> bool {
 }
 
 impl Person {
+    /// Time until an incapacitated immortal can physically act again.
+    pub fn recovery_after(&self) -> Result<Option<u128>, &'static str> {
+        let Some(immortal) = &self.immortal else {
+            return Ok(None);
+        };
+        let Some(rate) = immortal.recovery_rate else {
+            return if immortal.recovery_remainder == 0 {
+                Ok(None)
+            } else {
+                Err("recovery remainder has no rate")
+            };
+        };
+        if rate.per_millis == 0 || immortal.recovery_remainder >= rate.per_millis {
+            return Err("invalid fractional recovery");
+        }
+        if self.health != 0 || rate.units == 0 {
+            return Ok(None);
+        }
+        let needed = u128::from(rate.per_millis - immortal.recovery_remainder);
+        Ok(Some(needed.div_ceil(u128::from(rate.units))))
+    }
+
+    /// Recover independently of decisions and other people.
+    pub fn advance_recovery(
+        &mut self,
+        elapsed_millis: u64,
+        max_health: u32,
+    ) -> Result<(), &'static str> {
+        self.recovery_after()?;
+        let Some(immortal) = &mut self.immortal else {
+            return Ok(());
+        };
+        let Some(rate) = immortal.recovery_rate else {
+            return Ok(());
+        };
+        if max_health == 0 || self.health > max_health {
+            return Err("invalid recovery health");
+        }
+        let credit = u128::from(immortal.recovery_remainder)
+            + u128::from(rate.units) * u128::from(elapsed_millis);
+        let gained = credit / u128::from(rate.per_millis);
+        let room = u128::from(max_health - self.health);
+        if gained >= room {
+            self.health = max_health;
+            immortal.recovery_remainder = 0;
+        } else {
+            self.health += gained as u32;
+            immortal.recovery_remainder = (credit % u128::from(rate.per_millis)) as u64;
+        }
+        Ok(())
+    }
     /// Time until starvation is fatal, including any time before its threshold.
     pub fn starvation_death_after(
         &self,
@@ -230,6 +293,45 @@ mod tests {
     }
 
     #[test]
+    fn elapsed_recovery_preserves_fraction_and_reports_capability() {
+        let mut person = person();
+        person.health = 0;
+        person.immortal = Some(Immortal {
+            recovery_per_tick: 0,
+            recovery_rate: Some(RecoveryRate {
+                units: 4,
+                per_millis: 1000,
+            }),
+            recovery_remainder: 0,
+        });
+        assert_eq!(person.recovery_after().unwrap(), Some(250));
+        person.advance_recovery(100, 10).unwrap();
+        assert_eq!(person.health, 0);
+        person = serde_json::from_str(&serde_json::to_string(&person).unwrap()).unwrap();
+        assert_eq!(person.recovery_after().unwrap(), Some(150));
+        person.advance_recovery(150, 10).unwrap();
+        assert_eq!(person.health, 1);
+        assert_eq!(person.recovery_after().unwrap(), None);
+        person.advance_recovery(10000, 10).unwrap();
+        assert_eq!(person.health, 10);
+        assert_eq!(person.immortal.as_ref().unwrap().recovery_remainder, 0);
+
+        let mut stalled = person;
+        stalled.health = 0;
+        stalled.immortal = Some(Immortal {
+            recovery_per_tick: 0,
+            recovery_rate: Some(RecoveryRate {
+                units: 0,
+                per_millis: 1000,
+            }),
+            recovery_remainder: 0,
+        });
+        assert_eq!(stalled.recovery_after().unwrap(), None);
+        stalled.advance_recovery(1000, 10).unwrap();
+        assert_eq!(stalled.health, 0);
+    }
+
+    #[test]
     fn fractional_hunger_is_partition_independent_and_survives_reload() {
         let mut whole = person();
         whole.advance_hunger(3, 1000, 1000).unwrap();
@@ -270,6 +372,8 @@ mod tests {
         p.hunger_remainder = 0;
         p.immortal = Some(Immortal {
             recovery_per_tick: 1,
+            recovery_rate: None,
+            recovery_remainder: 0,
         });
         assert_eq!(p.hunger_threshold_after(4, 3, 1000).unwrap(), None);
     }
@@ -350,6 +454,8 @@ mod tests {
         let mut p = person();
         p.immortal = Some(Immortal {
             recovery_per_tick: 1,
+            recovery_rate: None,
+            recovery_remainder: 0,
         });
         p.advance_hunger(1, 500, 1000).unwrap();
         assert_eq!((p.hunger, p.hunger_remainder), (0, 0));
@@ -411,6 +517,8 @@ mod tests {
                             if id == 1 {
                                 row.immortal = Some(Immortal {
                                     recovery_per_tick: 1,
+                                    recovery_rate: None,
+                                    recovery_remainder: 0,
                                 });
                             }
                             row
