@@ -2,6 +2,81 @@ use game_autowork::{Autowork, Policy};
 use game_production::{Amount, Inventory, Production, Recipe, Stock};
 
 #[test]
+fn multiple_recipes_are_offered_but_an_unselected_plan_does_not_choose() {
+    let people = vec![(1, Some(1), 100, 0), (2, Some(1), 100, 0)];
+    let recipe = |id| Recipe {
+        id,
+        name: format!("recipe-{id}"),
+        ticks: 1,
+        inputs: vec![Amount {
+            good: 1,
+            quantity: 1,
+        }],
+        outputs: vec![Amount {
+            good: 2,
+            quantity: 1,
+        }],
+    };
+    let production = Production {
+        max_work_hunger: 20,
+        goods: vec![],
+        recipes: vec![recipe(1), recipe(2)],
+        recipe_categories: vec![],
+        inventories: vec![Inventory {
+            region: 1,
+            stocks: vec![
+                Stock {
+                    good: 1,
+                    quantity: 10,
+                    capacity: 10,
+                },
+                Stock {
+                    good: 2,
+                    quantity: 0,
+                    capacity: 10,
+                },
+            ],
+        }],
+        jobs: vec![],
+        events: vec![],
+    };
+    let policy = |person, recipe| Policy {
+        person,
+        recipe,
+        enabled: true,
+        disregard_claims: false,
+    };
+    let auto = Autowork {
+        next_id: 1,
+        policies: vec![policy(2, 1), policy(1, 2), policy(1, 1)],
+        requests: None,
+    };
+    let expected = vec![(1, 1), (1, 2), (2, 1)];
+    for workers in [1, 4] {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let opportunities = auto.opportunities(&people, &production, &[], None).unwrap();
+                assert_eq!(
+                    opportunities
+                        .iter()
+                        .map(|row| (row.person, row.recipe))
+                        .collect::<Vec<_>>(),
+                    expected
+                );
+                let plan = auto.plan(&people, &production, &[], None).unwrap().unwrap();
+                assert_eq!(plan.actors, vec![2]);
+                assert_eq!(plan.requests[0].recipe, 1);
+                let mut duplicate = auto.clone();
+                duplicate.policies.push(policy(1, 2));
+                assert!(duplicate.validate(&people, &production).is_err());
+            });
+    }
+}
+
+#[test]
 fn ordered_and_unordered_busy_people_exclude_the_same_workers() {
     let people = (1..=4).map(|id| (id, Some(1), 100, 0)).collect::<Vec<_>>();
     let production = Production {

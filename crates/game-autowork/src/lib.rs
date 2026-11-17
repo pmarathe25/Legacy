@@ -61,17 +61,38 @@ pub struct Plan {
     pub actors: Vec<u64>,
 }
 impl Autowork {
+    /// People with multiple enabled recipes need an individual selection before
+    /// legacy planning can reserve stock or provisional site capacity.
+    pub fn ambiguous_people(&self) -> Vec<u64> {
+        let mut people: Vec<_> = self
+            .policies
+            .par_iter()
+            .filter(|row| row.enabled)
+            .map(|row| row.person)
+            .collect();
+        if people.par_windows(2).any(|pair| pair[0] > pair[1]) {
+            people.par_sort_unstable();
+        }
+        people
+            .par_chunk_by(|a, b| a == b)
+            .filter_map(|group| (group.len() > 1).then_some(group[0]))
+            .collect()
+    }
     pub fn validate(
         &self,
         people: &[PersonSnapshot],
         production: &Production,
     ) -> Result<(), String> {
         let recipes: HashSet<_> = production.recipes.iter().map(|r| r.id).collect();
-        let mut people_ids: Vec<_> = self.policies.par_iter().map(|p| p.person).collect();
-        if people_ids.par_windows(2).any(|pair| pair[0] > pair[1]) {
-            people_ids.par_sort_unstable();
+        let mut keys: Vec<_> = self
+            .policies
+            .par_iter()
+            .map(|p| (p.person, p.recipe))
+            .collect();
+        if keys.par_windows(2).any(|pair| pair[0] > pair[1]) {
+            keys.par_sort_unstable();
         }
-        if people_ids.par_windows(2).any(|p| p[0] == p[1])
+        if keys.par_windows(2).any(|p| p[0] == p[1])
             || self.policies.par_iter().any(|policy| {
                 person_index(people, policy.person).is_none() || !recipes.contains(&policy.recipe)
             })
@@ -154,7 +175,7 @@ impl Autowork {
             .iter()
             .map(|i| (i.region, i))
             .collect();
-        let intents = self.opportunities_validated(
+        let mut intents = self.opportunities_validated(
             people,
             production,
             busy,
@@ -162,6 +183,16 @@ impl Autowork {
             &recipes,
             &inventories,
         );
+        // This legacy planner has no personal comparison between alternatives.
+        // Leave ambiguous actors for the individual choice path instead of
+        // starting multiple jobs or arbitrarily selecting a recipe for them.
+        let ambiguous = self.ambiguous_people();
+        if !ambiguous.is_empty() {
+            intents = intents
+                .into_par_iter()
+                .filter(|row| ambiguous.binary_search(&row.person).is_err())
+                .collect();
+        }
         let granted = grant(intents, &recipes, &inventories);
         if granted.is_empty() {
             return Ok(None);
@@ -282,9 +313,9 @@ impl Autowork {
             .collect();
         if intents
             .par_windows(2)
-            .any(|pair| pair[0].person > pair[1].person)
+            .any(|pair| (pair[0].person, pair[0].recipe) > (pair[1].person, pair[1].recipe))
         {
-            intents.par_sort_unstable_by_key(|intent| intent.person);
+            intents.par_sort_unstable_by_key(|intent| (intent.person, intent.recipe));
         }
         intents
     }

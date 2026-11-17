@@ -29,8 +29,7 @@ Feature-owned typed requests, constraints, and events should remain the basis
 for new content, without granting institutions automatic authority or making
 agreements binding.
 
-Specific integration limits to address in context: autonomous work currently
-permits one recipe policy per person; imports allocate empty stock entries for
+Specific integration limits to address in context: imports allocate empty stock entries for
 every catalog good; container capacity sums unlike raw quantities; lot identity
 currently excludes both batch provenance and expiry; regional colocation is a
 coarse proxy for reach; and mechanical operations require personally carried

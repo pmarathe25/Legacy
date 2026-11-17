@@ -5097,6 +5097,95 @@ fn work_intentions_compete_with_carrying_and_share_scarce_inputs() {
             .build()
             .unwrap()
             .install(|| {
+                let mut alternatives = snapshot.clone();
+                let mut other_recipe = alternatives
+                    .core
+                    .physical
+                    .recipes
+                    .iter()
+                    .find(|row| row.id == recipe)
+                    .unwrap()
+                    .clone();
+                other_recipe.id = recipe + 1;
+                other_recipe.name = "alternative personal work".into();
+                alternatives.core.physical.recipes.push(other_recipe);
+                let stock = alternatives
+                    .core
+                    .physical
+                    .custody
+                    .containers
+                    .iter_mut()
+                    .find(|container| {
+                        container.place
+                            == Place::Stock {
+                                region: 1,
+                                good: grain,
+                            }
+                    })
+                    .unwrap();
+                *stock = Container::new(
+                    stock.place,
+                    100,
+                    vec![Lot {
+                        batch: None,
+                        item: None,
+                        good: grain,
+                        quantity: 10,
+                        expires_at: None,
+                    }],
+                )
+                .unwrap();
+                alternatives
+                    .autowork
+                    .as_mut()
+                    .unwrap()
+                    .policies
+                    .push(game_autowork::Policy {
+                        person: 1,
+                        recipe: recipe + 1,
+                        enabled: true,
+                        disregard_claims: false,
+                    });
+                let profiles = std::sync::Arc::make_mut(
+                    alternatives
+                        .schedule
+                        .as_mut()
+                        .unwrap()
+                        .personal_choices
+                        .as_mut()
+                        .unwrap(),
+                );
+                profiles[0]
+                    .actions
+                    .push(game_personal_choice::ActionPreference {
+                        key: game_personal_choice::Key {
+                            domain: 4,
+                            action: u64::from(recipe + 1),
+                        },
+                        enabled: true,
+                        bias: 100,
+                    });
+                let mut chooser = CoreHost::resume(alternatives).unwrap();
+                let chosen = chooser.preview_personal_choices(&[]).unwrap().0;
+                assert_eq!(
+                    chosen.iter().find(|row| row.actor == 1).unwrap().key.action,
+                    u64::from(recipe + 1)
+                );
+                let checkpoint = serde_json::to_string(&chooser.snapshot()).unwrap();
+                let mut restored =
+                    CoreHost::resume(serde_json::from_str(&checkpoint).unwrap()).unwrap();
+                assert_eq!(chooser.advance_continuous(1, &[]).unwrap().failure, None);
+                assert_eq!(restored.advance_continuous(1, &[]).unwrap().failure, None);
+                assert_eq!(chooser.snapshot(), restored.snapshot());
+                assert!(
+                    chooser
+                        .snapshot()
+                        .core
+                        .physical
+                        .work
+                        .iter()
+                        .any(|row| row.job.worker == 1 && row.job.recipe == recipe + 1)
+                );
                 let mut host = CoreHost::resume(snapshot.clone()).unwrap();
                 let (intentions, _) = host.preview_personal_choices(&[]).unwrap();
                 assert_eq!(

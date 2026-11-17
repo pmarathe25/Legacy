@@ -21,11 +21,15 @@ fn filter(
     busy: &[u64],
     selection: Selection<'_>,
 ) -> Autowork {
+    let ambiguous = auto.ambiguous_people();
     let candidates: Vec<_> = auto
         .policies
         .par_iter()
         .filter_map(|p| {
-            if !p.enabled || busy.binary_search(&p.person).is_ok() {
+            if !p.enabled
+                || busy.binary_search(&p.person).is_ok()
+                || ambiguous.binary_search(&p.person).is_ok()
+            {
                 return None;
             }
             let person = person_index(people, p.person).map(|i| people[i])?;
@@ -70,11 +74,12 @@ fn filter(
         .policies
         .par_iter()
         .filter(|p| {
-            sites
-                .requirements
-                .binary_search_by_key(&p.recipe, |r| r.recipe)
-                .is_err()
-                || plan.permits(p.person)
+            ambiguous.binary_search(&p.person).is_err()
+                && (sites
+                    .requirements
+                    .binary_search_by_key(&p.recipe, |r| r.recipe)
+                    .is_err()
+                    || plan.permits(p.person))
         })
         .cloned()
         .collect();
@@ -127,4 +132,122 @@ pub fn plan(
         excluded.dedup();
     }
     unreachable!("bounded site admission returns in its final round")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use game_autowork::Policy;
+    use game_lots::{Balance, ContainerView, Place, View};
+    use game_production::{Amount, Inventory, Production, Recipe, Stock};
+    use game_work_sites::{Requirement, Site};
+
+    #[test]
+    fn unresolved_recipes_do_not_reserve_someone_elses_site() {
+        let people = vec![(1, Some(1), 100, 0), (2, Some(1), 100, 0)];
+        let recipe = |id| Recipe {
+            id,
+            name: format!("work-{id}"),
+            ticks: 1,
+            inputs: vec![Amount {
+                good: 1,
+                quantity: 1,
+            }],
+            outputs: vec![Amount {
+                good: 2,
+                quantity: 1,
+            }],
+        };
+        let production = Production {
+            max_work_hunger: 20,
+            goods: vec![],
+            recipes: vec![recipe(1), recipe(2)],
+            recipe_categories: vec![],
+            inventories: vec![Inventory {
+                region: 1,
+                stocks: vec![
+                    Stock {
+                        good: 1,
+                        quantity: 10,
+                        capacity: 10,
+                    },
+                    Stock {
+                        good: 2,
+                        quantity: 0,
+                        capacity: 10,
+                    },
+                ],
+            }],
+            jobs: vec![],
+            events: vec![],
+        };
+        let policy = |person, recipe| Policy {
+            person,
+            recipe,
+            enabled: true,
+            disregard_claims: false,
+        };
+        let auto = Autowork {
+            next_id: 1,
+            policies: vec![policy(1, 1), policy(1, 2), policy(2, 1)],
+            requests: None,
+        };
+        let sites = Facilities {
+            next_id: 2,
+            sites: vec![Site {
+                id: 1,
+                region: 1,
+                kind: "bench".into(),
+                capacity: 1,
+            }],
+            requirements: vec![
+                Requirement {
+                    recipe: 1,
+                    kind: "bench".into(),
+                    slots: 1,
+                },
+                Requirement {
+                    recipe: 2,
+                    kind: "bench".into(),
+                    slots: 1,
+                },
+            ],
+            bindings: vec![],
+        };
+        let view = View {
+            boundary: 0,
+            revision: 0,
+            containers: vec![ContainerView {
+                place: Place::Stock { region: 1, good: 1 },
+                capacity: 10,
+                used: 10,
+                goods: vec![Balance {
+                    good: 1,
+                    quantity: 10,
+                }],
+            }],
+        };
+        let selection = Selection {
+            seed: 1,
+            tick: 1,
+            claims: None,
+            classes: &[],
+            production: &production,
+            view: &view,
+            max_job: None,
+        };
+        for workers in [1, 4] {
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(workers)
+                .build()
+                .unwrap()
+                .install(|| {
+                    let result = plan(&sites, &auto, &people, &[], selection)
+                        .unwrap()
+                        .unwrap();
+                    assert_eq!(result.actors, vec![2]);
+                    assert_eq!(result.requests[0].worker, 2);
+                });
+        }
+    }
 }
