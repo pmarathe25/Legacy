@@ -19,6 +19,7 @@ pub(super) const MECHANICAL_DESIGN: u32 = 13;
 pub(super) const MECHANICAL_WATCH: u32 = 14;
 pub(super) const PERSONAL_ATTACK: u32 = 15;
 pub(super) const WOUND_CARE: u32 = 16;
+pub(super) const WRITTEN_FORM: u32 = 17;
 
 fn index_by_person<T>(rows: &[T], id: u64, key: impl Fn(&T) -> u64) -> Option<usize> {
     rows.first()
@@ -54,6 +55,8 @@ pub struct CoreWorkIntent {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CoreChoiceIntent {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub written_form: Option<game_language::writing::Association>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub strike: Option<game_personal_conflict::Strike>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -604,6 +607,7 @@ impl CoreHost {
                 .map_err(str::to_owned)?
                 .into_par_iter()
                 .map(|opportunity| CoreChoiceIntent {
+                    written_form: None,
                     strike: None,
                     watch: None,
                     assembly: None,
@@ -681,6 +685,7 @@ impl CoreHost {
                             }
                         });
                         CoreChoiceIntent {
+                            written_form: None,
                             strike: None,
                             watch: None,
                             assembly: None,
@@ -733,6 +738,7 @@ impl CoreHost {
                 let rows: Vec<_> = opportunities
                     .into_par_iter()
                     .map(|opportunity| CoreChoiceIntent {
+                        written_form: None,
                         strike: None,
                         watch: None,
                         assembly: None,
@@ -787,6 +793,7 @@ impl CoreHost {
                 .direct_opportunities()
                 .into_par_iter()
                 .map(|opportunity| CoreChoiceIntent {
+                    written_form: None,
                     strike: None,
                     watch: None,
                     assembly: None,
@@ -835,6 +842,7 @@ impl CoreHost {
                     .preview_work_with_hunger_limit(&busy, schedule.work_rate, u32::MAX, true)?
                     .into_par_iter()
                     .map(|opportunity| CoreChoiceIntent {
+                        written_form: None,
                         strike: None,
                         watch: None,
                         assembly: None,
@@ -896,6 +904,7 @@ impl CoreHost {
                 Ok(policies
                     .into_par_iter()
                     .map(|policy| CoreChoiceIntent {
+                        written_form: None,
                         strike: None,
                         watch: None,
                         assembly: None,
@@ -949,6 +958,7 @@ impl CoreHost {
                         domain: PERSONAL_ATTACK,
                         action: policy.id,
                     },
+                    written_form: None,
                     strike: Some(game_personal_conflict::Strike {
                         actor: policy.actor,
                         target: policy.target,
@@ -993,6 +1003,7 @@ impl CoreHost {
                 .preview_mechanical_watching(&busy)?
                 .into_par_iter()
                 .map(|policy| CoreChoiceIntent {
+                    written_form: None,
                     strike: None,
                     actor: policy.observer,
                     key: Key {
@@ -1045,6 +1056,7 @@ impl CoreHost {
                 .preview_mechanical_designs(&designers, &busy)?
                 .into_par_iter()
                 .map(|assembly| CoreChoiceIntent {
+                    written_form: None,
                     strike: None,
                     watch: None,
                     actor: assembly.actor,
@@ -1083,6 +1095,7 @@ impl CoreHost {
                     .preview_mechanical_loads(&busy)?
                     .into_par_iter()
                     .map(|policy| CoreChoiceIntent {
+                        written_form: None,
                         strike: None,
                         watch: None,
                         assembly: None,
@@ -1133,6 +1146,7 @@ impl CoreHost {
                     let person = index_by_person(&self.core.people, opportunity.person, |p| p.id)
                         .expect("known person");
                     CoreChoiceIntent {
+                        written_form: None,
                         strike: None,
                         watch: None,
                         assembly: None,
@@ -1203,6 +1217,7 @@ impl CoreHost {
                     let mut movement = action.movements[0];
                     movement.id = 0;
                     CoreChoiceIntent {
+                        written_form: None,
                         strike: None,
                         watch: None,
                         assembly: None,
@@ -1245,6 +1260,7 @@ impl CoreHost {
                 let person = index_by_person(&self.core.people, opportunity.person, |p| p.id)
                     .expect("known person");
                 CoreChoiceIntent {
+                    written_form: None,
                     strike: None,
                     watch: None,
                     assembly: None,
@@ -1306,6 +1322,7 @@ impl CoreHost {
             )?
             .into_par_iter()
             .map(|opportunity| CoreChoiceIntent {
+                written_form: None,
                 strike: None,
                 watch: None,
                 assembly: None,
@@ -1421,6 +1438,7 @@ impl CoreHost {
                             item: None,
                             batch: None,
                         }),
+                        written_form: None,
                         strike: None,
                         watch: None,
                         assembly: None,
@@ -1437,6 +1455,93 @@ impl CoreHost {
                 })
                 .collect();
             intents.par_extend(care);
+        }
+        if domain.is_none_or(|domain| domain == WRITTEN_FORM)
+            && let Some(people) = self
+                .schedule
+                .as_ref()
+                .and_then(|schedule| schedule.personal_choices.as_ref())
+            && let Some(language) = self
+                .social
+                .as_ref()
+                .and_then(|social| social.language.as_ref())
+            && let Some(forms) = language.writing.as_ref()
+        {
+            let round =
+                tick.rotate_left(21) ^ self.core.elapsed_millis().ok_or("no physical interval")?;
+            let proposed: Vec<_> = people
+                .par_iter()
+                .flat_map_iter(|person| {
+                    let enabled = person
+                        .preferences
+                        .binary_search_by_key(&WRITTEN_FORM, |row| row.domain)
+                        .ok()
+                        .is_some_and(|index| person.preferences[index].enabled);
+                    let actor = self
+                        .core
+                        .people
+                        .binary_search_by_key(&person.id, |row| row.id)
+                        .ok()
+                        .map(|index| &self.core.people[index]);
+                    let available = enabled
+                        && busy.binary_search(&person.id).is_err()
+                        && actor.is_some_and(|actor| actor.health > 0 && !actor.controlled);
+                    let mind = language
+                        .minds
+                        .binary_search_by_key(&person.id, |mind| mind.person)
+                        .ok()
+                        .map(|index| &language.minds[index]);
+                    let room = forms
+                        .minds
+                        .binary_search_by_key(&person.id, |mind| mind.person)
+                        .ok()
+                        .is_none_or(|index| forms.minds[index].associations.len() < forms.capacity);
+                    mind.into_iter()
+                        .filter(move |_| available && room)
+                        .flat_map(move |mind| {
+                            mind.words
+                                .iter()
+                                .enumerate()
+                                .filter_map(move |(index, word)| {
+                                    if forms.marks(person.id, &word.sounds).is_some() {
+                                        return None;
+                                    }
+                                    let action = u64::try_from(index).ok()?.checked_add(1)?;
+                                    let mark = (game_genetics::random(
+                                        self.core.seed,
+                                        person.id,
+                                        round ^ action,
+                                    ) as u32)
+                                        .max(1);
+                                    Some(CoreChoiceIntent {
+                                        actor: person.id,
+                                        key: Key {
+                                            domain: WRITTEN_FORM,
+                                            action,
+                                        },
+                                        written_form: Some(game_language::writing::Association {
+                                            sounds: word.sounds.clone(),
+                                            marks: vec![mark],
+                                        }),
+                                        strike: None,
+                                        watch: None,
+                                        assembly: None,
+                                        cultivation: None,
+                                        mechanical_load: None,
+                                        movement: None,
+                                        second_movement: None,
+                                        work: None,
+                                        experiment: None,
+                                        experiment_value: Some(1),
+                                        meal_value: None,
+                                        tool_damage: None,
+                                        health_value: None,
+                                    })
+                                })
+                        })
+                })
+                .collect();
+            intents.par_extend(proposed);
         }
         if intents
             .par_windows(2)
@@ -1536,6 +1641,7 @@ impl CoreHost {
                         && current[i].assembly == intent.assembly
                         && current[i].watch == intent.watch
                         && current[i].strike == intent.strike
+                        && current[i].written_form == intent.written_form
                 });
                 (intent, found)
             })

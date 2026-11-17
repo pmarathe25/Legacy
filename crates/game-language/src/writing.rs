@@ -91,6 +91,70 @@ impl Writing {
         Ok(())
     }
 
+    /// Stage disjoint personal choices together; any invalid choice is inert.
+    pub fn assign_batch(
+        &mut self,
+        choices: &[(u64, Association)],
+        sounds: usize,
+    ) -> Result<(), &'static str> {
+        if self.capacity == 0
+            || self.capacity > 1024
+            || choices.par_windows(2).any(|row| row[0].0 >= row[1].0)
+            || choices.par_iter().any(|(person, association)| {
+                *person == 0
+                    || !valid(association, sounds)
+                    || self
+                        .minds
+                        .binary_search_by_key(person, |mind| mind.person)
+                        .ok()
+                        .is_some_and(|index| {
+                            let mind = &self.minds[index];
+                            mind.associations.len() >= self.capacity
+                                && mind
+                                    .associations
+                                    .binary_search_by(|row| row.sounds.cmp(&association.sounds))
+                                    .is_err()
+                        })
+            })
+        {
+            return Err("invalid writing choices");
+        }
+        let mut next: Vec<_> = self
+            .minds
+            .par_iter()
+            .map(|mind| {
+                let mut mind = mind.clone();
+                if let Ok(index) = choices.binary_search_by_key(&mind.person, |choice| choice.0) {
+                    let association = choices[index].1.clone();
+                    match mind
+                        .associations
+                        .binary_search_by(|row| row.sounds.cmp(&association.sounds))
+                    {
+                        Ok(index) => mind.associations[index] = association,
+                        Err(index) => mind.associations.insert(index, association),
+                    }
+                }
+                mind
+            })
+            .collect();
+        next.par_extend(
+            choices
+                .par_iter()
+                .filter(|(person, _)| {
+                    self.minds
+                        .binary_search_by_key(person, |mind| mind.person)
+                        .is_err()
+                })
+                .map(|(person, association)| Mind {
+                    person: *person,
+                    associations: vec![association.clone()],
+                }),
+        );
+        next.par_sort_unstable_by_key(|mind| mind.person);
+        self.minds = next;
+        Ok(())
+    }
+
     /// Look up the visible form a person has chosen for a spoken form.
     pub fn marks(&self, person: u64, sounds: &[u8]) -> Option<&[u32]> {
         let index = self

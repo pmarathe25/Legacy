@@ -60,41 +60,56 @@ impl CoreHost {
         person: u64,
         association: game_language::writing::Association,
     ) -> Result<(), String> {
-        let actor = self
-            .core
-            .people
-            .binary_search_by_key(&person, |row| row.id)
-            .ok()
-            .map(|index| &self.core.people[index])
-            .ok_or("unknown person")?;
-        if actor.health == 0 {
-            return Err("person cannot choose a written form while incapacitated".into());
+        self.choose_written_forms(&[(person, association)])
+    }
+
+    /// Commit disjoint people’s independent written-form choices together.
+    pub fn choose_written_forms(
+        &mut self,
+        choices: &[(u64, game_language::writing::Association)],
+    ) -> Result<(), String> {
+        if choices.par_windows(2).any(|pair| pair[0].0 >= pair[1].0) {
+            return Err("invalid written-form choices".into());
+        }
+        if choices.is_empty() {
+            return Ok(());
+        }
+        let language = self
+            .social
+            .as_ref()
+            .and_then(|social| social.language.as_ref())
+            .ok_or("personal language is disabled")?;
+        if choices.par_iter().any(|(person, association)| {
+            self.core
+                .people
+                .binary_search_by_key(person, |row| row.id)
+                .ok()
+                .is_none_or(|index| self.core.people[index].health == 0)
+                || language
+                    .minds
+                    .binary_search_by_key(person, |mind| mind.person)
+                    .ok()
+                    .is_none_or(|index| {
+                        !language.minds[index]
+                            .words
+                            .iter()
+                            .any(|word| word.sounds == association.sounds)
+                    })
+        }) {
+            return Err("person cannot choose that spoken form".into());
         }
         let language = self
             .social
             .as_mut()
             .and_then(|social| social.language.as_mut())
-            .ok_or("personal language is disabled")?;
-        let known = language
-            .minds
-            .binary_search_by_key(&person, |mind| mind.person)
-            .ok()
-            .is_some_and(|index| {
-                language.minds[index]
-                    .words
-                    .iter()
-                    .any(|word| word.sounds == association.sounds)
-            });
-        if !known {
-            return Err("person does not know that spoken form".into());
-        }
+            .expect("language checked");
         std::sync::Arc::make_mut(
             language
                 .writing
                 .as_mut()
                 .ok_or("personal writing forms are disabled")?,
         )
-        .assign(person, association, language.rules.sounds.len())
+        .assign_batch(choices, language.rules.sounds.len())
         .map_err(str::to_owned)
     }
 

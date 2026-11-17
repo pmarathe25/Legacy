@@ -5638,6 +5638,208 @@ fn independent_inscriptions_settle_without_creating_unfunded_pages() {
 }
 
 #[test]
+fn people_independently_choose_whether_to_invent_written_forms() {
+    use game_economy::core_interval::{CoreChoiceOutcome, CoreHost, CoreRunEvent};
+    fn run(workers: usize) -> serde_json::Value {
+        rayon::ThreadPoolBuilder::new().num_threads(workers).build().unwrap().install(|| {
+            let root = root();
+            let mut host = game_economy_cli::core_scenario(
+                &root.join("content/scenarios/economy-core-written-invention.toml"), &root.join("content")
+            ).unwrap();
+            assert!(host.preview_personal_choices(&[]).unwrap().0.is_empty());
+            let result = host.advance_continuous(2_700_001, &[]).unwrap();
+            assert_eq!(result.failure, None);
+            assert!(result.events.iter().any(|event| matches!(event, CoreRunEvent::PersonalChoices(rows)
+                if rows.iter().any(|row| row.actor == 1 && row.key.is_some_and(|key| key.domain == 17) && row.outcome == CoreChoiceOutcome::Accepted))),
+                "events={:?} language={:?}", result.events, host.snapshot().social.as_ref().unwrap().language);
+            let state = host.snapshot();
+            let language = state.social.as_ref().unwrap().language.as_ref().unwrap();
+            let forms = language.writing.as_ref().unwrap();
+            assert_eq!(forms.minds.len(), 1);
+            assert_eq!(forms.minds[0].person, 1);
+            assert_eq!(forms.minds[0].associations.len(), 1);
+            assert!(forms.minds.iter().all(|mind| mind.person != 2));
+            let mut restored = CoreHost::resume(serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap()).unwrap();
+            assert_eq!(host.advance_continuous(900_000, &[]).unwrap().failure, None);
+            assert_eq!(restored.advance_continuous(900_000, &[]).unwrap().failure, None);
+            assert_eq!(host.snapshot(), restored.snapshot());
+            serde_json::to_value(host.snapshot()).unwrap()
+        })
+    }
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
+fn saved_written_invention_does_not_replace_a_stale_intention() {
+    use game_economy::core_interval::{CoreChoiceOutcome, CoreHost, CoreRunEvent, DecisionPhase};
+    let root = root();
+    let mut host = game_economy_cli::core_scenario(
+        &root.join("content/scenarios/economy-core-language-topics.toml"),
+        &root.join("content"),
+    )
+    .unwrap();
+    assert_eq!(host.advance_continuous(900_001, &[]).unwrap().failure, None);
+    let profile: game_personal_choice::Person = serde_json::from_value(serde_json::json!({
+        "id": 1, "idle": 0, "preferences": [{"domain":17,"enabled":true,"bias":10}]
+    }))
+    .unwrap();
+    host.enable_personal_choices(vec![profile]).unwrap();
+    let (intents, _) = host.preview_personal_choices(&[]).unwrap();
+    assert_eq!(intents.len(), 1);
+    let selected = intents[0].written_form.clone().unwrap();
+    let mut state = host.snapshot();
+    let schedule = state.schedule.as_mut().unwrap();
+    schedule.next_decision_millis = Some(1);
+    schedule.phase = DecisionPhase::ChosenWrittenForm {
+        meal_people: vec![],
+        intents: std::sync::Arc::new(intents),
+        remaining: 0,
+    };
+    let saved = serde_json::to_string(&state).unwrap();
+    let restored = CoreHost::resume(serde_json::from_str(&saved).unwrap()).unwrap();
+    if let DecisionPhase::ChosenWrittenForm { intents, .. } =
+        &restored.snapshot().schedule.unwrap().phase
+    {
+        assert_eq!(intents[0].written_form.as_ref(), Some(&selected));
+    } else {
+        panic!("expected saved written-form choice");
+    }
+    state
+        .social
+        .as_mut()
+        .unwrap()
+        .language
+        .as_mut()
+        .unwrap()
+        .minds[0]
+        .words
+        .clear();
+    let mut host = CoreHost::resume(state).unwrap();
+    let result = host.advance_continuous(1, &[]).unwrap();
+    assert_eq!(result.failure, None);
+    assert!(
+        result
+            .events
+            .iter()
+            .any(|event| matches!(event, CoreRunEvent::PersonalChoices(rows)
+        if rows.iter().any(|row| row.actor == 1 && row.outcome == CoreChoiceOutcome::Stale)))
+    );
+    assert!(
+        host.snapshot()
+            .social
+            .unwrap()
+            .language
+            .unwrap()
+            .writing
+            .unwrap()
+            .minds
+            .is_empty()
+    );
+}
+
+#[test]
+fn inventing_marks_competes_with_another_personal_opportunity() {
+    use game_economy::core_interval::CoreHost;
+    let root = root();
+    let mut state = game_economy_cli::core_scenario(
+        &root.join("content/scenarios/economy-core-written-invention.toml"),
+        &root.join("content"),
+    )
+    .unwrap()
+    .snapshot();
+    std::sync::Arc::make_mut(
+        state
+            .schedule
+            .as_mut()
+            .unwrap()
+            .personal_choices
+            .as_mut()
+            .unwrap(),
+    )[0]
+    .idle = 100;
+    let mut host = CoreHost::resume(state).unwrap();
+    assert_eq!(
+        host.advance_continuous(2_700_001, &[]).unwrap().failure,
+        None
+    );
+    let mut state = host.snapshot();
+    let other = game_economy_cli::core_scenario(
+        &root.join("content/scenarios/economy-core-personal-choices.toml"),
+        &root.join("content"),
+    )
+    .unwrap()
+    .snapshot();
+    let timber = state
+        .core
+        .physical
+        .goods
+        .iter()
+        .find(|good| good.name == "timber")
+        .unwrap()
+        .id;
+    let mut construction = other.construction.unwrap();
+    construction.policies.retain(|policy| policy.person == 1);
+    construction.blueprints[0].kit = timber;
+    state.construction = Some(construction);
+    state.sites = other.sites;
+    let profiles = std::sync::Arc::make_mut(
+        state
+            .schedule
+            .as_mut()
+            .unwrap()
+            .personal_choices
+            .as_mut()
+            .unwrap(),
+    );
+    profiles[0].idle = 0;
+    profiles[0].preferences[0].bias = 0;
+    profiles[0].preferences.insert(
+        0,
+        game_personal_choice::Preference {
+            domain: 1,
+            enabled: true,
+            bias: 20,
+            weight: 1000,
+        },
+    );
+    let host = CoreHost::resume(state.clone()).unwrap();
+    assert_eq!(
+        host.preview_personal_choices(&[])
+            .unwrap()
+            .0
+            .iter()
+            .find(|row| row.actor == 1)
+            .unwrap()
+            .key
+            .domain,
+        1
+    );
+    let profiles = std::sync::Arc::make_mut(
+        state
+            .schedule
+            .as_mut()
+            .unwrap()
+            .personal_choices
+            .as_mut()
+            .unwrap(),
+    );
+    profiles[0].preferences[0].bias = -20;
+    profiles[0].preferences[1].bias = 20;
+    let host = CoreHost::resume(state).unwrap();
+    assert_eq!(
+        host.preview_personal_choices(&[])
+            .unwrap()
+            .0
+            .iter()
+            .find(|row| row.actor == 1)
+            .unwrap()
+            .key
+            .domain,
+        17
+    );
+}
+
+#[test]
 fn people_choose_between_competing_physical_actions_or_idleness() {
     use game_economy::core_interval::{CoreChoiceOutcome, CoreRunEvent};
     fn run(workers: usize) -> serde_json::Value {
@@ -5800,6 +6002,7 @@ fn stale_saved_carrying_intention_is_reported_without_substituting_an_action() {
         meal_people: vec![],
         intents: std::sync::Arc::new(vec![CoreChoiceIntent {
             strike: None,
+            written_form: None,
             watch: None,
             assembly: None,
             mechanical_load: None,
