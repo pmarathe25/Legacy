@@ -173,26 +173,30 @@ impl CoreHost {
             return Ok((Vec::new(), Vec::new()));
         }
         let quantum = self.core.physical.tick_millis();
-        let projected = owner
-            .prepare(
-                &self.activity,
-                quantum,
-                |id| {
-                    self.core
-                        .people
-                        .binary_search_by_key(&id, |person| person.id)
-                        .ok()
-                        .is_some_and(|i| self.core.people[i].health > 0)
-                },
-                |id| {
-                    self.core
-                        .people
-                        .binary_search_by_key(&id, |person| person.id)
-                        .ok()
-                        .is_some_and(|i| self.core.people[i].controlled)
-                },
-            )?
-            .state;
+        let projected = if owner.elapsed_damage_remainders.is_some() {
+            owner.clone()
+        } else {
+            owner
+                .prepare(
+                    &self.activity,
+                    quantum,
+                    |id| {
+                        self.core
+                            .people
+                            .binary_search_by_key(&id, |person| person.id)
+                            .ok()
+                            .is_some_and(|i| self.core.people[i].health > 0)
+                    },
+                    |id| {
+                        self.core
+                            .people
+                            .binary_search_by_key(&id, |person| person.id)
+                            .ok()
+                            .is_some_and(|i| self.core.people[i].controlled)
+                    },
+                )?
+                .state
+        };
         let resting = owner.fatigue.resting();
         let mut occupied = blocked.to_vec();
         if let Some(schedule) = &self.schedule {
@@ -2025,26 +2029,30 @@ impl CoreHost {
                 })
             && let Some(owner) = &self.fatigue
         {
-            let projected = owner
-                .prepare(
-                    &self.activity,
-                    self.core.physical.tick_millis(),
-                    |id| {
-                        self.core
-                            .people
-                            .binary_search_by_key(&id, |person| person.id)
-                            .ok()
-                            .is_some_and(|index| self.core.people[index].health > 0)
-                    },
-                    |id| {
-                        self.core
-                            .people
-                            .binary_search_by_key(&id, |person| person.id)
-                            .ok()
-                            .is_some_and(|index| self.core.people[index].controlled)
-                    },
-                )?
-                .state;
+            let projected = if owner.elapsed_damage_remainders.is_some() {
+                owner.clone()
+            } else {
+                owner
+                    .prepare(
+                        &self.activity,
+                        self.core.physical.tick_millis(),
+                        |id| {
+                            self.core
+                                .people
+                                .binary_search_by_key(&id, |person| person.id)
+                                .ok()
+                                .is_some_and(|index| self.core.people[index].health > 0)
+                        },
+                        |id| {
+                            self.core
+                                .people
+                                .binary_search_by_key(&id, |person| person.id)
+                                .ok()
+                                .is_some_and(|index| self.core.people[index].controlled)
+                        },
+                    )?
+                    .state
+            };
             let rest: Vec<_> = self
                 .core
                 .people

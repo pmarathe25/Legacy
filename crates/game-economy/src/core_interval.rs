@@ -932,13 +932,14 @@ impl CoreInterval {
     /// Progress without repeating decisions, publishing arrivals, or completing work.
     /// Failed validation leaves all owners unchanged.
     pub fn progress(&mut self, requested_millis: u64) -> Result<u64, String> {
-        self.progress_adjusting(requested_millis, &[])
+        self.progress_adjusting(requested_millis, &[], &[])
     }
 
     fn progress_adjusting(
         &mut self,
         requested_millis: u64,
         reductions: &[(u64, u64)],
+        injuries: &[game_economy_fatigue::Consequence],
     ) -> Result<u64, String> {
         let quantum = self.physical.tick_millis();
         let consumed = self.progress_limit(requested_millis)?;
@@ -949,47 +950,21 @@ impl CoreInterval {
             .generation
             .checked_add(1)
             .ok_or("core revision overflow")?;
-        let mut people: Vec<_> = self.people.par_iter().cloned().collect();
+        let people = self.preview_people_progress(consumed, injuries)?;
         let mut travel = self.travel.clone();
         if let Some(travel) = &mut travel {
             travel
-                .progress_elapsed(&people, consumed, quantum)
+                .progress_elapsed(&self.people, consumed, quantum)
                 .map_err(str::to_owned)?;
         }
-        if self.rules.starvation_rate.is_some()
-            || self.people.par_iter().any(|person| {
-                person
-                    .immortal
-                    .as_ref()
-                    .is_some_and(|immortal| immortal.recovery_rate.is_some())
+        let dead: Vec<_> = self
+            .people
+            .par_iter()
+            .zip(people.par_iter())
+            .filter_map(|(before, after)| {
+                (before.health > 0 && after.health == 0).then_some(before.id)
             })
-        {
-            game_economy_person::progress_vitals(&mut people, &self.rules, consumed, quantum)
-                .map_err(str::to_owned)?;
-        } else {
-            game_economy_person::progress_hunger(
-                &mut people,
-                self.rules
-                    .hunger_rate
-                    .map_or(self.rules.hunger_per_tick, |rate| rate.units),
-                consumed,
-                self.rules
-                    .hunger_rate
-                    .map_or(quantum, |rate| rate.per_millis),
-            )
-            .map_err(str::to_owned)?;
-        }
-        let dead: Vec<_> = if self.rules.starvation_rate.is_some() {
-            self.people
-                .par_iter()
-                .zip(people.par_iter())
-                .filter_map(|(before, after)| {
-                    (before.health > 0 && after.health == 0).then_some(before.id)
-                })
-                .collect()
-        } else {
-            Vec::new()
-        };
+            .collect();
         let advanced = if dead.is_empty() && reductions.is_empty() {
             self.physical.progress_work_interval(consumed)?
         } else {
@@ -1020,6 +995,54 @@ impl CoreInterval {
         self.travel = travel;
         self.generation = generation;
         Ok(consumed)
+    }
+
+    /// Stage elapsed physiology and injuries before advancing the physical owner.
+    fn preview_people_progress(
+        &self,
+        consumed: u64,
+        injuries: &[game_economy_fatigue::Consequence],
+    ) -> Result<Vec<Person>, String> {
+        if injuries.par_windows(2).any(|pair| pair[0].id >= pair[1].id)
+            || injuries.par_iter().any(|injury| {
+                self.people
+                    .binary_search_by_key(&injury.id, |person| person.id)
+                    .is_err()
+            })
+        {
+            return Err("invalid elapsed injuries".into());
+        }
+        let quantum = self.physical.tick_millis();
+        let mut people: Vec<_> = self.people.par_iter().cloned().collect();
+        if self.rules.starvation_rate.is_some()
+            || self.people.par_iter().any(|person| {
+                person
+                    .immortal
+                    .as_ref()
+                    .is_some_and(|immortal| immortal.recovery_rate.is_some())
+            })
+        {
+            game_economy_person::progress_vitals(&mut people, &self.rules, consumed, quantum)
+                .map_err(str::to_owned)?;
+        } else {
+            game_economy_person::progress_hunger(
+                &mut people,
+                self.rules
+                    .hunger_rate
+                    .map_or(self.rules.hunger_per_tick, |rate| rate.units),
+                consumed,
+                self.rules
+                    .hunger_rate
+                    .map_or(quantum, |rate| rate.per_millis),
+            )
+            .map_err(str::to_owned)?;
+        }
+        people.par_iter_mut().for_each(|person| {
+            if let Ok(index) = injuries.binary_search_by_key(&person.id, |injury| injury.id) {
+                person.health = person.health.saturating_sub(injuries[index].damage);
+            }
+        });
+        Ok(people)
     }
     /// Stage the full quantum without publishing physical or personal changes.
     /// An enclosing item owner retains its own rules, allocator and metadata.

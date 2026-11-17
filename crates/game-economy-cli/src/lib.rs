@@ -31,6 +31,9 @@ struct Scenario {
     /// Duration represented by the authored fatigue rates.
     #[serde(default)]
     fatigue_rate_period_millis: Option<u64>,
+    /// Integrate fatigue and exhaustion at elapsed activity transitions.
+    #[serde(default)]
+    elapsed_fatigue: bool,
     /// Autonomous decision cadence, independent of the physical quantum.
     #[serde(default)]
     decision_period_millis: Option<u64>,
@@ -1013,6 +1016,7 @@ pub fn core_scenario_with_options(
     let signals = authored.signals;
     let decision_period_millis = authored.decision_period_millis;
     let fatigue_rate_period_millis = authored.fatigue_rate_period_millis;
+    let elapsed_fatigue = authored.elapsed_fatigue;
     let hunger_rate = authored.rules.hunger_rate;
     let work_capabilities = authored.work_capabilities;
     let regions: HashSet<_> = authored.regions.iter().map(|region| region.id).collect();
@@ -1031,6 +1035,16 @@ pub fn core_scenario_with_options(
             .as_mut()
             .ok_or("fatigue rate period requires fatigue")?
             .rate_period_millis = Some(period);
+    }
+    if elapsed_fatigue {
+        if fatigue_rate_period_millis.is_none() {
+            return Err("elapsed fatigue requires an explicit rate period".into());
+        }
+        snapshot
+            .fatigue
+            .as_mut()
+            .ok_or("elapsed fatigue requires fatigue")?
+            .elapsed_damage_remainders = Some(Vec::new());
     }
     if let Some(owner) = &mut personal_conflict {
         owner
@@ -1443,7 +1457,9 @@ fn scenario_with_options_inner(
 ) -> Result<Economy, String> {
     let source = std::fs::read_to_string(path).map_err(|error| error.to_string())?;
     let mut scenario: Scenario = toml::from_str(&source).map_err(|error| error.to_string())?;
-    if (scenario.decision_period_millis.is_some() || scenario.fatigue_rate_period_millis.is_some())
+    if (scenario.decision_period_millis.is_some()
+        || scenario.fatigue_rate_period_millis.is_some()
+        || scenario.elapsed_fatigue)
         && !interval_features
     {
         return Err(

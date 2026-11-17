@@ -45,9 +45,11 @@ An interval-host scenario may set `fatigue_rate_period_millis` so saved
 fatigue fractions use a stable rate period. Interval-host rest and resumption
 are individual choices, evaluated from signed personal preferences and current
 projected fatigue. Idle people compare rest with their other local options;
-workers compare it with a continuation preference. Fatigue and exhaustion
-still settle at physical boundaries, and the legacy whole-boundary runner
-still applies automatic rest thresholds.
+workers compare it with a continuation preference. A scenario can also set
+`elapsed_fatigue = true` to integrate fatigue at activity transitions and
+schedule exhaustion damage at elapsed deadlines. The integrated history
+scenario selects this mode. Older interval saves retain boundary settlement,
+and the legacy whole-boundary runner still applies automatic rest thresholds.
 Renewal is still settled at a physical boundary, alongside gathering, using
 the season selected for that boundary. Changing boundaries can therefore
 change the ordering of gathering and renewal or cross a season transition;
@@ -58,7 +60,7 @@ retain absolute milliseconds at the current boundary; an older snapshot
 derives this value from its original tick and quantum when loaded. This clock
 does not by itself convert other owners' tick-based state when a quantum
 changes. This does not yet convert
-nutrition, fatigue decisions and consequences, family
+nutrition, all fatigue decision opportunities, family
 and animal clocks, other ecological processes, disease, or social randomness. In
 particular, a short physical quantum must not be advertised as a faithful
 minute-world until those owners have independent elapsed-time rules.

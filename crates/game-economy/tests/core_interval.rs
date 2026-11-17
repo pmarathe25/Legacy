@@ -1352,7 +1352,159 @@ fn timed_fatigue() -> game_economy_fatigue::TimedFatigue {
             people: vec![],
         },
         remainders: vec![],
+        elapsed_damage_remainders: None,
     }
+}
+
+#[test]
+fn elapsed_fatigue_tracks_ordered_activity_and_resume_before_settlement() {
+    fn run(partition: u64, workers: usize) -> game_economy_fatigue::TimedFatigue {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut core = fixture();
+                core.travel = None;
+                core.people[1].region = Some(1);
+                core.people[0].controlled = true;
+                core.nutrition = None;
+                core.pending_food.clear();
+                core.rules.hunger_per_tick = 0;
+                core.rules.starvation_damage = 0;
+                core.physical.work_rate_period_millis = Some(10_000);
+                let mut fatigue = timed_fatigue();
+                fatigue.rate_period_millis = Some(1000);
+                fatigue.elapsed_damage_remainders = Some(vec![]);
+                fatigue.fatigue.rules.exhaustion_damage = 0;
+                fatigue.fatigue.people = vec![game_economy_fatigue::FatiguePerson {
+                    id: 1,
+                    fatigue: 9,
+                    resting: false,
+                }];
+                let snapshot: CoreHostSnapshot =
+                    serde_json::from_value(serde_json::json!({"core": core, "fatigue": fatigue}))
+                        .unwrap();
+                let mut host = CoreHost::begin(snapshot, &[(1, 1)]).unwrap();
+                for resting in [false, true] {
+                    if resting {
+                        host.set_controlled_rest(1, true).unwrap();
+                    }
+                    let mut elapsed = 0;
+                    while elapsed < 500 {
+                        let amount = partition.min(500 - elapsed);
+                        assert_eq!(host.progress(amount).unwrap(), amount);
+                        elapsed += amount;
+                        if elapsed == 500 {
+                            host = CoreHost::resume(
+                                serde_json::from_str(
+                                    &serde_json::to_string(&host.snapshot()).unwrap(),
+                                )
+                                .unwrap(),
+                            )
+                            .unwrap();
+                        }
+                    }
+                }
+                let before = host.snapshot().fatigue.unwrap();
+                assert_eq!(before.fatigue.people[0].fatigue, 8);
+                host.settle().unwrap();
+                assert_eq!(host.snapshot().fatigue.unwrap(), before);
+                before
+            })
+    }
+    assert_eq!(run(500, 1), run(13, 4));
+}
+
+#[test]
+fn elapsed_exhaustion_injury_interrupts_work_at_the_actual_deadline() {
+    let mut core = fixture();
+    core.travel = None;
+    core.people[1].region = Some(1);
+    core.people[0].health = 1;
+    core.nutrition = None;
+    core.pending_food.clear();
+    core.rules.hunger_per_tick = 0;
+    core.rules.starvation_damage = 0;
+    let mut fatigue = timed_fatigue();
+    fatigue.rate_period_millis = Some(1000);
+    fatigue.elapsed_damage_remainders = Some(vec![]);
+    fatigue.fatigue.rules.exhaustion_damage = 4;
+    fatigue.fatigue.people = vec![game_economy_fatigue::FatiguePerson {
+        id: 1,
+        fatigue: 9,
+        resting: false,
+    }];
+    let snapshot: CoreHostSnapshot =
+        serde_json::from_value(serde_json::json!({"core": core, "fatigue": fatigue})).unwrap();
+    let mut host = CoreHost::begin(snapshot, &[(1, 1)]).unwrap();
+    assert_eq!(host.progress(1000).unwrap(), 499);
+    let snapshot = host.snapshot();
+    assert_eq!(snapshot.core.people[0].health, 0);
+    assert_eq!(snapshot.core.physical.work[0].progress_remainder, 499);
+    assert!(
+        snapshot
+            .core
+            .physical
+            .work_interval
+            .as_ref()
+            .unwrap()
+            .rates
+            .is_empty()
+    );
+    let mut resumed =
+        CoreHost::resume(serde_json::from_str(&serde_json::to_string(&snapshot).unwrap()).unwrap())
+            .unwrap();
+    assert_eq!(resumed.progress(501).unwrap(), 501);
+    assert_eq!(
+        resumed.snapshot().core.physical.work[0].progress_remainder,
+        499
+    );
+}
+
+#[test]
+fn elapsed_exhaustion_and_starvation_jointly_incapacitate_a_worker() {
+    let mut core = fixture();
+    core.travel = None;
+    core.people[1].region = Some(1);
+    core.people[0].health = 2;
+    core.people[0].hunger = core.rules.starvation_threshold;
+    core.nutrition = None;
+    core.pending_food.clear();
+    core.rules.hunger_rate = Some(game_economy_person::HungerRate {
+        units: 0,
+        per_millis: 1000,
+    });
+    core.rules.starvation_rate = Some(game_economy_person::StarvationRate {
+        units: 4,
+        per_millis: 1000,
+    });
+    let mut fatigue = timed_fatigue();
+    fatigue.rate_period_millis = Some(1000);
+    fatigue.elapsed_damage_remainders = Some(vec![]);
+    fatigue.fatigue.rules.exhaustion_damage = 4;
+    fatigue.fatigue.people = vec![game_economy_fatigue::FatiguePerson {
+        id: 1,
+        fatigue: 9,
+        resting: false,
+    }];
+    let snapshot: CoreHostSnapshot =
+        serde_json::from_value(serde_json::json!({"core": core, "fatigue": fatigue})).unwrap();
+    let mut host = CoreHost::begin(snapshot, &[(1, 1)]).unwrap();
+    assert_eq!(host.progress(1000).unwrap(), 499);
+    let saved = host.snapshot();
+    assert_eq!(saved.core.people[0].health, 0);
+    assert_eq!(saved.core.physical.work[0].progress_remainder, 499);
+    assert!(
+        saved
+            .core
+            .physical
+            .work_interval
+            .as_ref()
+            .unwrap()
+            .rates
+            .is_empty()
+    );
 }
 
 #[test]

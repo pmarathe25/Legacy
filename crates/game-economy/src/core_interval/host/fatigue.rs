@@ -74,6 +74,9 @@ impl CoreHost {
         let Some(owner) = &self.fatigue else {
             return Ok(None);
         };
+        if owner.elapsed_damage_remainders.is_some() {
+            return Ok(Some(owner.clone()));
+        }
         let draft = owner.prepare(
             &self.activity,
             self.core.physical.tick_millis(),
@@ -154,17 +157,120 @@ impl CoreHost {
         externally_busy: &[u64],
     ) -> Result<u64, String> {
         let quantum = self.core.physical.tick_millis();
-        let consumed = self.core.progress_limit(requested)?;
+        let mut consumed = self.core.progress_limit(requested)?;
+        let elapsed_owner = self
+            .fatigue
+            .as_ref()
+            .and_then(|owner| owner.elapsed_owner());
+        let mut elapsed_draft = None;
+        if let Some(owner) = elapsed_owner {
+            // Each elapsed segment ends before an activity transition is published.
+            consumed = consumed.min(self.core.next_deadline(None)?.after_millis);
+            if consumed == 0 {
+                return Ok(0);
+            }
+            let mut working: Vec<_> = self
+                .core
+                .physical
+                .work_interval()
+                .ok_or("no physical interval")?
+                .rates
+                .par_iter()
+                .map(|&(job, _)| {
+                    self.core
+                        .physical
+                        .work()
+                        .binary_search_by_key(&job, |row| row.job.id)
+                        .map(|index| self.core.physical.work()[index].job.worker)
+                        .map_err(|_| "missing activity job".to_string())
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            if let Some(shared) = &self.shared_work {
+                working.par_extend(
+                    shared
+                        .sessions
+                        .par_iter()
+                        .map(|session| session.event.person),
+                );
+            }
+            working.par_sort_unstable();
+            working.dedup();
+            let mut traveling: Vec<_> = self.core.travel.as_ref().map_or_else(Vec::new, |travel| {
+                travel
+                    .journeys
+                    .par_iter()
+                    .map(|journey| journey.person)
+                    .collect()
+            });
+            traveling.par_sort_unstable();
+            let resting = owner.fatigue.resting();
+            let people: std::collections::HashSet<_> = self
+                .core
+                .people
+                .par_iter()
+                .map(|person| person.id)
+                .collect();
+            let activity: Vec<_> = self
+                .core
+                .people
+                .par_iter()
+                .map(|person| {
+                    use game_economy_fatigue::Exertion;
+                    let work = working.binary_search(&person.id).is_ok();
+                    let travel = traveling.binary_search(&person.id).is_ok();
+                    if person.health > 0 && work && travel {
+                        return Err("overlapping work and travel activity".to_string());
+                    }
+                    let exertion = if person.health == 0 {
+                        Exertion::Inactive
+                    } else if work {
+                        Exertion::Work
+                    } else if travel {
+                        Exertion::Travel
+                    } else if person.region.is_none()
+                        || externally_busy.binary_search(&person.id).is_ok()
+                    {
+                        Exertion::Other
+                    } else if resting.binary_search(&person.id).is_ok() {
+                        Exertion::Rest
+                    } else {
+                        Exertion::Idle
+                    };
+                    Ok(game_economy_fatigue::ElapsedActivity {
+                        id: person.id,
+                        exertion,
+                    })
+                })
+                .collect::<Result<Vec<_>, String>>()?;
+            if let Some(deadline) = owner.next_damage_deadline(&activity, &people)? {
+                consumed = deadline.min(u128::from(consumed)) as u64;
+            }
+            elapsed_draft = Some(owner.prepare(&activity, consumed, &people)?);
+        }
         let recovery_due = game_economy_person::next_recovery(&self.core.people)
             .map_err(str::to_owned)?
             .is_some_and(|after| after <= u128::from(consumed));
-        let deaths = game_economy_person::starvation_deaths_within(
-            &self.core.people,
-            &self.core.rules,
-            quantum,
-            consumed,
-        )
-        .map_err(str::to_owned)?;
+        let deaths = if let Some(draft) = &elapsed_draft {
+            let people = self
+                .core
+                .preview_people_progress(consumed, &draft.consequences)?;
+            self.core
+                .people
+                .par_iter()
+                .zip(people.par_iter())
+                .filter_map(|(before, after)| {
+                    (before.health > 0 && after.health == 0).then_some(before.id)
+                })
+                .collect()
+        } else {
+            game_economy_person::starvation_deaths_within(
+                &self.core.people,
+                &self.core.rules,
+                quantum,
+                consumed,
+            )
+            .map_err(str::to_owned)?
+        };
         let mut pending = self.pending_vital_deaths.clone();
         if let Some(family) = &self.family {
             pending.par_extend(deaths.par_iter().copied().filter(|id| {
@@ -182,7 +288,7 @@ impl CoreHost {
             self.stage_fatal_assistance(&deaths, &durations, consumed)?;
         let Some(owner) = &self.fatigue else {
             let credits = self.plan_skill_practice(consumed);
-            let advanced = self.core.progress_adjusting(consumed, &reductions)?;
+            let advanced = self.core.progress_adjusting(consumed, &reductions, &[])?;
             if advanced > 0 {
                 self.pending_vital_deaths = pending;
                 if !deaths.is_empty() || recovery_due {
@@ -326,9 +432,21 @@ impl CoreHost {
             })
             .collect::<Result<Vec<_>, _>>()?;
         let next = chunks.into_par_iter().flatten().collect();
-        let advanced = self.core.progress_adjusting(consumed, &reductions)?;
+        let injuries = elapsed_draft
+            .as_ref()
+            .map_or(&[][..], |draft| draft.consequences.as_slice());
+        let has_injuries = !injuries.is_empty();
+        let advanced = self
+            .core
+            .progress_adjusting(consumed, &reductions, injuries)?;
+        if let Some(draft) = elapsed_draft {
+            self.fatigue
+                .as_mut()
+                .expect("checked fatigue")
+                .set_elapsed_owner(draft.state);
+        }
         self.pending_vital_deaths = pending;
-        if !deaths.is_empty() || recovery_due {
+        if !deaths.is_empty() || recovery_due || has_injuries {
             self.work_checked_revision = None;
         }
         self.activity = next;

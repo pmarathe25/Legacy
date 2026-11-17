@@ -26,6 +26,9 @@ pub struct TimedFatigue {
     /// Nonnegative fractional numerators over the rate period, sorted by person.
     #[serde(default)]
     pub remainders: Vec<(u64, u64)>,
+    /// Presence selects elapsed fatigue; absence retains legacy boundary settlement.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub elapsed_damage_remainders: Option<Vec<(u64, u64)>>,
 }
 
 pub struct TimedDraft {
@@ -39,6 +42,7 @@ impl TimedFatigue {
         let period = self.rate_period_millis.unwrap_or(quantum);
         if quantum == 0
             || period == 0
+            || (self.elapsed_damage_remainders.is_some() && self.rate_period_millis.is_none())
             || self
                 .remainders
                 .par_windows(2)
@@ -50,7 +54,27 @@ impl TimedFatigue {
         {
             return Err("invalid fractional fatigue".into());
         }
+        if let Some(elapsed) = self.elapsed_owner() {
+            elapsed.validate(people)?;
+        }
         Ok(())
+    }
+
+    /// Construct the elapsed owner only for saves explicitly using that mode.
+    pub fn elapsed_owner(&self) -> Option<super::ElapsedFatigue> {
+        Some(super::ElapsedFatigue {
+            fatigue: self.fatigue.clone(),
+            rate_period_millis: self.rate_period_millis?,
+            remainders: self.remainders.clone(),
+            damage_remainders: self.elapsed_damage_remainders.clone()?,
+        })
+    }
+
+    pub fn set_elapsed_owner(&mut self, elapsed: super::ElapsedFatigue) {
+        self.fatigue = elapsed.fatigue;
+        self.rate_period_millis = Some(elapsed.rate_period_millis);
+        self.remainders = elapsed.remainders;
+        self.elapsed_damage_remainders = Some(elapsed.damage_remainders);
     }
 
     /// Apply one boundary-weighted update. The input sums durations before
@@ -155,6 +179,7 @@ impl TimedFatigue {
                 },
                 rate_period_millis: self.rate_period_millis,
                 remainders,
+                elapsed_damage_remainders: self.elapsed_damage_remainders.clone(),
             },
             consequences,
         })
@@ -185,6 +210,7 @@ mod tests {
                 people: vec![],
             },
             remainders: vec![],
+            elapsed_damage_remainders: None,
         }
     }
 

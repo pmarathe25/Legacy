@@ -130,6 +130,46 @@ mod tests {
                 .is_err()
         );
     }
+
+    #[test]
+    fn predicts_first_damage_across_threshold_and_interrupted_exposure() {
+        let people = HashSet::from([1]);
+        let work = [ElapsedActivity {
+            id: 1,
+            exertion: Exertion::Work,
+        }];
+        let rest = [ElapsedActivity {
+            id: 1,
+            exertion: Exertion::Rest,
+        }];
+        let state = owner(7);
+        assert_eq!(
+            state.next_damage_deadline(&work, &people).unwrap(),
+            Some(583)
+        );
+        let before = state.prepare(&work, 582, &people).unwrap();
+        assert!(before.consequences.is_empty());
+        assert_eq!(
+            before.state.next_damage_deadline(&work, &people).unwrap(),
+            Some(1)
+        );
+        assert_eq!(
+            before
+                .state
+                .prepare(&work, 1, &people)
+                .unwrap()
+                .consequences[0]
+                .damage,
+            1
+        );
+        assert_eq!(owner(8).next_damage_deadline(&rest, &people).unwrap(), None);
+        let mut almost = owner(9);
+        almost.damage_remainders = vec![(1, 999)];
+        assert_eq!(
+            almost.next_damage_deadline(&rest, &people).unwrap(),
+            Some(1)
+        );
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -167,21 +207,24 @@ impl ElapsedFatigue {
         if self.rate_period_millis == 0
             || !valid(&self.remainders)
             || !valid(&self.damage_remainders)
+            || self.fatigue.people.par_iter().any(|person| {
+                person.fatigue == self.fatigue.rules.capacity
+                    && self
+                        .remainders
+                        .binary_search_by_key(&person.id, |row| row.0)
+                        .is_ok()
+            })
         {
             return Err("invalid elapsed fatigue fractions".into());
         }
         Ok(())
     }
 
-    /// Stage one half-open segment. Exhaustion exposure is sampled at the end
-    /// of each elapsed millisecond; fractions survive interrupted exposure.
-    /// Rest is an input to this calculation, never an automatic decision.
-    pub fn prepare(
+    fn validate_activity(
         &self,
         activity: &[ElapsedActivity],
-        millis: u64,
         people: &HashSet<u64>,
-    ) -> Result<ElapsedFatigueDraft, String> {
+    ) -> Result<(), String> {
         self.validate(people)?;
         if activity.par_windows(2).any(|pair| pair[0].id >= pair[1].id)
             || activity.par_iter().any(|row| !people.contains(&row.id))
@@ -202,6 +245,83 @@ impl ElapsedFatigue {
         {
             return Err("invalid elapsed fatigue activity".into());
         }
+        Ok(())
+    }
+
+    /// Predict the first damage event if these activities remain unchanged.
+    /// The host must also stop at earlier activity or health transitions.
+    pub fn next_damage_deadline(
+        &self,
+        activity: &[ElapsedActivity],
+        people: &HashSet<u64>,
+    ) -> Result<Option<u128>, String> {
+        self.validate_activity(activity, people)?;
+        let rules = &self.fatigue.rules;
+        if rules.exhaustion_damage == 0 {
+            return Ok(None);
+        }
+        let mut old: Vec<_> = self.fatigue.people.par_iter().collect();
+        old.par_sort_unstable_by_key(|person| person.id);
+        let period = u128::from(self.rate_period_millis);
+        let threshold = u128::from(rules.exhaustion_at) * period;
+        let cap = u128::from(rules.capacity) * period;
+        let deadlines: Result<Vec<_>, String> = activity
+            .par_iter()
+            .map(|row| {
+                let fraction = |entries: &[(u64, u64)]| {
+                    entries
+                        .binary_search_by_key(&row.id, |entry| entry.0)
+                        .ok()
+                        .map_or(0, |index| entries[index].1)
+                };
+                let fatigue = old
+                    .binary_search_by_key(&row.id, |person| person.id)
+                    .ok()
+                    .map_or(0, |index| old[index].fatigue);
+                let initial = u128::from(fatigue) * period + u128::from(fraction(&self.remainders));
+                if initial > cap {
+                    return Err("fatigue exceeds capacity".into());
+                }
+                if row.exertion == Exertion::Inactive {
+                    return Ok(None);
+                }
+                let (gain, recovery) = rates(rules, row.exertion);
+                let required = (period - u128::from(fraction(&self.damage_remainders)))
+                    .div_ceil(u128::from(rules.exhaustion_damage));
+                let deadline = if gain >= recovery {
+                    let rate = u128::from(gain - recovery);
+                    let first = if initial >= threshold {
+                        1
+                    } else if rate == 0 {
+                        return Ok(None);
+                    } else {
+                        (threshold - initial).div_ceil(rate).max(1)
+                    };
+                    Some(first + required - 1)
+                } else {
+                    let rate = u128::from(recovery - gain);
+                    if initial < threshold || (initial - threshold) / rate < required {
+                        None
+                    } else {
+                        Some(required)
+                    }
+                };
+                Ok(deadline)
+            })
+            .collect();
+        Ok(deadlines?.into_par_iter().flatten().min())
+    }
+
+    /// Stage one half-open segment. Exhaustion exposure is sampled at the end
+    /// of each elapsed millisecond; fractions survive interrupted exposure.
+    /// Rest is an input to this calculation, never an automatic decision.
+    pub fn prepare(
+        &self,
+        activity: &[ElapsedActivity],
+        millis: u64,
+        people: &HashSet<u64>,
+    ) -> Result<ElapsedFatigueDraft, String> {
+        self.validate_activity(activity, people)?;
         let mut old: Vec<_> = self.fatigue.people.par_iter().collect();
         old.par_sort_unstable_by_key(|person| person.id);
         let rules = &self.fatigue.rules;
@@ -231,26 +351,7 @@ impl ElapsedFatigue {
                 if initial > cap {
                     return Err("fatigue exceeds capacity".into());
                 }
-                let (gain, recovery) = match row.exertion {
-                    Exertion::Work => (
-                        u64::from(rules.baseline_gain) + u64::from(rules.work_gain),
-                        0,
-                    ),
-                    Exertion::Travel => (
-                        u64::from(rules.baseline_gain) + u64::from(rules.travel_gain),
-                        0,
-                    ),
-                    Exertion::Rest => (
-                        u64::from(rules.baseline_gain),
-                        u64::from(rules.rest_recovery),
-                    ),
-                    Exertion::Idle => (
-                        u64::from(rules.baseline_gain),
-                        u64::from(rules.idle_recovery),
-                    ),
-                    Exertion::Other => (u64::from(rules.baseline_gain), 0),
-                    Exertion::Inactive => (0, 0),
-                };
+                let (gain, recovery) = rates(rules, row.exertion);
                 let duration = u128::from(millis);
                 let (exact, exposed) = if row.exertion == Exertion::Inactive {
                     (initial, 0)
@@ -326,5 +427,28 @@ impl ElapsedFatigue {
                 })
                 .collect(),
         })
+    }
+}
+
+fn rates(rules: &super::Rules, activity: Exertion) -> (u64, u64) {
+    match activity {
+        Exertion::Work => (
+            u64::from(rules.baseline_gain) + u64::from(rules.work_gain),
+            0,
+        ),
+        Exertion::Travel => (
+            u64::from(rules.baseline_gain) + u64::from(rules.travel_gain),
+            0,
+        ),
+        Exertion::Rest => (
+            u64::from(rules.baseline_gain),
+            u64::from(rules.rest_recovery),
+        ),
+        Exertion::Idle => (
+            u64::from(rules.baseline_gain),
+            u64::from(rules.idle_recovery),
+        ),
+        Exertion::Other => (u64::from(rules.baseline_gain), 0),
+        Exertion::Inactive => (0, 0),
     }
 }

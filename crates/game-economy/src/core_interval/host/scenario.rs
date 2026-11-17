@@ -107,6 +107,7 @@ impl CoreHostSnapshot {
                     fatigue,
                     rate_period_millis: None,
                     remainders: vec![],
+                    elapsed_damage_remainders: None,
                 }),
             activity: vec![],
             food_search,
