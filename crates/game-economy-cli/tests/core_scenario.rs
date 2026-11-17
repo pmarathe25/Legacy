@@ -5454,6 +5454,190 @@ fn people_choose_written_forms_for_their_own_spoken_words() {
 }
 
 #[test]
+fn personal_marks_require_real_materials_and_are_read_subjectively() {
+    use game_economy::core_interval::{CoreHost, CoreMarkInscription};
+    use game_language::writing::Association;
+    use game_lots::{Movement, Place, Transaction};
+    fn run(workers: usize) -> serde_json::Value {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let root = root();
+                let mut host = game_economy_cli::core_scenario(
+                    &root.join("content/scenarios/economy-core-language-topics.toml"),
+                    &root.join("content"),
+                )
+                .unwrap();
+                assert_eq!(host.advance_continuous(900_001, &[]).unwrap().failure, None);
+                let state = host.snapshot();
+                let language = state.social.as_ref().unwrap().language.as_ref().unwrap();
+                let word = language.minds[0].words[0].clone();
+                assert_eq!(language.minds[1].words[0].sounds, word.sounds);
+                host.choose_written_form(
+                    1,
+                    Association {
+                        sounds: word.sounds.clone(),
+                        marks: vec![7],
+                    },
+                )
+                .unwrap();
+                let before = host.snapshot();
+                let choice = CoreMarkInscription {
+                    person: 1,
+                    sounds: word.sounds.clone(),
+                };
+                assert!(
+                    host.inscribe_marks(&[
+                        choice.clone(),
+                        CoreMarkInscription {
+                            person: 2,
+                            sounds: word.sounds.clone()
+                        }
+                    ])
+                    .is_err()
+                );
+                assert_eq!(host.snapshot(), before);
+                let page = host.inscribe_marks(std::slice::from_ref(&choice)).unwrap()[0]
+                    .1
+                    .unwrap();
+                assert_eq!(
+                    host.observe_marked_page(1, page).unwrap().meanings,
+                    vec![word.meaning]
+                );
+                assert!(host.observe_marked_page(2, page).is_err());
+                assert_eq!(host.inscribe_marks(&[choice]).unwrap(), vec![(1, None)]);
+                let state = host.snapshot();
+                let writing = state.writing.as_ref().unwrap();
+                assert_eq!(writing.pages.len(), 1);
+                assert_eq!(writing.pages[0].marks.as_deref(), Some(&[7][..]));
+                let transfer = Transaction {
+                    id: 1,
+                    movements: vec![Movement {
+                        id: 1,
+                        from: Place::Person(1),
+                        to: Some(Place::Person(2)),
+                        good: writing.page,
+                        quantity: 1,
+                        item: Some(page),
+                        batch: None,
+                    }],
+                    creations: vec![],
+                };
+                assert!(host.transfer_goods(&[transfer]).unwrap().transactions[0].accepted);
+                let mut no_language = host.snapshot();
+                no_language.social.as_mut().unwrap().language = None;
+                let observer = CoreHost::resume(no_language).unwrap();
+                let seen = observer.observe_marked_page(2, page).unwrap();
+                assert_eq!(seen.marks, vec![7]);
+                assert!(seen.meanings.is_empty());
+                assert!(
+                    host.observe_marked_page(2, page)
+                        .unwrap()
+                        .meanings
+                        .is_empty()
+                );
+                host.choose_written_form(
+                    2,
+                    Association {
+                        sounds: word.sounds.clone(),
+                        marks: vec![7],
+                    },
+                )
+                .unwrap();
+                assert_eq!(
+                    host.observe_marked_page(2, page).unwrap().meanings,
+                    vec![word.meaning]
+                );
+                let saved = host.snapshot();
+                let restored = CoreHost::resume(
+                    serde_json::from_str(&serde_json::to_string(&saved).unwrap()).unwrap(),
+                )
+                .unwrap();
+                assert_eq!(saved, restored.snapshot());
+                assert_eq!(
+                    restored.observe_marked_page(2, page).unwrap().meanings,
+                    vec![word.meaning]
+                );
+                serde_json::to_value(saved).unwrap()
+            })
+    }
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
+fn independent_inscriptions_settle_without_creating_unfunded_pages() {
+    use game_economy::core_interval::{CoreHost, CoreMarkInscription};
+    use game_language::writing::Association;
+    fn run(workers: usize) -> serde_json::Value {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let root = root();
+                let mut host = game_economy_cli::core_scenario(
+                    &root.join("content/scenarios/economy-core-language-topics.toml"),
+                    &root.join("content"),
+                )
+                .unwrap();
+                assert_eq!(host.advance_continuous(900_001, &[]).unwrap().failure, None);
+                let state = host.snapshot();
+                let language = state.social.as_ref().unwrap().language.as_ref().unwrap();
+                let first = language.minds[0].words[0].sounds.clone();
+                let second = language.minds[1].words[0].sounds.clone();
+                host.choose_written_form(
+                    1,
+                    Association {
+                        sounds: first.clone(),
+                        marks: vec![7],
+                    },
+                )
+                .unwrap();
+                host.choose_written_form(
+                    2,
+                    Association {
+                        sounds: second.clone(),
+                        marks: vec![8],
+                    },
+                )
+                .unwrap();
+                let result = host
+                    .inscribe_marks(&[
+                        CoreMarkInscription {
+                            person: 1,
+                            sounds: first,
+                        },
+                        CoreMarkInscription {
+                            person: 2,
+                            sounds: second,
+                        },
+                    ])
+                    .unwrap();
+                assert_eq!(result, vec![(1, Some(1)), (2, None)]);
+                let state = host.snapshot();
+                let pages = &state.writing.as_ref().unwrap().pages;
+                assert_eq!(pages.len(), 1);
+                assert_eq!(
+                    (pages[0].author, pages[0].marks.as_deref()),
+                    (1, Some(&[7][..]))
+                );
+                assert_eq!(
+                    CoreHost::resume(
+                        serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap()
+                    )
+                    .unwrap()
+                    .snapshot(),
+                    state
+                );
+                serde_json::to_value(state).unwrap()
+            })
+    }
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
 fn people_choose_between_competing_physical_actions_or_idleness() {
     use game_economy::core_interval::{CoreChoiceOutcome, CoreRunEvent};
     fn run(workers: usize) -> serde_json::Value {

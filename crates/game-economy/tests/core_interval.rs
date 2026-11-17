@@ -15749,6 +15749,7 @@ fn literacy_study_depends_on_personal_choice_encounter_and_a_physical_page() {
                         written_at: 0,
                         claim: None,
                         text: Some("A page".into()),
+                        marks: None,
                     }]);
                     let holder = snapshot
                         .core
@@ -15978,6 +15979,7 @@ fn consumed_written_pages_are_retired_but_personal_memories_survive() {
                     written_at: 0,
                     claim: None,
                     text: Some("remembered words".into()),
+                    marks: None,
                 }]);
                 writing.text_memories = std::sync::Arc::new(vec![game_economy::TextMemory {
                     person: 2,
@@ -16218,6 +16220,7 @@ fn written_page_retirement_rolls_back_when_another_item_has_no_owner() {
         written_at: 0,
         claim: None,
         text: Some("A page".into()),
+        marks: None,
     }]);
     let mut host = CoreHost::begin(snapshot, &[(1, 2)]).unwrap();
     assert_eq!(host.progress(500).unwrap(), 500);

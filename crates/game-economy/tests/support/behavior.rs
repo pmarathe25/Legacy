@@ -1316,6 +1316,7 @@ fn independent_readers(count: u64) -> State {
                     learned_from: None,
                 }),
                 text: None,
+                marks: None,
             })
             .collect::<Vec<_>>()
             .into(),

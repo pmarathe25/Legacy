@@ -47,7 +47,7 @@ health = 100
 hunger = 0
 willing_to_work = false
 seek_meals = false
-goods = { grain = 1 }
+goods = { grain = 1, paper = 1, ink = 1 }
 [[people]]
 id = 2
 region = 1
@@ -64,3 +64,15 @@ min_health = 1
 max_hunger = 100
 familiarity_gain = 1
 familiarity_max = 10
+
+[writing]
+paper = "paper"
+ink = "ink"
+page = "written-page"
+paper_quantity = 1
+ink_quantity = 1
+next_item = 1
+
+[knowledge]
+max_records = 4
+minds = []

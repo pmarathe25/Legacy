@@ -91,6 +91,19 @@ impl Writing {
         Ok(())
     }
 
+    /// Look up the visible form a person has chosen for a spoken form.
+    pub fn marks(&self, person: u64, sounds: &[u8]) -> Option<&[u32]> {
+        let index = self
+            .minds
+            .binary_search_by_key(&person, |mind| mind.person)
+            .ok()?;
+        let associations = &self.minds[index].associations;
+        let index = associations
+            .binary_search_by(|row| row.sounds.as_slice().cmp(sounds))
+            .ok()?;
+        Some(&associations[index].marks)
+    }
+
     /// Interpret only through this reader's own associations; homographs remain ambiguous.
     pub fn interpretations(&self, person: u64, marks: &[u32]) -> Vec<Vec<u8>> {
         self.minds

@@ -6,7 +6,236 @@ pub struct CoreWritingResults {
     pub actors: Vec<u64>,
     pub items: Vec<u64>,
 }
+
+/// A person's chosen spoken form to inscribe using their own marks.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CoreMarkInscription {
+    pub person: u64,
+    pub sounds: Vec<u8>,
+}
+
+/// What one person sees and can personally interpret on a carried page.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CoreMarkObservation {
+    pub marks: Vec<u32>,
+    pub meanings: Vec<game_language::Meaning>,
+}
+
 impl CoreHost {
+    /// Inscribe individually selected forms on real pages using carried materials.
+    /// Rejected physical transactions create no page or writing record.
+    pub fn inscribe_marks(
+        &mut self,
+        choices: &[CoreMarkInscription],
+    ) -> Result<Vec<(u64, Option<u64>)>, String> {
+        if choices
+            .par_windows(2)
+            .any(|pair| pair[0].person >= pair[1].person)
+        {
+            return Err("invalid inscription choices".into());
+        }
+        if choices.is_empty() {
+            return Ok(Vec::new());
+        }
+        u64::try_from(choices.len())
+            .map_err(|_| "writing action overflow")?
+            .checked_add(1)
+            .ok_or("writing action overflow")?;
+        let owner = self
+            .writing
+            .as_ref()
+            .ok_or("physical writing is disabled")?;
+        let language = self
+            .social
+            .as_ref()
+            .and_then(|social| social.language.as_ref())
+            .ok_or("personal language is disabled")?;
+        let forms = language
+            .writing
+            .as_ref()
+            .ok_or("personal writing forms are disabled")?;
+        let tick = self.writing_tick()?;
+        let busy = self.writing_busy(&[]);
+        let marks: Vec<Vec<u32>> = choices
+            .par_iter()
+            .map(|choice| {
+                let actor = self
+                    .core
+                    .people
+                    .binary_search_by_key(&choice.person, |person| person.id)
+                    .ok()
+                    .map(|index| &self.core.people[index])
+                    .ok_or("unknown writer")?;
+                if actor.health == 0
+                    || actor.region.is_none()
+                    || busy.binary_search(&actor.id).is_ok()
+                {
+                    return Err("writer cannot inscribe during their current activity");
+                }
+                forms
+                    .marks(choice.person, &choice.sounds)
+                    .map(<[u32]>::to_vec)
+                    .ok_or("writer has no chosen marks for that form")
+            })
+            .collect::<Result<_, _>>()
+            .map_err(str::to_owned)?;
+        let start = owner
+            .next_item
+            .max(self.tool_wear.as_ref().map_or(1, |wear| wear.next_item));
+        let items = self
+            .core
+            .physical
+            .next_unused_items(start, choices.len())
+            .ok_or("item identity overflow")?;
+        if items.last().is_some_and(|id| *id == u64::MAX) {
+            return Err("item identity overflow".into());
+        }
+        let actions: Vec<_> = choices
+            .par_iter()
+            .zip(items.par_iter())
+            .enumerate()
+            .map(|(index, (choice, &item))| game_lot_runtime::WritingPage {
+                action: index as u64 + 1,
+                writer: choice.person,
+                paper: owner.paper,
+                paper_quantity: owner.paper_quantity,
+                ink: owner.ink,
+                ink_quantity: owner.ink_quantity,
+                page: owner.page,
+                item,
+            })
+            .collect();
+        let physical = self
+            .core
+            .physical
+            .prepare_interval_writing(&actions, self.core.seed)?;
+        let mut outcomes: Vec<_> = physical.transactions().par_iter().copied().collect();
+        outcomes.par_sort_unstable_by_key(|outcome| outcome.id);
+        let accepted: Vec<_> = actions
+            .par_iter()
+            .zip(marks.par_iter())
+            .filter_map(|(action, marks)| {
+                outcomes
+                    .binary_search_by_key(&action.action, |outcome| outcome.id)
+                    .ok()
+                    .filter(|&index| outcomes[index].accepted)
+                    .map(|_| crate::WrittenPage {
+                        item: action.item,
+                        author: action.writer,
+                        script: 0,
+                        written_at: tick,
+                        claim: None,
+                        text: None,
+                        marks: Some(marks.clone()),
+                    })
+            })
+            .collect();
+        let results: Vec<_> = actions
+            .par_iter()
+            .map(|action| {
+                (
+                    action.writer,
+                    outcomes
+                        .binary_search_by_key(&action.action, |outcome| outcome.id)
+                        .ok()
+                        .filter(|&index| outcomes[index].accepted)
+                        .map(|_| action.item),
+                )
+            })
+            .collect();
+        let mut next = owner.clone();
+        if let Some(last) = accepted.last() {
+            next.next_item = next.next_item.max(last.item + 1);
+        }
+        if !accepted.is_empty() {
+            let mut pages: Vec<_> = owner.pages.par_iter().cloned().collect();
+            pages.par_extend(accepted.par_iter().cloned());
+            next.pages = Arc::new(pages);
+        }
+        let mut created = items.clone();
+        created.par_sort_unstable();
+        let other_updates: Vec<_> = physical
+            .item_updates()
+            .par_iter()
+            .filter(|(id, _)| created.binary_search(id).is_err())
+            .copied()
+            .collect();
+        let tools = self.stage_tools(&[], None, &other_updates)?;
+        next.retire(&other_updates);
+        if !accepted.is_empty() {
+            self.core
+                .physical
+                .validate_interval_consumption(&physical)?;
+            self.core.physical.commit_interval_consumption(physical)?;
+        }
+        if let Some(tools) = tools {
+            self.tool_wear = Some(tools);
+        }
+        self.writing = Some(next);
+        self.work_checked_revision = None;
+        Ok(results)
+    }
+
+    /// Interpret a carried physical page through the reader's own associations.
+    pub fn observe_marked_page(
+        &self,
+        person: u64,
+        item: u64,
+    ) -> Result<CoreMarkObservation, String> {
+        let actor = self
+            .core
+            .people
+            .binary_search_by_key(&person, |row| row.id)
+            .ok()
+            .map(|index| &self.core.people[index])
+            .ok_or("unknown reader")?;
+        if actor.health == 0 {
+            return Err("reader cannot observe while incapacitated".into());
+        }
+        if self
+            .core
+            .physical
+            .custody(game_lots::Place::Person(person))
+            .is_none_or(|holder| !holder.lots.iter().any(|lot| lot.item == Some(item)))
+        {
+            return Err("reader does not carry that page".into());
+        }
+        let page = self
+            .writing
+            .as_ref()
+            .and_then(|owner| owner.page(item))
+            .ok_or("unknown written page")?;
+        let marks = page.marks.as_ref().ok_or("page has no personal marks")?;
+        let mut meanings: Vec<_> = self
+            .social
+            .as_ref()
+            .and_then(|social| social.language.as_ref())
+            .map_or_else(Vec::new, |language| {
+                let sounds = language
+                    .writing
+                    .as_ref()
+                    .map_or_else(Vec::new, |forms| forms.interpretations(person, marks));
+                language
+                    .minds
+                    .binary_search_by_key(&person, |mind| mind.person)
+                    .ok()
+                    .map_or_else(Vec::new, |index| {
+                        language.minds[index]
+                            .words
+                            .iter()
+                            .filter(|word| sounds.contains(&word.sounds))
+                            .map(|word| word.meaning)
+                            .collect()
+                    })
+            });
+        meanings.sort_unstable();
+        meanings.dedup();
+        Ok(CoreMarkObservation {
+            marks: marks.clone(),
+            meanings,
+        })
+    }
+
     fn writing_busy(&self, blocked: &[u64]) -> Vec<u64> {
         let mut busy = self
             .blocked_with_rest(blocked)
@@ -208,6 +437,7 @@ impl CoreHost {
                         written_at: tick,
                         claim: None,
                         text: Some(text.clone()),
+                        marks: None,
                     })
             })
             .collect();
@@ -392,6 +622,7 @@ impl CoreHost {
                         written_at: tick,
                         claim: Some(text.clone()),
                         text: None,
+                        marks: None,
                     })
             })
             .collect();

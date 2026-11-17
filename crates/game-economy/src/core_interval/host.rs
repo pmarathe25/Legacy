@@ -74,7 +74,9 @@ pub use skills::{CoreSkillCredit, CoreSkills};
 pub use social::{CoreDynamicsResults, CoreHealth, CoreSocial};
 pub use tools::CoreToolRepairResults;
 pub use treatment::CoreTreatmentResults;
-pub use writing::{CoreWritingPracticeResults, CoreWritingResults};
+pub use writing::{
+    CoreMarkInscription, CoreMarkObservation, CoreWritingPracticeResults, CoreWritingResults,
+};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

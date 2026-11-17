@@ -6998,6 +6998,7 @@ impl Economy {
                         written_at: tick,
                         claim: Some(claim),
                         text: None,
+                        marks: None,
                     };
                     writing_output.push(game_lot_runtime::WritingPage {
                         action,
@@ -7048,6 +7049,7 @@ impl Economy {
                         written_at: tick,
                         claim: None,
                         text: Some(text),
+                        marks: None,
                     };
                     writing_output.push(game_lot_runtime::WritingPage {
                         action,
@@ -7170,6 +7172,7 @@ impl Economy {
                             written_at: tick,
                             claim,
                             text,
+                            marks: None,
                         },
                     )
                 })

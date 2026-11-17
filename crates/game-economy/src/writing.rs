@@ -137,6 +137,9 @@ pub struct Page {
     pub claim: Option<Record>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub text: Option<String>,
+    /// Visible marks chosen by the author; they carry no universal meaning.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub marks: Option<Vec<u32>>,
 }
 
 impl Writing {
@@ -217,9 +220,15 @@ impl Writing {
                 row.item == 0
                     || row.item >= self.next_item
                     || !people.contains(&row.author)
-                    || row.script == 0
+                    || (row.script == 0) != row.marks.is_some()
                     || row.written_at > tick
-                    || row.claim.is_some() == row.text.is_some()
+                    || usize::from(row.claim.is_some())
+                        + usize::from(row.text.is_some())
+                        + usize::from(row.marks.is_some())
+                        != 1
+                    || row.marks.as_ref().is_some_and(|marks| {
+                        marks.is_empty() || marks.len() > 16 || marks.contains(&0)
+                    })
                     || row
                         .text
                         .as_ref()

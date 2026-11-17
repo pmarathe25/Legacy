@@ -13,8 +13,11 @@ Optional `writing` state stores each person's chosen associations between
 spoken forms and sequences of visible marks. Different people can choose
 different forms, and one reader can associate the same marks with multiple
 sounds. The interval host permits an explicit choice for a form already in
-that person's vocabulary. This does not yet create or decode physical pages,
-teach another person, or schedule an autonomous writing choice.
+that person's vocabulary. The interval host can explicitly inscribe that
+person's marks on a physical page using carried paper and ink. A person who
+actually carries the page can observe its marks and interpret them through
+their own associations and vocabulary, including ambiguity. This does not yet
+teach another person or schedule an autonomous writing choice.
 
 `prepare_ungrounded` stages explicitly selected assertions whose referents are
 not jointly observable. It lets the speaker use or coin a personal sound form
