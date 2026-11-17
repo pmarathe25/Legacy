@@ -255,6 +255,101 @@ impl Runtime {
         result.map(|()| consumed)
     }
 
+    /// Advance work and pause selected unfinished jobs at the resulting instant.
+    /// Jobs that finish at that instant retain their rate until completion is
+    /// published. All validation happens before any physical state changes.
+    pub fn progress_work_interval_pausing(
+        &mut self,
+        requested_millis: u64,
+        pause_jobs: &[u64],
+    ) -> Result<(u64, Vec<(u64, u64)>), String> {
+        self.progress_work_interval_adjusting(requested_millis, pause_jobs, &[])
+    }
+
+    /// Also remove specified helper-rate contributions at the same instant.
+    /// Rates and job IDs must be sorted and unique; completed jobs retain their
+    /// original rates until their completion is published.
+    pub fn progress_work_interval_adjusting(
+        &mut self,
+        requested_millis: u64,
+        pause_jobs: &[u64],
+        reductions: &[(u64, u64)],
+    ) -> Result<(u64, Vec<(u64, u64)>), String> {
+        let interval = self
+            .work_interval
+            .as_ref()
+            .ok_or("no physical work interval")?;
+        if interval.tick != self.tick()
+            || interval.custody_revision != self.store.revision()
+            || interval.elapsed_millis > self.tick_millis
+            || pause_jobs.par_windows(2).any(|pair| pair[0] >= pair[1])
+            || pause_jobs.par_iter().any(|job| {
+                interval
+                    .rates
+                    .binary_search_by_key(job, |rate| rate.0)
+                    .is_err()
+            })
+            || reductions.par_windows(2).any(|pair| pair[0].0 >= pair[1].0)
+            || reductions.par_iter().any(|&(job, amount)| {
+                amount == 0
+                    || interval
+                        .rates
+                        .binary_search_by_key(&job, |rate| rate.0)
+                        .ok()
+                        .is_none_or(|index| amount >= interval.rates[index].1)
+            })
+        {
+            return Err("invalid physical work interruption".into());
+        }
+        let consumed = requested_millis.min(self.tick_millis - interval.elapsed_millis);
+        if consumed == 0 {
+            return Ok((0, Vec::new()));
+        }
+        let period = self.work_rate_period_millis();
+        let paused: Vec<_> = interval
+            .rates
+            .par_iter()
+            .filter_map(|&(job, rate)| {
+                if pause_jobs.binary_search(&job).is_err() {
+                    return None;
+                }
+                let index = self
+                    .work
+                    .binary_search_by_key(&job, |row| row.job.id)
+                    .ok()?;
+                let deadline = self.work[index]
+                    .completion_after(rate, period)
+                    .expect("validated interval work");
+                deadline
+                    .is_none_or(|after| after > u128::from(consumed))
+                    .then_some((job, rate))
+            })
+            .collect();
+        let mut interval = self.work_interval.take().expect("checked interval");
+        let result = self.apply_work_progress(&interval.rates, consumed);
+        if result.is_ok() {
+            interval.elapsed_millis += consumed;
+            interval.rates.retain(|rate| {
+                paused
+                    .binary_search_by_key(&rate.0, |entry| entry.0)
+                    .is_err()
+            });
+            interval.rates.par_iter_mut().for_each(|row| {
+                if let Ok(reduction) = reductions.binary_search_by_key(&row.0, |entry| entry.0) {
+                    let work = self
+                        .work
+                        .binary_search_by_key(&row.0, |work| work.job.id)
+                        .expect("validated interval work");
+                    if self.work[work].job.remaining > 0 {
+                        row.1 -= reductions[reduction].1;
+                    }
+                }
+            });
+        }
+        self.work_interval = Some(interval);
+        result.map(|()| (consumed, paused))
+    }
+
     /// Release the interval lock after the full quantum has elapsed. The
     /// caller must then settle completion with no additional work rates.
     pub fn close_work_interval(&mut self) -> Result<(), String> {

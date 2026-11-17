@@ -108,6 +108,9 @@ pub struct CoreHostSnapshot {
     pub tool_requirements: Vec<game_economy_work::tools::Requirement>,
     #[serde(default, alias = "tool_paused_rates")]
     pub paused_work_rates: Vec<(u64, u64)>,
+    /// Physiological deaths waiting for the family owner's next settlement.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pending_vital_deaths: Vec<u64>,
     #[serde(default)]
     pub fatigue: Option<game_economy_fatigue::TimedFatigue>,
     #[serde(default)]
@@ -205,6 +208,7 @@ pub struct CoreHost {
     tool_wear: Option<ToolWear>,
     tool_requirements: Vec<game_economy_work::tools::Requirement>,
     paused_work_rates: Vec<(u64, u64)>,
+    pending_vital_deaths: Vec<u64>,
     fatigue: Option<game_economy_fatigue::TimedFatigue>,
     activity: Vec<game_economy_fatigue::TimedActivity>,
     goal_setbacks: Vec<(u64, u32)>,
@@ -262,6 +266,7 @@ struct CoreRuntimeOptions {
     schedule: Option<CoreSchedule>,
     tool_requirements: Vec<game_economy_work::tools::Requirement>,
     paused_work_rates: Vec<(u64, u64)>,
+    pending_vital_deaths: Vec<u64>,
     fatigue: Option<game_economy_fatigue::TimedFatigue>,
     activity: Vec<game_economy_fatigue::TimedActivity>,
     goal_setbacks: Vec<(u64, u32)>,
@@ -316,6 +321,7 @@ impl CoreHost {
             tool_wear,
             tool_requirements,
             paused_work_rates,
+            pending_vital_deaths,
             fatigue,
             activity,
             goal_setbacks,
@@ -386,6 +392,7 @@ impl CoreHost {
                 schedule,
                 tool_requirements,
                 paused_work_rates,
+                pending_vital_deaths,
                 fatigue,
                 activity,
                 goal_setbacks,
@@ -429,6 +436,7 @@ impl CoreHost {
             tool_wear,
             tool_requirements,
             paused_work_rates,
+            pending_vital_deaths,
             fatigue,
             activity,
             goal_setbacks,
@@ -495,6 +503,7 @@ impl CoreHost {
                 schedule,
                 tool_requirements,
                 paused_work_rates,
+                pending_vital_deaths,
                 fatigue,
                 activity,
                 goal_setbacks,
@@ -552,6 +561,7 @@ impl CoreHost {
             schedule,
             tool_requirements,
             paused_work_rates,
+            pending_vital_deaths,
             fatigue,
             mut activity,
             goal_setbacks,
@@ -1086,10 +1096,27 @@ impl CoreHost {
                 core.physical.tick(),
             )?;
         }
+        if pending_vital_deaths
+            .par_windows(2)
+            .any(|rows| rows[0] >= rows[1])
+            || pending_vital_deaths.par_iter().any(|id| {
+                core.people
+                    .binary_search_by_key(id, |person| person.id)
+                    .ok()
+                    .is_none_or(|index| {
+                        core.people[index].health != 0 || core.people[index].immortal.is_some()
+                    })
+            })
+        {
+            return Err("invalid pending vital deaths".into());
+        }
         if let Some(owner) = &family {
-            let pending = personal_conflict
-                .as_ref()
-                .map_or(&[][..], |conflict| conflict.pending_deaths.as_slice());
+            let mut pending = pending_vital_deaths.clone();
+            if let Some(conflict) = &personal_conflict {
+                pending.extend_from_slice(&conflict.pending_deaths);
+                pending.par_sort_unstable();
+                pending.dedup();
+            }
             if pending.par_iter().any(|id| {
                 owner
                     .members
@@ -1116,9 +1143,10 @@ impl CoreHost {
                 core.physical.tick(),
                 core.rules.max_health,
             )?;
-        } else if personal_conflict
-            .as_ref()
-            .is_some_and(|owner| !owner.pending_deaths.is_empty())
+        } else if !pending_vital_deaths.is_empty()
+            || personal_conflict
+                .as_ref()
+                .is_some_and(|owner| !owner.pending_deaths.is_empty())
         {
             return Err("pending family deaths require a family owner".into());
         }
@@ -1325,6 +1353,7 @@ impl CoreHost {
             tool_wear,
             tool_requirements,
             paused_work_rates,
+            pending_vital_deaths,
             fatigue,
             activity,
             goal_setbacks,
@@ -1420,6 +1449,7 @@ impl CoreHost {
             tool_wear: self.tool_wear.clone(),
             tool_requirements: self.tool_requirements.clone(),
             paused_work_rates: self.paused_work_rates.clone(),
+            pending_vital_deaths: self.pending_vital_deaths.clone(),
             fatigue: self.fatigue.clone(),
             activity: self.activity.clone(),
             goal_setbacks: self.goal_setbacks.clone(),
@@ -2955,6 +2985,7 @@ impl CoreHost {
                 game_economy_work::care::inherit(care, &family.owner, &family.newborns);
             }
             self.family = Some(family.owner);
+            self.pending_vital_deaths.clear();
             if let Some(conflict) = &mut self.personal_conflict {
                 conflict.pending_deaths.clear();
             }

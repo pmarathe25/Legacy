@@ -6,6 +6,13 @@ pub struct HungerRate {
     pub units: u32,
     pub per_millis: u64,
 }
+/// Starvation damage in health units per explicit elapsed duration.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StarvationRate {
+    pub units: u32,
+    pub per_millis: u64,
+}
 /// An incapacitated immortal retains their body and recovers instead of dying.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -22,6 +29,9 @@ pub struct Person {
     /// Sub-unit hunger accumulated against the configured hunger rate period.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub hunger_remainder: u64,
+    /// Fractional accumulated starvation damage over its configured period.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub starvation_remainder: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub immortal: Option<Immortal>,
     /// A personal preference, not an obligation.
@@ -35,6 +45,58 @@ fn is_zero(value: &u64) -> bool {
 }
 
 impl Person {
+    /// Time until starvation is fatal, including any time before its threshold.
+    pub fn starvation_death_after(
+        &self,
+        threshold: u32,
+        hunger_rate: u32,
+        hunger_period: u64,
+        damage: StarvationRate,
+    ) -> Result<Option<u128>, &'static str> {
+        if damage.per_millis == 0 || self.starvation_remainder >= damage.per_millis {
+            return Err("invalid fractional starvation damage");
+        }
+        let crossing = self.hunger_threshold_after(threshold, hunger_rate, hunger_period)?;
+        if self.health == 0 || self.immortal.is_some() || damage.units == 0 {
+            return Ok(None);
+        }
+        let Some(crossing) = crossing else {
+            return Ok(None);
+        };
+        let needed = u128::from(self.health) * u128::from(damage.per_millis)
+            - u128::from(self.starvation_remainder);
+        Ok(Some(crossing + needed.div_ceil(u128::from(damage.units))))
+    }
+
+    /// Apply elapsed starvation exposure using the opening hunger state.
+    pub fn advance_starvation(
+        &mut self,
+        threshold: u32,
+        hunger_rate: u32,
+        hunger_period: u64,
+        damage: StarvationRate,
+        elapsed_millis: u64,
+    ) -> Result<(), &'static str> {
+        let death = self.starvation_death_after(threshold, hunger_rate, hunger_period, damage)?;
+        if self.health == 0 || self.immortal.is_some() {
+            return Ok(());
+        }
+        let Some(crossing) = self.hunger_threshold_after(threshold, hunger_rate, hunger_period)?
+        else {
+            return Ok(());
+        };
+        let exposure = u128::from(elapsed_millis).saturating_sub(crossing);
+        let credit = u128::from(self.starvation_remainder) + exposure * u128::from(damage.units);
+        let amount = credit / u128::from(damage.per_millis);
+        if death.is_some_and(|after| after <= u128::from(elapsed_millis)) {
+            self.health = 0;
+            self.starvation_remainder = 0;
+        } else {
+            self.health -= amount as u32;
+            self.starvation_remainder = (credit % u128::from(damage.per_millis)) as u64;
+        }
+        Ok(())
+    }
     pub(crate) fn valid_hunger_progress(&self, quantum_millis: u64) -> bool {
         quantum_millis != 0
             && self.hunger_remainder < quantum_millis
@@ -104,7 +166,11 @@ pub struct Rules {
     pub hunger_rate: Option<HungerRate>,
     pub meal_threshold: u32,
     pub starvation_threshold: u32,
+    #[serde(default)]
     pub starvation_damage: u32,
+    /// Explicit starvation rate; absent retains legacy boundary damage.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub starvation_rate: Option<StarvationRate>,
     pub max_health: u32,
     pub carrying_capacity: u64,
     pub max_work_hunger: u32,
@@ -121,11 +187,46 @@ mod tests {
             health: 100,
             hunger: 0,
             hunger_remainder: 0,
+            starvation_remainder: 0,
             immortal: None,
             willing_to_work: true,
             seek_meals: false,
             controlled: false,
         }
+    }
+
+    #[test]
+    fn starvation_exposure_preserves_fraction_across_threshold_and_resume() {
+        let damage = StarvationRate {
+            units: 3,
+            per_millis: 1000,
+        };
+        let mut whole = person();
+        whole.advance_starvation(1, 2, 1000, damage, 1000).unwrap();
+        assert_eq!((whole.health, whole.starvation_remainder), (99, 500));
+        let mut split = person();
+        for elapsed in [200, 333, 467] {
+            split
+                .advance_starvation(1, 2, 1000, damage, elapsed)
+                .unwrap();
+            split.advance_hunger(2, elapsed, 1000).unwrap();
+            split = serde_json::from_str(&serde_json::to_string(&split).unwrap()).unwrap();
+        }
+        assert_eq!(
+            (split.health, split.starvation_remainder),
+            (whole.health, whole.starvation_remainder)
+        );
+        let mut dying = person();
+        dying.health = 2;
+        assert_eq!(
+            dying.starvation_death_after(1, 2, 1000, damage).unwrap(),
+            Some(1167)
+        );
+        dying.advance_starvation(1, 2, 1000, damage, 1166).unwrap();
+        assert_eq!(dying.health, 1);
+        let mut invalid = person();
+        invalid.starvation_remainder = 1000;
+        assert!(invalid.advance_starvation(1, 2, 1000, damage, 1).is_err());
     }
 
     #[test]
@@ -269,6 +370,7 @@ mod tests {
             meal_threshold: 1,
             starvation_threshold: 10,
             starvation_damage: 1,
+            starvation_rate: None,
             max_health: 100,
             carrying_capacity: 1,
             max_work_hunger: 10,
@@ -347,6 +449,7 @@ mod tests {
             meal_threshold: 1,
             starvation_threshold: 3,
             starvation_damage: 4,
+            starvation_rate: None,
             max_health: 100,
             carrying_capacity: 1,
             max_work_hunger: 10,

@@ -32,7 +32,7 @@ remember_capacity = 4
 hunger_rate = { units = 1, per_millis = 3600000 }
 meal_threshold = 48
 starvation_threshold = 120
-starvation_damage = 1
+starvation_rate = { units = 1, per_millis = 3600000 }
 max_health = 100
 carrying_capacity = 100
 max_work_hunger = 120

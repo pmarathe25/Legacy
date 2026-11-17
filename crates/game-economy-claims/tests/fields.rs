@@ -8,6 +8,7 @@ fn person(id: u64) -> Person {
         health: 100,
         hunger: 0,
         hunger_remainder: 0,
+        starvation_remainder: 0,
         immortal: None,
         willing_to_work: false,
         seek_meals: false,

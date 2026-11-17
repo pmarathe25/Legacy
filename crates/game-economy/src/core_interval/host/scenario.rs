@@ -100,6 +100,7 @@ impl CoreHostSnapshot {
             tool_wear: state.tool_wear,
             tool_requirements: state.work_tools,
             paused_work_rates: vec![],
+            pending_vital_deaths: vec![],
             fatigue: state
                 .fatigue
                 .map(|fatigue| game_economy_fatigue::TimedFatigue {

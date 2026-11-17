@@ -276,6 +276,47 @@ fn ordinary_boundary_advance_uses_explicit_work_period() {
 }
 
 #[test]
+fn timed_interruption_is_atomic_and_completion_wins_a_tie() {
+    for workers in [1, 4] {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut runtime = fixture(false, 1);
+                runtime.begin_work_interval(&[(1, 1)]).unwrap();
+                let before = runtime.snapshot();
+                assert!(runtime.progress_work_interval_pausing(500, &[2]).is_err());
+                assert_eq!(runtime.snapshot(), before);
+                assert!(
+                    runtime
+                        .progress_work_interval_adjusting(500, &[], &[(1, 1)])
+                        .is_err()
+                );
+                assert_eq!(runtime.snapshot(), before);
+                assert_eq!(
+                    runtime.progress_work_interval_pausing(500, &[1]).unwrap(),
+                    (500, vec![(1, 1)])
+                );
+                assert_eq!(runtime.work()[0].progress_remainder, 500);
+                assert!(runtime.work_interval().unwrap().rates.is_empty());
+                let saved = serde_json::to_string(&runtime.snapshot()).unwrap();
+                let resumed = Runtime::compile(serde_json::from_str(&saved).unwrap()).unwrap();
+                assert_eq!(resumed.snapshot(), runtime.snapshot());
+
+                let mut finishing = fixture(false, 1);
+                finishing.begin_work_interval(&[(1, 2)]).unwrap();
+                assert_eq!(
+                    finishing.progress_work_interval_pausing(500, &[1]).unwrap(),
+                    (500, vec![])
+                );
+                assert_eq!(finishing.work()[0].job.remaining, 0);
+                assert_eq!(finishing.work_interval().unwrap().rates, vec![(1, 2)]);
+            });
+    }
+}
+
+#[test]
 fn stopping_at_interval_opening_keeps_inputs_until_boundary() {
     let mut runtime = fixture(false, 1);
     runtime.begin_work_interval(&[(1, 1)]).unwrap();

@@ -102,7 +102,6 @@ impl SharedWork {
                     || !people.contains(&e.person)
                     || !people.contains(&e.lead)
                     || !recipes.contains(&e.recipe)
-                    || e.progress > e.offered
             })
         {
             return Err("invalid shared work state".into());

@@ -3166,6 +3166,9 @@ impl Economy {
         player_meal: Option<person::meal::Choice>,
         player_transfer: Option<game_economy_interaction::PhysicalChoice>,
     ) -> Result<Draft, String> {
+        if self.rules.starvation_rate.is_some() {
+            return Err("elapsed starvation requires the interval host".into());
+        }
         #[cfg(feature = "profile")]
         let mut profile_phase = game_diagnostics::span("economy.setup");
         let tick = self.tick().checked_add(1).ok_or("tick overflow")?;

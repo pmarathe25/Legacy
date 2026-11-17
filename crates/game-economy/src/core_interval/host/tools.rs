@@ -11,6 +11,7 @@ impl CoreHost {
     /// Combine rest and tool blockers while retaining one desired work rate.
     pub(super) fn sync_work_rates(&mut self, blocked: &[u64]) -> Result<(), String> {
         if self.tool_requirements.is_empty()
+            && self.core.rules.starvation_rate.is_none()
             && self.work_capabilities.is_none()
             && self.fatigue.is_none()
             && self.health.is_none()

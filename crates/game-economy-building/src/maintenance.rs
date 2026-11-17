@@ -581,6 +581,7 @@ mod tests {
                 health: 10,
                 hunger: 0,
                 hunger_remainder: 0,
+                starvation_remainder: 0,
                 immortal: None,
                 willing_to_work: true,
                 seek_meals: false,

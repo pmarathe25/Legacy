@@ -89,30 +89,47 @@ impl CoreHost {
         requested: u64,
         externally_busy: &[u64],
     ) -> Result<u64, String> {
-        let elapsed = self.core.elapsed_millis().ok_or("no physical interval")?;
         let quantum = self.core.physical.tick_millis();
-        let consumed = requested.min(
-            quantum
-                .checked_sub(elapsed)
-                .ok_or("invalid interval elapsed time")?,
-        );
+        let consumed = self.core.progress_limit(requested)?;
+        let deaths = game_economy_person::starvation_deaths_within(
+            &self.core.people,
+            &self.core.rules,
+            quantum,
+            consumed,
+        )
+        .map_err(str::to_owned)?;
+        let mut pending = self.pending_vital_deaths.clone();
+        if let Some(family) = &self.family {
+            pending.par_extend(deaths.par_iter().copied().filter(|id| {
+                family
+                    .members
+                    .binary_search_by_key(id, |member| member.id)
+                    .ok()
+                    .is_some_and(|index| family.members[index].alive)
+            }));
+            pending.par_sort_unstable();
+            pending.dedup();
+        }
         let durations = self.assist_durations(consumed)?;
+        let (reductions, staged_shared) =
+            self.stage_fatal_assistance(&deaths, &durations, consumed)?;
         let Some(owner) = &self.fatigue else {
-            let credits = self.plan_skill_practice(requested);
-            let advanced = self.core.progress(requested)?;
+            let credits = self.plan_skill_practice(consumed);
+            let advanced = self.core.progress_adjusting(consumed, &reductions)?;
             if advanced > 0 {
-                self.record_assist_durations(&durations);
+                self.pending_vital_deaths = pending;
+                if !deaths.is_empty() {
+                    self.work_checked_revision = None;
+                }
+                if let Some(owner) = staged_shared {
+                    self.shared_work = Some(owner);
+                } else {
+                    self.record_assist_durations(&durations);
+                }
                 self.remember_skill_practice(credits);
             }
             return Ok(advanced);
         };
-        let elapsed = self.core.elapsed_millis().ok_or("no physical interval")?;
-        let quantum = self.core.physical.tick_millis();
-        let consumed = requested.min(
-            quantum
-                .checked_sub(elapsed)
-                .ok_or("invalid interval elapsed time")?,
-        );
         if consumed == 0 {
             return Ok(0);
         }
@@ -242,9 +259,17 @@ impl CoreHost {
             })
             .collect::<Result<Vec<_>, _>>()?;
         let next = chunks.into_par_iter().flatten().collect();
-        let advanced = self.core.progress(consumed)?;
+        let advanced = self.core.progress_adjusting(consumed, &reductions)?;
+        self.pending_vital_deaths = pending;
+        if !deaths.is_empty() {
+            self.work_checked_revision = None;
+        }
         self.activity = next;
-        self.record_assist_durations(&durations);
+        if let Some(owner) = staged_shared {
+            self.shared_work = Some(owner);
+        } else {
+            self.record_assist_durations(&durations);
+        }
         self.remember_skill_practice(skill_practice);
         Ok(advanced)
     }

@@ -431,6 +431,7 @@ pub fn advance_validated_with_context(
             health: birth.health,
             hunger: 0,
             hunger_remainder: 0,
+            starvation_remainder: 0,
             immortal: None,
             willing_to_work: people
                 .binary_search_by_key(&birth.mother, |person| person.id)

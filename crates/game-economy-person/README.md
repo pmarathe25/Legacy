@@ -2,9 +2,9 @@
 
 Stages individual hunger, digestion and nutrient reserves for the economic runtime.
 
-Hunger can accumulate fractional progress with an exact saved remainder. Whole-boundary meals retain any fractional hunger left after relief and clear it when relief exceeds the accumulated amount. This owner primitive does not yet advance needs, decisions, or damage at arbitrary world times.
+Hunger and opt-in starvation damage can accumulate against explicit elapsed-time rates with exact saved remainders. Meals retain fractional hunger left after relief and clear it when relief exceeds the accumulated amount. Starvation accrues only after hunger crosses the configured threshold; feeding pauses its damage without erasing fractional exposure.
 
-`progress_hunger` validates the complete batch before applying independent updates in parallel. It does not apply meals, starvation damage or decisions; `settle_elapsed` applies boundary effects without adding hunger again. The caller owns world time, decisions and draft invalidation.
+`progress_hunger` validates the complete batch before applying independent updates in parallel. `progress_vitals` stages hunger and starvation from the same opening state; `next_starvation_death` provides the earliest fatal deadline. The interval coordinator owns timing, work interruption, family updates, and draft invalidation. `settle_elapsed` applies remaining boundary effects without adding elapsed hunger or starvation damage twice.
 
 `meal::choose_now` selects carried, unexpired food at the current instant for autonomous hungry people who seek meals. It excludes controlled and host-blocked people; the host stages physical consumption and any affected item owners separately.
 
@@ -20,7 +20,7 @@ Meal seekers can choose an actual portion from regional stock or an observed nam
 
 Directed routes can have authored half-open closure intervals. A valid departure batch resolves physical closures independently, records each traveler's own bounded observations, and leaves already-started journeys unchanged. Observations include their time and are not automatically broadcast. Optional personal routing uses only an individual's reports and their estimated travel times; a route attempt updates whether it is open without replacing that estimate with hidden physical information.
 
-Journeys retain exact fractional progress and can report an arrival deadline. A finished journey can be saved as pending until arrival is published; the traveler remains in transit until settlement. Travelers on the same route are colocated only when their recorded progress matches. These are owner-level facilities; whole-boundary economy advancement still publishes arrivals at a boundary, and partial-boundary world advancement is not yet supported.
+Journeys retain exact fractional progress and can report an arrival deadline. `travel_unit_millis` specifies the duration of one route unit independently of the physical boundary. A finished journey can be saved as pending until arrival is published; the traveler remains in transit until publication. Travelers on the same route are colocated only when their recorded progress matches. Route closure and report timestamps still use boundary-based units.
 
 `Travel::progress_elapsed` validates a sorted batch before progressing independent journeys in parallel. It leaves incapacitated travelers in place and does not publish arrivals; `publish_arrivals` publishes completed living travelers without settling deaths, and `settle_elapsed` publishes boundary arrivals and deaths without adding another interval of travel. The caller coordinates world time and draft invalidation.
 

@@ -31,6 +31,11 @@ Travel can specify `travel_unit_millis` for its route lengths and saved journey
 progress, so travel and arrival deadlines no longer have to use the physical
 quantum. Route closures and reports still use boundary-based timestamps and
 must be migrated before routing as a whole is independent of boundaries.
+An optional `rules.starvation_rate` uses elapsed exposure after each person's
+hunger crosses the starvation threshold. Fractional damage is saved, and the
+interval coordinator stops at fatal deadlines before advancing work or travel
+farther. Fatal helper withdrawals and family deaths are staged and saved. The
+older boundary-only economy runner rejects this rate; use the interval host.
 Renewal is still settled at a physical boundary, alongside gathering, using
 the season selected for that boundary. Changing boundaries can therefore
 change the ordering of gathering and renewal or cross a season transition;
@@ -41,7 +46,7 @@ retain absolute milliseconds at the current boundary; an older snapshot
 derives this value from its original tick and quantum when loaded. This clock
 does not by itself convert other owners' tick-based state when a quantum
 changes. This does not yet convert
-starvation damage, recovery, nutrition, fatigue, family
+recovery, nutrition, fatigue, family
 and animal clocks, other ecological processes, disease, or social randomness. In
 particular, a short physical quantum must not be advertised as a faithful
 minute-world until those owners have independent elapsed-time rules.

@@ -1,6 +1,8 @@
 //! Personal helper assignments to real, reserved work.
 use super::*;
 
+type FatalAssistanceStage = (Vec<(u64, u64)>, Option<CoreSharedWork>);
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CoreAssistSession {
@@ -98,7 +100,7 @@ impl CoreSharedWork {
                                     .binary_search_by_key(&event.person, |person| person.id)
                                     .ok()
                                     .is_none_or(|i| {
-                                        core.people[i].health == 0
+                                        (core.people[i].health == 0 && job.job.remaining != 0)
                                             || core.people[i].region != Some(job.job.region)
                                     })
                                 || job.job.worker != event.lead
@@ -110,12 +112,12 @@ impl CoreSharedWork {
         }
         if self.records.par_iter().any(|record| {
             record.elapsed_millis == 0
-                || record.elapsed_millis > core.physical.tick_millis()
                 || !people.contains(&record.event.person)
                 || record.event.tick > core.physical.tick()
                 || record.event.progress
                     != ((u128::from(record.event.offered) * u128::from(record.elapsed_millis))
-                        / u128::from(core.physical.tick_millis())) as u64
+                        / u128::from(core.physical.work_rate_period_millis()))
+                    .min(u128::from(u64::MAX)) as u64
         }) {
             return Err("invalid shared work history".into());
         }
@@ -307,7 +309,8 @@ impl CoreSharedWork {
             .map(|session| {
                 let mut event = session.event.clone();
                 event.progress = ((u128::from(event.progress) * u128::from(session.elapsed_millis))
-                    / u128::from(quantum)) as u64;
+                    / u128::from(quantum))
+                .min(u128::from(u64::MAX)) as u64;
                 event.finished = completed.binary_search(&event.job).is_ok();
                 event.interrupted = jobs.is_some() && !event.finished;
                 CoreAssistRecord {
@@ -330,6 +333,138 @@ impl CoreSharedWork {
     }
 }
 impl CoreHost {
+    /// Prepare fatal helper withdrawals without publishing rates or records.
+    pub(super) fn stage_fatal_assistance(
+        &self,
+        deaths: &[u64],
+        durations: &[u64],
+        consumed: u64,
+    ) -> Result<FatalAssistanceStage, String> {
+        let Some(owner) = &self.shared_work else {
+            return Ok((Vec::new(), None));
+        };
+        if deaths.is_empty()
+            || owner.sessions.par_iter().all(|session| {
+                deaths.binary_search(&session.event.person).is_err()
+                    && deaths.binary_search(&session.event.lead).is_err()
+            })
+        {
+            return Ok((Vec::new(), None));
+        }
+        if durations.len() != owner.sessions.len() {
+            return Err("invalid shared work durations".into());
+        }
+        let interval = self
+            .core
+            .physical
+            .work_interval()
+            .ok_or("no physical interval")?;
+        let period = self.core.physical.work_rate_period_millis();
+        let selected: Vec<_> = owner
+            .sessions
+            .par_iter()
+            .enumerate()
+            .map(|(index, session)| -> Result<_, String> {
+                if deaths.binary_search(&session.event.person).is_err()
+                    && deaths.binary_search(&session.event.lead).is_err()
+                {
+                    return Ok(None);
+                }
+                let job = self
+                    .core
+                    .physical
+                    .work()
+                    .binary_search_by_key(&session.event.job, |work| work.job.id)
+                    .map_err(|_| "missing shared job")?;
+                let rate = interval
+                    .rates
+                    .binary_search_by_key(&session.event.job, |rate| rate.0)
+                    .ok();
+                let complete = if let Some(rate) = rate {
+                    self.core.physical.work()[job]
+                        .completion_after(interval.rates[rate].1, period)
+                        .map_err(str::to_owned)?
+                        .is_some_and(|deadline| deadline <= u128::from(consumed))
+                } else {
+                    self.core.physical.work()[job].job.remaining == 0
+                };
+                Ok((!complete).then_some((index, rate.is_some())))
+            })
+            .collect::<Result<Vec<_>, _>>()?
+            .into_par_iter()
+            .flatten()
+            .collect();
+        if selected.is_empty() {
+            return Ok((Vec::new(), None));
+        }
+        let mut next = owner.clone();
+        next.sessions
+            .par_iter_mut()
+            .zip(durations.par_iter())
+            .try_for_each(|(session, duration)| -> Result<(), String> {
+                session.elapsed_millis = session
+                    .elapsed_millis
+                    .checked_add(*duration)
+                    .ok_or("shared work duration overflow")?;
+                Ok(())
+            })?;
+        let active: Vec<_> = selected
+            .par_iter()
+            .filter_map(|&(index, active)| {
+                active.then_some((
+                    next.sessions[index].event.job,
+                    next.sessions[index].event.progress,
+                ))
+            })
+            .collect();
+        let reductions: Vec<_> = active
+            .par_chunk_by(|a, b| a.0 == b.0)
+            .map(|group| {
+                let sum: u128 = group.par_iter().map(|row| u128::from(row.1)).sum();
+                u64::try_from(sum)
+                    .map(|sum| (group[0].0, sum))
+                    .map_err(|_| "shared work rate overflow".to_owned())
+            })
+            .collect::<Result<_, _>>()?;
+        let records: Vec<_> = selected
+            .par_iter()
+            .filter_map(|&(index, _)| {
+                let session = &next.sessions[index];
+                if session.elapsed_millis > 0 {
+                    let mut event = session.event.clone();
+                    event.progress = ((u128::from(event.offered)
+                        * u128::from(session.elapsed_millis))
+                        / u128::from(period))
+                    .min(u128::from(u64::MAX)) as u64;
+                    event.interrupted = true;
+                    Some(CoreAssistRecord {
+                        event,
+                        elapsed_millis: session.elapsed_millis,
+                    })
+                } else {
+                    None
+                }
+            })
+            .collect();
+        next.owner
+            .events
+            .par_extend(records.par_iter().map(|record| record.event.clone()));
+        next.records.par_extend(records);
+        let selected_ids: Vec<_> = selected.par_iter().map(|&(index, _)| index).collect();
+        next.sessions = next
+            .sessions
+            .into_par_iter()
+            .enumerate()
+            .filter_map(|(index, session)| {
+                selected_ids
+                    .binary_search(&index)
+                    .is_err()
+                    .then_some(session)
+            })
+            .collect();
+        Ok((reductions, Some(next)))
+    }
+
     /// End only the named helpers' current contributions, preserving other helpers.
     /// The sorted list represents personal decisions, not a lead's instruction.
     pub fn withdraw_shared_helpers(&mut self, people: &[u64]) -> Result<(), String> {
@@ -392,14 +527,15 @@ impl CoreHost {
                 row.1 -= removed[index].1;
             }
         });
-        let quantum = self.core.physical.tick_millis();
+        let quantum = self.core.physical.work_rate_period_millis();
         let mut records: Vec<_> = selected
             .par_iter()
             .filter(|session| session.elapsed_millis > 0)
             .map(|session| {
                 let mut event = session.event.clone();
                 event.progress = ((u128::from(event.offered) * u128::from(session.elapsed_millis))
-                    / u128::from(quantum)) as u64;
+                    / u128::from(quantum))
+                .min(u128::from(u64::MAX)) as u64;
                 event.interrupted = true;
                 CoreAssistRecord {
                     event,
@@ -509,7 +645,11 @@ impl CoreHost {
             .collect();
         completed.par_sort_unstable();
         let mut next = owner.clone();
-        next.finish(None, &completed, self.core.physical.tick_millis());
+        next.finish(
+            None,
+            &completed,
+            self.core.physical.work_rate_period_millis(),
+        );
         self.core.physical.replace_interval_rates(&rates)?;
         self.shared_work = Some(next);
         self.work_checked_revision = None;
@@ -517,7 +657,11 @@ impl CoreHost {
     }
     pub(super) fn finished_shared_jobs(&mut self, jobs: &[u64], finished: &[u64]) {
         if let Some(owner) = &mut self.shared_work {
-            owner.finish(Some(jobs), finished, self.core.physical.tick_millis());
+            owner.finish(
+                Some(jobs),
+                finished,
+                self.core.physical.work_rate_period_millis(),
+            );
         }
     }
     pub(super) fn stage_shared_boundary(
@@ -544,7 +688,7 @@ impl CoreHost {
             .filter(|record| record.event.tick == tick)
             .cloned()
             .collect();
-        next.finish(None, finished, self.core.physical.tick_millis());
+        next.finish(None, finished, self.core.physical.work_rate_period_millis());
         next.owner
             .events
             .par_iter_mut()

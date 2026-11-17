@@ -114,6 +114,7 @@ pub struct CoreDeadline {
     pub work: bool,
     pub arrival: bool,
     pub hunger: bool,
+    pub death: bool,
 }
 /// Travelers published at a partial-interval offset.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -168,7 +169,15 @@ impl CoreInterval {
                         })
                         .ok()
                 })
-                .is_none_or(|i| self.people[i].health == 0)
+                .is_none_or(|i| {
+                    self.people[i].health == 0
+                        && self
+                            .physical
+                            .work()
+                            .binary_search_by_key(&job, |work| work.job.id)
+                            .ok()
+                            .is_none_or(|index| self.physical.work()[index].job.remaining != 0)
+                })
         }) {
             return Err("interval work rate has no living worker".into());
         }
@@ -195,6 +204,9 @@ impl CoreInterval {
         let hunger_period = rules.hunger_rate.map_or(quantum, |rate| rate.per_millis);
         if people.par_windows(2).any(|p| p[0].id >= p[1].id)
             || hunger_period == 0
+            || rules
+                .starvation_rate
+                .is_some_and(|rate| rate.per_millis == 0)
             || rules.max_health == 0
             || rules.carrying_capacity == 0
             || rules.starvation_threshold == 0
@@ -203,6 +215,11 @@ impl CoreInterval {
                 p.id == 0
                     || p.health > rules.max_health
                     || p.hunger_remainder >= hunger_period
+                    || rules
+                        .starvation_rate
+                        .map_or(p.starvation_remainder != 0, |rate| {
+                            rate.per_millis == 0 || p.starvation_remainder >= rate.per_millis
+                        })
                     || (p.hunger == u32::MAX && p.hunger_remainder != 0)
                     || p.immortal.as_ref().is_some_and(|immortal| {
                         immortal.recovery_per_tick == 0 || p.hunger != 0 || p.hunger_remainder != 0
@@ -211,6 +228,8 @@ impl CoreInterval {
         {
             return Err("invalid interval people".into());
         }
+        game_economy_person::next_starvation_death(&people, &rules, quantum)
+            .map_err(str::to_owned)?;
         let ids: HashSet<_> = people.par_iter().map(|p| p.id).collect();
         if physical.work().par_iter().any(|work| {
             work.phase == game_lot_runtime::Phase::Working
@@ -355,7 +374,9 @@ impl CoreInterval {
             .transpose()
             .map_err(str::to_owned)?
             .flatten();
-        let after = [Some(u128::from(remaining)), work, arrival, hunger]
+        let death = game_economy_person::next_starvation_death(&self.people, &self.rules, quantum)
+            .map_err(str::to_owned)?;
+        let after = [Some(u128::from(remaining)), work, arrival, hunger, death]
             .into_iter()
             .flatten()
             .min()
@@ -366,6 +387,7 @@ impl CoreInterval {
             work: work == Some(after),
             arrival: arrival == Some(after),
             hunger: hunger == Some(after),
+            death: death == Some(after),
         })
     }
     /// Progress no farther than the next observed deadline. A zero result
@@ -874,16 +896,34 @@ impl CoreInterval {
         }
         self.commit_meals(draft)
     }
+    /// Limit progress to the physical boundary or the next fatal starvation event.
+    pub fn progress_limit(&self, requested_millis: u64) -> Result<u64, String> {
+        let elapsed = self.elapsed_millis().ok_or("no physical interval")?;
+        let quantum = self.physical.tick_millis();
+        let remaining = quantum
+            .checked_sub(elapsed)
+            .ok_or("invalid interval elapsed time")?;
+        let limit = requested_millis.min(remaining);
+        Ok(
+            game_economy_person::next_starvation_death(&self.people, &self.rules, quantum)
+                .map_err(str::to_owned)?
+                .map_or(limit, |death| death.min(u128::from(limit)) as u64),
+        )
+    }
+
     /// Progress without repeating decisions, publishing arrivals, or completing work.
     /// Failed validation leaves all owners unchanged.
     pub fn progress(&mut self, requested_millis: u64) -> Result<u64, String> {
-        let elapsed = self.elapsed_millis().ok_or("no physical interval")?;
+        self.progress_adjusting(requested_millis, &[])
+    }
+
+    fn progress_adjusting(
+        &mut self,
+        requested_millis: u64,
+        reductions: &[(u64, u64)],
+    ) -> Result<u64, String> {
         let quantum = self.physical.tick_millis();
-        let consumed = requested_millis.min(
-            quantum
-                .checked_sub(elapsed)
-                .ok_or("invalid interval elapsed time")?,
-        );
+        let consumed = self.progress_limit(requested_millis)?;
         if consumed == 0 {
             return Ok(0);
         }
@@ -898,18 +938,58 @@ impl CoreInterval {
                 .progress_elapsed(&people, consumed, quantum)
                 .map_err(str::to_owned)?;
         }
-        game_economy_person::progress_hunger(
-            &mut people,
-            self.rules
-                .hunger_rate
-                .map_or(self.rules.hunger_per_tick, |rate| rate.units),
-            consumed,
-            self.rules
-                .hunger_rate
-                .map_or(quantum, |rate| rate.per_millis),
-        )
-        .map_err(str::to_owned)?;
-        let advanced = self.physical.progress_work_interval(consumed)?;
+        if self.rules.starvation_rate.is_some() {
+            game_economy_person::progress_vitals(&mut people, &self.rules, consumed, quantum)
+                .map_err(str::to_owned)?;
+        } else {
+            game_economy_person::progress_hunger(
+                &mut people,
+                self.rules
+                    .hunger_rate
+                    .map_or(self.rules.hunger_per_tick, |rate| rate.units),
+                consumed,
+                self.rules
+                    .hunger_rate
+                    .map_or(quantum, |rate| rate.per_millis),
+            )
+            .map_err(str::to_owned)?;
+        }
+        let dead: Vec<_> = if self.rules.starvation_rate.is_some() {
+            self.people
+                .par_iter()
+                .zip(people.par_iter())
+                .filter_map(|(before, after)| {
+                    (before.health > 0 && after.health == 0).then_some(before.id)
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let advanced = if dead.is_empty() && reductions.is_empty() {
+            self.physical.progress_work_interval(consumed)?
+        } else {
+            let interval = self
+                .physical
+                .work_interval()
+                .ok_or("no physical interval")?;
+            let paused: Vec<_> = interval
+                .rates
+                .par_iter()
+                .filter_map(|&(job, _)| {
+                    let work = self
+                        .physical
+                        .work()
+                        .binary_search_by_key(&job, |work| work.job.id)
+                        .ok()?;
+                    dead.binary_search(&self.physical.work()[work].job.worker)
+                        .ok()
+                        .map(|_| job)
+                })
+                .collect();
+            self.physical
+                .progress_work_interval_adjusting(consumed, &paused, reductions)?
+                .0
+        };
         debug_assert_eq!(advanced, consumed);
         self.people = people;
         self.travel = travel;

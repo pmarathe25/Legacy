@@ -7,7 +7,7 @@ pub mod travel;
 use game_lot_diet::Effects;
 use game_nutrition::{Nutrition, Person as NutritionPerson};
 use game_production_model::FoodEffect;
-pub use model::{HungerRate, Immortal, Person, Rules};
+pub use model::{HungerRate, Immortal, Person, Rules, StarvationRate};
 use rayon::prelude::*;
 
 /// Find the first personal hunger threshold without serially scanning people.
@@ -34,6 +34,123 @@ pub fn next_hunger_threshold(
                 })
             },
         )
+}
+
+/// Earliest fatal starvation event, reduced independently over people.
+pub fn next_starvation_death(
+    people: &[Person],
+    rules: &Rules,
+    boundary_millis: u64,
+) -> Result<Option<u128>, &'static str> {
+    let Some(damage) = rules.starvation_rate else {
+        return Ok(None);
+    };
+    let hunger_units = rules
+        .hunger_rate
+        .map_or(rules.hunger_per_tick, |rate| rate.units);
+    let hunger_period = rules
+        .hunger_rate
+        .map_or(boundary_millis, |rate| rate.per_millis);
+    people
+        .par_iter()
+        .map(|person| {
+            person.starvation_death_after(
+                rules.starvation_threshold,
+                hunger_units,
+                hunger_period,
+                damage,
+            )
+        })
+        .try_reduce(
+            || None,
+            |left, right| {
+                Ok(match (left, right) {
+                    (Some(a), Some(b)) => Some(a.min(b)),
+                    (Some(a), None) | (None, Some(a)) => Some(a),
+                    (None, None) => None,
+                })
+            },
+        )
+}
+
+/// Stage hunger and starvation from the same opening state.
+pub fn progress_vitals(
+    people: &mut [Person],
+    rules: &Rules,
+    elapsed_millis: u64,
+    boundary_millis: u64,
+) -> Result<(), &'static str> {
+    let hunger_units = rules
+        .hunger_rate
+        .map_or(rules.hunger_per_tick, |rate| rate.units);
+    let hunger_period = rules
+        .hunger_rate
+        .map_or(boundary_millis, |rate| rate.per_millis);
+    let next: Vec<_> = people
+        .par_iter()
+        .map(|person| {
+            let mut hunger = person.clone();
+            hunger.advance_hunger(hunger_units, elapsed_millis, hunger_period)?;
+            let mut result = person.clone();
+            if let Some(damage) = rules.starvation_rate {
+                result.advance_starvation(
+                    rules.starvation_threshold,
+                    hunger_units,
+                    hunger_period,
+                    damage,
+                    elapsed_millis,
+                )?;
+            } else if result.starvation_remainder != 0 {
+                return Err("starvation remainder has no rate");
+            }
+            result.hunger = hunger.hunger;
+            result.hunger_remainder = hunger.hunger_remainder;
+            Ok(result)
+        })
+        .collect::<Result<_, &'static str>>()?;
+    people
+        .par_iter_mut()
+        .zip(next.into_par_iter())
+        .for_each(|(person, next)| {
+            *person = next;
+        });
+    Ok(())
+}
+
+/// People whose fatal starvation deadline falls within the given duration.
+pub fn starvation_deaths_within(
+    people: &[Person],
+    rules: &Rules,
+    boundary_millis: u64,
+    elapsed_millis: u64,
+) -> Result<Vec<u64>, &'static str> {
+    let Some(damage) = rules.starvation_rate else {
+        return Ok(Vec::new());
+    };
+    let hunger_units = rules
+        .hunger_rate
+        .map_or(rules.hunger_per_tick, |rate| rate.units);
+    let hunger_period = rules
+        .hunger_rate
+        .map_or(boundary_millis, |rate| rate.per_millis);
+    let rows: Vec<_> = people
+        .par_iter()
+        .map(|person| {
+            person
+                .starvation_death_after(
+                    rules.starvation_threshold,
+                    hunger_units,
+                    hunger_period,
+                    damage,
+                )
+                .map(|after| {
+                    after
+                        .filter(|time| *time <= u128::from(elapsed_millis))
+                        .map(|_| person.id)
+                })
+        })
+        .collect::<Result<_, _>>()?;
+    Ok(rows.into_par_iter().flatten().collect())
 }
 
 /// Progress individual hunger without applying meals, damage or decisions.
@@ -165,7 +282,10 @@ fn prepare_inner(
                         }
                     }
                 }
-                if person.immortal.is_none() && person.hunger >= rules.starvation_threshold {
+                if person.immortal.is_none()
+                    && person.hunger >= rules.starvation_threshold
+                    && (add_boundary_hunger || rules.starvation_rate.is_none())
+                {
                     person.health = person.health.saturating_sub(rules.starvation_damage);
                 }
                 if let (Some(values), Some(nutrition_rules)) = (&mut values, nutrition_rules)

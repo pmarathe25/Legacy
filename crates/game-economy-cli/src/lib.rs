@@ -2656,6 +2656,7 @@ fn scenario_with_options_inner(
             health: resident.health,
             hunger: resident.hunger,
             hunger_remainder: 0,
+            starvation_remainder: 0,
             immortal: resident.immortal,
             willing_to_work: resident.willing_to_work,
             seek_meals: resident.seek_meals,
