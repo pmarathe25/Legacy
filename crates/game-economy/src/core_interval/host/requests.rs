@@ -499,7 +499,10 @@ impl CoreHost {
         };
         let mut busy = blocked.to_vec();
         if let Some(family) = &self.family {
-            busy.par_extend(game_economy_work::underage(family));
+            busy.par_extend(game_economy_work::underage_at(
+                family,
+                Some(self.core.simulated_millis()),
+            ));
         }
         busy.par_extend(
             self.core

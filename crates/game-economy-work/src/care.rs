@@ -23,10 +23,14 @@ pub fn validate(
         .map_err(str::to_owned)
 }
 pub fn dependents(care: &DependentCare, family: &Families) -> Vec<u64> {
+    dependents_at(care, family, None)
+}
+
+pub fn dependents_at(care: &DependentCare, family: &Families, now: Option<u128>) -> Vec<u64> {
     let mut ids: Vec<_> = family
         .members
         .par_iter()
-        .filter(|m| m.age < care.rules.dependent_until)
+        .filter(|m| now.map_or(m.age, |now| family.age_at(m, now)) < care.rules.dependent_until)
         .map(|m| m.id)
         .collect();
     ids.par_sort_unstable();
@@ -78,7 +82,17 @@ pub struct Context<'a> {
 }
 impl Context<'_> {
     pub fn prepare(&self, base: u64) -> Result<Plan, String> {
-        let family = FamilyView::compile(&self.family.members).map_err(str::to_owned)?;
+        self.prepare_at(base, None)
+    }
+
+    pub fn prepare_at(&self, base: u64, now: Option<u128>) -> Result<Plan, String> {
+        let current_age = |member: &game_families::Member| {
+            now.map_or(member.age, |now| self.family.age_at(member, now))
+        };
+        let mut family = FamilyView::compile(&self.family.members).map_err(str::to_owned)?;
+        if now.is_some() && self.family.elapsed_lifetimes.is_some() {
+            family = family.with_current_age(&current_age);
+        }
         let opinions = self.opinions.map(Opinions::index);
         let locations = Colocation::new(self.travel);
         let colocated = |a: usize, b: usize| {

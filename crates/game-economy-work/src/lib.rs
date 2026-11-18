@@ -190,10 +190,17 @@ pub fn initial_busy(
     busy
 }
 pub fn underage(family: &game_families::Families) -> Vec<u64> {
+    underage_at(family, None)
+}
+
+pub fn underage_at(family: &game_families::Families, now: Option<u128>) -> Vec<u64> {
+    if family.rules.min_work_age == 0 {
+        return Vec::new();
+    }
     let mut ids: Vec<_> = family
         .members
         .par_iter()
-        .filter(|m| m.age < family.rules.min_work_age)
+        .filter(|m| now.map_or(m.age, |now| family.age_at(m, now)) < family.rules.min_work_age)
         .map(|m| m.id)
         .collect();
     ids.par_sort_unstable();

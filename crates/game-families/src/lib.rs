@@ -74,6 +74,15 @@ pub struct Families {
 }
 use game_family_index::{MemberIndex, PhysicalIndex};
 impl Families {
+    /// Present age using this family's own time unit when configured.
+    pub fn age_at(&self, member: &Member, now: u128) -> u64 {
+        self.elapsed_lifetimes
+            .as_ref()
+            .map_or(member.age, |calendar| {
+                calendar.age_at(&self.rules, member, now)
+            })
+    }
+
     pub fn validate(&self, inputs: &[LifeInput], now: u64) -> Result<(), &'static str> {
         self.validate_with_index(inputs, now).map(|_| ())
     }
@@ -173,8 +182,9 @@ impl Families {
         }
         if self.members.par_iter().any(|m| {
             m.id == 0
-                || m.born
-                    .is_some_and(|at| at > now || now - at != m.age && m.alive)
+                || m.born.is_some_and(|at| {
+                    at > now || (self.elapsed_lifetimes.is_none() && now - at != m.age && m.alive)
+                })
                 || m.genome.alleles.iter().flatten().any(|a| *a > 1000)
                 || m.genome.mate_desire.iter().any(|a| *a > 1000)
                 || !(m.parents.is_empty() || m.parents.len() == 2 && m.parents[0] != m.parents[1])

@@ -413,10 +413,21 @@ pub fn advance_with_clock(
     .map_err(str::to_owned)?;
     let mut grown: Vec<_> = next
         .families
-        .members
+        .events
         .par_iter()
-        .filter(|m| m.born.is_some() && m.age == family.rules.adult_age)
-        .map(|m| m.id)
+        .filter(|event| event.kind == "adulthood")
+        .filter_map(|event| {
+            let person = event.people[0];
+            let index = next
+                .families
+                .members
+                .binary_search_by_key(&person, |member| member.id)
+                .ok()?;
+            next.families.members[index]
+                .born
+                .is_some()
+                .then_some(person)
+        })
         .collect();
     grown.par_sort_unstable();
     people.par_iter_mut().for_each(|person| {

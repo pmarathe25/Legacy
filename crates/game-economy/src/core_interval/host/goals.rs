@@ -15,7 +15,10 @@ impl CoreHost {
             busy.par_extend(owner.fatigue.resting());
         }
         if let Some(family) = &self.family {
-            busy.par_extend(game_economy_work::underage(family));
+            busy.par_extend(game_economy_work::underage_at(
+                family,
+                Some(self.core.simulated_millis()),
+            ));
         }
         busy.par_extend(
             self.core

@@ -9,9 +9,10 @@ deliberately accelerates generations and does not define a real-world calendar.
 In interval scenarios, `family.elapsed_lifetimes.unit_millis` gives the
 lifespan and founder age an explicit unit for natural mortality. The interval
 host builds the calendar at world creation and schedules each newborn from
-their birth instant. Physical death occurs at the saved deadline. The family
-phase records the death at settlement, and other family durations continue to
-use the boundary clock.
+their birth instant. Physical age for work capability and dependent care uses
+the same clock between settlements. Physical death occurs at the saved
+deadline. Family history records death and adulthood at settlement. Encounters,
+pregnancy, and recovery spacing still follow the boundary clock.
 
 Each person retains an individual demographic record, including recorded birth,
 age at death, parents, reproductive opt-in, partner, pregnancy and four diploid

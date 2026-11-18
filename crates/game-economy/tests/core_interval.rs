@@ -365,6 +365,56 @@ fn elapsed_mortality_and_purpose_damage_interrupt_work_across_quanta() {
 }
 
 #[test]
+fn elapsed_growth_changes_work_capability_inside_the_physical_interval() {
+    let run = |quantum, workers| {
+        rayon::ThreadPoolBuilder::new().num_threads(workers).build().unwrap().install(|| {
+            let mut state = fixture();
+            state.nutrition = None;
+            state.pending_food.clear();
+            state.travel = None;
+            state.people[1].region = Some(2);
+            state.rules.hunger_per_tick = 0;
+            state.rules.starvation_damage = 0;
+            state.physical.tick_millis = quantum;
+            state.physical.work_rate_period_millis = Some(1000);
+            let stock = Place::Stock {region: 2, good: 1};
+            let opening = state.physical.custody.containers.iter_mut().find(|row| row.place == stock).unwrap();
+            *opening = Container::new(stock, 10, vec![Lot {
+                batch: None, item: None, good: 1, quantity: 2, expires_at: None,
+            }]).unwrap();
+            let snapshot: CoreHostSnapshot = serde_json::from_value(serde_json::json!({
+                "core": state,
+                "work_capabilities": {"growth":[{"age":0,"strength":0},{"age":2,"strength":20}],
+                    "vigor_base":1000,"vigor_weight":0,"default_strength":20},
+                "family": {
+                    "elapsed_lifetimes": {"unit_millis":200},
+                    "rules": {"adult_age":2,"min_work_age":2,"fertile_until":10,"gestation":1,
+                        "birth_spacing":1,"lifespan_min":11,"lifespan_max":11,"conception_one_in":1,
+                        "minimum_health":1,"maximum_hunger":100,"newborn_health":50,
+                        "mutation_per_million":0,"mutation_step":0},
+                    "members": [
+                        {"id":1,"age":3,"genome":{"sex":"Male","alleles":[[100,100],[100,100],[100,100],[100,100]]}},
+                        {"id":2,"age":1,"genome":{"sex":"Female","alleles":[[100,100],[100,100],[100,100],[100,100]]}}
+                    ],"next_id":3
+                }
+            })).unwrap();
+            let mut host = CoreHost::begin(snapshot, &[(1, 1)]).unwrap();
+            host.enable_schedule(1000, 1).unwrap();
+            assert_eq!(host.advance_continuous(199, &[]).unwrap().failure, None);
+            let request = [(Start {id:2, worker:2, region:2, recipe:1, units:1}, 1)];
+            assert_eq!(host.start_chosen_work(&request).unwrap(), [(2, false)]);
+            let saved = serde_json::to_string(&host.snapshot()).unwrap();
+            let mut host = CoreHost::resume(serde_json::from_str(&saved).unwrap()).unwrap();
+            assert_eq!(host.advance_continuous(1, &[]).unwrap().failure, None);
+            assert_eq!(host.start_chosen_work(&request).unwrap(), [(2, true)]);
+            assert_eq!(host.snapshot().family.unwrap().members[1].age, 1);
+        })
+    };
+    run(1000, 1);
+    run(180, 4);
+}
+
+#[test]
 fn fatal_starvation_wins_an_arrival_tie_and_places_the_body_at_the_source() {
     let mut state = fixture();
     state.nutrition = None;

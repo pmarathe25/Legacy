@@ -153,7 +153,10 @@ impl CoreHost {
             busy.par_extend(irrigation.parallel_actors());
         }
         if let Some(family) = &self.family {
-            busy.par_extend(game_economy_work::underage(family));
+            busy.par_extend(game_economy_work::underage_at(
+                family,
+                Some(self.core.simulated_millis()),
+            ));
         }
         busy.par_extend(
             self.core
@@ -243,7 +246,10 @@ impl CoreHost {
         let occupied = rest.as_deref().unwrap_or(occupied);
         let mut busy = occupied.to_vec();
         if let Some(family) = &self.family {
-            busy.par_extend(game_economy_work::underage(family));
+            busy.par_extend(game_economy_work::underage_at(
+                family,
+                Some(self.core.simulated_millis()),
+            ));
         }
         busy.par_extend(farm.actors.par_iter().copied());
         busy.par_extend(farm.requesters.par_iter().copied());
@@ -403,7 +409,10 @@ impl CoreHost {
         let occupied = rest.as_deref().unwrap_or(occupied);
         let mut busy = occupied.to_vec();
         if let Some(family) = &self.family {
-            busy.par_extend(game_economy_work::underage(family));
+            busy.par_extend(game_economy_work::underage_at(
+                family,
+                Some(self.core.simulated_millis()),
+            ));
         }
         busy.par_extend(
             self.core

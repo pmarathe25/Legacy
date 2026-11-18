@@ -2009,7 +2009,10 @@ impl CoreHost {
             busy.par_extend(personality.work_refusals(self.core.seed, tick));
         }
         if !personal && let Some(family) = &self.family {
-            busy.par_extend(game_economy_work::underage(family));
+            busy.par_extend(game_economy_work::underage_at(
+                family,
+                Some(self.core.simulated_millis()),
+            ));
         }
         busy.par_sort_unstable();
         busy.dedup();
@@ -2087,7 +2090,9 @@ impl CoreHost {
         let Some(capabilities) = &self.work_capabilities else {
             return vec![true; attempts.len()];
         };
-        let members = self.family.as_ref().map(|family| {
+        let family = self.family.as_ref();
+        let now = self.core.simulated_millis();
+        let members = family.map(|family| {
             game_family_index::MemberIndex::new(&family.members).expect("validated family")
         });
         let wounds = self
@@ -2102,7 +2107,9 @@ impl CoreHost {
                     .and_then(|members| members.get(&person))
                     .map(|member| game_work_capability::Body {
                         person: member.id,
-                        age: member.age,
+                        age: family
+                            .expect("member index has a family")
+                            .age_at(member, now),
                         vigor: member.genome.expressed(1),
                     });
                 let loss = wounds.map_or(0, |wounds| wounds.work_strength_loss(person));
@@ -2293,9 +2300,10 @@ impl CoreHost {
         let active = dependent.as_ref().map(|plan| {
             let mut active = occupied.to_vec();
             active.par_extend(plan.actors.par_iter().copied());
-            active.par_extend(game_economy_work::care::dependents(
+            active.par_extend(game_economy_work::care::dependents_at(
                 self.dependent_care.as_ref().expect("care owner"),
                 self.family.as_ref().expect("care family"),
+                Some(self.core.simulated_millis()),
             ));
             active.par_sort_unstable();
             active.dedup();
@@ -2307,7 +2315,11 @@ impl CoreHost {
                 .as_ref()
                 .zip(self.family.as_ref())
                 .map_or_else(Vec::new, |(care, family)| {
-                    game_economy_work::care::dependents(care, family)
+                    game_economy_work::care::dependents_at(
+                        care,
+                        family,
+                        Some(self.core.simulated_millis()),
+                    )
                 })
         } else {
             Vec::new()

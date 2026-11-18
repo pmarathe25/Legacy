@@ -1,9 +1,12 @@
 use super::{FamilyRules, Member};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
-use std::{collections::BTreeSet, sync::Arc};
+use std::{
+    collections::{BTreeSet, HashMap},
+    sync::Arc,
+};
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ElapsedLifetimes {
     /// Milliseconds per authored lifespan and starting-age unit.
@@ -11,7 +14,17 @@ pub struct ElapsedLifetimes {
     /// Natural mortality deadlines ordered by time, then individual identity.
     #[serde(default)]
     deadlines: Arc<Vec<(u128, u64)>>,
+    #[serde(skip)]
+    by_person: Arc<HashMap<u64, u128>>,
 }
+
+impl PartialEq for ElapsedLifetimes {
+    fn eq(&self, other: &Self) -> bool {
+        self.unit_millis == other.unit_millis && self.deadlines == other.deadlines
+    }
+}
+
+impl Eq for ElapsedLifetimes {}
 
 pub(super) fn lifespan(rules: &FamilyRules, member: &Member) -> u64 {
     let inherited = ((u128::from(rules.lifespan_max - rules.lifespan_min)
@@ -21,6 +34,10 @@ pub(super) fn lifespan(rules: &FamilyRules, member: &Member) -> u64 {
 }
 
 impl ElapsedLifetimes {
+    fn index(deadlines: &[(u128, u64)]) -> Arc<HashMap<u64, u128>> {
+        Arc::new(deadlines.par_iter().map(|&(time, id)| (id, time)).collect())
+    }
+
     fn deadline(
         &self,
         rules: &FamilyRules,
@@ -54,7 +71,23 @@ impl ElapsedLifetimes {
             deadlines.par_sort_unstable();
             self.deadlines = Arc::new(deadlines);
         }
+        self.by_person = Self::index(&self.deadlines);
         Ok(())
+    }
+
+    /// Whole units of age at an absolute instant. Cohort records for people
+    /// already confirmed dead retain their saved age.
+    pub(super) fn age_at(&self, rules: &FamilyRules, member: &Member, now: u128) -> u64 {
+        let Some(&deadline) = self.by_person.get(&member.id) else {
+            return member.age;
+        };
+        let remaining = deadline
+            .saturating_sub(now)
+            .div_ceil(u128::from(self.unit_millis));
+        let remaining = u64::try_from(remaining).unwrap_or(u64::MAX);
+        lifespan(rules, member)
+            .saturating_sub(remaining)
+            .max(member.age)
     }
 
     pub fn validate(
@@ -132,6 +165,7 @@ impl ElapsedLifetimes {
         }
         Ok(Self {
             unit_millis: self.unit_millis,
+            by_person: Self::index(&deadlines),
             deadlines: Arc::new(deadlines),
         })
     }

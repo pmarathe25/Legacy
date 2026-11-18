@@ -129,7 +129,7 @@ impl CoreHost {
             seed: self.core.seed,
             tick,
         }
-        .prepare(1)
+        .prepare_at(1, Some(self.core.simulated_millis()))
         .map(Some)
     }
 }

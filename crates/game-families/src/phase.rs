@@ -266,14 +266,7 @@ impl Families {
             return Err("elapsed natural mortality requires an interval host");
         }
         let rules = &self.rules;
-        let (mut members, mut events) = stage_life(
-            &self.members,
-            rules,
-            physical,
-            tick,
-            penalty,
-            calendar.is_none(),
-        )?;
+        let (mut members, mut events) = stage_life(self, physical, tick, penalty, now)?;
         #[cfg(feature = "profile")]
         {
             drop(profile_phase);
@@ -650,16 +643,16 @@ impl Families {
 
 /// Physical age and mortality use only the opening family and physical views.
 fn stage_life(
-    opening: &[Member],
-    rules: &FamilyRules,
+    opening: &Families,
     physical: &impl game_family_model::PhysicalView,
     tick: u64,
     penalty: Option<(u64, u64)>,
-    apply_boundary_mortality: bool,
+    now: Option<u128>,
 ) -> Result<(Vec<Member>, Vec<FamilyEvent>), &'static str> {
     // Clone directly into the staged generation, avoiding per-chunk member
     // buffers and a second population-sized flattening pass.
-    let mut members: Vec<_> = opening.par_iter().cloned().collect();
+    let rules = &opening.rules;
+    let mut members: Vec<_> = opening.members.par_iter().cloned().collect();
     let chunks: Vec<Result<_, &'static str>> = members
         .par_chunks_mut(1024)
         .map(|chunk| {
@@ -674,10 +667,18 @@ fn stage_life(
                             .checked_add(amount)
                             .ok_or("lifespan penalty overflow")?;
                     }
-                    m.age = m.age.checked_add(1).ok_or("age overflow")?;
+                    let old_age = m.age;
+                    m.age = if let Some((calendar, now)) =
+                        opening.elapsed_lifetimes.as_ref().zip(now)
+                    {
+                        calendar.age_at(rules, m, now)
+                    } else {
+                        m.age.checked_add(1).ok_or("age overflow")?
+                    };
                     let person = physical.read(m.id);
                     if person.health == 0
-                        || (apply_boundary_mortality && m.age >= lifetimes::lifespan(rules, m))
+                        || (opening.elapsed_lifetimes.is_none()
+                            && m.age >= lifetimes::lifespan(rules, m))
                     {
                         m.alive = false;
                         events.push(event(tick, "death", vec![m.id], person.region));
@@ -689,7 +690,7 @@ fn stage_life(
                                 person.region,
                             ));
                         }
-                    } else if m.age == rules.adult_age {
+                    } else if old_age < rules.adult_age && m.age >= rules.adult_age {
                         events.push(event(tick, "adulthood", vec![m.id], person.region));
                     }
                 }

@@ -156,7 +156,8 @@ impl CoreHost {
         let skill_rates = self.skill_start_rates(starts)?;
         let starts = skill_rates.as_deref().unwrap_or(starts);
         if !personal && let Some(family) = &self.family {
-            let underage = game_economy_work::underage(family);
+            let underage =
+                game_economy_work::underage_at(family, Some(self.core.simulated_millis()));
             if starts
                 .par_iter()
                 .any(|(start, _)| underage.binary_search(&start.worker).is_ok())

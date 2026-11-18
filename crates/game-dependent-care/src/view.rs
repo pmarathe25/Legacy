@@ -47,6 +47,7 @@ pub struct FamilyView<'a> {
     members: &'a [Member],
     order: Option<Vec<usize>>,
     dense: bool,
+    current_age: Option<&'a (dyn Fn(&Member) -> u64 + Sync)>,
 }
 impl<'a> FamilyView<'a> {
     pub fn compile(members: &'a [Member]) -> Result<Self, &'static str> {
@@ -67,6 +68,7 @@ impl<'a> FamilyView<'a> {
             members,
             order,
             dense: false,
+            current_age: None,
         };
         if (1..view.len())
             .into_par_iter()
@@ -87,6 +89,10 @@ impl<'a> FamilyView<'a> {
         }
         Ok(view)
     }
+    pub fn with_current_age(mut self, current_age: &'a (dyn Fn(&Member) -> u64 + Sync)) -> Self {
+        self.current_age = Some(current_age);
+        self
+    }
     fn row(&self, slot: usize) -> &Member {
         &self.members[self.order.as_ref().map_or(slot, |order| order[slot])]
     }
@@ -101,7 +107,9 @@ impl CareFamily for FamilyView<'_> {
         parents[..member.parents.len()].copy_from_slice(&member.parents);
         CareMember {
             id: member.id,
-            age: member.age,
+            age: self
+                .current_age
+                .map_or(member.age, |current| current(member)),
             alive: member.alive,
             parents,
             parent_count: member.parents.len(),
