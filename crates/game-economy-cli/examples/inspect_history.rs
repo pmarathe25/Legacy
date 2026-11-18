@@ -125,7 +125,7 @@ impl ObservationSink<'_> {
                 }
                 continue;
             }
-            if event["kind"] == "family_events" {
+            if event["kind"] == "family_events" || event["kind"] == "elapsed_family_events" {
                 if let Focus::Person(person) = self.focus
                     && let Some(rows) = event["events"].as_array()
                 {
@@ -136,7 +136,13 @@ impl ObservationSink<'_> {
                                     people.iter().any(|id| id.as_u64() == Some(person))
                                 })
                             })
-                            .cloned(),
+                            .map(|row| {
+                                let mut row = row.clone();
+                                if let Some(instant) = event.get("at_millis") {
+                                    row["at_millis"] = instant.clone();
+                                }
+                                row
+                            }),
                     );
                 }
                 continue;
@@ -751,17 +757,15 @@ fn narrative(report: &Value, focus: Focus) -> String {
                     (Some("death"), _) if !exact_death => "they died.".to_owned(),
                     _ => continue,
                 };
-                writeln!(text, "At tick {tick}, {sentence}\n").unwrap();
+                let when = event["at_millis"]
+                    .as_u64()
+                    .map_or_else(|| format!("tick {tick}"), simulated_time);
+                writeln!(text, "At {when}, {sentence}\n").unwrap();
             }
             for event in incapacitations {
                 let Some(time) = event["at_millis"].as_u64() else {
                     continue;
                 };
-                let day = time / 86_400_000;
-                let hour = time / 3_600_000 % 24;
-                let minute = time / 60_000 % 60;
-                let second = time / 1000 % 60;
-                let millis = time % 1000;
                 let result = match (
                     event["died"].as_bool(),
                     event["natural_mortality"].as_bool(),
@@ -770,7 +774,7 @@ fn narrative(report: &Value, focus: Focus) -> String {
                     (Some(true), _) => "died",
                     _ => "became incapacitated",
                 };
-                writeln!(text, "At {hour:02}:{minute:02}:{second:02}.{millis:03} on simulated day {day}, they {result}.\n").unwrap();
+                writeln!(text, "At {}, they {result}.\n", simulated_time(time)).unwrap();
             }
             writeln!(text, "The recorded activity includes {} meetings, {} spoken exchanges, {} instances of recipe learning or teaching, and {} mechanical experiments involving them.\n",
                 count("recorded_meetings"), count("language_events"), count("recipe_learning"), count("mechanical_experiments")).unwrap();
@@ -842,6 +846,15 @@ fn death_cause(cause: &str) -> &str {
         "hunted" => "hunting",
         other => other,
     }
+}
+
+fn simulated_time(time: u64) -> String {
+    let day = time / 86_400_000;
+    let hour = time / 3_600_000 % 24;
+    let minute = time / 60_000 % 60;
+    let second = time / 1000 % 60;
+    let millis = time % 1000;
+    format!("{hour:02}:{minute:02}:{second:02}.{millis:03} on simulated day {day}")
 }
 
 fn observed_life(text: &mut String, report: &Value) {

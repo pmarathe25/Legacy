@@ -3,7 +3,11 @@ use crate::{Families, Giving};
 use rayon::prelude::*;
 use std::collections::HashSet;
 
-pub fn enroll(owner: Option<&mut Giving>, family: Option<&Families>, tick: u64) {
+pub fn enroll(
+    owner: Option<&mut Giving>,
+    family: Option<&Families>,
+    batch: game_economy_family::BirthBatch<'_>,
+) {
     let Some((owner, family)) = owner
         .zip(family)
         .filter(|(owner, family)| owner.inherit_births && family.rules.enroll_births)
@@ -13,7 +17,7 @@ pub fn enroll(owner: Option<&mut Giving>, family: Option<&Families>, tick: u64) 
     let newborns: Vec<_> = family
         .members
         .par_iter()
-        .filter(|member| member.born == Some(tick))
+        .filter(|member| batch.contains(member))
         .collect();
     if newborns.is_empty() {
         return;
@@ -71,7 +75,7 @@ pub fn enroll(owner: Option<&mut Giving>, family: Option<&Families>, tick: u64) 
             rule.last_helper = None;
             rule.last_help_at = None;
             if let Some(asking) = &mut rule.ask_helper {
-                asking.next_review = tick;
+                asking.next_review = batch.tick;
             }
             Some(rule)
         })
@@ -93,7 +97,7 @@ pub fn enroll(owner: Option<&mut Giving>, family: Option<&Families>, tick: u64) 
             })?;
             let mut rule = parent.clone();
             rule.person = member.id;
-            rule.next_review = tick;
+            rule.next_review = batch.tick;
             rule.last_target = None;
             Some(rule)
         })

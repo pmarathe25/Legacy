@@ -48,7 +48,11 @@ impl Clone for FoodSearch {
     }
 }
 /// Inherit a parent's inclination, not the parent's food reports.
-pub fn enroll(owner: Option<&mut FoodSearch>, family: Option<&crate::Families>, tick: u64) {
+pub fn enroll(
+    owner: Option<&mut FoodSearch>,
+    family: Option<&crate::Families>,
+    batch: game_economy_family::BirthBatch<'_>,
+) {
     let Some((owner, family)) = owner
         .zip(family)
         .filter(|(owner, family)| owner.inherit_births && family.rules.enroll_births)
@@ -60,7 +64,7 @@ pub fn enroll(owner: Option<&mut FoodSearch>, family: Option<&crate::Families>, 
     let newborns: Vec<_> = family
         .members
         .par_iter()
-        .filter(|m| m.born == Some(tick))
+        .filter(|m| batch.contains(m))
         .filter_map(|m| {
             let enabled = m.parents.iter().find_map(|id| {
                 preferences
@@ -71,7 +75,7 @@ pub fn enroll(owner: Option<&mut FoodSearch>, family: Option<&crate::Families>, 
             Some(Preference {
                 person: m.id,
                 enabled,
-                next_review: tick,
+                next_review: batch.tick,
                 next_review_millis: None,
                 target: None,
             })

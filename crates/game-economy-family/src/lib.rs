@@ -1,7 +1,9 @@
 //! Apply birth and mortality to staged people and their existing travel.
+mod birth_placement;
+pub use birth_placement::BirthPlacement;
 use game_economy_person::{Person, travel::Travel};
 use game_families::LifeInput;
-pub use game_families::{Families, FamilyEvent};
+pub use game_families::{Birth, BirthBatch, DeliveryDraft, Families, FamilyEvent};
 pub use game_family_model::MateFeelings;
 use game_family_model::{ContactPartition, PhysicalView};
 use rayon::prelude::*;
@@ -411,6 +413,13 @@ pub fn advance_with_clock(
         None => family.advance_validated(&physical, seed, tick),
     }
     .map_err(str::to_owned)?;
+    let placement = BirthPlacement::prepare(
+        &next.births,
+        people,
+        travel.as_ref(),
+        newborns_seek_meals,
+        None,
+    )?;
     let mut grown: Vec<_> = next
         .families
         .events
@@ -439,71 +448,24 @@ pub fn advance_with_clock(
         }
     });
     let newborns: Vec<_> = next.births.par_iter().map(|birth| birth.id).collect();
-    let traveling: Vec<_> = next
-        .births
-        .par_iter()
-        .filter(|birth| birth.region.is_none())
-        .collect();
-    let journeys = if traveling.is_empty() {
-        Vec::new()
-    } else {
-        let travel = travel.as_ref().ok_or("traveling newborn has no journey")?;
-        traveling
-            .par_iter()
-            .map(|birth| {
-                let index = travel
-                    .journeys
-                    .binary_search_by_key(&birth.mother, |journey| journey.person)
-                    .map_err(|_| "traveling mother has no journey")?;
-                let mut journey = travel.journeys[index].clone();
-                journey.person = birth.id;
-                Ok(journey)
-            })
-            .collect::<Result<Vec<_>, &str>>()?
-    };
-    let infants: Vec<_> = next
-        .births
-        .par_iter()
-        .map(|birth| Person {
-            id: birth.id,
-            region: birth.region,
-            health: birth.health,
-            hunger: 0,
-            hunger_remainder: 0,
-            starvation_remainder: 0,
-            immortal: None,
-            willing_to_work: people
-                .binary_search_by_key(&birth.mother, |person| person.id)
-                .ok()
-                .is_some_and(|index| people[index].willing_to_work),
-            seek_meals: newborns_seek_meals,
-            controlled: false,
-        })
-        .collect();
-    people.par_extend(infants);
-    if !journeys.is_empty() {
-        travel
-            .as_mut()
-            .expect("traveling newborns have journeys")
-            .journeys
-            .par_extend(journeys);
-    }
-    if people.par_windows(2).any(|rows| rows[0].id > rows[1].id) {
-        people.par_sort_unstable_by_key(|p| p.id);
-    }
-    if let Some(travel) = travel
-        && travel
-            .journeys
-            .par_windows(2)
-            .any(|rows| rows[0].person > rows[1].person)
-    {
-        travel.journeys.par_sort_unstable_by_key(|j| j.person);
-    }
+    placement.publish(people, travel);
     Ok(ResultFrame {
         family: next.families,
         newborns,
         births: next.births,
     })
+}
+
+pub fn deliver_elapsed(
+    family: &Families,
+    people: &[Person],
+    seed: u64,
+    tick: u64,
+    now: u128,
+) -> Result<DeliveryDraft, String> {
+    family
+        .deliver_elapsed(&View::new(people, None, None), seed, tick, now)
+        .map_err(str::to_owned)
 }
 
 #[macro_export]

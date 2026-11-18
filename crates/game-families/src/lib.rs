@@ -5,7 +5,7 @@ pub use game_family_model::{
     Birth, FamilyEvent, FamilyTotals, LifeInput, MatePreference, Member, Pregnancy,
 };
 pub use lifetimes::ElapsedLifetimes;
-pub use phase::Draft;
+pub use phase::{DeliveryDraft, Draft};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -72,8 +72,77 @@ pub struct Families {
     #[serde(default)]
     pub events: Vec<FamilyEvent>,
 }
+
+/// The exact children supplied by an elapsed delivery or the children from a
+/// legacy settled generation.
+#[derive(Clone, Copy)]
+pub struct BirthBatch<'a> {
+    pub tick: u64,
+    people: Option<&'a [u64]>,
+}
+
+impl<'a> BirthBatch<'a> {
+    pub fn at_tick(tick: u64) -> Self {
+        Self { tick, people: None }
+    }
+
+    pub fn for_people(tick: u64, people: &'a [u64]) -> Self {
+        Self {
+            tick,
+            people: Some(people),
+        }
+    }
+
+    pub fn contains(self, member: &Member) -> bool {
+        self.people.map_or_else(
+            || member.born == Some(self.tick),
+            |people| people.binary_search(&member.id).is_ok(),
+        )
+    }
+}
 use game_family_index::{MemberIndex, PhysicalIndex};
 impl Families {
+    /// Convert authored pregnancy times at the scenario epoch and validate saved deadlines.
+    pub fn initialize_elapsed_gestation(&mut self, now: u128) -> Result<(), &'static str> {
+        let timed = self
+            .elapsed_lifetimes
+            .as_mut()
+            .filter(|calendar| calendar.elapsed_gestation);
+        if let Some(calendar) = timed {
+            self.members.par_iter_mut().try_for_each(|member| {
+                if let Some(pregnancy) = &mut member.pregnancy {
+                    if now == 0 && pregnancy.due_at_millis.is_none() {
+                        pregnancy.due_at_millis =
+                            Some(u128::from(pregnancy.due) * u128::from(calendar.unit_millis));
+                    }
+                    if pregnancy
+                        .due_at_millis
+                        .is_none_or(|deadline| deadline <= now)
+                    {
+                        return Err("invalid elapsed pregnancy deadline");
+                    }
+                }
+                Ok(())
+            })?;
+            calendar.refresh_deliveries(&self.members);
+        } else if self.members.par_iter().any(|member| {
+            member
+                .pregnancy
+                .as_ref()
+                .is_some_and(|pregnancy| pregnancy.due_at_millis.is_some())
+        }) {
+            return Err("elapsed pregnancies require a gestation clock");
+        }
+        Ok(())
+    }
+
+    /// Upcoming deliveries, ordered by absolute time and then maternal identity.
+    pub fn delivery_deadlines(&self) -> &[(u128, u64)] {
+        self.elapsed_lifetimes
+            .as_ref()
+            .map_or(&[], |timeline| timeline.deliveries.as_slice())
+    }
+
     /// Present age using this family's own time unit when configured.
     pub fn age_at(&self, member: &Member, now: u128) -> u64 {
         self.elapsed_lifetimes
@@ -198,7 +267,7 @@ impl Families {
                             .is_none_or(|other| other.partner != Some(m.id))
                 })
                 || m.pregnancy.as_ref().is_some_and(|p| {
-                    p.due <= now
+                    (p.due_at_millis.is_none() && p.due <= now)
                         || !members.contains_key(&p.father)
                         || members
                             .get(&p.father)

@@ -1,11 +1,13 @@
 //! Family data contracts.
 use game_genetics::Genome;
 use serde::{Deserialize, Serialize};
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Pregnancy {
     pub father: u64,
     pub due: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub due_at_millis: Option<u128>,
 }
 fn yes() -> bool {
     true

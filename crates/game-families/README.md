@@ -11,8 +11,12 @@ lifespan and founder age an explicit unit for natural mortality. The interval
 host builds the calendar at world creation and schedules each newborn from
 their birth instant. Physical age for work capability and dependent care uses
 the same clock between settlements. Physical death occurs at the saved
-deadline. Family history records death and adulthood at settlement. Encounters,
-pregnancy, and recovery spacing still follow the boundary clock.
+deadline. Family history records death and adulthood at settlement.
+Set `elapsed_gestation = true` in the same table to schedule pregnancy and
+maternal recovery independently of settlement. A birth commits physical custody
+and the newborn's state together. An infant born during travel joins the
+mother's actual journey position. Fatal maternal harm at the same instant
+produces a pregnancy loss. Encounter opportunities still use the boundary clock.
 
 Each person retains an individual demographic record, including recorded birth,
 age at death, parents, reproductive opt-in, partner, pregnancy and four diploid

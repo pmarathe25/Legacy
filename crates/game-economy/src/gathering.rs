@@ -76,7 +76,11 @@ impl Clone for Gathering {
     }
 }
 /// A child may inherit a personal inclination, never another person's pressure.
-pub fn enroll(owner: Option<&mut Gathering>, family: Option<&crate::Families>, tick: u64) {
+pub fn enroll(
+    owner: Option<&mut Gathering>,
+    family: Option<&crate::Families>,
+    batch: game_economy_family::BirthBatch<'_>,
+) {
     let Some((owner, family)) = owner
         .zip(family)
         .filter(|(owner, family)| owner.inherit_births && family.rules.enroll_births)
@@ -88,7 +92,7 @@ pub fn enroll(owner: Option<&mut Gathering>, family: Option<&crate::Families>, t
     let newborns: Vec<_> = family
         .members
         .par_iter()
-        .filter(|m| m.born == Some(tick))
+        .filter(|m| batch.contains(m))
         .flat_map_iter(|m| {
             let parent = m
                 .parents

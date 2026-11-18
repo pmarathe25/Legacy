@@ -1171,11 +1171,19 @@ impl CoreHost {
                 core.physical.tick(),
                 core.rules.max_health,
             )?;
+            if owner
+                .members
+                .par_windows(2)
+                .any(|members| members[0].id > members[1].id)
+            {
+                owner.members.par_sort_unstable_by_key(|member| member.id);
+            }
             if let Some(calendar) = &mut owner.elapsed_lifetimes {
                 let now = core.simulated_millis();
                 calendar.initialize(&owner.rules, &owner.members, now)?;
                 calendar.validate(&owner.members, &pending, now)?;
             }
+            owner.initialize_elapsed_gestation(core.simulated_millis())?;
         } else if !pending_vital_deaths.is_empty()
             || personal_conflict
                 .as_ref()
@@ -1578,7 +1586,10 @@ impl CoreHost {
             .next_natural_death()
             .and_then(|after| u64::try_from(after).ok());
         let purpose = self.next_purpose();
-        let first = [recovery, exposure, natural_death, purpose]
+        let delivery = self
+            .next_delivery()
+            .and_then(|after| u64::try_from(after).ok());
+        let first = [recovery, exposure, natural_death, purpose, delivery]
             .into_iter()
             .flatten()
             .min();
@@ -1594,6 +1605,7 @@ impl CoreHost {
                     nutrition: false,
                     food_health: false,
                     purpose: purpose == Some(after_millis),
+                    delivery: delivery == Some(after_millis),
                     recovery: recovery == Some(after_millis),
                     exposure: exposure == Some(after_millis),
                 };
@@ -1602,6 +1614,7 @@ impl CoreHost {
                 deadline.recovery |= recovery == Some(after_millis);
                 deadline.exposure = exposure == Some(after_millis);
                 deadline.purpose = purpose == Some(after_millis);
+                deadline.delivery = delivery == Some(after_millis);
             }
         }
         Ok(deadline)
@@ -2666,11 +2679,13 @@ impl CoreHost {
         }
         let personality = self.stage_personality_births(family.as_ref());
         let skills = self.stage_skill_births(skills, family.as_ref(), draft.events().tick)?;
-        crate::purpose::enroll(
-            purpose.as_mut().map(|owner| &mut owner.owner),
-            family.as_ref().map(|frame| &frame.owner),
-            draft.events().tick,
-        )?;
+        if let Some(frame) = &family {
+            crate::purpose::enroll(
+                purpose.as_mut().map(|owner| &mut owner.owner),
+                Some(&frame.owner),
+                game_economy_family::BirthBatch::for_people(draft.events().tick, &frame.newborns),
+            )?;
+        }
         let medical_resolved = medical.as_ref().map(|plan| plan.resolve(draft.events()));
         let birth_health = self.stage_birth_health(family.as_ref(), draft.events().tick);
         let birth_health =

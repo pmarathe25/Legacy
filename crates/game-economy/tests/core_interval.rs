@@ -415,6 +415,91 @@ fn elapsed_growth_changes_work_capability_inside_the_physical_interval() {
 }
 
 #[test]
+fn elapsed_delivery_joins_a_maternal_journey_and_loses_to_fatal_harm() {
+    use game_economy::core_interval::CoreRunEvent;
+
+    let run = |quantum, workers, maternal_death| {
+        rayon::ThreadPoolBuilder::new().num_threads(workers).build().unwrap().install(|| {
+            let mut core = fixture();
+            core.physical.tick_millis = quantum;
+            core.nutrition = None;
+            core.pending_food.clear();
+            core.rules.hunger_per_tick = 0;
+            core.rules.hunger_rate = Some(game_economy_person::HungerRate {units:1, per_millis:1000});
+            core.rules.starvation_damage = 0;
+            core.travel.as_mut().unwrap().travel_unit_millis = Some(1000);
+            let snapshot: CoreHostSnapshot = serde_json::from_value(serde_json::json!({
+                "core":core, "fatigue":timed_fatigue(),
+                "family": {
+                    "elapsed_lifetimes":{"unit_millis":200,"elapsed_gestation":true},
+                    "rules":{"adult_age":2,"min_work_age":2,"fertile_until":10,"gestation":2,
+                        "birth_spacing":3,"lifespan_min":11,"lifespan_max":11,"conception_one_in":1,
+                        "minimum_health":1,"maximum_hunger":100,"newborn_health":50,
+                        "mutation_per_million":0,"mutation_step":0,"enroll_births":true},
+                    "members":[
+                        {"id":1,"age":3,"genome":{"sex":"Male","alleles":[[100,100],[100,100],[100,100],[100,100]]}},
+                        {"id":2,"age":if maternal_death {9} else {3},"pregnancy":{"father":1,"due":2},
+                            "genome":{"sex":"Female","alleles":[[100,100],[100,100],[100,100],[100,100]]}}
+                    ],"next_id":3
+                },
+                "purpose":{"owner":{"rules":{"max":10,"per_tick":0,"blocked_increase":0,
+                    "completion_relief":0,"damage_threshold":10,"damage":0},"people":[]}}
+            })).unwrap();
+            let mut host = CoreHost::begin(snapshot, &[(1,1)]).unwrap();
+            host.enable_schedule(1000,1).unwrap();
+            assert_eq!(host.advance_continuous(399,&[]).unwrap().failure,None);
+            let before = host.snapshot();
+            assert_eq!(before.core.people.len(),2);
+            assert_eq!(before.family.as_ref().unwrap().members[1].pregnancy.as_ref().unwrap().due_at_millis, Some(400));
+            let deadline = host.next_deadline(None).unwrap();
+            assert!(deadline.delivery);
+            assert_eq!(deadline.after_millis,1);
+            let save = serde_json::to_string(&before).unwrap();
+            let mut host = CoreHost::resume(serde_json::from_str(&save).unwrap()).unwrap();
+            let first = host.advance_continuous(1,&[]).unwrap();
+            assert_eq!(first.failure,None);
+            let delivered: Vec<_> = first.events.into_iter().filter_map(|event| match event {
+                CoreRunEvent::FamilyTransitions {at_millis,events} => Some((at_millis,events)),
+                _ => None,
+            }).collect();
+            assert_eq!(delivered.len(),1);
+            assert_eq!(delivered[0].0,400);
+            assert_eq!(delivered[0].1.len(),1);
+            let snapshot = host.snapshot();
+            let owner = snapshot.family.as_ref().unwrap();
+            assert!(owner.members[1].pregnancy.is_none());
+            if maternal_death {
+                assert_eq!(snapshot.core.people.len(),2);
+                assert_eq!(owner.totals.pregnancy_losses,1);
+                assert_eq!(delivered[0].1[0].kind,"pregnancy_loss");
+            } else {
+                assert_eq!(snapshot.core.people[2].health,50);
+                assert_eq!(snapshot.core.people[2].region,None);
+                assert_eq!(owner.members[2].parents.as_slice(),[2,1]);
+                assert_eq!(delivered[0].1[0].kind,"birth");
+                assert_eq!(snapshot.purpose.as_ref().unwrap().owner.people[0].person,3);
+                assert!(snapshot.core.physical.custody.containers.iter().any(|holder| holder.place == Place::Person(3)));
+                let journeys = &snapshot.core.travel.as_ref().unwrap().journeys;
+                assert_eq!(journeys[0].progress_millis,journeys[1].progress_millis);
+                assert_eq!(journeys[1].person,3);
+            }
+            let save = serde_json::to_string(&snapshot).unwrap();
+            let mut host = CoreHost::resume(serde_json::from_str(&save).unwrap()).unwrap();
+            let later = host.advance_continuous(50,&[]).unwrap();
+            assert_eq!(later.failure,None);
+            assert!(!later.events.iter().any(|event| matches!(event, CoreRunEvent::FamilyTransitions {..})));
+            if !maternal_death {
+                assert_eq!(host.snapshot().core.people[2].hunger_remainder,50);
+            }
+        })
+    };
+    for maternal_death in [false, true] {
+        run(1000, 1, maternal_death);
+        run(180, 4, maternal_death);
+    }
+}
+
+#[test]
 fn fatal_starvation_wins_an_arrival_tie_and_places_the_body_at_the_source() {
     let mut state = fixture();
     state.nutrition = None;

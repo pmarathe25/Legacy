@@ -96,7 +96,7 @@ impl Config {
 pub fn enroll(
     owner: Option<&AnimalCare>,
     family: Option<&crate::Families>,
-    tick: u64,
+    batch: game_economy_family::BirthBatch<'_>,
 ) -> Vec<Policy> {
     let Some((owner, family)) = owner
         .zip(family)
@@ -107,7 +107,7 @@ pub fn enroll(
     let newborns: Vec<_> = family
         .members
         .par_iter()
-        .filter(|member| member.born == Some(tick))
+        .filter(|member| batch.contains(member))
         .collect();
     if newborns.is_empty() {
         return Vec::new();

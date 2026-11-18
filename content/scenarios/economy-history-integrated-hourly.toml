@@ -564,6 +564,7 @@ last_tick = 0
 
 [family.elapsed_lifetimes]
 unit_millis = 3600000
+elapsed_gestation = true
 
 [family.rules]
 adult_age = 140160

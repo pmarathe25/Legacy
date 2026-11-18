@@ -101,7 +101,7 @@ impl Clone for Agriculture {
 pub fn enroll(
     owner: Option<&mut Agriculture>,
     family: Option<&game_families::Families>,
-    tick: u64,
+    batch: game_families::BirthBatch<'_>,
 ) {
     let Some((owner, family)) = owner
         .zip(family)
@@ -112,7 +112,7 @@ pub fn enroll(
     let newborns: Vec<_> = family
         .members
         .par_iter()
-        .filter(|member| member.born == Some(tick))
+        .filter(|member| batch.contains(member))
         .collect();
     if newborns.is_empty() {
         return;

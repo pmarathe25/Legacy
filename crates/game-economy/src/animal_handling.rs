@@ -42,7 +42,7 @@ pub struct Handling {
 pub fn enroll(
     owner: Option<&Handling>,
     family: Option<&crate::Families>,
-    tick: u64,
+    batch: game_economy_family::BirthBatch<'_>,
 ) -> Vec<Policy> {
     let Some((owner, family)) = owner
         .zip(family)
@@ -53,7 +53,7 @@ pub fn enroll(
     family
         .members
         .par_iter()
-        .filter(|member| member.born == Some(tick))
+        .filter(|member| batch.contains(member))
         .filter_map(|member| {
             if owner
                 .policies

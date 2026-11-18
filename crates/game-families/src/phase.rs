@@ -10,6 +10,11 @@ pub struct Draft {
     pub births: Vec<Birth>,
     pub deaths: BTreeSet<u64>,
 }
+pub struct DeliveryDraft {
+    pub families: Families,
+    pub births: Vec<Birth>,
+    pub events: Vec<FamilyEvent>,
+}
 fn event(tick: u64, kind: &str, people: Vec<u64>, region: Option<u64>) -> FamilyEvent {
     FamilyEvent {
         tick,
@@ -204,6 +209,97 @@ fn subjective_partnerships(
         .collect()
 }
 impl Families {
+    pub fn deliver_elapsed(
+        &self,
+        physical: &impl game_family_model::PhysicalView,
+        seed: u64,
+        tick: u64,
+        now: u128,
+    ) -> Result<DeliveryDraft, &'static str> {
+        let calendar = self
+            .elapsed_lifetimes
+            .as_ref()
+            .filter(|calendar| calendar.elapsed_gestation)
+            .ok_or("elapsed delivery requires a gestation clock")?;
+        let due = |member: &Member| {
+            member
+                .pregnancy
+                .as_ref()
+                .and_then(|p| p.due_at_millis)
+                .is_some_and(|at| at <= now)
+        };
+        let healthy = |member: &Member| member.alive && physical.read(member.id).health > 0;
+        let stage = stage_births(
+            self.next_id,
+            &self.members,
+            &OrderedMemberIndex::new(&self.members),
+            &self.rules,
+            physical,
+            seed,
+            BirthTime {
+                tick,
+                millis: Some(now),
+            },
+        )?;
+        let mut families = Families {
+            rules: self.rules.clone(),
+            members: self.members.par_iter().cloned().collect(),
+            next_id: self.next_id,
+            last_tick: self.last_tick,
+            elapsed_lifetimes: self.elapsed_lifetimes.clone(),
+            totals: self.totals.clone(),
+            events: self.events.par_iter().cloned().collect(),
+        };
+        let mut events: Vec<_> = families
+            .members
+            .par_iter_mut()
+            .filter_map(|member| {
+                if !due(member) {
+                    return None;
+                }
+                let region = physical.read(member.id).region;
+                let died = !healthy(member);
+                let father = member.pregnancy.take().expect("due pregnancy").father;
+                died.then(|| event(tick, "pregnancy_loss", vec![member.id, father], region))
+            })
+            .collect();
+        let lost = events.len() as u64;
+        let next = families
+            .elapsed_lifetimes
+            .as_mut()
+            .expect("validated gestation clock");
+        if !stage.births.is_empty() {
+            let recovery = now
+                .checked_add(
+                    u128::from(calendar.unit_millis) * u128::from(self.rules.birth_spacing),
+                )
+                .ok_or("elapsed birth spacing overflow")?;
+            std::sync::Arc::make_mut(&mut next.birth_recovery)
+                .extend(stage.births.iter().map(|birth| (birth.mother, recovery)));
+            next.enroll(&self.rules, &stage.newborns, now)?;
+        }
+        families.next_id = stage.next_id;
+        families.totals.births = families
+            .totals
+            .births
+            .checked_add(stage.births.len() as u64)
+            .ok_or("family counter overflow")?;
+        families.totals.pregnancy_losses = families
+            .totals
+            .pregnancy_losses
+            .checked_add(lost)
+            .ok_or("family counter overflow")?;
+        families.members.extend(stage.newborns);
+        next.refresh_deliveries(&families.members);
+        events.extend(stage.events);
+        events.par_sort_unstable_by(|a, b| (&a.kind, &a.people).cmp(&(&b.kind, &b.people)));
+        Ok(DeliveryDraft {
+            families,
+            births: stage.births,
+            events,
+        })
+    }
+
     /// One immutable read phase, local matching, canonical IDs, then disjoint inheritance.
     pub fn advance(
         &self,
@@ -426,7 +522,15 @@ impl Families {
             newborns,
             births,
             events: birth_events,
-        } = stage_births(self.next_id, &members, &index, rules, physical, seed, tick)?;
+        } = stage_births(
+            self.next_id,
+            &members,
+            &index,
+            rules,
+            physical,
+            seed,
+            BirthTime { tick, millis: None },
+        )?;
         events.par_extend(birth_events);
         #[cfg(feature = "profile")]
         {
@@ -461,7 +565,16 @@ impl Families {
                 if mother.genome.sex != Sex::Female
                     || physical.controlled(mother.id)
                     || mother.pregnancy.is_some()
-                    || mother.next_conception > tick
+                    || match calendar
+                        .filter(|calendar| calendar.elapsed_gestation)
+                        .zip(now)
+                    {
+                        Some((calendar, now)) => calendar
+                            .birth_recovery
+                            .get(&mother.id)
+                            .is_some_and(|due| *due > now),
+                        None => mother.next_conception > tick,
+                    }
                     || !eligible(mother, &physical.read(mother.id), rules)
                 {
                     return None;
@@ -513,19 +626,35 @@ impl Families {
                 {
                     return None;
                 }
-                Some(
-                    tick.checked_add(rules.gestation)
-                        .ok_or("gestation overflow")
-                        .map(|due| {
-                            (
-                                mother.id,
-                                Pregnancy {
-                                    father: father.id,
-                                    due,
-                                },
-                            )
-                        }),
-                )
+                Some((|| {
+                    let (due, due_at_millis) = match calendar
+                        .filter(|calendar| calendar.elapsed_gestation)
+                        .zip(now)
+                    {
+                        Some((calendar, now)) => (
+                            tick,
+                            Some(
+                                now.checked_add(
+                                    u128::from(calendar.unit_millis) * u128::from(rules.gestation),
+                                )
+                                .ok_or("elapsed gestation overflow")?,
+                            ),
+                        ),
+                        None => (
+                            tick.checked_add(rules.gestation)
+                                .ok_or("gestation overflow")?,
+                            None,
+                        ),
+                    };
+                    Ok((
+                        mother.id,
+                        Pregnancy {
+                            father: father.id,
+                            due,
+                            due_at_millis,
+                        },
+                    ))
+                })())
             })
             .collect::<Result<_, _>>()?;
         events.par_extend(conceptions.par_iter().map(|(mother, pregnancy)| {
@@ -563,7 +692,7 @@ impl Families {
                     .get(conception_index)
                     .is_some_and(|row| row.0 == member.id)
                 {
-                    member.pregnancy = Some(conceived[conception_index].1.clone());
+                    member.pregnancy = Some(conceived[conception_index].1);
                 }
             }
         });
@@ -577,11 +706,14 @@ impl Families {
             .filter(|e| e.kind == "death")
             .map(|e| e.people[0])
             .collect();
-        let elapsed_lifetimes = calendar
+        let mut elapsed_lifetimes = calendar
             .zip(now)
             .map(|(calendar, now)| calendar.advance(rules, &deaths, &newborns, now))
             .transpose()?;
         members.extend(newborns);
+        if let Some(calendar) = &mut elapsed_lifetimes {
+            calendar.refresh_deliveries(&members);
+        }
         events.par_sort_unstable_by(|a, b| (&a.kind, &a.people).cmp(&(&b.kind, &b.people)));
         let counts = events
             .par_iter()
@@ -736,6 +868,11 @@ struct BirthStage {
     events: Vec<FamilyEvent>,
 }
 
+struct BirthTime {
+    tick: u64,
+    millis: Option<u128>,
+}
+
 /// Stage the births that are physically due, independently of any new encounter.
 fn stage_births(
     first_id: u64,
@@ -744,11 +881,24 @@ fn stage_births(
     rules: &FamilyRules,
     physical: &impl game_family_model::PhysicalView,
     seed: u64,
-    tick: u64,
+    time: BirthTime,
 ) -> Result<BirthStage, &'static str> {
+    let tick = time.tick;
+    let entropy = time.millis.map_or(tick, |now| {
+        now as u64 ^ ((now >> 64) as u64).rotate_left(29)
+    });
     let due: Vec<_> = members
         .par_iter()
-        .filter(|m| m.alive && m.pregnancy.as_ref().is_some_and(|p| p.due <= tick))
+        .filter(|m| {
+            m.alive
+                && m.pregnancy.as_ref().is_some_and(|p| match time.millis {
+                    Some(now) => {
+                        p.due_at_millis.is_some_and(|due| due <= now)
+                            && physical.read(m.id).health > 0
+                    }
+                    None => p.due_at_millis.is_none() && p.due <= tick,
+                })
+        })
         .collect();
     let next_id = first_id
         .checked_add(due.len() as u64)
@@ -764,7 +914,7 @@ fn stage_births(
                 &father.genome,
                 seed,
                 mother.id,
-                tick,
+                entropy,
                 rules.mutation_per_million,
                 rules.mutation_step,
             );
@@ -783,9 +933,12 @@ fn stage_births(
                 reconsider_partnership: mother.reconsider_partnership,
                 mate_preference: None,
             };
-            let recover = tick
-                .checked_add(rules.birth_spacing)
-                .ok_or("birth spacing overflow")?;
+            let recover = if time.millis.is_some() {
+                tick
+            } else {
+                tick.checked_add(rules.birth_spacing)
+                    .ok_or("birth spacing overflow")?
+            };
             Ok((
                 child,
                 Birth {

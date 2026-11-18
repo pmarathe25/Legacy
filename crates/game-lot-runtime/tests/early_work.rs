@@ -1177,6 +1177,61 @@ fn early_work_completion_benchmark() {
 }
 
 #[test]
+fn elapsed_work_and_newborn_custody_publish_as_one_generation() {
+    use game_lot_runtime::ElapsedCustody;
+    use game_lots::BatchCount;
+
+    let mut world = fixture(false, 1);
+    world.enable_batch_allocator(10).unwrap();
+    world.begin_work_interval(&[(1, 1)]).unwrap();
+    let opening = world.snapshot();
+    let batch = [BatchCount { owner: 5, count: 2 }];
+    let allocation = world.plan_batches(&batch).unwrap();
+    assert!(
+        world
+            .progress_work_interval_with_custody(
+                125,
+                &[],
+                &[],
+                ElapsedCustody {
+                    new_people: &[(9, 8), (9, 8)],
+                    batches: Some(allocation),
+                }
+            )
+            .is_err()
+    );
+    assert_eq!(world.snapshot(), opening);
+    let allocation = world.plan_batches(&batch).unwrap();
+    assert_eq!(
+        world
+            .progress_work_interval_with_custody(
+                125,
+                &[],
+                &[],
+                ElapsedCustody {
+                    new_people: &[(9, 8)],
+                    batches: Some(allocation),
+                }
+            )
+            .unwrap()
+            .0,
+        125
+    );
+    let saved = world.snapshot();
+    assert_eq!(saved.custody.next_batch, Some(12));
+    assert_eq!(saved.custody.revision, opening.custody.revision + 1);
+    assert_eq!(saved.work[0].progress_remainder, 125);
+    let interval = saved.work_interval.as_ref().unwrap();
+    assert_eq!(interval.elapsed_millis, 125);
+    assert_eq!(interval.custody_revision, saved.custody.revision);
+    let holder = world.custody(Place::Person(9)).unwrap();
+    assert_eq!(holder.capacity, 8);
+    assert!(holder.lots.is_empty());
+    let restored: Snapshot = serde_json::from_str(&serde_json::to_string(&saved).unwrap()).unwrap();
+    assert_eq!(Runtime::compile(restored).unwrap().snapshot(), saved);
+}
+
+#[test]
 fn completed_interval_stages_batch_allocation_with_its_physical_commit() {
     let mut world = fixture(false, 1);
     world.enable_batch_allocator(10).unwrap();

@@ -45,6 +45,7 @@ fn observations(events: &[CoreRunEvent], current_tick: &mut u64) -> Vec<Value> {
         CoreRunEvent::WrittenExplanations(rows) if !rows.is_empty() => Some(json!({"kind":"written_explanations","events":rows})),
         CoreRunEvent::Disease(rows) if !rows.is_empty() => Some(json!({"kind":"disease","events":rows})),
         CoreRunEvent::Incapacitations { at_millis, people } => Some(json!({"kind":"incapacitations","at_millis":at_millis,"people":people})),
+        CoreRunEvent::FamilyTransitions { at_millis, events } => Some(json!({"kind":"elapsed_family_events","at_millis":at_millis,"events":events})),
         CoreRunEvent::Meals(rows) if !rows.is_empty() => Some(json!({"kind":"meals","events":rows})),
         CoreRunEvent::Treatments(rows) if !rows.is_empty() => Some(json!({"kind":"treatments","events":rows})),
         CoreRunEvent::Provisions(rows) if !rows.is_empty() => Some(json!({"kind":"provisions","events":rows})),
@@ -754,7 +755,7 @@ mod tests {
             let mut host = CoreHost::resume(initial).unwrap();
             let result = host.advance_continuous(2_628_000_000, &[]).unwrap();
             assert_eq!(result.failure, None);
-            host.snapshot().family.unwrap().members[0].pregnancy.clone()
+            host.snapshot().family.unwrap().members[0].pregnancy
         };
         assert!(run(-10).is_none());
         assert_eq!(run(10).unwrap().father, 2);
@@ -775,7 +776,7 @@ mod tests {
                 host.advance_continuous(2_628_000_000, &[]).unwrap().failure,
                 None
             );
-            host.snapshot().family.unwrap().members[0].pregnancy.clone()
+            host.snapshot().family.unwrap().members[0].pregnancy
         };
         assert!(run_with_fear(0).is_none());
         assert_eq!(run_with_fear(1).unwrap().father, 2);
@@ -818,9 +819,7 @@ mod tests {
             .unwrap();
             let mut world = game_economy::Economy::compile(initial).unwrap();
             world.advance().unwrap();
-            world.snapshot().family.unwrap().members[0]
-                .pregnancy
-                .clone()
+            world.snapshot().family.unwrap().members[0].pregnancy
         };
         assert!(run(-10).is_none());
         assert_eq!(run(10).unwrap().father, 2);

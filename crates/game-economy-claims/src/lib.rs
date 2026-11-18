@@ -661,7 +661,11 @@ impl Clone for Claims {
 }
 
 /// Enroll actual newborns without copying any person's claims or feelings.
-pub fn enroll(owner: Option<&mut Claims>, family: Option<&game_families::Families>, tick: u64) {
+pub fn enroll(
+    owner: Option<&mut Claims>,
+    family: Option<&game_families::Families>,
+    batch: game_families::BirthBatch<'_>,
+) {
     let Some((owner, family)) = owner
         .zip(family)
         .filter(|(owner, family)| owner.inherit_births && family.rules.enroll_births)
@@ -671,7 +675,7 @@ pub fn enroll(owner: Option<&mut Claims>, family: Option<&game_families::Familie
     let newborns: Vec<_> = family
         .members
         .par_iter()
-        .filter(|member| member.born == Some(tick))
+        .filter(|member| batch.contains(member))
         .collect();
     if newborns.is_empty() {
         return;

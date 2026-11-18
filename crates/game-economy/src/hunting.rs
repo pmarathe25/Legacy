@@ -125,7 +125,11 @@ impl Config {
 }
 
 /// New people may inherit a parent's general inclination, never a target or pressure.
-pub fn enroll(owner: Option<&Hunting>, family: Option<&crate::Families>, tick: u64) -> Vec<Policy> {
+pub fn enroll(
+    owner: Option<&Hunting>,
+    family: Option<&crate::Families>,
+    batch: game_economy_family::BirthBatch<'_>,
+) -> Vec<Policy> {
     let Some((owner, family)) = owner
         .zip(family)
         .filter(|(owner, family)| owner.inherit_births && family.rules.enroll_births)
@@ -135,7 +139,7 @@ pub fn enroll(owner: Option<&Hunting>, family: Option<&crate::Families>, tick: u
     let newborns: Vec<_> = family
         .members
         .par_iter()
-        .filter(|member| member.born == Some(tick))
+        .filter(|member| batch.contains(member))
         .collect();
     if newborns.is_empty() {
         return Vec::new();

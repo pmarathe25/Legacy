@@ -143,9 +143,22 @@ impl Disease {
         seed: u64,
         tick: u64,
     ) {
+        if let Some(now) = tick.checked_sub(1) {
+            self.admit_births_at(previous, births, seed, now, tick);
+        }
+    }
+
+    /// Sample the mother's opening case and record infection at the child's birth.
+    pub fn admit_births_at(
+        &mut self,
+        previous: &Disease,
+        births: &[(u64, u64)],
+        seed: u64,
+        now: u64,
+        tick: u64,
+    ) {
         if births.is_empty()
             || previous.cases.is_empty()
-            || tick == 0
             || !previous
                 .strains
                 .iter()
@@ -153,7 +166,6 @@ impl Disease {
         {
             return;
         }
-        let now = tick - 1;
         let mut cases: Vec<_> = previous.cases.par_iter().collect();
         if cases
             .par_windows(2)

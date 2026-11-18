@@ -5,6 +5,7 @@ use super::*;
 pub(super) struct ElapsedProgress {
     pub millis: u64,
     pub incapacitations: Vec<scheduler::Incapacitation>,
+    pub family_events: Vec<game_economy_family::FamilyEvent>,
 }
 use game_economy_fatigue::TimedActivity;
 
@@ -180,6 +181,10 @@ impl CoreHost {
         if let Some(deadline) = purpose {
             consumed = consumed.min(deadline);
         }
+        let delivery = self.next_delivery();
+        if let Some(deadline) = delivery {
+            consumed = deadline.min(u128::from(consumed)) as u64;
+        }
         let (crop_rates, crop_limit) = self.plan_crop_segment(consumed)?;
         consumed = crop_limit;
         let elapsed_owner = self
@@ -283,11 +288,13 @@ impl CoreHost {
         let exposure_due = exposure == Some(consumed);
         let natural_death_due = natural_death == Some(u128::from(consumed));
         let purpose_due = purpose == Some(consumed);
+        let delivery_due = delivery == Some(u128::from(consumed));
         let food_health_due = self.core.next_food_health() == Some(u128::from(consumed));
         let mut vitals = (has_injuries
             || exposure_due
             || natural_death_due
             || purpose_due
+            || delivery_due
             || food_health_due
             || ordinary_recovery_due
             || self.core.next_metabolism() == Some(consumed))
@@ -348,6 +355,16 @@ impl CoreHost {
         } else {
             None
         };
+        let delivery = if delivery_due {
+            let now = self.core.simulated_millis() + u128::from(consumed);
+            Some(self.stage_elapsed_family(
+                &vitals.as_ref().expect("delivery vitals").people,
+                now,
+                purpose.as_ref(),
+            )?)
+        } else {
+            None
+        };
         let deaths = if let Some(vitals) = &vitals {
             self.core
                 .people
@@ -402,9 +419,14 @@ impl CoreHost {
         let Some(owner) = &self.fatigue else {
             let credits = self.plan_skill_practice(consumed);
             let recovery = self.stage_natural_recovery(consumed, &[], vitals.as_mut())?;
-            let advanced = self
-                .core
-                .progress_adjusting(consumed, &reductions, vitals, batches)?;
+            let advanced = self.core.progress_adjusting(
+                consumed,
+                &reductions,
+                vitals,
+                batches,
+                delivery.as_ref().map(|delivery| delivery.physical()),
+            )?;
+            let mut family_events = Vec::new();
             if advanced > 0 {
                 self.publish_resource_renewal(renewal);
                 self.publish_crop_growth(growth);
@@ -423,6 +445,7 @@ impl CoreHost {
                     || exposure_due
                     || purpose_due
                     || food_health_due
+                    || delivery_due
                 {
                     self.work_checked_revision = None;
                 }
@@ -432,10 +455,14 @@ impl CoreHost {
                     self.record_assist_durations(&durations);
                 }
                 self.remember_skill_practice(credits);
+                if let Some(delivery) = delivery {
+                    family_events = self.publish_elapsed_family(delivery);
+                }
             }
             return Ok(ElapsedProgress {
                 millis: advanced,
                 incapacitations,
+                family_events,
             });
         };
         if consumed == 0 {
@@ -568,9 +595,13 @@ impl CoreHost {
             .collect::<Result<Vec<_>, _>>()?;
         let next: Vec<_> = chunks.into_par_iter().flatten().collect();
         let recovery = self.stage_natural_recovery(consumed, &next, vitals.as_mut())?;
-        let advanced = self
-            .core
-            .progress_adjusting(consumed, &reductions, vitals, batches)?;
+        let advanced = self.core.progress_adjusting(
+            consumed,
+            &reductions,
+            vitals,
+            batches,
+            delivery.as_ref().map(|delivery| delivery.physical()),
+        )?;
         self.publish_resource_renewal(renewal);
         self.publish_crop_growth(growth);
         if let Some(recovery) = recovery {
@@ -595,10 +626,13 @@ impl CoreHost {
             || exposure_due
             || purpose_due
             || food_health_due
+            || delivery_due
         {
             self.work_checked_revision = None;
         }
         self.activity = next;
+        let family_events =
+            delivery.map_or_else(Vec::new, |delivery| self.publish_elapsed_family(delivery));
         if let Some(owner) = staged_shared {
             self.shared_work = Some(owner);
         } else {
@@ -608,6 +642,7 @@ impl CoreHost {
         Ok(ElapsedProgress {
             millis: advanced,
             incapacitations,
+            family_events,
         })
     }
 

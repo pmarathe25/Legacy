@@ -2,7 +2,7 @@ use super::{FamilyRules, Member};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::{BTreeSet, HashMap},
+    collections::{BTreeMap, BTreeSet, HashMap},
     sync::Arc,
 };
 
@@ -11,16 +11,26 @@ use std::{
 pub struct ElapsedLifetimes {
     /// Milliseconds per authored lifespan and starting-age unit.
     pub unit_millis: u64,
+    /// Schedule gestation and maternal recovery in elapsed units.
+    #[serde(default)]
+    pub elapsed_gestation: bool,
     /// Natural mortality deadlines ordered by time, then individual identity.
     #[serde(default)]
     deadlines: Arc<Vec<(u128, u64)>>,
     #[serde(skip)]
     by_person: Arc<HashMap<u64, u128>>,
+    #[serde(skip)]
+    pub(super) deliveries: Arc<Vec<(u128, u64)>>,
+    #[serde(default)]
+    pub(super) birth_recovery: Arc<BTreeMap<u64, u128>>,
 }
 
 impl PartialEq for ElapsedLifetimes {
     fn eq(&self, other: &Self) -> bool {
-        self.unit_millis == other.unit_millis && self.deadlines == other.deadlines
+        self.unit_millis == other.unit_millis
+            && self.deadlines == other.deadlines
+            && self.elapsed_gestation == other.elapsed_gestation
+            && self.birth_recovery == other.birth_recovery
     }
 }
 
@@ -34,6 +44,20 @@ pub(super) fn lifespan(rules: &FamilyRules, member: &Member) -> u64 {
 }
 
 impl ElapsedLifetimes {
+    pub(super) fn refresh_deliveries(&mut self, members: &[Member]) {
+        if !self.elapsed_gestation {
+            return;
+        }
+        let mut deadlines: Vec<_> = members
+            .par_iter()
+            .filter_map(|member| Some((member.pregnancy.as_ref()?.due_at_millis?, member.id)))
+            .collect();
+        if deadlines.par_windows(2).any(|pair| pair[0] > pair[1]) {
+            deadlines.par_sort_unstable();
+        }
+        self.deliveries = Arc::new(deadlines);
+    }
+
     fn index(deadlines: &[(u128, u64)]) -> Arc<HashMap<u64, u128>> {
         Arc::new(deadlines.par_iter().map(|&(time, id)| (id, time)).collect())
     }
@@ -132,6 +156,25 @@ impl ElapsedLifetimes {
         &self.deadlines[start..end]
     }
 
+    pub(super) fn enroll(
+        &mut self,
+        rules: &FamilyRules,
+        newborns: &[Member],
+        now: u128,
+    ) -> Result<(), &'static str> {
+        let added: Vec<_> = newborns
+            .par_iter()
+            .map(|member| self.deadline(rules, member, now))
+            .collect::<Result<_, _>>()?;
+        if !added.is_empty() {
+            let deadlines = Arc::make_mut(&mut self.deadlines);
+            deadlines.extend(added);
+            deadlines.par_sort_unstable();
+            self.by_person = Self::index(deadlines);
+        }
+        Ok(())
+    }
+
     pub(super) fn advance(
         &self,
         rules: &FamilyRules,
@@ -149,24 +192,21 @@ impl ElapsedLifetimes {
         if deaths.is_empty() && newborns.is_empty() {
             return Ok(self.clone());
         }
-        let mut deadlines: Vec<_> = self
-            .deadlines
-            .par_iter()
-            .copied()
-            .filter(|&(_, id)| !deaths.contains(&id))
-            .collect();
-        let added: Vec<_> = newborns
-            .par_iter()
-            .map(|member| self.deadline(rules, member, now))
-            .collect::<Result<_, _>>()?;
-        if !added.is_empty() {
-            deadlines.extend(added);
-            deadlines.par_sort_unstable();
+        let mut next = self.clone();
+        if !deaths.is_empty() {
+            let deadlines: Vec<_> = self
+                .deadlines
+                .par_iter()
+                .copied()
+                .filter(|&(_, id)| !deaths.contains(&id))
+                .collect();
+            next.by_person = Self::index(&deadlines);
+            next.deadlines = Arc::new(deadlines);
+            if !next.birth_recovery.is_empty() {
+                Arc::make_mut(&mut next.birth_recovery).retain(|id, _| !deaths.contains(id));
+            }
         }
-        Ok(Self {
-            unit_millis: self.unit_millis,
-            by_person: Self::index(&deadlines),
-            deadlines: Arc::new(deadlines),
-        })
+        next.enroll(rules, newborns, now)?;
+        Ok(next)
     }
 }

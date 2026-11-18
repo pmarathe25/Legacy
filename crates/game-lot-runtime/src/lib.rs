@@ -24,6 +24,14 @@ pub struct PhysicalOutcomes {
     pub movements: Vec<Outcome>,
     pub spoiled: Vec<Spoilage>,
 }
+
+/// Owner-staged custody changes at the endpoint of elapsed work.
+#[derive(Default)]
+pub struct ElapsedCustody<'a> {
+    pub new_people: &'a [(u64, u64)],
+    pub batches: Option<game_lots::BatchAllocation>,
+}
+
 pub struct Runtime {
     store: Store,
     catalog: Catalog,
@@ -287,6 +295,26 @@ impl Runtime {
         reductions: &[(u64, u64)],
         allocation: Option<game_lots::BatchAllocation>,
     ) -> Result<(u64, Vec<(u64, u64)>), String> {
+        self.progress_work_interval_with_custody(
+            requested_millis,
+            pause_jobs,
+            reductions,
+            ElapsedCustody {
+                batches: allocation,
+                ..ElapsedCustody::default()
+            },
+        )
+    }
+
+    /// Commit new personal holders and reserved batch IDs with elapsed work.
+    /// All custody validation precedes publication of elapsed time and rates.
+    pub fn progress_work_interval_with_custody(
+        &mut self,
+        requested_millis: u64,
+        pause_jobs: &[u64],
+        reductions: &[(u64, u64)],
+        effects: ElapsedCustody<'_>,
+    ) -> Result<(u64, Vec<(u64, u64)>), String> {
         let interval = self
             .work_interval
             .as_ref()
@@ -314,19 +342,32 @@ impl Runtime {
             return Err("invalid physical work interruption".into());
         }
         let consumed = requested_millis.min(self.tick_millis - interval.elapsed_millis);
+        let changes_custody = effects.batches.is_some() || !effects.new_people.is_empty();
         if consumed == 0 {
-            if allocation.is_some() {
-                return Err("a batch allocation requires positive elapsed time".into());
+            if changes_custody {
+                return Err("elapsed custody changes require positive elapsed time".into());
             }
             return Ok((0, Vec::new()));
         }
-        let custody = allocation
-            .map(|allocation| {
+        let custody = changes_custody
+            .then(|| {
                 let mut draft = self.store.prepare_transactions_now(0, &[])?;
                 if !draft.spoiled().is_empty() {
-                    return Err("elapsed batches cannot publish pending spoilage".to_string());
+                    return Err("elapsed custody cannot publish pending spoilage".to_string());
                 }
-                self.store.attach_batch_allocation(&mut draft, allocation)?;
+                if !effects.new_people.is_empty() {
+                    let containers = effects
+                        .new_people
+                        .par_iter()
+                        .map(|&(id, capacity)| {
+                            game_lots::Container::new(Place::Person(id), capacity, vec![])
+                        })
+                        .collect::<Result<Vec<_>, _>>()?;
+                    self.store.add_empty_in(&mut draft, containers)?;
+                }
+                if let Some(allocation) = effects.batches {
+                    self.store.attach_batch_allocation(&mut draft, allocation)?;
+                }
                 Ok(draft)
             })
             .transpose()?;

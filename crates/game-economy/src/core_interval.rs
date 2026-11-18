@@ -90,6 +90,12 @@ struct VitalsProgress {
     nutrition: Option<Nutrition>,
     pending_food: Option<Vec<FoodEffect>>,
 }
+
+struct ElapsedBirths<'a> {
+    children: &'a [game_economy_family::Birth],
+    seek_meals: bool,
+    work_preference: Option<bool>,
+}
 impl CoreMealDraft {
     pub fn transactions(&self) -> &[game_lots::TransactionOutcome] {
         self.physical.transactions()
@@ -127,6 +133,7 @@ pub struct CoreDeadline {
     pub exposure: bool,
     pub food_health: bool,
     pub purpose: bool,
+    pub delivery: bool,
 }
 /// Travelers published at a partial-interval offset.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -438,6 +445,7 @@ impl CoreInterval {
             nutrition: nutrition == Some(after),
             exposure: false,
             purpose: false,
+            delivery: false,
             food_health: food_health == Some(after),
         })
     }
@@ -1033,7 +1041,7 @@ impl CoreInterval {
     /// Progress without repeating decisions, publishing arrivals, or completing work.
     /// Failed validation leaves all owners unchanged.
     pub fn progress(&mut self, requested_millis: u64) -> Result<u64, String> {
-        self.progress_adjusting(requested_millis, &[], None, None)
+        self.progress_adjusting(requested_millis, &[], None, None, None)
     }
 
     fn progress_adjusting(
@@ -1042,6 +1050,7 @@ impl CoreInterval {
         reductions: &[(u64, u64)],
         staged_vitals: Option<VitalsProgress>,
         batches: Option<game_lots::BatchAllocation>,
+        births: Option<ElapsedBirths<'_>>,
     ) -> Result<u64, String> {
         let quantum = self.physical.tick_millis();
         let consumed = self.progress_limit(requested_millis)?;
@@ -1053,7 +1062,7 @@ impl CoreInterval {
             .checked_add(1)
             .ok_or("core revision overflow")?;
         let VitalsProgress {
-            people,
+            mut people,
             nutrition,
             pending_food,
         } = match staged_vitals {
@@ -1074,7 +1083,30 @@ impl CoreInterval {
                 (before.health > 0 && after.health == 0).then_some(before.id)
             })
             .collect();
-        let advanced = if dead.is_empty() && reductions.is_empty() && batches.is_none() {
+        let (placement, holders) =
+            if let Some(births) = births.filter(|births| !births.children.is_empty()) {
+                let placement = game_economy_family::BirthPlacement::prepare(
+                    births.children,
+                    &people,
+                    travel.as_ref(),
+                    births.seek_meals,
+                    births.work_preference,
+                )
+                .map_err(str::to_owned)?;
+                let holders = births
+                    .children
+                    .par_iter()
+                    .map(|birth| (birth.id, self.rules.carrying_capacity))
+                    .collect();
+                (Some(placement), holders)
+            } else {
+                (None, Vec::new())
+            };
+        let advanced = if dead.is_empty()
+            && reductions.is_empty()
+            && batches.is_none()
+            && holders.is_empty()
+        {
             self.physical.progress_work_interval(consumed)?
         } else {
             let interval = self
@@ -1096,10 +1128,21 @@ impl CoreInterval {
                 })
                 .collect();
             self.physical
-                .progress_work_interval_with_batches(consumed, &paused, reductions, batches)?
+                .progress_work_interval_with_custody(
+                    consumed,
+                    &paused,
+                    reductions,
+                    game_lot_runtime::ElapsedCustody {
+                        new_people: &holders,
+                        batches,
+                    },
+                )?
                 .0
         };
         debug_assert_eq!(advanced, consumed);
+        if let Some(placement) = placement {
+            placement.publish(&mut people, &mut travel);
+        }
         self.people = people;
         if let Some(nutrition) = nutrition {
             self.nutrition = Some(nutrition);

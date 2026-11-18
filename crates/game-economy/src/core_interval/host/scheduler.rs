@@ -644,6 +644,10 @@ pub enum CoreRunEvent {
         at_millis: u128,
         people: Vec<Incapacitation>,
     },
+    FamilyTransitions {
+        at_millis: u128,
+        events: Vec<game_economy_family::FamilyEvent>,
+    },
     Repairs(Vec<game_economy_building::maintenance::Event>),
     ToolRepairs(Vec<game_economy_work::tool_wear::RepairEvent>),
     Deliveries(Vec<game_lots::TransactionOutcome>),
@@ -3098,6 +3102,12 @@ impl CoreHost {
                 run.events.push(CoreRunEvent::Incapacitations {
                     at_millis: self.core.simulated_millis(),
                     people: elapsed.incapacitations,
+                });
+            }
+            if !elapsed.family_events.is_empty() {
+                run.events.push(CoreRunEvent::FamilyTransitions {
+                    at_millis: self.core.simulated_millis(),
+                    events: elapsed.family_events,
                 });
             }
         }

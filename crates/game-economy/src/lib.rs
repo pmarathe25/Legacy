@@ -9251,26 +9251,27 @@ impl Economy {
         if let Some(travel) = &mut travel {
             travel.settle_deaths(&mut person.people);
         }
-        purpose::enroll(purpose.as_mut(), family.as_ref(), tick)?;
-        game_economy_agriculture::enroll(agriculture.as_mut(), family.as_ref(), tick);
+        let batch = game_economy_family::BirthBatch::at_tick(tick);
+        purpose::enroll(purpose.as_mut(), family.as_ref(), batch)?;
+        game_economy_agriculture::enroll(agriculture.as_mut(), family.as_ref(), batch);
         game_economy_claims::enroll(
             dynamics.as_mut().and_then(|owner| owner.claims.as_mut()),
             family.as_ref(),
-            tick,
+            batch,
         );
-        giving_inheritance::enroll(next_giving.as_mut(), family.as_ref(), tick);
-        gathering::enroll(gathering.as_mut(), family.as_ref(), tick);
-        let hunting_births = hunting::enroll(self.hunting.as_ref(), family.as_ref(), tick);
+        giving_inheritance::enroll(next_giving.as_mut(), family.as_ref(), batch);
+        gathering::enroll(gathering.as_mut(), family.as_ref(), batch);
+        let hunting_births = hunting::enroll(self.hunting.as_ref(), family.as_ref(), batch);
         let animal_care_births =
-            animal_care::enroll(self.animal_care.as_ref(), family.as_ref(), tick);
+            animal_care::enroll(self.animal_care.as_ref(), family.as_ref(), batch);
         let animal_handling_births =
-            animal_handling::enroll(self.animal_handling.as_ref(), family.as_ref(), tick);
+            animal_handling::enroll(self.animal_handling.as_ref(), family.as_ref(), batch);
         animal_restraint_inheritance::enroll(
             next_animal_restraints.as_mut(),
             family.as_ref(),
-            tick,
+            batch,
         );
-        food_search::enroll(food_search.as_mut(), family.as_ref(), tick);
+        food_search::enroll(food_search.as_mut(), family.as_ref(), batch);
         #[cfg(feature = "profile")]
         {
             drop(profile_phase);

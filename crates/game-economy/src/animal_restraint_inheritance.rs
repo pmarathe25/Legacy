@@ -2,7 +2,11 @@
 use crate::{AnimalCapturePolicy, AnimalReleasePolicy, AnimalRestraints, Families};
 use rayon::prelude::*;
 
-pub fn enroll(owner: Option<&mut AnimalRestraints>, family: Option<&Families>, tick: u64) {
+pub fn enroll(
+    owner: Option<&mut AnimalRestraints>,
+    family: Option<&Families>,
+    batch: game_economy_family::BirthBatch<'_>,
+) {
     let Some((owner, family)) = owner
         .zip(family)
         .filter(|(owner, family)| owner.inherit_births && family.rules.enroll_births)
@@ -12,7 +16,7 @@ pub fn enroll(owner: Option<&mut AnimalRestraints>, family: Option<&Families>, t
     let births: Vec<_> = family
         .members
         .par_iter()
-        .filter(|member| member.born == Some(tick))
+        .filter(|member| batch.contains(member))
         .collect();
     if births.is_empty() {
         return;

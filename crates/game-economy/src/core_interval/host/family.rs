@@ -7,6 +7,27 @@ pub(super) struct FamilyFrame {
     pub births: Vec<(u64, u64)>,
 }
 
+pub(super) struct ElapsedFamilyFrame {
+    frame: FamilyFrame,
+    children: Vec<game_economy_family::Birth>,
+    events: Vec<game_economy_family::FamilyEvent>,
+    preferences: (bool, Option<bool>),
+    personality: Option<game_economy_dynamics::personality::Personality>,
+    skills: Option<CoreSkills>,
+    purpose: Option<CorePurpose>,
+    health: Option<CoreHealth>,
+}
+
+impl ElapsedFamilyFrame {
+    pub(super) fn physical(&self) -> ElapsedBirths<'_> {
+        ElapsedBirths {
+            children: &self.children,
+            seek_meals: self.preferences.0,
+            work_preference: self.preferences.1,
+        }
+    }
+}
+
 impl CoreHost {
     pub(super) fn next_natural_death(&self) -> Option<u128> {
         self.family
@@ -14,6 +35,118 @@ impl CoreHost {
             .elapsed_lifetimes
             .as_ref()?
             .next_after(self.core.simulated_millis())
+    }
+
+    pub(super) fn next_delivery(&self) -> Option<u128> {
+        let &(deadline, _) = self.family.as_ref()?.delivery_deadlines().first()?;
+        Some(deadline.saturating_sub(self.core.simulated_millis()))
+    }
+
+    fn birth_preferences(&self, owner: &game_economy_family::Families) -> (bool, Option<bool>) {
+        let birth_choices = owner
+            .rules
+            .enroll_births
+            .then(|| self.schedule.as_ref()?.birth_choices.as_ref())
+            .flatten();
+        let preference = |domain| {
+            birth_choices?
+                .preferences
+                .iter()
+                .find(|row| row.domain == domain)
+        };
+        (
+            self.dependent_care.is_some() || preference(personal_choice::MEAL).is_some(),
+            preference(personal_choice::WORK).map(|row| row.enabled),
+        )
+    }
+
+    pub(super) fn stage_elapsed_family(
+        &self,
+        people: &[Person],
+        now: u128,
+        staged_purpose: Option<&CorePurpose>,
+    ) -> Result<ElapsedFamilyFrame, String> {
+        let current = self.family.as_ref().expect("delivery has family owner");
+        let tick = self.core.physical.tick();
+        let game_economy_family::DeliveryDraft {
+            families,
+            births,
+            events,
+        } = game_economy_family::deliver_elapsed(current, people, self.core.seed, tick, now)?;
+        let newborns = births.par_iter().map(|birth| birth.id).collect();
+        let maternal = births
+            .par_iter()
+            .map(|birth| (birth.id, birth.mother))
+            .collect();
+        let frame = FamilyFrame {
+            owner: families,
+            newborns,
+            births: maternal,
+        };
+        let personality = self.stage_personality_births(Some(&frame));
+        let skills = self.stage_skill_births(None, Some(&frame), tick)?;
+        let mut purpose = staged_purpose
+            .or(self.purpose.as_ref())
+            .filter(|_| !frame.newborns.is_empty())
+            .cloned();
+        crate::purpose::enroll(
+            purpose.as_mut().map(|owner| &mut owner.owner),
+            Some(&frame.owner),
+            game_economy_family::BirthBatch::for_people(tick, &frame.newborns),
+        )?;
+        let health = self.stage_birth_health_at(Some(&frame), tick, Some(tick));
+        Ok(ElapsedFamilyFrame {
+            frame,
+            children: births,
+            events,
+            preferences: self.birth_preferences(current),
+            personality,
+            skills,
+            purpose,
+            health,
+        })
+    }
+
+    pub(super) fn publish_elapsed_family(
+        &mut self,
+        staged: ElapsedFamilyFrame,
+    ) -> Vec<game_economy_family::FamilyEvent> {
+        let FamilyFrame {
+            owner, newborns, ..
+        } = staged.frame;
+        if let Some(care) = &mut self.dependent_care {
+            game_economy_work::care::inherit(care, &owner, &newborns);
+        }
+        self.family = Some(owner);
+        if let Some(personality) = staged.personality {
+            self.personality = Some(personality);
+        }
+        if let Some(skills) = staged.skills {
+            self.skills = Some(skills);
+        }
+        if let Some(health) = staged.health {
+            self.health = Some(health);
+        }
+        if let Some(purpose) = staged.purpose {
+            self.purpose = Some(purpose);
+        }
+        if self.fatigue.is_some() {
+            self.activity.par_extend(newborns.par_iter().map(|&id| {
+                game_economy_fatigue::TimedActivity {
+                    id,
+                    ..Default::default()
+                }
+            }));
+            if self
+                .activity
+                .par_windows(2)
+                .any(|pair| pair[0].id > pair[1].id)
+            {
+                self.activity.par_sort_unstable_by_key(|row| row.id);
+            }
+        }
+        self.inherit_birth_preferences(&newborns, self.core.physical.tick());
+        staged.events
     }
 
     /// Enroll only configured personal preferences; relationships and claims are not inherited.
@@ -117,16 +250,18 @@ impl CoreHost {
                 .collect();
             social.owner.enroll_inherited(&choices);
         }
+        let batch = game_economy_family::BirthBatch::for_people(tick, newborns);
         crate::animal_restraint_inheritance::enroll(
             self.animal_restraints.as_mut(),
             Some(family),
-            tick,
+            batch,
         );
-        crate::giving_inheritance::enroll(self.giving.as_mut(), Some(family), tick);
-        let hunting = crate::hunting::enroll(self.hunting.as_ref(), Some(family), tick);
-        let animal_care = crate::animal_care::enroll(self.animal_care.as_ref(), Some(family), tick);
+        crate::giving_inheritance::enroll(self.giving.as_mut(), Some(family), batch);
+        let hunting = crate::hunting::enroll(self.hunting.as_ref(), Some(family), batch);
+        let animal_care =
+            crate::animal_care::enroll(self.animal_care.as_ref(), Some(family), batch);
         let handling =
-            crate::animal_handling::enroll(self.animal_handling.as_ref(), Some(family), tick);
+            crate::animal_handling::enroll(self.animal_handling.as_ref(), Some(family), batch);
         if !hunting.is_empty() {
             self.hunting
                 .as_mut()
@@ -148,14 +283,14 @@ impl CoreHost {
                 .policies
                 .par_extend(handling);
         }
-        crate::gathering::enroll(self.gathering.as_mut(), Some(family), tick);
-        game_economy_agriculture::enroll(self.agriculture.as_mut(), Some(family), tick);
-        game_economy_claims::enroll(self.claims.as_mut(), Some(family), tick);
+        crate::gathering::enroll(self.gathering.as_mut(), Some(family), batch);
+        game_economy_agriculture::enroll(self.agriculture.as_mut(), Some(family), batch);
+        game_economy_claims::enroll(self.claims.as_mut(), Some(family), batch);
         game_economy_knowledge::inherit(&mut self.knowledge, family, newborns);
         crate::food_search::enroll(
             self.food_search.as_mut().map(|owner| &mut owner.search),
             Some(family),
-            tick,
+            batch,
         );
     }
 
@@ -185,40 +320,14 @@ impl CoreHost {
                     }
                 })
         };
-        let personal_meals = owner.rules.enroll_births
-            && self
-                .schedule
-                .as_ref()
-                .and_then(|schedule| schedule.birth_choices.as_ref())
-                .is_some_and(|profile| {
-                    profile
-                        .preferences
-                        .iter()
-                        .any(|row| row.domain == personal_choice::MEAL)
-                });
-        let personal_work = owner
-            .rules
-            .enroll_births
-            .then(|| {
-                self.schedule
-                    .as_ref()
-                    .and_then(|schedule| schedule.birth_choices.as_ref())
-                    .and_then(|profile| {
-                        profile
-                            .preferences
-                            .iter()
-                            .find(|row| row.domain == personal_choice::WORK)
-                    })
-                    .map(|row| row.enabled)
-            })
-            .flatten();
+        let (personal_meals, personal_work) = self.birth_preferences(owner);
         let next = game_economy_family::advance_with_clock(
             owner,
             &mut draft.people.people,
             &mut draft.travel,
             self.core.seed,
             tick,
-            self.dependent_care.is_some() || personal_meals,
+            personal_meals,
             None,
             Some(&feelings),
             Some(self.core.simulated_millis()),
@@ -302,6 +411,15 @@ impl CoreHost {
         family: Option<&FamilyFrame>,
         tick: u64,
     ) -> Option<CoreHealth> {
+        self.stage_birth_health_at(family, tick, None)
+    }
+
+    fn stage_birth_health_at(
+        &self,
+        family: Option<&FamilyFrame>,
+        tick: u64,
+        now: Option<u64>,
+    ) -> Option<CoreHealth> {
         let family = family.filter(|family| !family.births.is_empty())?;
         let health = self.health.as_ref().filter(|health| {
             !health.owner.cases.is_empty()
@@ -312,8 +430,13 @@ impl CoreHost {
                     .any(|strain| strain.birth_transmission_per_million > 0)
         })?;
         let mut next = health.clone();
-        next.owner
-            .admit_births_validated(&health.owner, &family.births, self.core.seed, tick);
+        if let Some(now) = now {
+            next.owner
+                .admit_births_at(&health.owner, &family.births, self.core.seed, now, tick);
+        } else {
+            next.owner
+                .admit_births_validated(&health.owner, &family.births, self.core.seed, tick);
+        }
         (next.owner.cases.len() != health.owner.cases.len()).then_some(next)
     }
 }

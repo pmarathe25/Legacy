@@ -58,7 +58,7 @@ pub fn prepare(
 pub fn enroll(
     owner: Option<&mut Purpose>,
     family: Option<&Families>,
-    tick: u64,
+    batch: game_economy_family::BirthBatch<'_>,
 ) -> Result<(), String> {
     let Some((owner, family)) = owner
         .zip(family)
@@ -69,13 +69,14 @@ pub fn enroll(
     let newborn_ids: Vec<_> = family
         .members
         .par_iter()
-        .filter(|m| m.born == Some(tick))
+        .filter(|m| batch.contains(m))
         .map(|m| m.id)
         .collect();
     if newborn_ids.is_empty() {
         return Ok(());
     }
-    let eligible_at = tick
+    let eligible_at = batch
+        .tick
         .checked_add(family.rules.adult_age)
         .ok_or("purpose eligibility overflow")?;
     let newborns: Vec<_> = newborn_ids
