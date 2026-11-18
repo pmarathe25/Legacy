@@ -14,6 +14,13 @@ Lessons are explicit encounters that consume a tick. A teacher with a higher app
 
 Enabled `teachers` policies let NPCs teach a weaker person during an already-consenting social encounter. Each encounter produces at most one lesson and uses committed skill levels; a controlled ruler is excluded from automatic teaching choices. The composed campaign includes teachable crafts.
 
+In interval scenarios with personal choice profiles, each student's domain
+`23` scores a proposed practice lesson against their idle preference. The
+action key uses the applicable skill rule's recipe ID. A student can decline
+even when the teacher is willing or feels pressured to offer the lesson.
+Worlds without a personal choice schedule retain their existing reception
+rules.
+
 When `inherit_teachers = true`, children of opted-in teachers inherit those teaching roles but no skill. An inherited role becomes eligible at the authored adult age; the child must still learn a higher skill before teaching anyone.
 
 Optional `[skills.recipe_knowledge]` is separate from those skill levels. Each

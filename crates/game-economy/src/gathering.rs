@@ -56,6 +56,9 @@ pub struct Policy {
 #[serde(deny_unknown_fields)]
 pub struct Gathering {
     pub max_hunger: u32,
+    /// Publish renewable growth as simulated time passes inside the interval.
+    #[serde(default)]
+    pub elapsed_renewal: bool,
     #[serde(default)]
     pub inherit_births: bool,
     pub nodes: Vec<Node>,
@@ -65,6 +68,7 @@ impl Clone for Gathering {
     fn clone(&self) -> Self {
         Self {
             max_hunger: self.max_hunger,
+            elapsed_renewal: self.elapsed_renewal,
             inherit_births: self.inherit_births,
             nodes: self.nodes.par_iter().cloned().collect(),
             policies: self.policies.par_iter().cloned().collect(),
@@ -109,6 +113,41 @@ pub fn enroll(owner: Option<&mut Gathering>, family: Option<&crate::Families>, t
     owner.policies.par_extend(newborns);
 }
 impl Gathering {
+    /// Prepare independent node updates for a segment with no withdrawals.
+    pub fn progress_renewal(
+        &self,
+        millis: u64,
+        seasonal_exposure: Option<u128>,
+    ) -> Result<Option<Vec<Node>>, String> {
+        if !self.elapsed_renewal || millis == 0 {
+            return Ok(None);
+        }
+        let neutral = u128::from(millis) * 1000;
+        let nodes = self
+            .nodes
+            .par_iter()
+            .map(|node| {
+                let mut next = node.clone();
+                if let Some(rate) = node.renewal_rate {
+                    let exposure = if node.seasonal {
+                        seasonal_exposure.unwrap_or(neutral)
+                    } else {
+                        neutral
+                    };
+                    (next.available, next.renewal_remainder) = integrate_renewal(
+                        rate,
+                        node.renewal_remainder,
+                        exposure,
+                        node.available,
+                        node.capacity,
+                    )?;
+                }
+                Ok(next)
+            })
+            .collect::<Result<Vec<_>, String>>()?;
+        Ok(Some(nodes))
+    }
+
     pub fn validate(
         &self,
         people: &HashSet<u64>,
@@ -128,6 +167,7 @@ impl Gathering {
             || policies.par_windows(2).any(|p| p[0] == p[1])
             || self.nodes.par_iter().any(|n| {
                 n.capacity == 0
+                    || (self.elapsed_renewal && n.regrowth > 0)
                     || n.available > n.capacity
                     || n.yield_per_action == 0
                     || n.yield_per_action > n.capacity
@@ -496,7 +536,9 @@ impl Plan {
                 } else {
                     1000
                 };
-                if let Some(rate) = node.renewal_rate {
+                if owner.elapsed_renewal {
+                    next.available = after_gathering;
+                } else if let Some(rate) = node.renewal_rate {
                     let exposure = if node.seasonal {
                         food_growth_exposure
                             .unwrap_or(u128::from(self.elapsed_millis) * u128::from(factor))
@@ -526,6 +568,7 @@ impl Plan {
             .collect::<Result<Vec<_>, _>>()?;
         Ok(Gathering {
             max_hunger: owner.max_hunger,
+            elapsed_renewal: owner.elapsed_renewal,
             inherit_births: owner.inherit_births,
             nodes,
             policies: owner.policies.par_iter().cloned().collect(),

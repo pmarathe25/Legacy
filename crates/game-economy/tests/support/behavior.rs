@@ -205,6 +205,7 @@ fn fixture() -> State {
         dreams: None,
         nutrition: Some(Nutrition {
             rules: NutritionRules {
+                interval_millis: None,
                 interval: 1,
                 capacity: [100; 6],
                 initial: [0; 6],
@@ -2092,6 +2093,7 @@ fn seasonal_patch_renewal_preserves_fractional_rates_and_save_continuity() {
         person.seek_meals = false;
     }
     state.gathering = Some(Gathering {
+        elapsed_renewal: false,
         max_hunger: 20,
         inherit_births: false,
         policies: vec![],
@@ -2213,6 +2215,7 @@ fn animals_graze_only_the_actual_seasonal_renewal() {
     state.fauna.as_mut().unwrap().animals.truncate(1);
     state.fauna.as_mut().unwrap().animals[0].pregnancy = None;
     state.gathering = Some(Gathering {
+        elapsed_renewal: false,
         max_hunger: 20,
         inherit_births: false,
         policies: vec![],
@@ -2260,6 +2263,7 @@ fn grazing_and_patch_stock_commit_together_and_resume_after_reload() {
     initial.hunting = None;
     initial.fauna.as_mut().unwrap().animals[0].pregnancy = None;
     initial.gathering = Some(Gathering {
+        elapsed_renewal: false,
         max_hunger: 20,
         inherit_births: false,
         policies: vec![],
@@ -4386,6 +4390,7 @@ fn concentrated_and_independent_animal_defenses_are_worker_deterministic() {
 
 fn enable_defense_grazing(state: &mut State, count: u64) {
     state.gathering = Some(Gathering {
+        elapsed_renewal: false,
         max_hunger: 20,
         inherit_births: false,
         policies: vec![],
@@ -4811,6 +4816,7 @@ fn a_received_request_can_motivate_hunting_through_fear_without_consent() {
 fn contested_hunting_conserves_yield_and_prevents_births() {
     let mut initial = hunting_fixture();
     initial.gathering = Some(Gathering {
+        elapsed_renewal: false,
         max_hunger: 20,
         inherit_births: false,
         nodes: vec![ResourceNode {
@@ -36538,6 +36544,7 @@ fn people_and_wildlife_share_a_finite_physical_resource_atomically() {
         person.seek_meals = false;
     }
     initial.gathering = Some(Gathering {
+        elapsed_renewal: false,
         inherit_births: false,
         max_hunger: 20,
         nodes: vec![ResourceNode {
@@ -36666,6 +36673,7 @@ fn gathering_depletes_real_sites_only_when_storage_accepts_the_output() {
         p.seek_meals = false;
     }
     initial.gathering = Some(Gathering {
+        elapsed_renewal: false,
         inherit_births: false,
         max_hunger: 20,
         nodes: vec![ResourceNode {
@@ -36778,6 +36786,7 @@ fn gathered_outputs_become_personal_claims_only_after_real_delivery() {
         claims: Some(Claims::default()),
     });
     initial.gathering = Some(Gathering {
+        elapsed_renewal: false,
         inherit_births: false,
         max_hunger: 20,
         nodes: vec![ResourceNode {
@@ -36860,6 +36869,7 @@ fn fear_can_motivate_gathering_and_renewable_sites_regrow() {
         affinity: 0,
     }];
     initial.gathering = Some(Gathering {
+        elapsed_renewal: false,
         inherit_births: false,
         max_hunger: 20,
         nodes: vec![ResourceNode {
@@ -36929,6 +36939,7 @@ fn farming_and_gathering_share_one_atomic_stock_boundary() {
         }],
     });
     initial.gathering = Some(Gathering {
+        elapsed_renewal: false,
         inherit_births: false,
         max_hunger: 20,
         nodes: vec![ResourceNode {
@@ -36992,6 +37003,7 @@ fn gathering_workload(count: u64) -> State {
         .unwrap();
     *stock = Container::new(stock.place, count * 2, vec![]).unwrap();
     initial.gathering = Some(Gathering {
+        elapsed_renewal: false,
         inherit_births: false,
         max_hunger: 20,
         nodes: vec![ResourceNode {
@@ -41666,6 +41678,7 @@ fn recovery_uses_real_rest_and_does_not_revive_or_heal_starving_people() {
     });
     initial.recovery = Some(RecoveryRules {
         interval: 1,
+        elapsed: None,
         health_per_interval: 2,
         rest_bonus: 3,
         max_hunger: 5,
@@ -49272,6 +49285,7 @@ fn tool_pickup_and_gathering_share_one_physical_boundary() {
     )
     .unwrap();
     initial.gathering = Some(Gathering {
+        elapsed_renewal: false,
         inherit_births: false,
         max_hunger: 20,
         nodes: vec![ResourceNode {

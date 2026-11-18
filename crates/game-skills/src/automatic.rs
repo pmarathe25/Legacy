@@ -73,9 +73,12 @@ impl Skills {
             return None;
         }
         let index = self.index();
-        self.plan_teaching_with_index(pairs, controlled, tick, &index, willing)
+        self.plan_teaching_with_index(pairs, controlled, tick, &index, willing, |_, _, _, _| {
+            Some(0)
+        })
     }
-    /// Use an existing tick-start skill index for repeated decisions.
+    /// Use an existing skill index. A student can decline or rank alternatives
+    /// separately from the teacher's willingness.
     pub fn plan_teaching_with_index(
         &self,
         pairs: &[(u64, u64)],
@@ -83,6 +86,7 @@ impl Skills {
         tick: u64,
         index: &crate::Index,
         willing: impl Fn(u64, u64, bool) -> bool + Sync,
+        interest: impl Fn(u64, u64, u32, u64) -> Option<i128> + Sync,
     ) -> Option<TeachingDraft> {
         if (self.records.is_empty() && self.lessons.is_empty())
             || pairs.is_empty()
@@ -134,16 +138,27 @@ impl Skills {
                             continue;
                         }
                         let rate = index.rate(teacher, policy.recipe);
-                        if rate <= index.rate(student, policy.recipe) {
+                        let difference = rate.saturating_sub(index.rate(student, policy.recipe));
+                        if difference == 0 {
                             continue;
                         }
-                        let candidate = (std::cmp::Reverse(rate), teacher, policy.recipe, student);
+                        let Some(interest) = interest(student, teacher, policy.recipe, difference)
+                        else {
+                            continue;
+                        };
+                        let candidate = (
+                            std::cmp::Reverse(interest),
+                            std::cmp::Reverse(rate),
+                            teacher,
+                            policy.recipe,
+                            student,
+                        );
                         if choice.is_none_or(|old| candidate < old) {
                             choice = Some(candidate);
                         }
                     }
                 }
-                let (_, teacher, recipe, student) = choice?;
+                let (_, _, teacher, recipe, student) = choice?;
                 let rule = rules[&recipe];
                 let credits = worked
                     .get(&(student, recipe))

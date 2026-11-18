@@ -39,6 +39,15 @@ max_health = 100
 carrying_capacity = 100
 max_work_hunger = 120
 
+[nutrition.rules]
+interval_millis = 86400000
+capacity = [240, 64, 24, 30, 12, 30]
+initial = [180, 48, 18, 24, 8, 20]
+metabolism = [20, 2, 1, 1, 1, 1]
+minimum = [1, 1, 1, 1, 1, 1]
+deficiency_damage = 1
+scalar_meal = [0, 0, 0, 0, 0, 0]
+
 [[regions]]
 id = 1
 stock = { timber = 3000, barley = 3000, bread = 800, grain-seed = 200, fresh-water = 300, paper = 100, ink = 100 }
@@ -1542,6 +1551,7 @@ inherit_births = true
 people = [{ person = 1, sociability = 400, diligence = 400 }, { person = 2, sociability = 500, diligence = 550 }, { person = 3, sociability = 600, diligence = 700 }, { person = 4, sociability = 700, diligence = 850 }, { person = 5, sociability = 800, diligence = 400 }, { person = 6, sociability = 400, diligence = 550 }, { person = 7, sociability = 500, diligence = 700 }, { person = 8, sociability = 600, diligence = 850 }, { person = 9, sociability = 700, diligence = 400 }, { person = 10, sociability = 800, diligence = 550 }, { person = 11, sociability = 400, diligence = 700 }, { person = 12, sociability = 500, diligence = 850 }, { person = 13, sociability = 700, diligence = 550 }, { person = 14, sociability = 800, diligence = 700 }, { person = 15, sociability = 400, diligence = 850 }, { person = 16, sociability = 500, diligence = 400 }, { person = 17, sociability = 600, diligence = 550 }, { person = 18, sociability = 700, diligence = 700 }, { person = 19, sociability = 800, diligence = 850 }, { person = 20, sociability = 400, diligence = 400 }, { person = 21, sociability = 500, diligence = 550 }, { person = 22, sociability = 600, diligence = 700 }, { person = 23, sociability = 700, diligence = 850 }, { person = 24, sociability = 800, diligence = 400 }, { person = 25, sociability = 400, diligence = 550 }, { person = 26, sociability = 500, diligence = 700 }, { person = 27, sociability = 600, diligence = 850 }, { person = 28, sociability = 700, diligence = 400 }, { person = 29, sociability = 800, diligence = 550 }, { person = 30, sociability = 400, diligence = 700 }, { person = 31, sociability = 500, diligence = 850 }, { person = 32, sociability = 600, diligence = 400 }, { person = 33, sociability = 700, diligence = 550 }, { person = 34, sociability = 800, diligence = 700 }, { person = 35, sociability = 400, diligence = 850 }, { person = 36, sociability = 500, diligence = 400 }, { person = 37, sociability = 600, diligence = 550 }, { person = 38, sociability = 700, diligence = 700 }, { person = 39, sociability = 800, diligence = 850 }, { person = 40, sociability = 400, diligence = 400 }, { person = 41, sociability = 500, diligence = 550 }, { person = 42, sociability = 600, diligence = 700 }, { person = 43, sociability = 700, diligence = 850 }, { person = 44, sociability = 800, diligence = 400 }, { person = 45, sociability = 400, diligence = 550 }, { person = 46, sociability = 500, diligence = 700 }, { person = 47, sociability = 600, diligence = 850 }, { person = 48, sociability = 700, diligence = 400 }, { person = 49, sociability = 800, diligence = 550 }, { person = 50, sociability = 400, diligence = 700 }, { person = 51, sociability = 500, diligence = 850 }, { person = 52, sociability = 600, diligence = 400 }, { person = 53, sociability = 700, diligence = 550 }, { person = 54, sociability = 800, diligence = 700 }, { person = 55, sociability = 400, diligence = 850 }, { person = 56, sociability = 500, diligence = 400 }, { person = 57, sociability = 600, diligence = 550 }, { person = 58, sociability = 700, diligence = 700 }, { person = 59, sociability = 800, diligence = 850 }, { person = 60, sociability = 400, diligence = 400 }]
 
 [gathering]
+elapsed_renewal = true
 inherit_births = true
 max_hunger = 120
 policies = [{ person = 1, node = 1, willing = true }, { person = 2, node = 1, willing = true }, { person = 3, node = 1, willing = true }, { person = 4, node = 1, willing = true }, { person = 5, node = 1, willing = true }, { person = 6, node = 1, willing = true }, { person = 7, node = 1, willing = true }, { person = 8, node = 1, willing = true }, { person = 9, node = 1, willing = true }, { person = 10, node = 1, willing = true }, { person = 11, node = 1, willing = true }, { person = 12, node = 1, willing = true }, { person = 13, node = 1, willing = true }, { person = 14, node = 1, willing = true }, { person = 15, node = 1, willing = true }, { person = 16, node = 1, willing = true }, { person = 17, node = 1, willing = true }, { person = 18, node = 1, willing = true }, { person = 19, node = 1, willing = true }, { person = 20, node = 1, willing = true }, { person = 21, node = 1, willing = true }, { person = 22, node = 1, willing = true }, { person = 23, node = 1, willing = true }, { person = 24, node = 1, willing = true }, { person = 25, node = 1, willing = true }, { person = 26, node = 1, willing = true }, { person = 27, node = 1, willing = true }, { person = 28, node = 1, willing = true }, { person = 29, node = 1, willing = true }, { person = 30, node = 1, willing = true }, { person = 31, node = 1, willing = true }, { person = 32, node = 1, willing = true }, { person = 33, node = 1, willing = true }, { person = 34, node = 1, willing = true }, { person = 35, node = 1, willing = true }, { person = 36, node = 1, willing = true }, { person = 37, node = 1, willing = true }, { person = 38, node = 1, willing = true }, { person = 39, node = 1, willing = true }, { person = 40, node = 1, willing = true }, { person = 41, node = 1, willing = true }, { person = 42, node = 1, willing = true }, { person = 43, node = 1, willing = true }, { person = 44, node = 1, willing = true }, { person = 45, node = 1, willing = true }, { person = 46, node = 1, willing = true }, { person = 47, node = 1, willing = true }, { person = 48, node = 1, willing = true }, { person = 49, node = 2, willing = true }, { person = 50, node = 2, willing = true }, { person = 51, node = 2, willing = true }, { person = 52, node = 2, willing = true }, { person = 53, node = 2, willing = true }, { person = 54, node = 2, willing = true }, { person = 55, node = 2, willing = true }, { person = 56, node = 2, willing = true }, { person = 57, node = 2, willing = true }, { person = 58, node = 2, willing = true }, { person = 59, node = 2, willing = true }, { person = 60, node = 2, willing = true }, { person = 11, node = 5, willing = true }, { person = 12, node = 5, willing = true }]
@@ -1610,10 +1620,12 @@ fetch_local_food = true
 feed_from_cargo = true
 
 [recovery]
-interval = 1
 health_per_interval = 1
 rest_bonus = 1
 max_hunger = 120
+
+[recovery.elapsed]
+period_millis = 3600000
 
 [animal_products]
 [[animal_products.rules]]

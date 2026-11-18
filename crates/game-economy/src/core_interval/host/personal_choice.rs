@@ -25,6 +25,7 @@ pub(super) const REMEMBERED_FORM: u32 = 19;
 pub(super) const GATHERING: u32 = 20;
 pub(super) const REST: u32 = 21;
 pub(super) const RESUME: u32 = 22;
+pub(super) const PRACTICE_LESSON: u32 = 23;
 
 fn index_by_person<T>(rows: &[T], id: u64, key: impl Fn(&T) -> u64) -> Option<usize> {
     rows.first()

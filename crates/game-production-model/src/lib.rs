@@ -3,6 +3,9 @@ use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
 use std::collections::BTreeMap;
 
+/// Canonical ordering of the nutrient quantities carried by a food receipt.
+pub const NUTRIENT_NAMES: [&str; 6] = ["energy", "protein", "fat", "fibre", "vitamins", "minerals"];
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Good {

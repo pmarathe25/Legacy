@@ -308,7 +308,7 @@ impl CoreHost {
             completed: vec![],
         })
     }
-    /// A real meeting can become a lesson only through a person's own choice.
+    /// A real meeting can become a lesson through the teacher's and student's choices.
     pub(super) fn stage_skill_teaching(
         &self,
         social: &game_social::Social,
@@ -379,6 +379,10 @@ impl CoreHost {
         }
         pressured.par_sort_unstable();
         pressured.dedup();
+        let profiles = self
+            .schedule
+            .as_ref()
+            .and_then(|schedule| schedule.personal_choices.as_deref());
         let plan = owner.owner.plan_teaching_with_index(
             &pairs,
             None,
@@ -389,6 +393,25 @@ impl CoreHost {
                     || pressured
                         .binary_search(&(teacher.min(student), teacher.max(student), teacher))
                         .is_ok()
+            },
+            |student, _, recipe, gap| {
+                let Some(profiles) = profiles else {
+                    return Some(0);
+                };
+                let index = profiles.binary_search_by_key(&student, |row| row.id).ok()?;
+                let person = &profiles[index];
+                let key = game_personal_choice::Key {
+                    domain: personal_choice::PRACTICE_LESSON,
+                    action: u64::from(recipe),
+                };
+                let value = game_personal_choice::score(
+                    person,
+                    key,
+                    i64::try_from(gap).unwrap_or(i64::MAX),
+                )?;
+                (value > i128::from(person.idle)
+                    || (value == i128::from(person.idle) && person.act_on_tie))
+                    .then_some(value)
             },
         )?;
         let mut next = owner.parallel_copy();

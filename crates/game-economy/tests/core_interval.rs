@@ -557,6 +557,7 @@ fn fixture() -> CoreSnapshot {
         nutrition: Some(game_nutrition::Nutrition {
             rules: game_nutrition::Rules {
                 interval: 1,
+                interval_millis: None,
                 capacity: [10; 6],
                 initial: [2; 6],
                 metabolism: [1; 6],
@@ -2202,6 +2203,7 @@ fn external_occupation_does_not_count_as_rest() {
         animal_products: None,
         recovery: Some(game_economy::RecoveryRules {
             interval: 1,
+            elapsed: None,
             health_per_interval: 2,
             rest_bonus: 8,
             max_hunger: 10,
@@ -4091,6 +4093,175 @@ fn local_interval_transfer_moves_real_custody_and_preserves_inflight_work() {
             })
     };
     assert_eq!(run(1), run(6));
+}
+
+#[test]
+fn elapsed_recovery_uses_actual_rested_time_across_boundary_changes() {
+    fn run(quantum: u64, chunk: u64) -> u32 {
+        let mut core = fixture();
+        core.physical.tick_millis = quantum;
+        core.people[0].health = 90;
+        core.people[0].controlled = true;
+        core.people[1].region = Some(1);
+        core.travel = None;
+        core.nutrition = None;
+        core.pending_food.clear();
+        core.rules.hunger_per_tick = 0;
+        core.rules.starvation_damage = 0;
+        let state: CoreHostSnapshot = serde_json::from_value(serde_json::json!({
+            "core": core,
+            "fatigue": timed_fatigue(),
+            "recovery": { "health_per_interval": 2, "rest_bonus": 8, "max_hunger": 100,
+                "elapsed": { "period_millis": 500 } }
+        }))
+        .unwrap();
+        let mut host = CoreHost::begin(state, &[]).unwrap();
+        host.set_controlled_rest(1, true).unwrap();
+        let mut elapsed = 0;
+        for end in [250, 499, 500] {
+            while elapsed < end {
+                let advanced = host.progress(chunk.min(end - elapsed)).unwrap();
+                assert!(advanced > 0);
+                elapsed += advanced;
+                if elapsed % quantum == 0 {
+                    host.settle().unwrap();
+                    host = CoreHost::begin(host.snapshot(), &[]).unwrap();
+                }
+            }
+            if end == 250 {
+                let snapshot = host.snapshot();
+                assert_eq!(
+                    snapshot
+                        .recovery
+                        .as_ref()
+                        .unwrap()
+                        .elapsed
+                        .as_ref()
+                        .unwrap()
+                        .rest,
+                    [(1, 250)]
+                );
+                host = CoreHost::resume(
+                    serde_json::from_str(&serde_json::to_string(&snapshot).unwrap()).unwrap(),
+                )
+                .unwrap();
+                host.set_controlled_rest(1, false).unwrap();
+            }
+            if end < 500 {
+                assert_eq!(host.snapshot().core.people[0].health, 90);
+            }
+        }
+        let snapshot = host.snapshot();
+        assert!(snapshot.recovery.unwrap().elapsed.unwrap().rest.is_empty());
+        snapshot.core.people[0].health
+    }
+    assert_eq!(run(1000, 500), 96);
+    assert_eq!(run(300, 37), 96);
+}
+
+#[test]
+fn elapsed_metabolism_is_independent_of_boundaries_and_resume() {
+    fn run(quantum: u64, chunk: u64, workers: usize) -> (game_nutrition::Nutrition, Vec<Person>) {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut opening = fixture();
+                opening.physical.tick_millis = quantum;
+                opening.pending_food.clear();
+                opening.rules.hunger_per_tick = 0;
+                opening.rules.starvation_damage = 0;
+                opening.travel = None;
+                opening.people[1].region = Some(1);
+                let rules = &mut opening.nutrition.as_mut().unwrap().rules;
+                rules.interval = 0;
+                rules.interval_millis = Some(125);
+                rules.deficiency_damage = 1;
+                rules.minimum = [1; 6];
+                let mut core = CoreInterval::begin(opening, &[]).unwrap();
+                let mut elapsed = 0;
+                while elapsed < 375 {
+                    let advanced = core.progress(chunk.min(375 - elapsed)).unwrap();
+                    assert!(advanced > 0);
+                    elapsed += advanced;
+                    if elapsed == 125 {
+                        let saved = serde_json::to_string(&core.snapshot()).unwrap();
+                        core = CoreInterval::resume(serde_json::from_str(&saved).unwrap()).unwrap();
+                    }
+                    if core.elapsed_millis() == Some(quantum) {
+                        core.settle().unwrap();
+                        core = CoreInterval::begin(core.snapshot(), &[]).unwrap();
+                    }
+                }
+                let saved = core.snapshot();
+                assert_eq!(saved.people[0].health, 98);
+                assert_eq!(saved.nutrition.as_ref().unwrap().people[0].reserves, [0; 6]);
+                (saved.nutrition.unwrap(), saved.people)
+            })
+    }
+    assert_eq!(run(1000, 375, 1), run(80, 31, 4));
+}
+
+#[test]
+fn elapsed_food_credits_nutrients_before_metabolism_and_deficiency_stops_work() {
+    let mut opening = fixture();
+    opening.pending_food.clear();
+    opening.rules.hunger_per_tick = 0;
+    opening.rules.starvation_damage = 0;
+    opening.people[0].health = 1;
+    let rules = &mut opening.nutrition.as_mut().unwrap().rules;
+    rules.interval = 0;
+    rules.interval_millis = Some(125);
+    rules.minimum = [2, 0, 0, 0, 0, 0];
+    rules.deficiency_damage = 1;
+    opening.physical.goods[1].food = Some(game_production_model::FoodProfile {
+        portion: 1,
+        hunger_relief: 1,
+        nutrients: [("energy".to_owned(), 1)].into(),
+        health_effect: 0,
+        shelf_days: None,
+    });
+    opening.physical.custody.containers.push(
+        Container::new(
+            Place::Person(1),
+            2,
+            vec![Lot {
+                batch: None,
+                item: None,
+                good: 2,
+                quantity: 1,
+                expires_at: None,
+            }],
+        )
+        .unwrap(),
+    );
+    opening
+        .physical
+        .custody
+        .containers
+        .sort_by_key(|row| row.place);
+    let mut core = CoreInterval::begin(opening, &[(1, 1)]).unwrap();
+    assert!(core.next_deadline(None).unwrap().nutrition);
+    assert_eq!(core.progress(124).unwrap(), 124);
+    let meal = game_lot_diet::Meal {
+        action: 1,
+        person: 1,
+        good: 2,
+    };
+    assert!(core.eat(0, 124, &[meal]).unwrap().transactions[0].accepted);
+    let fed = core.snapshot();
+    assert_eq!(fed.nutrition.as_ref().unwrap().people[0].reserves[0], 3);
+    assert!(fed.pending_food.is_empty());
+    assert!(!core.eat(0, 124, &[meal]).unwrap().transactions[0].accepted);
+    assert_eq!(core.snapshot().nutrition, fed.nutrition);
+    assert_eq!(core.progress(126).unwrap(), 1);
+    assert_eq!(core.snapshot().people[0].health, 1);
+    assert_eq!(core.progress(126).unwrap(), 125);
+    let saved = core.snapshot();
+    assert_eq!(saved.people[0].health, 0);
+    assert_eq!(saved.physical.work[0].progress_remainder, 250);
+    assert!(saved.physical.work_interval.unwrap().rates.is_empty());
 }
 
 #[test]
@@ -6726,7 +6897,7 @@ fn irrigation_consumes_contested_water_and_gates_next_growth() {
         let mut fourth = combined.core.people[2].clone(); fourth.id = 4; combined.core.people.push(fourth);
         combined.core.physical.custody.containers.push(Container::new(Place::Person(4), 1, vec![]).unwrap());
         combined.core.physical.custody.containers.sort_by_key(|row| row.place);
-        combined.gathering = Some(game_economy::Gathering {max_hunger: 10, inherit_births: false,
+        combined.gathering = Some(game_economy::Gathering {elapsed_renewal: false, max_hunger: 10, inherit_births: false,
             nodes: vec![game_economy::ResourceNode {id: 1, region: 1, good: 2, available: 1, capacity: 1, regrowth: 0, renewal_rate: None, renewal_remainder: 0, seasonal: false, yield_per_action: 1}],
             policies: vec![game_economy::GatherPolicy {person: 4, node: 1, willing: true, pressured_by: None, pressure_threshold: None}]});
         let mut combined = CoreHost::begin(combined, &[(1, 1)]).unwrap();
@@ -6804,6 +6975,7 @@ fn gathering_depletes_resources_into_real_personal_custody() {
                     .containers
                     .sort_by_key(|row| row.place);
                 let gathering = game_economy::Gathering {
+                    elapsed_renewal: false,
                     max_hunger: 10,
                     inherit_births: false,
                     nodes: vec![game_economy::ResourceNode {
@@ -7760,7 +7932,7 @@ fn core_host_cultivation_benchmark() {
             progress: (1..=count).map(|animal| game_economy::AnimalProductProgress { animal, growth: 1 }).collect(),
             policies: (2..=count).map(|person| game_economy::AnimalProductPolicy { person, animal: if product_contested { 1 } else { person }, willing: true, force_if_held: false, pressured_by: None, pressure_threshold: None }).collect(),
             events: vec![],
-        }), recovery: std::env::var_os("LEGACY_RECOVERY").map(|_| game_economy::RecoveryRules { interval: 1, health_per_interval: 2, rest_bonus: 4, max_hunger: 100 }),
+        }), recovery: std::env::var_os("LEGACY_RECOVERY").map(|_| game_economy::RecoveryRules { interval: 1, elapsed: None, health_per_interval: 2, rest_bonus: 4, max_hunger: 100 }),
         dependent_care: dependent.then(|| {
             let mut care: game_economy::DependentCare = serde_json::from_value(serde_json::json!({
                 "rules": {"dependent_until": 2, "max_caregiver_hunger": 100, "neglect_damage": 5, "fetch_local_food": true},
@@ -7950,7 +8122,7 @@ fn core_host_cultivation_benchmark() {
         }),
         agriculture: ((!gathering && !family_mode && !medical && !giving && !taking) || inheritance).then_some(agriculture),
         gathering: (gathering || inheritance).then(|| game_economy::Gathering {
-            max_hunger: 10,
+            elapsed_renewal: false, max_hunger: 10,
             inherit_births: inheritance,
             nodes: vec![game_economy::ResourceNode {
                 id: 1,
@@ -14621,7 +14793,7 @@ fn family_birth_custody_and_worker_death_commit_atomically() {
                     {"person": 1, "sociability": 200, "diligence": 0},
                     {"person": 2, "sociability": 800, "diligence": 1000}]
             })).unwrap());
-            inherited.gathering = Some(game_economy::Gathering { max_hunger: 10, inherit_births: true,
+            inherited.gathering = Some(game_economy::Gathering { elapsed_renewal: false, max_hunger: 10, inherit_births: true,
                 nodes: vec![game_economy::ResourceNode { id: 1, region: 1, good: 2, available: 1,
                     capacity: 1, regrowth: 0, renewal_rate: None, renewal_remainder: 0, seasonal: false, yield_per_action: 1 }],
                 policies: vec![game_economy::GatherPolicy { person: 2, node: 1, willing: true,
@@ -15012,7 +15184,12 @@ fn idle_work_does_not_create_practice_credit() {
 
 #[test]
 fn personal_teaching_follows_willingness_pressure_and_subjective_reactions() {
-    fn run(workers: usize, willing: bool, pressured: bool) -> serde_json::Value {
+    fn run(
+        workers: usize,
+        willing: bool,
+        pressured: bool,
+        interest: Option<bool>,
+    ) -> serde_json::Value {
         rayon::ThreadPoolBuilder::new().num_threads(workers).build().unwrap().install(|| {
             let mut initial = fixture();
             initial.physical.custody.tick = 1;
@@ -15039,9 +15216,24 @@ fn personal_teaching_follows_willingness_pressure_and_subjective_reactions() {
                     "sensitivities":[{"person":2,"teaching_reaction":{"given":{"affinity":-2}}},{"person":3,"teaching_reaction":{"received":{"affinity":3}}}]}
             })).unwrap();
             let mut host = CoreHost::begin(snapshot, &[(1, 1)]).unwrap();
+            if let Some(interested) = interest {
+                host.enable_schedule(1000, 1).unwrap();
+                host.enable_personal_choices(vec![game_personal_choice::Person {
+                    id: 3,
+                    idle: 0,
+                    act_on_tie: false,
+                    preferences: vec![game_personal_choice::Preference {
+                        domain: 23,
+                        enabled: true,
+                        weight: 1000,
+                        bias: if interested { 0 } else { -3 },
+                    }],
+                    actions: vec![],
+                }]).unwrap();
+            }
             assert_eq!(host.meet_autonomously(&[]).unwrap().len(), 1);
             let state = host.snapshot();
-            let taught = willing || pressured;
+            let taught = (willing || pressured) && interest.unwrap_or(true);
             assert_eq!(state.skills.as_ref().unwrap().owner.lessons.len(), usize::from(taught));
             let saved = serde_json::to_string(&state).unwrap();
             let mut restored = CoreHost::resume(serde_json::from_str(&saved).unwrap()).unwrap();
@@ -15060,8 +15252,18 @@ fn personal_teaching_follows_willingness_pressure_and_subjective_reactions() {
             serde_json::to_value(result).unwrap()
         })
     }
-    for (willing, pressured) in [(true, false), (false, false), (false, true)] {
-        assert_eq!(run(1, willing, pressured), run(6, willing, pressured));
+    for (willing, pressured, interest) in [
+        (true, false, None),
+        (false, false, None),
+        (false, true, None),
+        (true, false, Some(false)),
+        (false, true, Some(false)),
+        (true, false, Some(true)),
+    ] {
+        assert_eq!(
+            run(1, willing, pressured, interest),
+            run(6, willing, pressured, interest)
+        );
     }
 }
 

@@ -307,6 +307,7 @@ fn prepare_inner(
                 }
                 if let (Some(values), Some(nutrition_rules)) = (&mut values, nutrition_rules)
                     && person.immortal.is_none()
+                    && nutrition_rules.interval_millis.is_none()
                     && tick.is_multiple_of(nutrition_rules.interval)
                 {
                     for (index, value) in values.iter_mut().enumerate() {

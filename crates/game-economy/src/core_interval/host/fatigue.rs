@@ -158,6 +158,10 @@ impl CoreHost {
     ) -> Result<u64, String> {
         let quantum = self.core.physical.tick_millis();
         let mut consumed = self.core.progress_limit(requested)?;
+        let ordinary_recovery = self.next_ordinary_recovery();
+        if let Some(deadline) = ordinary_recovery {
+            consumed = consumed.min(deadline);
+        }
         let elapsed_owner = self
             .fatigue
             .as_ref()
@@ -247,17 +251,25 @@ impl CoreHost {
             }
             elapsed_draft = Some(owner.prepare(&activity, consumed, &people)?);
         }
-        let recovery_due = game_economy_person::next_recovery(&self.core.people)
-            .map_err(str::to_owned)?
-            .is_some_and(|after| after <= u128::from(consumed));
-        let deaths = if let Some(draft) = &elapsed_draft {
-            let people = self
-                .core
-                .preview_people_progress(consumed, &draft.consequences)?;
+        let ordinary_recovery_due = ordinary_recovery == Some(consumed);
+        let recovery_due = ordinary_recovery_due
+            || game_economy_person::next_recovery(&self.core.people)
+                .map_err(str::to_owned)?
+                .is_some_and(|after| after <= u128::from(consumed));
+        let injuries = elapsed_draft
+            .as_ref()
+            .map_or(&[][..], |draft| draft.consequences.as_slice());
+        let has_injuries = !injuries.is_empty();
+        let mut vitals = (has_injuries
+            || ordinary_recovery_due
+            || self.core.next_metabolism() == Some(consumed))
+        .then(|| self.core.preview_people_progress(consumed, injuries))
+        .transpose()?;
+        let deaths = if let Some(vitals) = &vitals {
             self.core
                 .people
                 .par_iter()
-                .zip(people.par_iter())
+                .zip(vitals.people.par_iter())
                 .filter_map(|(before, after)| {
                     (before.health > 0 && after.health == 0).then_some(before.id)
                 })
@@ -287,10 +299,18 @@ impl CoreHost {
         let (reductions, staged_shared) =
             self.stage_fatal_assistance(&deaths, &durations, consumed)?;
         let paused_after_deaths = self.pause_incapacitated_rates(&deaths, &reductions, consumed)?;
+        let renewal = self.stage_resource_renewal(consumed)?;
         let Some(owner) = &self.fatigue else {
             let credits = self.plan_skill_practice(consumed);
-            let advanced = self.core.progress_adjusting(consumed, &reductions, &[])?;
+            let recovery = self.stage_natural_recovery(consumed, &[], vitals.as_mut())?;
+            let advanced = self
+                .core
+                .progress_adjusting(consumed, &reductions, vitals)?;
             if advanced > 0 {
+                self.publish_resource_renewal(renewal);
+                if let Some(recovery) = recovery {
+                    self.recovery = Some(recovery);
+                }
                 self.pending_vital_deaths = pending;
                 if let Some(paused) = paused_after_deaths {
                     self.paused_work_rates = paused;
@@ -435,14 +455,15 @@ impl CoreHost {
                 Ok(rows)
             })
             .collect::<Result<Vec<_>, _>>()?;
-        let next = chunks.into_par_iter().flatten().collect();
-        let injuries = elapsed_draft
-            .as_ref()
-            .map_or(&[][..], |draft| draft.consequences.as_slice());
-        let has_injuries = !injuries.is_empty();
+        let next: Vec<_> = chunks.into_par_iter().flatten().collect();
+        let recovery = self.stage_natural_recovery(consumed, &next, vitals.as_mut())?;
         let advanced = self
             .core
-            .progress_adjusting(consumed, &reductions, injuries)?;
+            .progress_adjusting(consumed, &reductions, vitals)?;
+        self.publish_resource_renewal(renewal);
+        if let Some(recovery) = recovery {
+            self.recovery = Some(recovery);
+        }
         if let Some(draft) = elapsed_draft {
             self.fatigue
                 .as_mut()
@@ -464,6 +485,39 @@ impl CoreHost {
         }
         self.remember_skill_practice(skill_practice);
         Ok(advanced)
+    }
+
+    /// Use actual rested time in this segment, including work interruptions.
+    fn stage_natural_recovery(
+        &self,
+        millis: u64,
+        next_activity: &[TimedActivity],
+        vitals: Option<&mut VitalsProgress>,
+    ) -> Result<Option<crate::RecoveryRules>, String> {
+        let Some(owner) = self
+            .recovery
+            .as_ref()
+            .filter(|owner| owner.elapsed.is_some() && millis > 0)
+        else {
+            return Ok(None);
+        };
+        let rest: Vec<_> = self
+            .activity
+            .par_iter()
+            .zip(next_activity.par_iter())
+            .filter_map(|(old, next)| {
+                let delta = next.rest_millis - old.rest_millis;
+                (delta > 0).then_some((next.id, delta))
+            })
+            .collect();
+        owner
+            .stage_elapsed(
+                self.core.simulated_millis(),
+                millis,
+                &rest,
+                vitals.map(|draft| (draft.people.as_mut_slice(), self.core.rules.max_health)),
+            )
+            .map(Some)
     }
 
     /// Remember the chosen rate of unfinished jobs while their lead is unable

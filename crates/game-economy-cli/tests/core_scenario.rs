@@ -4649,7 +4649,13 @@ fn food_pickups_are_personal_choices_with_shared_stock_and_claim_consequences() 
 #[test]
 fn elapsed_resource_renewal_survives_subdivision_and_resume() {
     use game_economy::core_interval::CoreHost;
-    fn run(quantum: u64, chunk: u64, workers: usize, seasonal: bool) -> game_economy::ResourceNode {
+    fn run(
+        quantum: u64,
+        chunk: u64,
+        workers: usize,
+        seasonal: bool,
+        elapsed_renewal: bool,
+    ) -> game_economy::ResourceNode {
         rayon::ThreadPoolBuilder::new()
             .num_threads(workers)
             .build()
@@ -4683,6 +4689,7 @@ fn elapsed_resource_renewal_survives_subdivision_and_resume() {
                     .unwrap()
                     .id;
                 state.gathering = Some(game_economy::Gathering {
+                    elapsed_renewal,
                     max_hunger: 100,
                     inherit_births: false,
                     nodes: vec![game_economy::ResourceNode {
@@ -4724,6 +4731,12 @@ fn elapsed_resource_renewal_survives_subdivision_and_resume() {
                     );
                     elapsed += duration;
                     if elapsed == chunk {
+                        if elapsed_renewal && chunk < quantum && chunk < 600_000 {
+                            assert_eq!(
+                                host.snapshot().gathering.unwrap().nodes[0].renewal_remainder,
+                                3000 * chunk,
+                            );
+                        }
                         host = CoreHost::resume(
                             serde_json::from_str(&serde_json::to_string(&host.snapshot()).unwrap())
                                 .unwrap(),
@@ -4734,15 +4747,16 @@ fn elapsed_resource_renewal_survives_subdivision_and_resume() {
                 host.snapshot().gathering.unwrap().nodes.remove(0)
             })
     }
-    let whole = run(3_600_000, 3_600_000, 1, false);
+    let whole = run(3_600_000, 3_600_000, 1, false, false);
     assert_eq!(whole.available, 3);
     assert_eq!(whole.renewal_remainder, 0);
-    assert_eq!(run(60_000, 17_000, 1, false), whole);
-    assert_eq!(run(60_000, 31_000, 4, false), whole);
-    let seasonal = run(3_600_000, 3_600_000, 1, true);
+    assert_eq!(run(60_000, 17_000, 1, false, false), whole);
+    assert_eq!(run(60_000, 31_000, 4, false, true), whole);
+    let seasonal = run(3_600_000, 3_600_000, 1, true, false);
     assert_eq!(seasonal.available, 1);
     assert_eq!(seasonal.renewal_remainder, 1_800_000_000);
-    assert_eq!(run(60_000, 31_000, 4, true), seasonal);
+    assert_eq!(run(60_000, 31_000, 4, true, false), seasonal);
+    assert_eq!(run(60_000, 31_000, 4, true, true), seasonal);
 }
 
 #[test]
@@ -4756,7 +4770,7 @@ fn gathering_is_chosen_then_settles_contended_physical_resources() {
             let mut state = host.snapshot();
             let grain = state.core.physical.goods.iter().find(|good| good.name == "grain").unwrap().id;
             state.gathering = Some(game_economy::Gathering {
-                max_hunger: 20, inherit_births: false,
+                elapsed_renewal: false, max_hunger: 20, inherit_births: false,
                 nodes: vec![game_economy::ResourceNode { id: 1, region: 1, good: grain, available: 2, capacity: 2, regrowth: 0, renewal_rate: None, renewal_remainder: 0, seasonal: false, yield_per_action: 2 }, game_economy::ResourceNode { id: 2, region: 1, good: grain, available: 2, capacity: 2, regrowth: 0, renewal_rate: None, renewal_remainder: 0, seasonal: false, yield_per_action: 2 }],
                 policies: (1..=3).map(|person| game_economy::GatherPolicy { person, node: 1, willing: true, pressured_by: None, pressure_threshold: None }).chain(std::iter::once(game_economy::GatherPolicy { person: 1, node: 2, willing: true, pressured_by: None, pressure_threshold: None })).collect(),
             });
@@ -6179,6 +6193,129 @@ fn personal_choices_use_absolute_time_instead_of_tick_number() {
         chosen.len() > 1,
         "test must exercise randomized choice ties"
     );
+}
+
+#[test]
+fn authored_work_time_and_byproducts_survive_different_settlement_intervals() {
+    use std::fs;
+    let directory = std::env::temp_dir().join(format!(
+        "legacy-work-outputs-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos(),
+    ));
+    let objects = directory.join("objects");
+    let workshop = directory.join("workshop");
+    fs::create_dir_all(&objects).unwrap();
+    fs::create_dir_all(&workshop).unwrap();
+    let objects_file = objects.join("goods.toml");
+    let recipes_file = workshop.join("recipes.toml");
+    let scenario_file = directory.join("scenario.toml");
+    fs::write(
+        &objects_file,
+        r#"
+id = "test.objects"
+version = 1
+[data.objects.log]
+id = 1
+name = "Log"
+[data.objects.plank]
+id = 2
+name = "Plank"
+[data.objects.offcut]
+id = 3
+name = "Offcut"
+"#,
+    )
+    .unwrap();
+    fs::write(
+        &recipes_file,
+        r#"
+id = "test.recipes"
+version = 1
+[data.recipes.saw]
+inputs = { log = 1 }
+outputs = { plank = 2, offcut = 1 }
+duration = 200
+"#,
+    )
+    .unwrap();
+    let scenario = r#"
+seed = 7
+tick_millis = QUANTUM
+work_rate_period_millis = 100
+stock_capacity = 100
+food_relief_divisor = 20
+
+[rules]
+meal_threshold = 5
+starvation_threshold = 50
+max_health = 100
+carrying_capacity = 10
+max_work_hunger = 20
+
+[[regions]]
+id = 1
+stock = { log = 1 }
+
+[[people]]
+id = 1
+region = 1
+health = 100
+hunger = 0
+controlled = true
+willing_to_work = false
+seek_meals = false
+"#;
+    for quantum in [1000, 150] {
+        fs::write(
+            &scenario_file,
+            scenario.replace("QUANTUM", &quantum.to_string()),
+        )
+        .unwrap();
+        let mut host = game_economy_cli::core_scenario(&scenario_file, &directory).unwrap();
+        let opening = host.snapshot();
+        let recipe = &opening.core.physical.recipes[0];
+        assert_eq!(recipe.ticks, 2);
+        assert_eq!(recipe.outputs.len(), 2);
+        let mut player = game_economy_player::interval::Player::new(&mut host, 1).unwrap();
+        assert_eq!(player.start_work(recipe.id, 1).unwrap(), Some(1));
+        assert!(player.advance(199).unwrap().failure.is_none());
+        let quantity = |host: &game_economy::core_interval::CoreHost, name| {
+            let state = host.snapshot();
+            let good = state
+                .core
+                .physical
+                .goods
+                .iter()
+                .find(|good| good.name == name)
+                .unwrap()
+                .id;
+            state
+                .core
+                .physical
+                .custody
+                .containers
+                .iter()
+                .flat_map(|container| &container.lots)
+                .filter(|lot| lot.good == good)
+                .map(|lot| lot.quantity)
+                .sum::<u64>()
+        };
+        assert_eq!(quantity(&host, "plank"), 0);
+        assert_eq!(host.advance_continuous(1, &[]).unwrap().failure, None);
+        assert_eq!(quantity(&host, "plank"), 2);
+        assert_eq!(quantity(&host, "offcut"), 1);
+        assert_eq!(quantity(&host, "log"), 0);
+    }
+    for path in [&scenario_file, &recipes_file, &objects_file] {
+        fs::remove_file(path).unwrap();
+    }
+    for path in [&objects, &workshop, &directory] {
+        fs::remove_dir(path).unwrap();
+    }
 }
 
 #[test]

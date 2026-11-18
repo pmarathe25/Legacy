@@ -1053,6 +1053,17 @@ impl CoreHost {
             crate::environment::validate(environment.as_ref(), &view, &goods)?;
         }
         if let Some(owner) = &gathering {
+            if owner.elapsed_renewal
+                && environment.as_ref().is_some_and(|environment| {
+                    environment.season_unit_millis.is_none() && !environment.seasons.is_empty()
+                })
+                && owner
+                    .nodes
+                    .par_iter()
+                    .any(|node| node.seasonal && node.renewal_rate.is_some())
+            {
+                return Err("elapsed seasonal renewal requires an elapsed calendar".into());
+            }
             let people: HashSet<_> = core.people.par_iter().map(|person| person.id).collect();
             let goods: HashSet<_> = core
                 .physical
@@ -1306,8 +1317,8 @@ impl CoreHost {
         {
             return Err("invalid pending goal setbacks".into());
         }
-        if recovery.as_ref().is_some_and(|rules| rules.interval == 0) {
-            return Err("invalid recovery rules".into());
+        if let Some(rules) = &recovery {
+            rules.validate_elapsed(core.simulated_millis(), &core.people)?;
         }
         if let Some(owner) = &mut sites {
             owner.validate(&core)?;
@@ -1519,7 +1530,30 @@ impl CoreHost {
         {
             self.sync_work_rates(&[])?;
         }
-        self.core.next_deadline(hunger)
+        let mut deadline = self.core.next_deadline(hunger)?;
+        if let Some(recovery) = self.next_ordinary_recovery() {
+            if recovery < deadline.after_millis {
+                deadline = CoreDeadline {
+                    after_millis: recovery,
+                    quantum: false,
+                    work: false,
+                    arrival: false,
+                    hunger: false,
+                    death: false,
+                    recovery: true,
+                    nutrition: false,
+                };
+            } else if recovery == deadline.after_millis {
+                deadline.recovery = true;
+            }
+        }
+        Ok(deadline)
+    }
+
+    fn next_ordinary_recovery(&self) -> Option<u64> {
+        self.recovery
+            .as_ref()?
+            .next_elapsed(self.core.simulated_millis())
     }
     pub fn publish_arrivals(&mut self) -> Result<Option<CoreArrivals>, String> {
         self.core.publish_arrivals()
@@ -2483,11 +2517,9 @@ impl CoreHost {
                 Some(self.core.simulated_millis().saturating_sub(1)),
             );
         }
-        if let Some(rules) = self
-            .recovery
-            .as_ref()
-            .filter(|rules| draft.events().tick.is_multiple_of(rules.interval))
-        {
+        if let Some(rules) = self.recovery.as_ref().filter(|rules| {
+            rules.elapsed.is_none() && draft.events().tick.is_multiple_of(rules.interval)
+        }) {
             let quantum = self.core.physical.tick_millis();
             draft.people.people.par_iter_mut().for_each(|person| {
                 if person.health == 0 || person.hunger > rules.max_hunger {

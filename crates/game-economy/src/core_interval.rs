@@ -81,7 +81,13 @@ pub struct CoreMealDraft {
     generation: u64,
     physical: game_lot_runtime::IntervalConsumptionDraft,
     people: Vec<Person>,
+    nutrition_after_intake: Option<Nutrition>,
     pending_food: Vec<FoodEffect>,
+}
+
+struct VitalsProgress {
+    people: Vec<Person>,
+    nutrition: Option<Nutrition>,
 }
 impl CoreMealDraft {
     pub fn transactions(&self) -> &[game_lots::TransactionOutcome] {
@@ -116,6 +122,7 @@ pub struct CoreDeadline {
     pub hunger: bool,
     pub death: bool,
     pub recovery: bool,
+    pub nutrition: bool,
 }
 /// Travelers published at a partial-interval offset.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -386,6 +393,7 @@ impl CoreInterval {
         let death = game_economy_person::next_starvation_death(&self.people, &self.rules, quantum)
             .map_err(str::to_owned)?;
         let recovery = game_economy_person::next_recovery(&self.people).map_err(str::to_owned)?;
+        let nutrition = self.next_metabolism().map(u128::from);
         let after = [
             Some(u128::from(remaining)),
             work,
@@ -393,6 +401,7 @@ impl CoreInterval {
             hunger,
             death,
             recovery,
+            nutrition,
         ]
         .into_iter()
         .flatten()
@@ -406,6 +415,7 @@ impl CoreInterval {
             hunger: hunger == Some(after),
             death: death == Some(after),
             recovery: recovery == Some(after),
+            nutrition: nutrition == Some(after),
         })
     }
     /// Progress no farther than the next observed deadline. A zero result
@@ -827,7 +837,7 @@ impl CoreInterval {
             drop(phase);
             phase = game_diagnostics::span("core.meal.effects");
         }
-        let effects =
+        let mut effects =
             plan.interval_effects(draft.transactions(), &draft.movements(), effect_tick)?;
         #[cfg(feature = "profile")]
         {
@@ -847,6 +857,25 @@ impl CoreInterval {
                 person.hunger = person.hunger.saturating_sub(relief);
             }
         });
+        let nutrition_after_intake = self
+            .nutrition
+            .as_ref()
+            .filter(|owner| owner.rules.interval_millis.is_some())
+            .filter(|_| {
+                effects
+                    .pending
+                    .par_iter()
+                    .any(|row| row.nutrients != [0; 6])
+            })
+            .map(|owner| {
+                let next = owner.ingest(&effects.pending);
+                effects.pending.retain(|row| row.health != 0);
+                effects
+                    .pending
+                    .par_iter_mut()
+                    .for_each(|row| row.nutrients = [0; 6]);
+                next
+            });
         let mut pending_food = self.pending_food.clone();
         pending_food.extend(effects.pending);
         #[cfg(feature = "profile")]
@@ -855,6 +884,7 @@ impl CoreInterval {
             generation: self.generation,
             physical: draft,
             people,
+            nutrition_after_intake,
             pending_food,
         }))
     }
@@ -897,6 +927,9 @@ impl CoreInterval {
             .ok_or("core revision overflow")?;
         let result = self.physical.commit_interval_consumption(draft.physical)?;
         self.people = draft.people;
+        if let Some(nutrition) = draft.nutrition_after_intake {
+            self.nutrition = Some(nutrition);
+        }
         self.pending_food = draft.pending_food;
         self.generation = generation;
         Ok(result)
@@ -920,7 +953,13 @@ impl CoreInterval {
         }
         self.commit_meals(draft)
     }
-    /// Limit progress to the physical boundary or the next fatal starvation event.
+    fn next_metabolism(&self) -> Option<u64> {
+        self.nutrition
+            .as_ref()?
+            .next_metabolism(self.simulated_millis())
+    }
+
+    /// Limit progress to the physical boundary or the next elapsed physiology event.
     pub fn progress_limit(&self, requested_millis: u64) -> Result<u64, String> {
         let elapsed = self.elapsed_millis().ok_or("no physical interval")?;
         let quantum = self.physical.tick_millis();
@@ -931,21 +970,24 @@ impl CoreInterval {
         let death = game_economy_person::next_starvation_death(&self.people, &self.rules, quantum)
             .map_err(str::to_owned)?;
         let recovery = game_economy_person::next_recovery(&self.people).map_err(str::to_owned)?;
-        Ok(earliest(death, recovery)
-            .map_or(limit, |deadline| deadline.min(u128::from(limit)) as u64))
+        Ok(earliest(
+            earliest(death, recovery),
+            self.next_metabolism().map(u128::from),
+        )
+        .map_or(limit, |deadline| deadline.min(u128::from(limit)) as u64))
     }
 
     /// Progress without repeating decisions, publishing arrivals, or completing work.
     /// Failed validation leaves all owners unchanged.
     pub fn progress(&mut self, requested_millis: u64) -> Result<u64, String> {
-        self.progress_adjusting(requested_millis, &[], &[])
+        self.progress_adjusting(requested_millis, &[], None)
     }
 
     fn progress_adjusting(
         &mut self,
         requested_millis: u64,
         reductions: &[(u64, u64)],
-        injuries: &[game_economy_fatigue::Consequence],
+        staged_vitals: Option<VitalsProgress>,
     ) -> Result<u64, String> {
         let quantum = self.physical.tick_millis();
         let consumed = self.progress_limit(requested_millis)?;
@@ -956,7 +998,10 @@ impl CoreInterval {
             .generation
             .checked_add(1)
             .ok_or("core revision overflow")?;
-        let people = self.preview_people_progress(consumed, injuries)?;
+        let VitalsProgress { people, nutrition } = match staged_vitals {
+            Some(vitals) => vitals,
+            None => self.preview_people_progress(consumed, &[])?,
+        };
         let mut travel = self.travel.clone();
         if let Some(travel) = &mut travel {
             travel
@@ -998,6 +1043,9 @@ impl CoreInterval {
         };
         debug_assert_eq!(advanced, consumed);
         self.people = people;
+        if let Some(nutrition) = nutrition {
+            self.nutrition = Some(nutrition);
+        }
         self.travel = travel;
         self.generation = generation;
         Ok(consumed)
@@ -1008,7 +1056,7 @@ impl CoreInterval {
         &self,
         consumed: u64,
         injuries: &[game_economy_fatigue::Consequence],
-    ) -> Result<Vec<Person>, String> {
+    ) -> Result<VitalsProgress, String> {
         if injuries.par_windows(2).any(|pair| pair[0].id >= pair[1].id)
             || injuries.par_iter().any(|injury| {
                 self.people
@@ -1048,7 +1096,27 @@ impl CoreInterval {
                 person.health = person.health.saturating_sub(injuries[index].damage);
             }
         });
-        Ok(people)
+        let nutrition = self.nutrition.as_ref().and_then(|nutrition| {
+            (self.next_metabolism() == Some(consumed)).then(|| {
+                let eligible: Vec<_> = self
+                    .people
+                    .par_iter()
+                    .map(|person| (person.id, person.health > 0 && person.immortal.is_none()))
+                    .collect();
+                let (state, deficient) = nutrition.metabolize(&eligible);
+                if !deficient.is_empty() {
+                    people.par_iter_mut().for_each(|person| {
+                        if deficient.binary_search(&person.id).is_ok() {
+                            person.health = person
+                                .health
+                                .saturating_sub(nutrition.rules.deficiency_damage);
+                        }
+                    });
+                }
+                state
+            })
+        });
+        Ok(VitalsProgress { people, nutrition })
     }
     /// Stage the full quantum without publishing physical or personal changes.
     /// An enclosing item owner retains its own rules, allocator and metadata.

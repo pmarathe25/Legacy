@@ -1,5 +1,7 @@
 //! Translate authored object and workshop files into numeric production catalogs.
-use game_production::{Amount, FoodProfile, Good, Production, Recipe, RecipeCategory, Stock};
+use game_production::{
+    Amount, FoodProfile, Good, NUTRIENT_NAMES, Production, Recipe, RecipeCategory, Stock,
+};
 use std::collections::{BTreeMap, HashSet};
 use std::path::Path;
 use toml::Value;
@@ -66,13 +68,16 @@ fn food_profile(object: &Value, divisor: u32) -> Result<Option<FoodProfile>, Str
         .ok_or("invalid nutrients")?
         .iter()
         .map(|(key, value)| {
+            if !NUTRIENT_NAMES.contains(&key.as_str()) {
+                return Err(format!("unknown nutrient: {key}"));
+            }
             let value = value
                 .as_integer()
                 .and_then(|value| u32::try_from(value).ok())
                 .ok_or("invalid nutrient quantity")?;
             Ok((key.clone(), value))
         })
-        .collect::<Result<_, &str>>()?;
+        .collect::<Result<_, String>>()?;
     let health_effect = food
         .get("effects")
         .and_then(|effects| effects.get("health"))
@@ -101,11 +106,11 @@ pub fn augment(
     production: &mut Production,
     objects: &Path,
     recipes: &Path,
-    tick_millis: u64,
+    work_unit_millis: u64,
     capacity: u64,
     food_relief_divisor: u32,
 ) -> Result<(), String> {
-    if tick_millis == 0 || capacity == 0 || food_relief_divisor == 0 {
+    if work_unit_millis == 0 || capacity == 0 || food_relief_divisor == 0 {
         return Err("invalid catalog conversion rules".into());
     }
     let objects = entries(objects, "objects")?;
@@ -183,18 +188,11 @@ pub fn augment(
                 .and_modify(|value| *value = (*value).max(input.quantity))
                 .or_insert(input.quantity);
         }
-        let output = row
-            .get("output")
-            .and_then(Value::as_str)
-            .ok_or_else(|| format!("recipe {key}: invalid output"))?;
-        let good = *ids
-            .get(output)
-            .ok_or_else(|| format!("recipe {key}: unknown output {output}"))?;
-        let quantity =
-            positive(&row, "quantity").map_err(|error| format!("recipe {key}: {error}"))?;
+        let outputs =
+            recipe_outputs(&row, &ids).map_err(|error| format!("recipe {key}: {error}"))?;
         let duration =
             positive(&row, "duration").map_err(|error| format!("recipe {key}: {error}"))?;
-        let ticks = duration.div_ceil(tick_millis);
+        let ticks = duration.div_ceil(work_unit_millis);
         let ticks = u32::try_from(ticks).map_err(|_| format!("recipe {key}: duration overflow"))?;
         recipe_id = recipe_id.checked_add(1).ok_or("recipe identity overflow")?;
         if let Some(category) = row.get("skill") {
@@ -207,16 +205,18 @@ pub fn augment(
                 category: category.to_owned(),
             });
         }
-        required
-            .entry(good)
-            .and_modify(|value| *value = (*value).max(quantity))
-            .or_insert(quantity);
+        for output in &outputs {
+            required
+                .entry(output.good)
+                .and_modify(|value| *value = (*value).max(output.quantity))
+                .or_insert(output.quantity);
+        }
         next.recipes.push(Recipe {
             id: recipe_id,
             name: key,
             ticks,
             inputs: amounts,
-            outputs: vec![Amount { good, quantity }],
+            outputs,
         });
     }
     for inventory in &mut next.inventories {
@@ -238,4 +238,73 @@ pub fn augment(
     }
     *production = next;
     Ok(())
+}
+
+fn recipe_outputs(row: &Value, ids: &BTreeMap<String, u32>) -> Result<Vec<Amount>, String> {
+    let amount = |name: &str, quantity| -> Result<Amount, String> {
+        let good = *ids
+            .get(name)
+            .ok_or_else(|| format!("unknown output {name}"))?;
+        Ok(Amount { good, quantity })
+    };
+    let Some(outputs) = row.get("outputs") else {
+        let name = row
+            .get("output")
+            .and_then(Value::as_str)
+            .ok_or("invalid output")?;
+        return Ok(vec![amount(name, positive(row, "quantity")?)?]);
+    };
+    if row.get("output").is_some() || row.get("quantity").is_some() {
+        return Err("use either outputs or output and quantity".into());
+    }
+    let table = outputs
+        .as_table()
+        .filter(|rows| !rows.is_empty())
+        .ok_or("invalid outputs")?;
+    table
+        .keys()
+        .map(|name| amount(name, positive(outputs, name)?))
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rejects_authored_nutrients_the_simulation_cannot_use() {
+        let object: Value =
+            toml::from_str("[food]\nportion = 1\nrelief = 1\nnutrients = { enregy = 12 }").unwrap();
+        assert_eq!(
+            food_profile(&object, 1),
+            Err("unknown nutrient: enregy".into())
+        );
+    }
+
+    #[test]
+    fn resolves_all_outputs_and_rejects_an_ambiguous_recipe() {
+        let ids = BTreeMap::from([("bread".to_owned(), 1), ("bran".to_owned(), 2)]);
+        let row = |source| toml::from_str::<Value>(source).unwrap();
+        assert_eq!(
+            recipe_outputs(&row("outputs = { bran = 1, bread = 3 }"), &ids).unwrap(),
+            [
+                Amount {
+                    good: 2,
+                    quantity: 1
+                },
+                Amount {
+                    good: 1,
+                    quantity: 3
+                }
+            ],
+        );
+        assert!(
+            recipe_outputs(
+                &row("outputs = { bran = 1 }\noutput = 'bread'\nquantity = 3"),
+                &ids
+            )
+            .is_err()
+        );
+        assert!(recipe_outputs(&row("outputs = { missing = 1 }"), &ids).is_err());
+    }
 }

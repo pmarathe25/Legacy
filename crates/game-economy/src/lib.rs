@@ -159,7 +159,7 @@ pub use game_purpose::Purpose;
 pub use gathering::{
     Gathering, Node as ResourceNode, Policy as GatherPolicy, RenewalRate as ResourceRenewalRate,
 };
-pub use recovery::Rules as RecoveryRules;
+pub use recovery::{ElapsedRecovery, Rules as RecoveryRules};
 mod state;
 mod teaching;
 mod writing;
@@ -177,7 +177,7 @@ use game_lot_projection::agreement;
 use game_lot_runtime::{AdvanceDraft, Events, Runtime};
 use game_lots::Transaction;
 use game_market::Market;
-use game_nutrition::Nutrition;
+pub use game_nutrition::Nutrition;
 use game_opinions::Opinions;
 use game_production_model::FoodEffect;
 use rayon::prelude::*;
@@ -2533,7 +2533,7 @@ impl Economy {
         if state
             .recovery
             .as_ref()
-            .is_some_and(|rules| rules.interval == 0)
+            .is_some_and(|rules| !rules.valid_cadence())
         {
             return Err("invalid recovery rules".into());
         }
@@ -3190,6 +3190,10 @@ impl Economy {
     ) -> Result<Draft, String> {
         if self.rules.hunger_rate.is_some()
             || self.rules.starvation_rate.is_some()
+            || self
+                .nutrition
+                .as_ref()
+                .is_some_and(|owner| owner.rules.interval_millis.is_some())
             || self.people.par_iter().any(|person| {
                 person
                     .immortal
@@ -3213,6 +3217,20 @@ impl Economy {
                 .any(|closure| closure.unit_millis.is_some())
         }) {
             return Err("elapsed route closures require the interval host".into());
+        }
+        if self
+            .gathering
+            .as_ref()
+            .is_some_and(|owner| owner.elapsed_renewal)
+        {
+            return Err("elapsed resource renewal requires the interval host".into());
+        }
+        if self
+            .recovery
+            .as_ref()
+            .is_some_and(|owner| owner.elapsed.is_some())
+        {
+            return Err("elapsed recovery requires the interval host".into());
         }
         #[cfg(feature = "profile")]
         let mut profile_phase = game_diagnostics::span("economy.setup");

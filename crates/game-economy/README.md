@@ -502,7 +502,12 @@ Irrigation is optional and belongs to fields and individuals. The scenario names
 
 Fresh content scenarios can be converted to `CoreHostSnapshot` using `from_scenario`; unsupported state owners are rejected explicitly. The CLI library provides `core_scenario` to load content and create the scheduled interval host. This is an integration bridge, not yet a replacement for the existing whole-boundary runner.
 
-The interval host stages optional recovery after fatigue and environmental exposure. Living people below the hunger limit recover the configured base amount at each recovery interval; the rest bonus is proportional to actual resting time recorded during the boundary, including interruptions. Recovery does not revive the dead and is committed only with the rest of the boundary.
+Living people below the hunger limit can recover at intervals. In the interval
+host, `recovery.elapsed.period_millis` sets an absolute cadence and the rest
+bonus reflects actual time rested since the previous recovery event. The
+partial rest total survives saves and physical settlement. Older worlds use
+the boundary-based `recovery.interval` and measure rest within that boundary.
+This recovery applies only to living people.
 
 With `LEGACY_DEPENDENT_DISEASE=1 LEGACY_RECOVERY=1 LEGACY_PEOPLE=60000`, the ignored `core_host_cultivation_benchmark` measures one boundary containing dependent care, disease exposure, and recovery. One run took 80.5, 59.0, 48.4, and 44.5 ms at one, two, four, and six workers; saved-state fingerprints matched. This is sublinear and excludes setup.
 

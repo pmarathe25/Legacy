@@ -40,6 +40,8 @@ struct Scenario {
     stock_capacity: u64,
     food_relief_divisor: u32,
     rules: Rules,
+    #[serde(default)]
+    nutrition: Option<game_economy::Nutrition>,
     regions: Vec<Region>,
     #[serde(default)]
     people: Vec<Resident>,
@@ -647,6 +649,8 @@ fn resolve_environment(
 #[serde(deny_unknown_fields)]
 struct GatheringConfig {
     max_hunger: u32,
+    #[serde(default)]
+    elapsed_renewal: bool,
     #[serde(default)]
     inherit_births: bool,
     nodes: Vec<ResourceConfig>,
@@ -1479,6 +1483,30 @@ fn scenario_with_options_inner(
     }
     if !interval_features
         && scenario
+            .nutrition
+            .as_ref()
+            .is_some_and(|owner| owner.rules.interval_millis.is_some())
+    {
+        return Err("elapsed nutrition requires the interval simulation host".into());
+    }
+    if !interval_features
+        && scenario
+            .gathering
+            .as_ref()
+            .is_some_and(|owner| owner.elapsed_renewal)
+    {
+        return Err("elapsed resource renewal requires the interval simulation host".into());
+    }
+    if !interval_features
+        && scenario
+            .recovery
+            .as_ref()
+            .is_some_and(|owner| owner.elapsed.is_some())
+    {
+        return Err("elapsed recovery requires the interval simulation host".into());
+    }
+    if !interval_features
+        && scenario
             .route_closures
             .iter()
             .any(|closure| closure.unit_millis.is_some())
@@ -1727,7 +1755,9 @@ fn scenario_with_options_inner(
         &mut production,
         &content.join("objects"),
         &content.join("workshop"),
-        scenario.tick_millis,
+        scenario
+            .work_rate_period_millis
+            .unwrap_or(scenario.tick_millis),
         scenario.stock_capacity,
         scenario.food_relief_divisor,
     )?;
@@ -2351,6 +2381,7 @@ fn scenario_with_options_inner(
                 .collect::<Result<Vec<_>, String>>()?;
             Ok(game_economy::Gathering {
                 max_hunger: config.max_hunger,
+                elapsed_renewal: config.elapsed_renewal,
                 inherit_births: config.inherit_births,
                 nodes,
                 policies: config.policies,
@@ -2778,7 +2809,7 @@ fn scenario_with_options_inner(
             people: dreams,
             events: vec![],
         }),
-        nutrition: None,
+        nutrition: scenario.nutrition,
         pending_food: vec![],
         travel: (!scenario.routes.is_empty()).then_some(Travel {
             travel_unit_millis: scenario.travel_unit_millis,
