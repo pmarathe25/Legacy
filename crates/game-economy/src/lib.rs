@@ -3249,6 +3249,14 @@ impl Economy {
         {
             return Err("elapsed irrigation requires the interval host".into());
         }
+        if self
+            .dynamics
+            .as_ref()
+            .and_then(|owner| owner.disease.as_ref())
+            .is_some_and(|owner| owner.time_unit_millis.is_some())
+        {
+            return Err("elapsed disease requires the interval host".into());
+        }
         #[cfg(feature = "profile")]
         let mut profile_phase = game_diagnostics::span("economy.setup");
         let tick = self.tick().checked_add(1).ok_or("tick overflow")?;

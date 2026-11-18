@@ -98,6 +98,8 @@ impl CoreHost {
             physical.transactions(),
             tick,
         );
+        next.owner
+            .stamp_treatments(tick, self.core.simulated_millis());
         self.core
             .physical
             .validate_interval_consumption(&physical)?;

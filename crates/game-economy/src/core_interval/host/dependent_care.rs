@@ -61,20 +61,8 @@ impl CoreHost {
         }
         contacts.par_sort_unstable_by_key(|event| (event.a, event.b));
         contacts.dedup_by_key(|event| (event.a, event.b));
-        let people: Vec<_> = self
-            .core
-            .people
-            .par_iter()
-            .map(|person| game_disease::Person {
-                id: person.id,
-                health: person.health,
-            })
-            .collect();
-        let mut next = staged.unwrap_or_else(|| health.clone());
-        next.owner
-            .admit_contacts_validated(&health.owner, &people, &contacts, self.core.seed, tick - 1)
-            .map_err(str::to_owned)?;
-        Ok(Some(next))
+        self.stage_encounter_health(health, staged, &contacts, tick)
+            .map(|(staged, _)| Some(staged))
     }
 
     pub(super) fn plan_dependent_care(

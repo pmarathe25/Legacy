@@ -19,6 +19,22 @@ pub(super) struct ElapsedFamilyFrame {
 }
 
 impl ElapsedFamilyFrame {
+    pub(super) fn birth_disease_events(&self, now: u128) -> Vec<game_disease::Event> {
+        self.health.as_ref().map_or_else(Vec::new, |health| {
+            health
+                .owner
+                .events
+                .par_iter()
+                .filter(|event| {
+                    event.at_millis == Some(now)
+                        && event.kind == game_disease::EventKind::Infected
+                        && self.frame.newborns.binary_search(&event.person).is_ok()
+                })
+                .cloned()
+                .collect()
+        })
+    }
+
     pub(super) fn physical(&self) -> ElapsedBirths<'_> {
         ElapsedBirths {
             children: &self.children,
@@ -76,6 +92,7 @@ impl CoreHost {
         people: &[Person],
         now: u128,
         staged_purpose: Option<&CorePurpose>,
+        staged_health: Option<&CoreHealth>,
         delivery_due: bool,
         conception_due: bool,
     ) -> Result<Option<ElapsedFamilyFrame>, String> {
@@ -136,7 +153,8 @@ impl CoreHost {
             Some(&frame.owner),
             game_economy_family::BirthBatch::for_people(tick, &frame.newborns),
         )?;
-        let health = self.stage_birth_health_at(Some(&frame), tick, Some(tick));
+        let health =
+            self.stage_birth_health_at(Some(&frame), tick, Some((tick, now)), staged_health);
         Ok(Some(ElapsedFamilyFrame {
             frame,
             children: births,
@@ -440,17 +458,18 @@ impl CoreHost {
         family: Option<&FamilyFrame>,
         tick: u64,
     ) -> Option<CoreHealth> {
-        self.stage_birth_health_at(family, tick, None)
+        self.stage_birth_health_at(family, tick, None, None)
     }
 
     fn stage_birth_health_at(
         &self,
         family: Option<&FamilyFrame>,
         tick: u64,
-        now: Option<u64>,
+        elapsed: Option<(u64, u128)>,
+        staged: Option<&CoreHealth>,
     ) -> Option<CoreHealth> {
         let family = family.filter(|family| !family.births.is_empty())?;
-        let health = self.health.as_ref().filter(|health| {
+        let health = staged.or(self.health.as_ref()).filter(|health| {
             !health.owner.cases.is_empty()
                 && health
                     .owner
@@ -459,7 +478,16 @@ impl CoreHost {
                     .any(|strain| strain.birth_transmission_per_million > 0)
         })?;
         let mut next = health.clone();
-        if let Some(now) = now {
+        if health.owner.time_unit_millis.is_some() {
+            let at_millis = elapsed.map_or_else(|| self.core.simulated_millis(), |(_, at)| at);
+            next.owner.admit_elapsed_births(
+                &health.owner,
+                &family.births,
+                self.core.seed,
+                tick,
+                at_millis,
+            );
+        } else if let Some((now, _)) = elapsed {
             next.owner
                 .admit_births_at(&health.owner, &family.births, self.core.seed, now, tick);
         } else {

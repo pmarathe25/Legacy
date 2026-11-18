@@ -44,6 +44,70 @@ fn travel_deadline_uses_explicit_elapsed_duration() {
 }
 
 #[test]
+fn elapsed_illness_stops_work_at_the_fatal_deadline_and_records_recovery() {
+    use game_economy::core_interval::CoreRunEvent;
+
+    let run = |quantum, workers| {
+        rayon::ThreadPoolBuilder::new().num_threads(workers).build().unwrap().install(|| {
+            let mut core = fixture();
+            core.physical.tick_millis = quantum;
+            core.physical.work_rate_period_millis = Some(1000);
+            core.travel = None;
+            core.nutrition = None;
+            core.pending_food.clear();
+            core.rules.hunger_per_tick = 0;
+            core.rules.starvation_damage = 0;
+            core.people[0].health = 3;
+            core.people[1].health = 100;
+            core.people[1].region = Some(1);
+            let snapshot: CoreHostSnapshot = serde_json::from_value(serde_json::json!({
+                "core": core,
+                "health": {"owner": {"time_unit_millis": 100,
+                    "strains": [{"id":1,"name":"fever","incubation":1,"infectious_ticks":4,
+                        "immunity_ticks":2,"damage_per_tick":2,"transmission_per_million":0}],
+                    "cases": [{"person":1,"strain":1,"infected_at":0},{"person":2,"strain":1,"infected_at":0}]
+                }}
+            })).unwrap();
+            let mut host = CoreHost::begin(snapshot, &[(1,1)]).unwrap();
+            host.enable_schedule(1000,1).unwrap();
+            if quantum > 200 {
+                let first = host.next_deadline(None).unwrap();
+                assert!(first.disease);
+                assert_eq!(first.after_millis, 200);
+            }
+            for step in [17, 31, 151] {
+                assert_eq!(host.advance_continuous(step, &[]).unwrap().failure, None);
+            }
+            assert_eq!(host.snapshot().core.people[0].health, 3);
+            assert_eq!(host.advance_continuous(1, &[]).unwrap().failure, None);
+            assert_eq!(host.snapshot().core.people[0].health, 1);
+            let mid = serde_json::to_string(&host.snapshot()).unwrap();
+            let mut host = CoreHost::resume(serde_json::from_str(&mid).unwrap()).unwrap();
+            let fatal = host.advance_continuous(100, &[]).unwrap();
+            assert_eq!(fatal.failure, None);
+            assert!(fatal.events.iter().any(|event| matches!(event,
+                CoreRunEvent::Incapacitations {at_millis:300, people} if people[0].person == 1 && people[0].died)));
+            let stopped = host.snapshot();
+            assert_eq!(stopped.core.people[0].health, 0);
+            assert_eq!(stopped.core.physical.work[0].progress_remainder, 300);
+            let recovery = host.advance_continuous(200, &[]).unwrap();
+            assert_eq!(recovery.failure, None);
+            assert!(recovery.events.iter().any(|event| matches!(event,
+                CoreRunEvent::Disease(events) if events.iter().any(|event| event.person == 2 && event.at_millis == Some(500) && event.kind == game_disease::EventKind::Recovered))));
+            let immune = host.snapshot();
+            assert_eq!(immune.core.people[1].health, 92);
+            let cases = immune.health.unwrap().owner.cases;
+            assert_eq!(cases.len(), 1);
+            assert_eq!(cases[0].person, 2);
+            assert_eq!(host.advance_continuous(200, &[]).unwrap().failure, None);
+            assert!(host.snapshot().health.unwrap().owner.cases.is_empty());
+            stopped.core.physical.work[0].progress_remainder
+        })
+    };
+    assert_eq!(run(1000, 1), run(180, 4));
+}
+
+#[test]
 fn fatal_starvation_stops_work_at_its_elapsed_deadline_and_resumes() {
     let mut state = fixture();
     state.nutrition = None;
@@ -6836,11 +6900,12 @@ fn disease_uses_actual_meetings_and_does_not_require_social_to_progress() {
         initial.nutrition = None;
         initial.pending_food.clear();
         let disease = game_disease::Disease {
+            time_unit_millis: None,
             strains: vec![game_disease::Strain {
                 id: 1, name: "fever".into(), incubation: 0, infectious_ticks: 5, immunity_ticks: 0,
                 damage_per_tick: 4, transmission_per_million: 1_000_000,
                 combat_transmission_per_million: 0, birth_transmission_per_million: 0,
-            }], treatments: vec![], cases: vec![game_disease::Case {person: 2, strain: 1, infected_at: 0, source: None}], events: vec![],
+            }], treatments: vec![], cases: vec![game_disease::Case {person: 2, strain: 1, infected_at: 0, infected_at_millis: None, source: None}], events: vec![],
         };
         let social = game_economy::core_interval::CoreSocial { language: None, signals: None,
             owner: game_social::Social {
@@ -6943,6 +7008,7 @@ fn personal_treatment_consumes_medicine_and_only_clears_matching_episodes() {
                 };
                 let health = game_economy::core_interval::CoreHealth {
                     owner: game_disease::Disease {
+                        time_unit_millis: None,
                         strains: vec![strain(1), strain(2)],
                         treatments: vec![game_disease::Treatment {
                             strain: 1,
@@ -6953,12 +7019,14 @@ fn personal_treatment_consumes_medicine_and_only_clears_matching_episodes() {
                                 person: 2,
                                 strain: 1,
                                 infected_at: 0,
+                                infected_at_millis: None,
                                 source: None,
                             },
                             game_disease::Case {
                                 person: 3,
                                 strain: 2,
                                 infected_at: 0,
+                                infected_at_millis: None,
                                 source: None,
                             },
                         ],
@@ -8760,22 +8828,24 @@ fn core_host_cultivation_benchmark() {
         }),
         health: if medical { Some(game_economy::core_interval::CoreHealth {
             owner: game_disease::Disease {
+                time_unit_millis: None,
                 strains: vec![game_disease::Strain { id: 1, name: "fever".into(), incubation: 0,
                     infectious_ticks: 3, immunity_ticks: 0, damage_per_tick: 0,
                     transmission_per_million: 1_000_000, combat_transmission_per_million: 0, birth_transmission_per_million: 0 }],
                 treatments: vec![game_disease::Treatment { strain: 1, medicine: 1 }],
-                cases: (count / 2 + 1..=count).map(|person| game_disease::Case { person, strain: 1, infected_at: 0, source: None }).collect(), events: vec![],
+                cases: (count / 2 + 1..=count).map(|person| game_disease::Case { person, strain: 1, infected_at: 0, infected_at_millis: None, source: None }).collect(), events: vec![],
             }, treatment: vec![], last_tick: None,
         }) } else { (birth_disease || dependent_disease).then(|| game_economy::core_interval::CoreHealth {
             owner: game_disease::Disease {
+                time_unit_millis: None,
                 strains: vec![game_disease::Strain { id: 1, name: "fever".into(), incubation: 0,
                     infectious_ticks: 3, immunity_ticks: 0, damage_per_tick: 1,
                     transmission_per_million: if dependent_disease { 1_000_000 } else { 0 }, combat_transmission_per_million: 0,
                     birth_transmission_per_million: if birth_disease { 1_000_000 } else { 0 } }],
                 treatments: vec![], cases: if dependent_disease {
-                    (1..=2 * count / 3).map(|person| game_disease::Case { person, strain: 1, infected_at: 0, source: None }).collect()
+                    (1..=2 * count / 3).map(|person| game_disease::Case { person, strain: 1, infected_at: 0, infected_at_millis: None, source: None }).collect()
                 } else {
-                    (2..=count).step_by(2).map(|person| game_disease::Case { person, strain: 1, infected_at: 0, source: None }).collect()
+                    (2..=count).step_by(2).map(|person| game_disease::Case { person, strain: 1, infected_at: 0, infected_at_millis: None, source: None }).collect()
                 }, events: vec![],
             }, treatment: vec![], last_tick: None,
         }) },
@@ -9342,6 +9412,7 @@ fn core_host_social_benchmark() {
                 vec![]
             },
             owner: game_disease::Disease {
+                time_unit_millis: None,
                 strains: vec![game_disease::Strain {
                     id: 1,
                     name: "fever".into(),
@@ -9367,6 +9438,7 @@ fn core_host_social_benchmark() {
                         person,
                         strain: 1,
                         infected_at: 0,
+                        infected_at_millis: None,
                         source: None,
                     })
                     .collect(),
@@ -15341,12 +15413,13 @@ fn family_birth_custody_and_worker_death_commit_atomically() {
                 if infectious {
                     after_birth.health = Some(game_economy::core_interval::CoreHealth {
                         owner: game_disease::Disease {
+                            time_unit_millis: None,
                             strains: vec![game_disease::Strain { id: 1, name: "fever".into(),
                                 incubation: 0, infectious_ticks: 3, immunity_ticks: 0, damage_per_tick: 4,
                                 transmission_per_million: 1_000_000, combat_transmission_per_million: 0,
                                 birth_transmission_per_million: 0 }],
                             treatments: vec![], cases: vec![game_disease::Case {
-                                person: 2, strain: 1, infected_at: 0, source: None,
+                                person: 2, strain: 1, infected_at: 0, infected_at_millis: None, source: None,
                             }], events: vec![],
                         }, treatment: vec![], last_tick: None,
                     });
@@ -15503,12 +15576,13 @@ fn family_birth_custody_and_worker_death_commit_atomically() {
             let mut infected = snapshot.clone();
             infected.health = Some(game_economy::core_interval::CoreHealth {
                 owner: game_disease::Disease {
+                    time_unit_millis: None,
                     strains: vec![game_disease::Strain { id: 1, name: "fever".into(),
                         incubation: 0, infectious_ticks: 3, immunity_ticks: 0, damage_per_tick: 4,
                         transmission_per_million: 1_000_000, combat_transmission_per_million: 0,
                         birth_transmission_per_million: 1_000_000 }],
                     treatments: vec![], cases: vec![game_disease::Case {
-                        person: 2, strain: 1, infected_at: 0, source: None,
+                        person: 2, strain: 1, infected_at: 0, infected_at_millis: None, source: None,
                     }], events: vec![],
                 }, treatment: vec![], last_tick: None,
             });

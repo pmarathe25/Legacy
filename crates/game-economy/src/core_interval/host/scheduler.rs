@@ -222,6 +222,8 @@ pub struct CoreSchedule {
     /// Opt-in personal choice for construction, carrying, maintenance and work starts.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub personal_choices: Option<Arc<Vec<game_personal_choice::Person>>>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub on_site_meals: bool,
     /// Chosen cultivation intentions awaiting the next physical boundary.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub pending_cultivation: Vec<game_economy_agriculture::opportunities::Opportunity>,
@@ -697,6 +699,15 @@ pub struct CoreRun {
     pub failure: Option<String>,
 }
 impl CoreHost {
+    pub fn enable_on_site_meals(&mut self) -> Result<(), String> {
+        let schedule = self
+            .schedule
+            .as_mut()
+            .ok_or("on-site meals require a decision schedule")?;
+        schedule.on_site_meals = true;
+        Ok(())
+    }
+
     fn after_selected_batch(
         &self,
         meal_people: Vec<u64>,
@@ -836,6 +847,7 @@ impl CoreHost {
             phase: DecisionPhase::Meals,
             carried_rates,
             personal_choices: None,
+            on_site_meals: false,
             pending_cultivation: Vec::new(),
             settled_cultivation: Vec::new(),
             pending_gathering: Vec::new(),
@@ -1005,10 +1017,9 @@ impl CoreHost {
                     .social
                     .as_ref()
                     .is_some_and(|owner| owner.last_tick != Some(tick))
-                    || self
-                        .health
-                        .as_ref()
-                        .is_some_and(|owner| owner.last_tick != Some(tick));
+                    || self.health.as_ref().is_some_and(|owner| {
+                        owner.owner.time_unit_millis.is_none() && owner.last_tick != Some(tick)
+                    });
                 if due {
                     let dynamics = attempt!('run, self.advance_dynamics_autonomously(blocked));
                     if !dynamics.meetings.is_empty() {
@@ -2485,27 +2496,47 @@ impl CoreHost {
                                 intent.key.domain == personal_choice::MEAL
                                     && blocked_choice.binary_search(&intent.actor).is_err()
                             })
-                            .map(|intent| game_lot_diet::Meal {
-                                action: intent.actor,
-                                person: intent.actor,
-                                good: intent.movement.expect("validated meal").good,
+                            .map(|intent| {
+                                let movement = intent.movement.expect("validated meal");
+                                (
+                                    game_lot_diet::Meal {
+                                        action: intent.actor,
+                                        person: intent.actor,
+                                        good: movement.good,
+                                    },
+                                    movement,
+                                )
                             })
                             .collect();
-                        attempt!('run, self.eat_selected(&meals));
-                        choices.par_extend(meals.par_iter().map(|meal| CoreChoiceEvent {
+                        let outcomes = attempt!('run, self.eat_selected(&meals));
+                        let accepted = |meal: &game_lot_diet::Meal| {
+                            outcomes
+                                .binary_search_by_key(&meal.action, |row| row.id)
+                                .ok()
+                                .is_some_and(|index| outcomes[index].accepted)
+                        };
+                        choices.par_extend(meals.par_iter().map(|(meal, _)| CoreChoiceEvent {
                             tick: self.core.physical.tick(),
                             offset_millis: offset,
                             actor: meal.person,
                             key: personal_choice::selected_key(&intents, meal.person),
-                            outcome: CoreChoiceOutcome::Accepted,
+                            outcome: if accepted(meal) {
+                                CoreChoiceOutcome::Accepted
+                            } else {
+                                CoreChoiceOutcome::Denied
+                            },
                         }));
-                        meal_people.par_extend(meals.par_iter().map(|meal| meal.person));
+                        meal_people.par_extend(meals.par_iter().map(|(meal, _)| meal.person));
                         meal_people.par_sort_unstable();
                         meal_people.dedup();
-                        if !meals.is_empty() {
-                            run.events.push(CoreRunEvent::Meals(
-                                meals.iter().map(|meal| (meal.person, meal.good)).collect(),
-                            ));
+                        let eaten: Vec<_> = meals
+                            .par_iter()
+                            .filter_map(|(meal, _)| {
+                                accepted(meal).then_some((meal.person, meal.good))
+                            })
+                            .collect();
+                        if !eaten.is_empty() {
+                            run.events.push(CoreRunEvent::Meals(eaten));
                         }
                         if !choices.is_empty() {
                             choices.par_sort_unstable_by_key(|event| event.actor);
@@ -3110,6 +3141,10 @@ impl CoreHost {
                     events: elapsed.family_events,
                 });
             }
+            if !elapsed.disease_events.is_empty() {
+                run.events
+                    .push(CoreRunEvent::Disease(elapsed.disease_events));
+            }
         }
         run.elapsed_millis = self.core.elapsed_millis().expect("active interval") - start;
         Ok(run)
@@ -3171,6 +3206,24 @@ impl CoreHost {
             combined
                 .events
                 .push(CoreRunEvent::Boundary(Box::new(events)));
+            if let Some(health) = self
+                .health
+                .as_ref()
+                .filter(|health| health.owner.time_unit_millis.is_some())
+            {
+                let now = self.core.simulated_millis();
+                let tick = self.core.physical.tick();
+                let events: Vec<_> = health
+                    .owner
+                    .events
+                    .par_iter()
+                    .filter(|event| event.tick == tick && event.at_millis == Some(now))
+                    .cloned()
+                    .collect();
+                if !events.is_empty() {
+                    combined.events.push(CoreRunEvent::Disease(events));
+                }
+            }
             if !schedule.settled_cultivation.is_empty() {
                 self.record_personal_choices(
                     &mut combined,

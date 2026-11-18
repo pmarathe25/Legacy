@@ -185,6 +185,7 @@ capacity = 10000
         }
         snapshot.health = Some(game_economy::core_interval::CoreHealth {
             owner: game_disease::Disease {
+                time_unit_millis: None,
                 strains: vec![game_disease::Strain {
                     id: 1,
                     name: "fever".into(),

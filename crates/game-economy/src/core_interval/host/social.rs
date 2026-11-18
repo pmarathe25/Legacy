@@ -36,6 +36,7 @@ impl Clone for CoreHealth {
     fn clone(&self) -> Self {
         Self {
             owner: game_disease::Disease {
+                time_unit_millis: self.owner.time_unit_millis,
                 strains: self.owner.strains.par_iter().cloned().collect(),
                 treatments: self.owner.treatments.par_iter().cloned().collect(),
                 cases: self.owner.cases.par_iter().cloned().collect(),
@@ -186,10 +187,9 @@ impl CoreHost {
             .social
             .as_ref()
             .filter(|owner| owner.last_tick != Some(tick));
-        let health = self
-            .health
-            .as_ref()
-            .filter(|owner| owner.last_tick != Some(tick));
+        let health = self.health.as_ref().filter(|owner| {
+            owner.last_tick != Some(tick) && owner.owner.time_unit_millis.is_none()
+        });
         if tick == 0 || (social.is_none() && health.is_none()) {
             return Ok(CoreDynamicsResults::default());
         }
@@ -272,6 +272,25 @@ impl CoreHost {
             .social
             .as_ref()
             .map_or_else(Vec::new, |owner| owner.events.par_iter().cloned().collect());
+        let (elapsed_health, elapsed_disease_events) = self
+            .health
+            .as_ref()
+            .filter(|health| {
+                health.owner.time_unit_millis.is_some()
+                    && !meetings.is_empty()
+                    && !health.owner.cases.is_empty()
+                    && health
+                        .owner
+                        .strains
+                        .iter()
+                        .any(|strain| strain.transmission_per_million > 0)
+            })
+            .map(|health| self.stage_encounter_health(health, None, &meetings, tick))
+            .transpose()?
+            .map_or_else(
+                || (None, Vec::new()),
+                |(staged, events)| (Some(staged), events),
+            );
         let mechanical_claims = social
             .and_then(|owner| owner.language.as_ref())
             .and_then(|_| self.mechanical_claim_offers(&meetings));
@@ -514,10 +533,11 @@ impl CoreHost {
                     .map_err(str::to_owned)
             })
             .transpose()?;
-        let disease_events: Vec<_> = next
+        let mut disease_events: Vec<_> = next
             .disease
             .as_ref()
             .map_or_else(Vec::new, |owner| owner.events.par_iter().cloned().collect());
+        disease_events.par_extend(elapsed_disease_events);
         let mut opinions = next.social.as_ref().map(|_| self.opinions.clone());
         if let Some(opinions) = &mut opinions {
             game_economy_dynamics::learn_social(opinions, Some(&next), tick);
@@ -721,6 +741,9 @@ impl CoreHost {
                 treatment,
                 last_tick: Some(tick),
             });
+        }
+        if let Some(staged) = elapsed_health {
+            self.health = Some(staged);
         }
         if let Some(opinions) = opinions {
             self.opinions = opinions;

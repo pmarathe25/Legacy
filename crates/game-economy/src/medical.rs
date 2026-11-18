@@ -622,6 +622,7 @@ mod receipt_tests {
         };
         let receipt = |id, accepted| TransactionOutcome { id, accepted };
         let disease = Disease {
+            time_unit_millis: None,
             strains: vec![game_disease::Strain {
                 id: 1,
                 name: "fever".into(),
@@ -642,12 +643,14 @@ mod receipt_tests {
                     person: 2,
                     strain: 1,
                     infected_at: 0,
+                    infected_at_millis: None,
                     source: None,
                 },
                 game_disease::Case {
                     person: 4,
                     strain: 1,
                     infected_at: 0,
+                    infected_at_millis: None,
                     source: None,
                 },
             ],

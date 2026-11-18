@@ -7,6 +7,7 @@ travel_unit_millis = 3600000
 fatigue_rate_period_millis = 3600000
 elapsed_fatigue = true
 decision_period_millis = 3600000
+on_site_meals = true
 stock_capacity = 100000
 food_relief_divisor = 1
 
@@ -1649,6 +1650,9 @@ grow_ticks = 8760
 min_age = 17520
 min_health = 1
 max_hunger = 10
+
+[dynamics.disease]
+time_unit_millis = 3600000
 
 [[dynamics.disease.strains]]
 id = 1

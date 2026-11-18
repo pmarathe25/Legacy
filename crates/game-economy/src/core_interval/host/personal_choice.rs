@@ -794,7 +794,13 @@ impl CoreHost {
                             .is_ok()
                     })
                 });
+        let on_site_meals = domain.is_none_or(|domain| domain == MEAL)
+            && self
+                .schedule
+                .as_ref()
+                .is_some_and(|schedule| schedule.on_site_meals);
         let needs_view = needs_provision
+            || on_site_meals
             || (domain.is_none_or(|domain| domain == CONSTRUCTION)
                 && self
                     .construction
@@ -1434,48 +1440,83 @@ impl CoreHost {
                         })
                     })
             {
-                Ok(game_economy_person::meal::opportunities_now(
+                let mut sources: Vec<_> = game_economy_person::meal::opportunities_now(
                     &self.core.people,
                     self.core.physical.goods(),
                     &self.core.physical,
                     &busy,
                 )?
                 .into_par_iter()
-                .map(|opportunity| {
-                    let person = index_by_person(&self.core.people, opportunity.person, |p| p.id)
-                        .expect("known person");
-                    CoreChoiceIntent {
-                        fatigue_value: None,
-                        written_form: None,
-                        strike: None,
-                        watch: None,
-                        assembly: None,
-                        mechanical_load: None,
-                        cultivation: None,
-                        actor: opportunity.person,
-                        key: Key {
-                            domain: MEAL,
-                            action: u64::from(opportunity.good),
-                        },
-                        movement: Some(game_lots::Movement {
-                            batch: None,
-                            id: 0,
-                            from: game_lots::Place::Person(opportunity.person),
-                            to: None,
-                            good: opportunity.good,
-                            quantity: opportunity.portion,
-                            item: None,
-                        }),
-                        second_movement: None,
-                        work: None,
-                        experiment: None,
-                        experiment_value: None,
-                        meal_value: Some(i64::from(self.core.people[person].hunger)),
-                        tool_damage: None,
-                        health_value: None,
-                    }
+                .map(|food| {
+                    (
+                        food.person,
+                        food.good,
+                        food.portion,
+                        game_lots::Place::Person(food.person),
+                    )
                 })
-                .collect())
+                .collect();
+                if on_site_meals {
+                    let local_food = game_economy_person::provision::opportunities_to_eat(
+                        &self.core.people,
+                        self.core.physical.goods(),
+                        view.as_ref().expect("on-site meal view"),
+                        &busy,
+                        |person, region, good| {
+                            claims
+                                .as_ref()
+                                .map_or(Some(0), |index| index.food_access(person, region, good))
+                        },
+                    )?;
+                    sources.par_extend(local_food.into_par_iter().map(|food| {
+                        (
+                            food.person,
+                            food.good,
+                            food.quantity,
+                            game_lots::Place::Stock {
+                                region: food.region,
+                                good: food.good,
+                            },
+                        )
+                    }));
+                }
+                Ok(sources
+                    .into_par_iter()
+                    .map(|(id, good, portion, from)| {
+                        let person =
+                            index_by_person(&self.core.people, id, |p| p.id).expect("known person");
+                        CoreChoiceIntent {
+                            fatigue_value: None,
+                            written_form: None,
+                            strike: None,
+                            watch: None,
+                            assembly: None,
+                            mechanical_load: None,
+                            cultivation: None,
+                            actor: id,
+                            key: Key {
+                                domain: MEAL,
+                                action: u64::from(good),
+                            },
+                            movement: Some(game_lots::Movement {
+                                batch: None,
+                                id: 0,
+                                from,
+                                to: None,
+                                good,
+                                quantity: portion,
+                                item: None,
+                            }),
+                            second_movement: None,
+                            work: None,
+                            experiment: None,
+                            experiment_value: None,
+                            meal_value: Some(i64::from(self.core.people[person].hunger)),
+                            tool_damage: None,
+                            health_value: None,
+                        }
+                    })
+                    .collect())
             } else {
                 Ok(Vec::new())
             }

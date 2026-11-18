@@ -799,6 +799,7 @@ impl CoreHost {
         if let Some(health) = &health {
             let people: HashSet<_> = core.people.par_iter().map(|person| person.id).collect();
             health.owner.validate(&people, core.physical.tick())?;
+            health.owner.validate_elapsed(core.simulated_millis())?;
             let goods: HashSet<_> = core
                 .physical
                 .goods()
@@ -1593,6 +1594,7 @@ impl CoreHost {
             .next_conception()
             .and_then(|after| u64::try_from(after).ok());
         let dry_field = self.next_dry_field();
+        let disease = self.next_disease_deadline();
         let first = [
             recovery,
             exposure,
@@ -1601,6 +1603,7 @@ impl CoreHost {
             delivery,
             conception,
             dry_field,
+            disease,
         ]
         .into_iter()
         .flatten()
@@ -1620,6 +1623,7 @@ impl CoreHost {
                     delivery: delivery == Some(after_millis),
                     conception: conception == Some(after_millis),
                     dry_field: dry_field == Some(after_millis),
+                    disease: disease == Some(after_millis),
                     recovery: recovery == Some(after_millis),
                     exposure: exposure == Some(after_millis),
                 };
@@ -1631,6 +1635,7 @@ impl CoreHost {
                 deadline.delivery = delivery == Some(after_millis);
                 deadline.conception = conception == Some(after_millis);
                 deadline.dry_field = dry_field == Some(after_millis);
+                deadline.disease = disease == Some(after_millis);
             }
         }
         Ok(deadline)
@@ -1993,23 +1998,67 @@ impl CoreHost {
         Ok(meals)
     }
     /// Commit only the meals already selected by individuals.
-    fn eat_selected(&mut self, meals: &[game_lot_diet::Meal]) -> Result<(), String> {
+    fn eat_selected(
+        &mut self,
+        selected: &[(game_lot_diet::Meal, game_lots::Movement)],
+    ) -> Result<Vec<game_lots::TransactionOutcome>, String> {
         let tick = self.core.physical.tick();
         let offset = self.core.elapsed_millis().ok_or("no physical interval")?;
-        let Some(draft) = self.core.prepare_meals(tick, offset, meals)? else {
-            return Ok(());
+        if selected
+            .par_windows(2)
+            .any(|rows| rows[0].0.person >= rows[1].0.person)
+        {
+            return Err("selected meals must be ordered by person".into());
+        }
+        let meals: Vec<_> = selected.par_iter().map(|(meal, _)| *meal).collect();
+        let source = |meal: &game_lot_diet::Meal| {
+            let index = selected
+                .binary_search_by_key(&meal.person, |row| row.0.person)
+                .expect("selected meal");
+            selected[index].1.from
+        };
+        let Some(draft) = self
+            .core
+            .prepare_meals_with_source(tick, offset, &meals, source)?
+        else {
+            return Ok(Vec::new());
         };
         let tools = self.stage_tools(&[], None, draft.item_updates())?;
         let writing = self.stage_written_page_removals(draft.item_updates());
+        let claims = if self.claims.is_some() {
+            let uses: Vec<_> = selected
+                .par_iter()
+                .filter_map(|(meal, movement)| {
+                    let game_lots::Place::Stock { region, good } = movement.from else {
+                        return None;
+                    };
+                    Some(game_economy_claims::Use {
+                        person: meal.person,
+                        action: meal.action,
+                        region,
+                        good,
+                        quantity: movement.quantity,
+                        job: false,
+                    })
+                })
+                .collect();
+            self.stage_food_claims(&uses, draft.physical.transactions())
+        } else {
+            None
+        };
         self.core.validate_meals(&draft)?;
-        self.core.commit_meals(draft)?;
+        let outcomes = self.core.commit_meals(draft)?;
         if let Some(tools) = tools {
             self.tool_wear = Some(tools);
         }
         if let Some(writing) = writing {
             self.writing = Some(writing);
         }
-        Ok(())
+        if let Some((owner, opinions)) = claims {
+            self.claims = Some(owner);
+            self.opinions = opinions;
+        }
+        Ok(outcomes.transactions)
     }
     /// Inspect individual work opportunities before shared-stock admission.
     /// Site, tool and physical resource admission can still deny an attempt.

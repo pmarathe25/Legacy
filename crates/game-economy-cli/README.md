@@ -374,6 +374,12 @@ The hourly scenario also enables experimental personal vocabularies with a data-
 
 `economy-core-tool-choice.toml` uses domain 8 to compare repairing a carried, identified tool with other opportunities. A person's signed weight and bias interpret the observed damage; hunger does not categorically prevent a personally chosen repair. Explicitly listing the domain, including disabling it, defers that person's earlier automatic repair. The exact tool, observed condition, and required material are saved and revalidated; a chosen repair can still be denied when the material is unavailable. Other earlier activity phases retain their current priority.
 
+Interval scenarios may set `on_site_meals = true` to make a local stock
+portion available for domain 7 even when it cannot fit in the person's cargo.
+People evaluate it using their meal preferences and their own judgment about
+claims. The food is consumed at the source. Actual stock decides which
+competing attempts succeed, and only successful consumption relieves hunger.
+
 `economy-core-food-pickup-choice.toml` adds domain 9 for acquiring locally visible food. Explicitly listing it defers automatic provision, and individual signed preferences compare available food against other activities and idleness without an imposed hunger threshold. `[[meal_preferences]]` may specify `domain = 9` and a named food to refine pickup choices. The selected source and portion are revalidated; simultaneous attempts still compete for actual stock, and accepted uses publish claim observations. This covers regional stock only; travel and other earlier activities still retain their existing scheduling.
 
 `economy-core-treatment-choice.toml` adds domain 10 for using one's own medicine. An explicit personal health threshold remains meaningful, but without one a person may choose medicine even at full health. Medicine is physically consumed and only actual matching disease episodes are affected. This covers self-treatment; care provided to others and several earlier activity phases still follow their existing paths.

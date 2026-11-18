@@ -901,6 +901,137 @@ fn chosen_wound_treatment_requires_real_supplies_and_can_be_declined() {
 }
 
 #[test]
+fn people_can_choose_to_eat_at_stock_with_full_cargo_and_compete_for_one_portion() {
+    use game_economy::core_interval::{CoreChoiceOutcome, CoreHost, CoreRunEvent};
+    use game_lots::Place;
+
+    let root = root();
+    let source =
+        std::fs::read_to_string(root.join("content/scenarios/economy-core-exchange.toml")).unwrap();
+    let mut source = source
+        .split_once("[family]")
+        .unwrap()
+        .0
+        .replacen("seed = 7", "seed = 7\non_site_meals = true", 1)
+        .replace(
+            "stock = { grain = 100, bread = 20 }",
+            "stock = { bread = 4 }",
+        )
+        .replace("hunger = 0", "hunger = 75")
+        .replace("seek_meals = false", "seek_meals = true")
+        .replace("goods = { grain = 2 }", "goods = { timber = 100 }")
+        .replace("goods = { bread = 1 }", "goods = { timber = 100 }");
+    source.push_str(
+        r#"
+[[personal_choices]]
+id = 1
+idle = 0
+preferences = [{ domain = 7, enabled = true, bias = 0, weight = 1000 }]
+
+[[personal_choices]]
+id = 2
+idle = 0
+preferences = [{ domain = 7, enabled = true, bias = 0, weight = 1000 }]
+"#,
+    );
+    let path =
+        std::env::temp_dir().join(format!("legacy-meals-at-stock-{}.toml", std::process::id()));
+    std::fs::write(&path, source).unwrap();
+    let loaded = game_economy_cli::core_scenario(&path, &root.join("content"));
+    std::fs::remove_file(path).unwrap();
+    let opening = loaded.unwrap().snapshot();
+    let good = opening
+        .core
+        .physical
+        .goods
+        .iter()
+        .find(|good| good.name == "bread")
+        .unwrap()
+        .id;
+    let run = |workers: usize, enabled: bool| {
+        let mut state = opening.clone();
+        state.schedule.as_mut().unwrap().on_site_meals = enabled;
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut host = CoreHost::resume(
+                    serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap(),
+                )
+                .unwrap();
+                let run = host.advance_continuous(1, &[]).unwrap();
+                assert_eq!(run.failure, None);
+                let meals: Vec<_> = run
+                    .events
+                    .iter()
+                    .filter_map(|event| match event {
+                        CoreRunEvent::Meals(rows) => Some(rows.as_slice()),
+                        _ => None,
+                    })
+                    .flatten()
+                    .copied()
+                    .collect();
+                let choices: Vec<_> = run
+                    .events
+                    .iter()
+                    .filter_map(|event| match event {
+                        CoreRunEvent::PersonalChoices(rows) => Some(rows.as_slice()),
+                        _ => None,
+                    })
+                    .flatten()
+                    .filter(|row| row.key.is_some_and(|key| key.domain == 7))
+                    .collect();
+                let final_state = host.snapshot();
+                let containers = &final_state.core.physical.custody.containers;
+                let stock = containers
+                    .iter()
+                    .find(|entry| entry.place == Place::Stock { region: 1, good })
+                    .unwrap();
+                assert!(
+                    containers
+                        .iter()
+                        .filter(|entry| matches!(entry.place, Place::Person(_)))
+                        .all(|row| row.used == 100)
+                );
+                if enabled {
+                    assert_eq!(stock.used, 0);
+                    assert_eq!(meals.len(), 1);
+                    assert_eq!(choices.len(), 2);
+                    assert_eq!(
+                        choices
+                            .iter()
+                            .filter(|row| row.outcome == CoreChoiceOutcome::Accepted)
+                            .count(),
+                        1
+                    );
+                    assert_eq!(
+                        choices
+                            .iter()
+                            .filter(|row| row.outcome == CoreChoiceOutcome::Denied)
+                            .count(),
+                        1
+                    );
+                    assert_eq!(final_state.core.people[(meals[0].0 - 1) as usize].hunger, 0);
+                } else {
+                    assert_eq!(stock.used, 4);
+                    assert!(meals.is_empty());
+                    assert!(
+                        final_state
+                            .core
+                            .people
+                            .iter()
+                            .all(|person| person.hunger == 75)
+                    );
+                }
+                meals
+            })
+    };
+    assert_eq!(run(1, true), run(4, true));
+    assert!(run(4, false).is_empty());
+}
+
+#[test]
 fn an_unrelated_caregiver_can_act_from_fear_and_disregard_a_food_claim() {
     use game_economy::core_interval::CoreHost;
     use game_lots::Place;
@@ -8905,6 +9036,7 @@ fn medical_help_consumes_real_medicine_and_can_transmit_infection() {
                 .unwrap();
                 snapshot.health = Some(game_economy::core_interval::CoreHealth {
                     owner: game_disease::Disease {
+                        time_unit_millis: None,
                         strains: vec![game_disease::Strain {
                             id: 1,
                             name: "illness".into(),
@@ -8924,6 +9056,7 @@ fn medical_help_consumes_real_medicine_and_can_transmit_infection() {
                             person: 1,
                             strain: 1,
                             infected_at: 0,
+                            infected_at_millis: None,
                             source: None,
                         }],
                         events: vec![],
@@ -9024,7 +9157,7 @@ fn personal_food_requests_and_pressured_giving_use_real_custody() {
                 "records": if pressured { vec![serde_json::json!({"observer":2,"target":1,"trust":0,"fear":3})] } else { vec![] }
             })).unwrap());
             snapshot.health.as_mut().unwrap().owner.cases = vec![game_disease::Case {
-                person: 1, strain: 1, infected_at: 0, source: None,
+                person: 1, strain: 1, infected_at: 0, infected_at_millis: None, source: None,
             }];
             let saved = serde_json::to_string(&snapshot).unwrap();
             let mut host = game_economy::core_interval::CoreHost::resume(snapshot).unwrap();

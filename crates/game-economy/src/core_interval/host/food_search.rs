@@ -95,52 +95,14 @@ impl CoreHost {
         if plan.actions.is_empty() {
             return Ok(CoreFoodProvision::default());
         }
-        let tick = self.core.physical.tick();
-        let claims = self.claims.as_ref();
         let draft = self
             .core
             .physical
             .prepare_interval_transfer(&plan.actions, self.core.seed)?;
         let tools = self.stage_tools(&[], None, draft.item_updates())?;
         let writing = self.stage_written_page_removals(draft.item_updates());
-        let mut staged_claims = claims.cloned();
-        let mut staged_opinions = claims.is_some().then(|| self.opinions.clone());
-        if let Some(claims) = &mut staged_claims {
-            let uses = game_economy_claims::pickups(&plan);
-            let old_events: Vec<_> = std::mem::take(&mut claims.events)
-                .into_par_iter()
-                .filter(|event| event.tick == tick)
-                .collect();
-            let events = game_lot_runtime::Events {
-                tick,
-                physical_actions: draft.transactions().par_iter().cloned().collect(),
-                started: vec![],
-                start_denied: vec![],
-                abandoned: vec![],
-                suspended: vec![],
-                adopted: vec![],
-                finished: vec![],
-                delivered: vec![],
-                output_lost: vec![],
-                interrupted: vec![],
-                returned: vec![],
-                empty_returns: vec![],
-                spoiled: vec![],
-                physical_movements: Default::default(),
-            };
-            game_economy_claims::publish(
-                claims,
-                &uses,
-                &events,
-                &self.core.people,
-                staged_opinions.as_mut().expect("claims stage opinions"),
-                None,
-            );
-            claims.events.par_extend(old_events);
-            claims
-                .events
-                .par_sort_unstable_by_key(|e| (e.tick, e.claimant, e.person, e.region, e.good));
-        }
+        let claims =
+            self.stage_food_claims(&game_economy_claims::pickups(&plan), draft.transactions());
         let outcomes = self.core.physical.commit_interval_consumption(draft)?;
         if let Some(tools) = tools {
             self.tool_wear = Some(tools);
@@ -148,14 +110,58 @@ impl CoreHost {
         if let Some(writing) = writing {
             self.writing = Some(writing);
         }
-        self.claims = staged_claims;
-        if let Some(opinions) = staged_opinions {
+        if let Some((owner, opinions)) = claims {
+            self.claims = Some(owner);
             self.opinions = opinions;
         }
         Ok(CoreFoodProvision {
             actors: plan.actors,
             outcomes: outcomes.transactions,
         })
+    }
+
+    pub(super) fn stage_food_claims(
+        &self,
+        uses: &[game_economy_claims::Use],
+        transactions: &[game_lots::TransactionOutcome],
+    ) -> Option<(game_economy_claims::Claims, Option<game_opinions::Opinions>)> {
+        let mut claims = self.claims.as_ref().filter(|_| !uses.is_empty())?.clone();
+        let mut opinions = self.opinions.clone();
+        let tick = self.core.physical.tick();
+        let old_events: Vec<_> = std::mem::take(&mut claims.events)
+            .into_par_iter()
+            .filter(|event| event.tick == tick)
+            .collect();
+        let events = game_lot_runtime::Events {
+            tick,
+            physical_actions: transactions.par_iter().cloned().collect(),
+            started: vec![],
+            start_denied: vec![],
+            abandoned: vec![],
+            suspended: vec![],
+            adopted: vec![],
+            finished: vec![],
+            delivered: vec![],
+            output_lost: vec![],
+            interrupted: vec![],
+            returned: vec![],
+            empty_returns: vec![],
+            spoiled: vec![],
+            physical_movements: Default::default(),
+        };
+        game_economy_claims::publish(
+            &mut claims,
+            uses,
+            &events,
+            &self.core.people,
+            &mut opinions,
+            None,
+        );
+        claims.events.par_extend(old_events);
+        claims
+            .events
+            .par_sort_unstable_by_key(|e| (e.tick, e.claimant, e.person, e.region, e.good));
+        Some((claims, opinions))
     }
 
     /// Stage personal search decisions and route observations together.

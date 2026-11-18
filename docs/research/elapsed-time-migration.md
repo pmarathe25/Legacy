@@ -83,6 +83,10 @@ An elapsed environment can set `exposure_period_millis` to schedule personal
 hazard damage and shelter rotation at fixed simulated times. The host uses
 the season just before each exposure event and applies it before new choices
 and ordinary healing at that instant. Legacy exposure still uses settlement.
+`dynamics.disease.time_unit_millis` measures case stages and recurring damage
+from the exact exposure time. The interval host stops at damage, recovery, and
+immunity expiry deadlines. Meetings and other contact opportunities follow
+their respective decision schedules.
 Optional `nutrition.rules.interval_millis` sets absolute metabolism deadlines
 and applies deficiency damage at those times. A meal credits nutrients at
 successful consumption in this mode. An explicit
@@ -109,7 +113,7 @@ derives this value from its original tick and quantum when loaded. This clock
 does not by itself convert other owners' tick-based state when a quantum
 changes. This does not yet convert
 all fatigue decision opportunities, family
-and animal clocks, other ecological processes, disease, or social randomness. In
+and animal clocks, other ecological processes, or social randomness. In
 particular, a short physical quantum must not be advertised as a faithful
 minute-world until those owners have independent elapsed-time rules.
 

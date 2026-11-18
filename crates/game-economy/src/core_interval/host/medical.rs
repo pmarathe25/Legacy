@@ -2,6 +2,47 @@
 use super::*;
 
 impl CoreHost {
+    pub(super) fn next_disease_deadline(&self) -> Option<u64> {
+        let health = self.health.as_ref()?;
+        u64::try_from(
+            health
+                .owner
+                .next_elapsed_deadline(self.core.simulated_millis())?,
+        )
+        .ok()
+    }
+
+    pub(super) fn stage_elapsed_disease(
+        &self,
+        people: &mut [game_economy_person::Person],
+        now: u128,
+    ) -> Option<CoreHealth> {
+        let health = self.health.as_ref()?;
+        let draft = health.owner.stage_elapsed(
+            |person| {
+                people
+                    .binary_search_by_key(&person, |row| row.id)
+                    .ok()
+                    .map(|index| people[index].health)
+            },
+            now,
+            self.core.physical.tick(),
+        )?;
+        people.par_iter_mut().for_each(|person| {
+            if let Ok(index) = draft
+                .damage
+                .binary_search_by_key(&person.id, |row| row.person)
+            {
+                person.health = person.health.saturating_sub(draft.damage[index].amount);
+            }
+        });
+        Some(CoreHealth {
+            owner: draft.state,
+            treatment: health.treatment.clone(),
+            last_tick: health.last_tick,
+        })
+    }
+
     pub(super) fn plan_medical(
         &self,
         external: &[u64],
@@ -114,26 +155,41 @@ impl CoreHost {
             .collect::<Result<Vec<_>, String>>()?;
         encounters.par_sort_unstable_by_key(|row| (row.a, row.b));
         encounters.dedup_by_key(|row| (row.a, row.b));
-        let people: Vec<_> = self
-            .core
-            .people
-            .par_iter()
-            .map(|person| game_disease::Person {
-                id: person.id,
-                health: person.health,
-            })
-            .collect();
+        self.stage_encounter_health(health, staged, &encounters, tick)
+            .map(|(staged, _)| Some(staged))
+    }
+
+    pub(super) fn stage_encounter_health(
+        &self,
+        health: &CoreHealth,
+        staged: Option<CoreHealth>,
+        encounters: &[game_social::Encounter],
+        tick: u64,
+    ) -> Result<(CoreHealth, Vec<game_disease::Event>), String> {
+        let people = disease_people(&self.core.people);
         let mut next = staged.unwrap_or_else(|| health.clone());
-        next.owner
-            .admit_contacts_validated(
+        let events = if health.owner.time_unit_millis.is_some() {
+            next.owner.admit_elapsed_contacts(
                 &health.owner,
                 &people,
-                &encounters,
+                encounters,
                 self.core.seed,
-                tick - 1,
+                tick,
+                self.core.simulated_millis(),
             )
-            .map_err(str::to_owned)?;
-        Ok(Some(next))
+        } else {
+            next.owner
+                .admit_contacts_validated(
+                    &health.owner,
+                    &people,
+                    encounters,
+                    self.core.seed,
+                    tick - 1,
+                )
+                .map(|()| Vec::new())
+        }
+        .map_err(str::to_owned)?;
+        Ok((next, events))
     }
 
     pub(super) fn stage_medical_health(
@@ -152,6 +208,18 @@ impl CoreHost {
         };
         let mut next = staged.unwrap_or_else(|| health.clone());
         resolved.apply(Some(&mut next.owner), tick);
+        next.owner
+            .stamp_treatments(tick, self.core.simulated_millis());
         Some(next)
     }
+}
+
+fn disease_people(people: &[game_economy_person::Person]) -> Vec<game_disease::Person> {
+    people
+        .par_iter()
+        .map(|person| game_disease::Person {
+            id: person.id,
+            health: person.health,
+        })
+        .collect()
 }

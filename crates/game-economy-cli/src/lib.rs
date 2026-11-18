@@ -37,6 +37,8 @@ struct Scenario {
     /// Autonomous decision cadence, independent of the physical quantum.
     #[serde(default)]
     decision_period_millis: Option<u64>,
+    #[serde(default)]
+    on_site_meals: bool,
     stock_capacity: u64,
     food_relief_divisor: u32,
     rules: Rules,
@@ -1028,6 +1030,7 @@ pub fn core_scenario_with_options(
     let language_topic_profiles = authored.language_topic_profiles;
     let signals = authored.signals;
     let decision_period_millis = authored.decision_period_millis;
+    let on_site_meals = authored.on_site_meals;
     let fatigue_rate_period_millis = authored.fatigue_rate_period_millis;
     let elapsed_fatigue = authored.elapsed_fatigue;
     let hunger_rate = authored.rules.hunger_rate;
@@ -1433,6 +1436,9 @@ pub fn core_scenario_with_options(
     let period = decision_period_millis.unwrap_or(snapshot.core.physical.tick_millis);
     let mut host = game_economy::core_interval::CoreHost::begin(snapshot, &[])?;
     host.enable_schedule(period, 1)?;
+    if on_site_meals {
+        host.enable_on_site_meals()?;
+    }
     if !personal_choices.is_empty() || birth_choices.is_some() {
         host.enable_personal_choices(personal_choices)?;
     }
@@ -1478,6 +1484,9 @@ fn scenario_with_options_inner(
         return Err(
             "elapsed decision cadence or fatigue rates require the interval simulation host".into(),
         );
+    }
+    if scenario.on_site_meals && !interval_features {
+        return Err("on-site meals require the interval simulation host".into());
     }
     if scenario.rules.hunger_rate.is_some() {
         if !interval_features {
@@ -1526,6 +1535,15 @@ fn scenario_with_options_inner(
             .is_some_and(|owner| owner.evaporation_period_millis.is_some())
     {
         return Err("elapsed irrigation requires the interval simulation host".into());
+    }
+    if !interval_features
+        && scenario
+            .dynamics
+            .as_ref()
+            .and_then(|owner| owner.disease.as_ref())
+            .is_some_and(|owner| owner.time_unit_millis.is_some())
+    {
+        return Err("elapsed disease requires the interval simulation host".into());
     }
     if !interval_features
         && scenario

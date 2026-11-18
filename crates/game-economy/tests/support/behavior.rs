@@ -10732,6 +10732,7 @@ fn infection_from(person: u64) -> Dynamics {
         personality: None,
         social: None,
         disease: Some(Disease {
+            time_unit_millis: None,
             strains: vec![Strain {
                 id: 1,
                 name: "fever".into(),
@@ -10748,6 +10749,7 @@ fn infection_from(person: u64) -> Dynamics {
                 person,
                 strain: 1,
                 infected_at: 0,
+                infected_at_millis: None,
                 source: None,
             }],
             events: vec![],
@@ -10799,6 +10801,7 @@ fn actual_personal_encounters_transmit_disease_and_survive_reload() {
             needs: None,
         }),
         disease: Some(Disease {
+            time_unit_millis: None,
             strains: vec![Strain {
                 id: 1,
                 name: "fever".into(),
@@ -10815,6 +10818,7 @@ fn actual_personal_encounters_transmit_disease_and_survive_reload() {
                 person: 1,
                 strain: 1,
                 infected_at: 0,
+                infected_at_millis: None,
                 source: None,
             }],
             events: vec![],
@@ -11632,6 +11636,7 @@ fn self_treatment_requires_personal_choice_and_actual_unexpired_medicine() {
         personality: None,
         social: None,
         disease: Some(Disease {
+            time_unit_millis: None,
             strains: vec![Strain {
                 id: 1,
                 name: "fever".into(),
@@ -11651,6 +11656,7 @@ fn self_treatment_requires_personal_choice_and_actual_unexpired_medicine() {
                 person: 1,
                 strain: 1,
                 infected_at: 0,
+                infected_at_millis: None,
                 source: None,
             }],
             events: vec![],
@@ -12708,6 +12714,7 @@ fn one_person_cannot_treat_and_receive_treatment_in_the_same_boundary() {
             person: 3,
             strain: 1,
             infected_at: 0,
+            infected_at_millis: None,
             source: None,
         });
     initial.medical.as_mut().unwrap().policies = vec![
@@ -12813,6 +12820,7 @@ fn distributed_medical_workload(count: u64) -> State {
             person,
             strain: 1,
             infected_at: 0,
+            infected_at_millis: None,
             source: None,
         })
         .collect();
@@ -16887,6 +16895,7 @@ fn birth_preserves_all_prior_maternal_strains_during_treatment() {
         person: 1,
         strain: 2,
         infected_at: 0,
+        infected_at_millis: None,
         source: None,
     });
     disease.treatments.push(game_disease::Treatment {
@@ -25128,6 +25137,7 @@ fn disease_workload(count: u64) -> State {
             needs: None,
         }),
         disease: Some(Disease {
+            time_unit_millis: None,
             strains: vec![Strain {
                 id: 1,
                 name: "fever".into(),
@@ -25144,6 +25154,7 @@ fn disease_workload(count: u64) -> State {
                     person,
                     strain: 1,
                     infected_at: 0,
+                    infected_at_millis: None,
                     source: None,
                 })
                 .collect(),

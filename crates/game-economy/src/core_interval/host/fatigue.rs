@@ -6,6 +6,7 @@ pub(super) struct ElapsedProgress {
     pub millis: u64,
     pub incapacitations: Vec<scheduler::Incapacitation>,
     pub family_events: Vec<game_economy_family::FamilyEvent>,
+    pub disease_events: Vec<game_disease::Event>,
 }
 use game_economy_fatigue::TimedActivity;
 
@@ -192,6 +193,10 @@ impl CoreHost {
         if let Some(deadline) = self.next_dry_field() {
             consumed = consumed.min(deadline);
         }
+        let disease = self.next_disease_deadline();
+        if let Some(deadline) = disease {
+            consumed = consumed.min(deadline);
+        }
         let (crop_rates, crop_limit) = self.plan_crop_segment(consumed)?;
         consumed = crop_limit;
         let elapsed_owner = self
@@ -297,6 +302,7 @@ impl CoreHost {
         let purpose_due = purpose == Some(consumed);
         let delivery_due = delivery == Some(u128::from(consumed));
         let conception_due = conception == Some(u128::from(consumed));
+        let disease_due = disease == Some(consumed);
         let food_health_due = self.core.next_food_health() == Some(u128::from(consumed));
         let mut vitals = (has_injuries
             || exposure_due
@@ -304,6 +310,7 @@ impl CoreHost {
             || purpose_due
             || delivery_due
             || conception_due
+            || disease_due
             || food_health_due
             || ordinary_recovery_due
             || self.core.next_metabolism() == Some(consumed))
@@ -322,6 +329,15 @@ impl CoreHost {
                 Some(sample),
             );
         }
+        let event_time = self.core.simulated_millis() + u128::from(consumed);
+        let staged_health = if disease_due {
+            self.stage_elapsed_disease(
+                &mut vitals.as_mut().expect("disease vitals").people,
+                event_time,
+            )
+        } else {
+            None
+        };
         let natural_deaths: Vec<_> = if natural_death_due {
             let now = self.core.simulated_millis() + u128::from(consumed);
             let due = self
@@ -365,17 +381,23 @@ impl CoreHost {
             None
         };
         let delivery = if delivery_due || conception_due {
-            let now = self.core.simulated_millis() + u128::from(consumed);
             self.stage_elapsed_family(
                 &vitals.as_ref().expect("delivery vitals").people,
-                now,
+                event_time,
                 purpose.as_ref(),
+                staged_health.as_ref(),
                 delivery_due,
                 conception_due,
             )?
         } else {
             None
         };
+        let mut disease_events: Vec<_> = staged_health.as_ref().map_or_else(Vec::new, |health| {
+            health.owner.events.par_iter().cloned().collect()
+        });
+        if let Some(delivery) = &delivery {
+            disease_events.par_extend(delivery.birth_disease_events(event_time));
+        }
         let deaths = if let Some(vitals) = &vitals {
             self.core
                 .people
@@ -467,6 +489,7 @@ impl CoreHost {
                     || purpose_due
                     || food_health_due
                     || delivery_due
+                    || disease_due
                 {
                     self.work_checked_revision = None;
                 }
@@ -476,6 +499,9 @@ impl CoreHost {
                     self.record_assist_durations(&durations);
                 }
                 self.remember_skill_practice(credits);
+                if let Some(health) = staged_health {
+                    self.health = Some(health);
+                }
                 if let Some(delivery) = delivery {
                     family_events = self.publish_elapsed_family(delivery);
                 }
@@ -484,6 +510,7 @@ impl CoreHost {
                 millis: advanced,
                 incapacitations,
                 family_events,
+                disease_events,
             });
         };
         if consumed == 0 {
@@ -654,10 +681,14 @@ impl CoreHost {
             || purpose_due
             || food_health_due
             || delivery_due
+            || disease_due
         {
             self.work_checked_revision = None;
         }
         self.activity = next;
+        if let Some(health) = staged_health {
+            self.health = Some(health);
+        }
         let family_events =
             delivery.map_or_else(Vec::new, |delivery| self.publish_elapsed_family(delivery));
         if let Some(owner) = staged_shared {
@@ -670,6 +701,7 @@ impl CoreHost {
             millis: advanced,
             incapacitations,
             family_events,
+            disease_events,
         })
     }
 

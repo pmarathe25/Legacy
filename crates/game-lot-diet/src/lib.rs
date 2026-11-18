@@ -44,6 +44,7 @@ pub struct Meal {
 }
 struct Record {
     meal: Meal,
+    source: Place,
     portion: u64,
     relief: u32,
     health: i32,
@@ -202,7 +203,7 @@ impl Plan {
                         batch: None,
                         item: None,
                         id,
-                        from: Place::Person(record.meal.person),
+                        from: record.source,
                         to: None,
                         good: record.meal.good,
                         quantity: record.portion,
@@ -269,6 +270,14 @@ impl Plan {
 }
 /// A person can choose at most one meal in this batch.
 pub fn plan(meals: &[Meal], goods: &[Good]) -> Result<Plan, String> {
+    plan_from(meals, goods, |meal| Place::Person(meal.person))
+}
+
+pub fn plan_from(
+    meals: &[Meal],
+    goods: &[Good],
+    source: impl Fn(&Meal) -> Place + Sync,
+) -> Result<Plan, String> {
     let mut index = HashMap::new();
     for good in goods {
         if good.id == 0 || index.insert(good.id, good).is_some() {
@@ -298,6 +307,7 @@ pub fn plan(meals: &[Meal], goods: &[Good]) -> Result<Plan, String> {
             }
             Ok(Record {
                 meal: *meal,
+                source: source(meal),
                 portion: food.portion,
                 relief: food.hunger_relief,
                 health: food.health_effect,
@@ -313,7 +323,7 @@ pub fn plan(meals: &[Meal], goods: &[Good]) -> Result<Plan, String> {
                 batch: None,
                 item: None,
                 id: record.meal.action,
-                from: Place::Person(record.meal.person),
+                from: record.source,
                 to: None,
                 good: record.meal.good,
                 quantity: record.portion,

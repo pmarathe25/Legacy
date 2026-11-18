@@ -150,6 +150,25 @@ impl Runtime {
         actions: &[Transaction],
         seed: u64,
     ) -> Result<IntervalConsumptionDraft, String> {
+        self.prepare_interval_consumption_at(actions, seed, false)
+    }
+
+    /// Stage food consumed in personal custody or at its regional stock.
+    /// The host validates physical access for each person before planning it.
+    pub fn prepare_interval_food_consumption(
+        &self,
+        actions: &[Transaction],
+        seed: u64,
+    ) -> Result<IntervalConsumptionDraft, String> {
+        self.prepare_interval_consumption_at(actions, seed, true)
+    }
+
+    fn prepare_interval_consumption_at(
+        &self,
+        actions: &[Transaction],
+        seed: u64,
+        at_stock: bool,
+    ) -> Result<IntervalConsumptionDraft, String> {
         let interval = self
             .work_interval
             .as_ref()
@@ -164,7 +183,9 @@ impl Runtime {
         if actions.par_iter().any(|action| {
             !action.creations.is_empty()
                 || action.movements.iter().any(|movement| {
-                    !matches!(movement.from, Place::Person(_)) || movement.to.is_some()
+                    !(matches!(movement.from, Place::Person(_))
+                        || (at_stock && matches!(movement.from, Place::Stock { .. })))
+                        || movement.to.is_some()
                 })
         }) {
             return Err("interval consumption requires personal custody".into());

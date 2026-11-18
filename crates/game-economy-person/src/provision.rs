@@ -28,6 +28,28 @@ pub fn opportunities_now(
     busy: &[u64],
     consider: impl Fn(&Person, u64, u32) -> Option<u8> + Sync,
 ) -> Result<Vec<Opportunity>, String> {
+    stock_opportunities(people, goods, view, busy, consider, false)
+}
+
+/// A local person may choose to eat a portion they cannot fit in their cargo.
+pub fn opportunities_to_eat(
+    people: &[Person],
+    goods: &[Good],
+    view: &View,
+    busy: &[u64],
+    consider: impl Fn(&Person, u64, u32) -> Option<u8> + Sync,
+) -> Result<Vec<Opportunity>, String> {
+    stock_opportunities(people, goods, view, busy, consider, true)
+}
+
+fn stock_opportunities(
+    people: &[Person],
+    goods: &[Good],
+    view: &View,
+    busy: &[u64],
+    consider: impl Fn(&Person, u64, u32) -> Option<u8> + Sync,
+    eat_on_site: bool,
+) -> Result<Vec<Opportunity>, String> {
     if people.par_windows(2).any(|rows| rows[0].id >= rows[1].id)
         || busy.par_windows(2).any(|rows| rows[0] >= rows[1])
     {
@@ -61,21 +83,28 @@ pub fn opportunities_now(
             .then_some(person.region)
             .flatten();
             region.into_iter().flat_map(move |region| {
-                let remaining = view
-                    .container(Place::Person(person.id))
-                    .map_or(0, |holding| holding.capacity.saturating_sub(holding.used));
+                let holding = view.container(Place::Person(person.id));
+                let remaining =
+                    holding.map_or(0, |holding| holding.capacity.saturating_sub(holding.used));
                 let start = stock.partition_point(|row| row.0 < region);
                 let end = stock.partition_point(|row| row.0 <= region);
                 stock[start..end]
                     .iter()
                     .filter_map(move |&(_, good, quantity)| {
-                        (quantity <= remaining && consider(person, region, good).is_some())
-                            .then_some(Opportunity {
+                        let accessible = if eat_on_site {
+                            quantity > remaining
+                                && holding.is_some_and(|holding| holding.quantity(good) < quantity)
+                        } else {
+                            quantity <= remaining
+                        };
+                        (accessible && consider(person, region, good).is_some()).then_some(
+                            Opportunity {
                                 person: person.id,
                                 region,
                                 good,
                                 quantity,
-                            })
+                            },
+                        )
                     })
             })
         })

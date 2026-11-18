@@ -415,6 +415,7 @@ pub fn apply_episodes(disease: Option<&mut Disease>, treated: &[(u64, u32, u64)]
             person: case.person,
             strain: case.strain,
             source: case.source,
+            at_millis: None,
             kind: EventKind::Treated,
         })
         .collect();
@@ -456,6 +457,7 @@ mod tests {
             .and_then(|s| s.parse().ok())
             .unwrap_or(1);
         let mut disease = Disease {
+            time_unit_millis: None,
             strains: (1..=2)
                 .map(|id| game_disease::Strain {
                     id,
@@ -479,6 +481,7 @@ mod tests {
                         person,
                         strain,
                         infected_at: 0,
+                        infected_at_millis: None,
                         source: None,
                     })
                 })
@@ -507,6 +510,7 @@ mod tests {
     #[test]
     fn treatment_removes_only_the_selected_opening_episode() {
         let mut disease = Disease {
+            time_unit_millis: None,
             strains: vec![],
             treatments: vec![],
             events: vec![],
@@ -515,18 +519,21 @@ mod tests {
                     person: 1,
                     strain: 1,
                     infected_at: 2,
+                    infected_at_millis: None,
                     source: None,
                 },
                 game_disease::Case {
                     person: 1,
                     strain: 2,
                     infected_at: 3,
+                    infected_at_millis: None,
                     source: None,
                 },
                 game_disease::Case {
                     person: 2,
                     strain: 1,
                     infected_at: 5,
+                    infected_at_millis: None,
                     source: None,
                 },
             ],
@@ -546,12 +553,14 @@ mod tests {
     #[test]
     fn ineffective_course_cannot_clear_an_infection_acquired_at_the_same_boundary() {
         let mut disease = Disease {
+            time_unit_millis: None,
             strains: vec![],
             treatments: vec![],
             cases: vec![game_disease::Case {
                 person: 1,
                 strain: 1,
                 infected_at: 1,
+                infected_at_millis: None,
                 source: Some(2),
             }],
             events: vec![],
@@ -592,6 +601,7 @@ mod tests {
     #[test]
     fn invalid_remedy_batch_does_not_partially_mutate_state() {
         let mut disease = Disease {
+            time_unit_millis: None,
             strains: vec![game_disease::Strain {
                 id: 1,
                 name: "fever".into(),

@@ -136,6 +136,7 @@ pub struct CoreDeadline {
     pub delivery: bool,
     pub conception: bool,
     pub dry_field: bool,
+    pub disease: bool,
 }
 /// Travelers published at a partial-interval offset.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -450,6 +451,7 @@ impl CoreInterval {
             delivery: false,
             conception: false,
             dry_field: false,
+            disease: false,
             food_health: food_health == Some(after),
         })
     }
@@ -830,6 +832,18 @@ impl CoreInterval {
         offset_millis: u64,
         meals: &[game_lot_diet::Meal],
     ) -> Result<Option<CoreMealDraft>, String> {
+        self.prepare_meals_with_source(tick, offset_millis, meals, |meal| {
+            game_lots::Place::Person(meal.person)
+        })
+    }
+
+    fn prepare_meals_with_source(
+        &self,
+        tick: u64,
+        offset_millis: u64,
+        meals: &[game_lot_diet::Meal],
+        source: impl Fn(&game_lot_diet::Meal) -> game_lots::Place + Sync,
+    ) -> Result<Option<CoreMealDraft>, String> {
         #[cfg(feature = "profile")]
         let mut phase = game_diagnostics::span("core.meal.validate");
         if self.physical.tick() != tick
@@ -848,9 +862,19 @@ impl CoreInterval {
             self.people
                 .binary_search_by_key(&meal.person, |p| p.id)
                 .ok()
-                .is_none_or(|index| self.people[index].health == 0)
+                .is_none_or(|index| {
+                    let person = &self.people[index];
+                    person.health == 0
+                        || match source(meal) {
+                            game_lots::Place::Person(id) => id != person.id,
+                            game_lots::Place::Stock { region, good } => {
+                                person.region != Some(region) || meal.good != good
+                            }
+                            _ => true,
+                        }
+                })
         }) {
-            return Err("meal requires a living person".into());
+            return Err("meal requires a living person with physical access".into());
         }
         let effect_tick = tick.checked_add(1).ok_or("food effect tick overflow")?;
         #[cfg(feature = "profile")]
@@ -858,7 +882,7 @@ impl CoreInterval {
             drop(phase);
             phase = game_diagnostics::span("core.meal.plan");
         }
-        let plan = game_lot_diet::plan(meals, self.physical.goods())?;
+        let plan = game_lot_diet::plan_from(meals, self.physical.goods(), source)?;
         #[cfg(feature = "profile")]
         {
             drop(phase);
@@ -866,7 +890,7 @@ impl CoreInterval {
         }
         let draft = self
             .physical
-            .prepare_interval_consumption(plan.actions(), self.seed)?;
+            .prepare_interval_food_consumption(plan.actions(), self.seed)?;
         #[cfg(feature = "profile")]
         {
             drop(phase);

@@ -120,7 +120,20 @@ fn run_steps(
                 }
                 CoreRunEvent::Work(row) => ("work_finished", row.finished.len()),
                 CoreRunEvent::Meetings(rows) => ("meetings", rows.len()),
-                CoreRunEvent::Incapacitations { people, .. } => ("incapacitations", people.len()),
+                CoreRunEvent::Disease(rows) => {
+                    write_line(
+                        &mut writer,
+                        &json!({"kind":"disease","step":step,"events":rows}),
+                    )?;
+                    ("disease_events", rows.len())
+                }
+                CoreRunEvent::Incapacitations { at_millis, people } => {
+                    write_line(
+                        &mut writer,
+                        &json!({"kind":"incapacitations","step":step,"at_millis":at_millis,"people":people}),
+                    )?;
+                    ("incapacitations", people.len())
+                }
                 CoreRunEvent::FamilyTransitions { at_millis, events } => {
                     write_line(
                         &mut writer,

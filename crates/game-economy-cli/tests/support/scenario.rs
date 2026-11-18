@@ -5787,6 +5787,7 @@ fn player_view_does_not_reveal_an_unobserved_infection_or_its_remedy() {
             person: 1,
             strain: 1,
             infected_at: 0,
+            infected_at_millis: None,
             source: None,
         });
     let mut healthy = game_economy::Economy::compile(healthy).unwrap();
@@ -5825,6 +5826,7 @@ fn player_treats_infection_with_authored_medicine_taken_from_stock() {
             person: 1,
             strain: 1,
             infected_at: 0,
+            infected_at_millis: None,
             source: None,
         });
     let mut world = game_economy::Economy::compile(state).unwrap();
@@ -5858,6 +5860,7 @@ fn player_can_treat_a_nearby_person_with_carried_medicine() {
             person: 2,
             strain: 1,
             infected_at: 0,
+            infected_at_millis: None,
             source: None,
         });
     let medicine = state
@@ -5912,6 +5915,7 @@ fn medicine_clears_only_its_matching_strain_for_self_and_others() {
                         person: patient,
                         strain,
                         infected_at: 0,
+                        infected_at_millis: None,
                         source: None,
                     });
                 }

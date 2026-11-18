@@ -1,4 +1,5 @@
 //! Data-defined infection, immunity and exposure through actual encounters.
+mod elapsed;
 use game_social::Encounter;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -7,6 +8,8 @@ use std::collections::HashSet;
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Disease {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub time_unit_millis: Option<u64>,
     pub strains: Vec<Strain>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub treatments: Vec<Treatment>,
@@ -45,6 +48,8 @@ pub struct Case {
     pub person: u64,
     pub strain: u32,
     pub infected_at: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub infected_at_millis: Option<u128>,
     pub source: Option<u64>,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -58,6 +63,8 @@ pub enum EventKind {
 #[serde(deny_unknown_fields)]
 pub struct Event {
     pub tick: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub at_millis: Option<u128>,
     pub person: u64,
     pub strain: u32,
     pub source: Option<u64>,
@@ -88,6 +95,44 @@ impl Strain {
         age >= self.incubation && age < self.incubation + self.infectious_ticks
     }
 }
+
+#[derive(Clone, Copy)]
+struct Opportunity {
+    previous: u64,
+    tick: u64,
+    elapsed: Option<(u64, u128)>,
+}
+impl Opportunity {
+    fn age(self, case: &Case) -> Option<u128> {
+        match self.elapsed {
+            Some((unit, at)) => case.elapsed_age(at, unit),
+            None => self.previous.checked_sub(case.infected_at).map(u128::from),
+        }
+    }
+
+    fn instant(self) -> Option<u128> {
+        self.elapsed.map(|(_, at)| at)
+    }
+
+    fn infectious(self, case: &Case, strain: &Strain) -> bool {
+        if self
+            .instant()
+            .is_some_and(|at| case.infected_at_millis == Some(at))
+        {
+            return false;
+        }
+        self.age(case)
+            .and_then(|age| u64::try_from(age).ok())
+            .is_some_and(|age| strain.contagious(age))
+    }
+
+    fn entropy(self) -> u64 {
+        self.instant().map_or(self.tick, |at| {
+            at as u64 ^ ((at >> 64) as u64).rotate_left(27)
+        })
+    }
+}
+
 impl Disease {
     pub fn validate(&self, people: &HashSet<u64>, now: u64) -> Result<(), String> {
         let mut strains = HashSet::new();
@@ -157,6 +202,43 @@ impl Disease {
         now: u64,
         tick: u64,
     ) {
+        self.admit_birth_infections(
+            previous,
+            births,
+            seed,
+            Opportunity {
+                previous: now,
+                tick,
+                elapsed: None,
+            },
+        );
+    }
+
+    pub fn admit_elapsed_births(
+        &mut self,
+        previous: &Disease,
+        births: &[(u64, u64)],
+        seed: u64,
+        tick: u64,
+        at_millis: u128,
+    ) {
+        let unit = self.time_unit_millis.expect("elapsed disease owner");
+        let clock = Opportunity {
+            previous: tick,
+            tick,
+            elapsed: Some((unit, at_millis)),
+        };
+        self.admit_birth_infections(previous, births, seed, clock);
+    }
+
+    fn admit_birth_infections(
+        &mut self,
+        previous: &Disease,
+        births: &[(u64, u64)],
+        seed: u64,
+        clock: Opportunity,
+    ) {
+        let tick = clock.tick;
         if births.is_empty()
             || previous.cases.is_empty()
             || !previous
@@ -185,12 +267,11 @@ impl Disease {
                             .strains
                             .iter()
                             .find(|strain| strain.id == case.strain)?;
-                        let age = now.checked_sub(case.infected_at)?;
-                        if !strain.contagious(age)
+                        if !clock.infectious(case, strain)
                             || game_genetics::random(
                                 seed ^ 0x6269727468 ^ mother ^ u64::from(strain.id),
                                 child,
-                                tick,
+                                clock.entropy(),
                             ) % 1_000_000
                                 >= u64::from(strain.birth_transmission_per_million)
                         {
@@ -200,6 +281,7 @@ impl Disease {
                             person: child,
                             strain: strain.id,
                             infected_at: tick,
+                            infected_at_millis: clock.instant(),
                             source: Some(mother),
                         })
                     })
@@ -209,12 +291,16 @@ impl Disease {
         if infections.is_empty() {
             return;
         }
+        if let Some(at) = clock.instant() {
+            self.events.retain(|event| event.at_millis == Some(at));
+        }
         self.events
             .par_extend(infections.par_iter().map(|case| Event {
                 tick,
                 person: case.person,
                 strain: case.strain,
                 source: case.source,
+                at_millis: clock.instant(),
                 kind: EventKind::Infected,
             }));
         self.cases.par_extend(infections);
@@ -249,6 +335,49 @@ impl Disease {
         seed: u64,
         now: u64,
     ) -> Result<(), &'static str> {
+        let tick = now.checked_add(1).ok_or("tick overflow")?;
+        self.admit_contacts_at(
+            previous,
+            people,
+            contacts,
+            seed,
+            Opportunity {
+                previous: now,
+                tick,
+                elapsed: None,
+            },
+        )
+        .map(drop)
+    }
+
+    pub fn admit_elapsed_contacts(
+        &mut self,
+        previous: &Disease,
+        people: &[Person],
+        contacts: &[Encounter],
+        seed: u64,
+        tick: u64,
+        at_millis: u128,
+    ) -> Result<Vec<Event>, &'static str> {
+        let unit = self
+            .time_unit_millis
+            .ok_or("elapsed disease owner required")?;
+        let clock = Opportunity {
+            previous: tick,
+            tick,
+            elapsed: Some((unit, at_millis)),
+        };
+        self.admit_contacts_at(previous, people, contacts, seed, clock)
+    }
+
+    fn admit_contacts_at(
+        &mut self,
+        previous: &Disease,
+        people: &[Person],
+        contacts: &[Encounter],
+        seed: u64,
+        clock: Opportunity,
+    ) -> Result<Vec<Event>, &'static str> {
         if contacts.is_empty()
             || previous.cases.is_empty()
             || !previous
@@ -256,14 +385,20 @@ impl Disease {
                 .iter()
                 .any(|strain| strain.transmission_per_million > 0)
         {
-            return Ok(());
+            return Ok(Vec::new());
         }
-        let tick = now.checked_add(1).ok_or("tick overflow")?;
-        let preview = previous.prepare_validated(people, contacts, seed, now)?;
+        let tick = clock.tick;
+        let preview = previous.prepare_at(people, contacts, &[], seed, clock)?;
         let mut existing: Vec<_> = self
             .cases
             .par_iter()
-            .map(|case| ((case.person, case.strain), case.infected_at))
+            .map(|case| {
+                (
+                    (case.person, case.strain),
+                    case.infected_at_millis,
+                    case.infected_at,
+                )
+            })
             .collect();
         existing.par_sort_unstable();
         let cases: Vec<_> = preview
@@ -275,11 +410,14 @@ impl Disease {
                     && existing
                         .binary_search_by_key(&(case.person, case.strain), |row| row.0)
                         .ok()
-                        .is_none_or(|index| existing[index].1 < tick)
+                        .is_none_or(|index| match clock.instant() {
+                            Some(at) => existing[index].1.is_none_or(|first| first < at),
+                            None => existing[index].2 < tick,
+                        })
             })
             .collect();
         if cases.is_empty() {
-            return Ok(());
+            return Ok(Vec::new());
         }
         let mut keys: Vec<_> = cases
             .par_iter()
@@ -290,11 +428,19 @@ impl Disease {
             .into_par_iter()
             .filter(|case| keys.binary_search(&(case.person, case.strain)).is_err())
             .collect();
-        self.events
-            .par_extend(preview.state.events.into_par_iter().filter(|event| {
+        let emitted: Vec<_> = preview
+            .state
+            .events
+            .into_par_iter()
+            .filter(|event| {
                 keys.binary_search(&(event.person, event.strain)).is_ok()
                     && matches!(event.kind, EventKind::Infected | EventKind::Recovered)
-            }));
+            })
+            .collect();
+        if let Some(at) = clock.instant() {
+            self.events.retain(|event| event.at_millis == Some(at));
+        }
+        self.events.par_extend(emitted.par_iter().cloned());
         self.cases.par_extend(cases);
         self.cases
             .par_sort_unstable_by_key(|case| (case.person, case.strain));
@@ -310,7 +456,7 @@ impl Disease {
                 event.source,
             )
         });
-        Ok(())
+        Ok(emitted)
     }
     /// Evaluate all distinct contacts against the prior generation; newly infected
     /// people cannot transmit until a later generation.
@@ -346,6 +492,29 @@ impl Disease {
         now: u64,
     ) -> Result<Draft, &'static str> {
         let next = now.checked_add(1).ok_or("tick overflow")?;
+        self.prepare_at(
+            people,
+            encounters,
+            combat,
+            seed,
+            Opportunity {
+                previous: now,
+                tick: next,
+                elapsed: None,
+            },
+        )
+    }
+
+    fn prepare_at(
+        &self,
+        people: &[Person],
+        encounters: &[Encounter],
+        combat: &[(u64, u64)],
+        seed: u64,
+        clock: Opportunity,
+    ) -> Result<Draft, &'static str> {
+        let now = clock.previous;
+        let next = clock.tick;
         let mut people: Vec<_> = people.par_iter().copied().collect();
         if people.par_windows(2).any(|pair| pair[0].id > pair[1].id) {
             people.par_sort_unstable_by_key(|person| person.id);
@@ -427,8 +596,14 @@ impl Disease {
                 .ok()
                 .and_then(|index| {
                     let case = person_cases(id)[index];
-                    (case.infected_at > now
-                        || now - case.infected_at < find_strain(strain)?.end()?)
+                    (clock.age(case).is_none_or(|age| {
+                        age < u128::from(
+                            find_strain(strain)
+                                .expect("validated strain")
+                                .end()
+                                .expect("validated duration"),
+                        )
+                    }))
                     .then_some(case)
                 })
         };
@@ -468,15 +643,14 @@ impl Disease {
                                 strain.transmission_per_million
                             };
                             let route_seed = if combat { seed ^ 0x636f6d626174 } else { seed };
-                            if case.infected_at > now
-                                || !strain.contagious(now - case.infected_at)
+                            if !clock.infectious(case, strain)
                                 || active(target, strain.id).is_some()
                                 || find_person(source)?.health == 0
                                 || find_person(target)?.health == 0
                                 || game_genetics::random(
                                     route_seed ^ source ^ u64::from(strain.id),
                                     target,
-                                    next,
+                                    clock.entropy(),
                                 ) % 1_000_000
                                     >= u64::from(probability)
                             {
@@ -486,12 +660,13 @@ impl Disease {
                                 person: target,
                                 strain: strain.id,
                                 infected_at: next,
+                                infected_at_millis: clock.instant(),
                                 source: Some(source),
                             };
                             let priority = game_genetics::random(
                                 seed ^ case.person,
                                 source,
-                                next ^ u64::from(case.strain),
+                                clock.entropy() ^ u64::from(case.strain),
                             );
                             Some((case.person, case.strain, priority, source, case))
                         })
@@ -509,6 +684,29 @@ impl Disease {
             .par_chunk_by(|a, b| (a.0, a.1) == (b.0, b.1))
             .map(|group| group[0].4.clone())
             .collect();
+        if clock.elapsed.is_some() {
+            let events = infection
+                .par_iter()
+                .map(|case| Event {
+                    tick: next,
+                    at_millis: clock.instant(),
+                    person: case.person,
+                    strain: case.strain,
+                    source: case.source,
+                    kind: EventKind::Infected,
+                })
+                .collect();
+            return Ok(Draft {
+                state: Self {
+                    time_unit_millis: self.time_unit_millis,
+                    strains: Vec::new(),
+                    treatments: Vec::new(),
+                    cases: infection,
+                    events,
+                },
+                damage: Vec::new(),
+            });
+        }
         let damage = cases
             .par_chunk_by(|a, b| a.person == b.person)
             .filter_map(|group| {
@@ -539,6 +737,7 @@ impl Disease {
                         person: case.person,
                         strain: case.strain,
                         source: case.source,
+                        at_millis: None,
                         kind: EventKind::Recovered,
                     })
             })
@@ -551,6 +750,7 @@ impl Disease {
                         person: case.person,
                         strain: case.strain,
                         source: case.source,
+                        at_millis: None,
                         kind: EventKind::Infected,
                     }),
             )
@@ -565,6 +765,7 @@ impl Disease {
                 person: case.person,
                 strain: case.strain,
                 source: case.source,
+                at_millis: None,
                 kind: EventKind::Infected,
             }))
             .collect();
@@ -606,6 +807,7 @@ impl Disease {
         }
         Ok(Draft {
             state: Self {
+                time_unit_millis: self.time_unit_millis,
                 strains: self.strains.clone(),
                 treatments: self.treatments.clone(),
                 cases: retained,
@@ -620,6 +822,7 @@ mod tests {
     use super::*;
     fn state() -> Disease {
         Disease {
+            time_unit_millis: None,
             strains: vec![Strain {
                 id: 1,
                 name: "fever".into(),
@@ -636,6 +839,7 @@ mod tests {
                 person: 1,
                 strain: 1,
                 infected_at: 0,
+                infected_at_millis: None,
                 source: None,
             }],
             events: vec![],
@@ -732,6 +936,39 @@ mod tests {
             }]
         );
     }
+
+    #[test]
+    fn elapsed_exposures_begin_at_contact_and_do_not_cascade_at_the_same_instant() {
+        let mut opening = state();
+        opening.time_unit_millis = Some(100);
+        opening.strains[0].incubation = 0;
+        opening.strains[0].transmission_per_million = 1_000_000;
+        let people = [
+            Person { id: 1, health: 10 },
+            Person { id: 2, health: 10 },
+            Person { id: 3, health: 10 },
+        ];
+        let mut next = opening.clone();
+        let at = 73;
+        let events = next
+            .admit_elapsed_contacts(&opening, &people, &[pair(1, 1, 2)], 7, 1, at)
+            .unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!((events[0].person, events[0].at_millis), (2, Some(at)));
+        let source = next.clone();
+        assert!(
+            next.admit_elapsed_contacts(&source, &people, &[pair(1, 2, 3)], 7, 1, at)
+                .unwrap()
+                .is_empty()
+        );
+        let events = next
+            .admit_elapsed_contacts(&source, &people, &[pair(1, 2, 3)], 7, 1, at + 1)
+            .unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!((events[0].person, events[0].at_millis), (3, Some(at + 1)));
+        assert_eq!(next.cases[1].infected_at_millis, Some(at));
+        assert_eq!(next.cases[2].infected_at_millis, Some(at + 1));
+    }
     #[test]
     fn staged_contact_reinfection_keeps_the_recovery_receipt() {
         let mut previous = state();
@@ -743,12 +980,14 @@ mod tests {
                 person: 1,
                 strain: 1,
                 infected_at: 1,
+                infected_at_millis: None,
                 source: None,
             },
             Case {
                 person: 2,
                 strain: 1,
                 infected_at: 0,
+                infected_at_millis: None,
                 source: None,
             },
         ];
@@ -821,6 +1060,7 @@ mod tests {
                 person: 9,
                 strain: 1,
                 infected_at: 0,
+                infected_at_millis: None,
                 source: None,
             },
         );
@@ -946,6 +1186,7 @@ mod tests {
                 person: id,
                 strain: 1,
                 infected_at: 0,
+                infected_at_millis: None,
                 source: None,
             })
             .collect();
@@ -1047,6 +1288,7 @@ mod tests {
             person: 2,
             strain: 2,
             infected_at: 0,
+            infected_at_millis: None,
             source: None,
         });
         let run = |workers, contacts: Vec<_>| {
@@ -1090,6 +1332,7 @@ mod tests {
             person: 2,
             strain: 2,
             infected_at: 0,
+            infected_at_millis: None,
             source: None,
         });
         let people = [Person { id: 1, health: 100 }, Person { id: 2, health: 100 }];
@@ -1144,6 +1387,7 @@ mod tests {
             person: 1,
             strain: 2,
             infected_at: 0,
+            infected_at_millis: None,
             source: None,
         });
         let mut next = previous.clone();
@@ -1172,6 +1416,7 @@ mod tests {
             person: 2,
             strain: 1,
             infected_at: 0,
+            infected_at_millis: None,
             source: None,
         });
         let people: Vec<_> = (1..=3).map(|id| Person { id, health: 100 }).collect();
@@ -1208,18 +1453,21 @@ mod tests {
                 person: 1,
                 strain: 1,
                 infected_at: 2,
+                infected_at_millis: None,
                 source: None,
             },
             Case {
                 person: 1,
                 strain: 2,
                 infected_at: 2,
+                infected_at_millis: None,
                 source: None,
             },
             Case {
                 person: 2,
                 strain: 1,
                 infected_at: 0,
+                infected_at_millis: None,
                 source: None,
             },
         ];
@@ -1270,6 +1518,7 @@ mod tests {
                     person,
                     strain,
                     infected_at: 0,
+                    infected_at_millis: None,
                     source: None,
                 })
             })

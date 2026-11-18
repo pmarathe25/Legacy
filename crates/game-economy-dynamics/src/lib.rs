@@ -415,6 +415,7 @@ impl Dynamics {
                 if disease.cases.is_empty() {
                     return Ok(game_disease::Draft {
                         state: Disease {
+                            time_unit_millis: disease.time_unit_millis,
                             strains: disease.strains.clone(),
                             treatments: disease.treatments.clone(),
                             cases: Vec::new(),
@@ -529,6 +530,7 @@ mod tests {
         }];
         for infected in [false, true] {
             let disease = Disease {
+                time_unit_millis: None,
                 strains: vec![Strain {
                     id: 1,
                     name: "fever".into(),
@@ -546,6 +548,7 @@ mod tests {
                         person: 1,
                         strain: 1,
                         infected_at: 0,
+                        infected_at_millis: None,
                         source: None,
                     }]
                 } else {
@@ -556,6 +559,7 @@ mod tests {
                     person: 1,
                     strain: 1,
                     source: None,
+                    at_millis: None,
                     kind: EventKind::Infected,
                 }],
             };
