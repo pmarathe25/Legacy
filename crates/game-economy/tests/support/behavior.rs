@@ -58256,8 +58256,13 @@ fn irrigation_fixture() -> State {
         capacity: 2,
         minimum_growth: 1,
         evaporation: 1,
+        evaporation_period_millis: None,
         moisture: (1..=3)
-            .map(|field| crate::FieldMoisture { field, amount: 0 })
+            .map(|field| crate::FieldMoisture {
+                field,
+                amount: 0,
+                evaporation_remainder: 0,
+            })
             .collect(),
         choices: (1..=3)
             .map(|person| crate::WaterChoice {
@@ -58429,8 +58434,13 @@ fn irrigation_boundary_benchmark() {
         capacity: 2,
         minimum_growth: 1,
         evaporation: 1,
+        evaporation_period_millis: None,
         moisture: (1..=count)
-            .map(|field| crate::FieldMoisture { field, amount: 0 })
+            .map(|field| crate::FieldMoisture {
+                field,
+                amount: 0,
+                evaporation_remainder: 0,
+            })
             .collect(),
         choices: (1..=count)
             .map(|person| crate::WaterChoice {

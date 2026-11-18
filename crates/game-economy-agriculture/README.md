@@ -7,7 +7,10 @@ durations use this unit independently of the settlement interval. Fields
 retain fractional growth and ripen at their elapsed deadline, accounting for
 season, genetics, and committed moisture. At ripening, new seed batch IDs
 commit with the field and its provenance. Planting, harvest, and irrigation
-actions still settle at physical boundaries.
+actions still settle at physical boundaries. Set `irrigation.evaporation_period_millis`
+to express the duration over which the authored `evaporation` amount is lost.
+Fields retain fractional loss in saves and crops pause at the first moment
+moisture falls below `minimum_growth`.
 
 Set `track_seed_batches = true` in a cultivation scenario to retain the exact
 seed cohorts actually consumed when a field is planted. These records are

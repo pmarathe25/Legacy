@@ -13,6 +13,8 @@ use std::collections::HashSet;
 pub struct Moisture {
     pub field: u64,
     pub amount: u64,
+    #[serde(default)]
+    pub evaporation_remainder: u64,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -48,6 +50,8 @@ pub struct Irrigation {
     pub capacity: u64,
     pub minimum_growth: u64,
     pub evaporation: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub evaporation_period_millis: Option<u64>,
     pub moisture: Vec<Moisture>,
     #[serde(default)]
     pub choices: Vec<Choice>,
@@ -79,6 +83,7 @@ impl Clone for Irrigation {
             capacity: self.capacity,
             minimum_growth: self.minimum_growth,
             evaporation: self.evaporation,
+            evaporation_period_millis: self.evaporation_period_millis,
             moisture: self.moisture.par_iter().cloned().collect(),
             choices: self.choices.par_iter().cloned().collect(),
             events: self.events.par_iter().cloned().collect(),
@@ -105,6 +110,7 @@ impl Irrigation {
             || self.capacity == 0
             || self.minimum_growth == 0
             || self.minimum_growth > self.capacity
+            || self.evaporation_period_millis == Some(0)
             || self
                 .moisture
                 .par_windows(2)
@@ -114,10 +120,15 @@ impl Irrigation {
                 .par_windows(2)
                 .any(|p| p[0].person >= p[1].person)
             || chosen_fields.par_windows(2).any(|p| p[0] == p[1])
-            || self
-                .moisture
-                .par_iter()
-                .any(|m| !fields.contains(&m.field) || m.amount > self.capacity)
+            || self.moisture.par_iter().any(|m| {
+                !fields.contains(&m.field)
+                    || m.amount > self.capacity
+                    || (m.evaporation_remainder != 0
+                        && (m.amount == 0
+                            || self.evaporation == 0
+                            || m.evaporation_remainder
+                                >= self.evaporation_period_millis.unwrap_or_default()))
+            })
             || self.choices.par_iter().any(|p| {
                 !people.contains(&p.person)
                     || p.quantity == 0
@@ -318,6 +329,11 @@ impl Irrigation {
         Ok(Plan { rows })
     }
     pub fn advance(&self, plan: Plan, outcomes: &Events, tick: u64) -> Self {
+        let boundary_evaporation = if self.evaporation_period_millis.is_some() {
+            0
+        } else {
+            self.evaporation
+        };
         let events: Vec<_> = plan
             .rows
             .par_iter()
@@ -352,9 +368,10 @@ impl Irrigation {
                     field: m.field,
                     amount: m
                         .amount
-                        .saturating_sub(self.evaporation)
+                        .saturating_sub(boundary_evaporation)
                         .saturating_add(added)
                         .min(self.capacity),
+                    evaporation_remainder: m.evaporation_remainder,
                 }
             })
             .collect();
@@ -363,6 +380,7 @@ impl Irrigation {
             capacity: self.capacity,
             minimum_growth: self.minimum_growth,
             evaporation: self.evaporation,
+            evaporation_period_millis: self.evaporation_period_millis,
             moisture,
             choices: self.choices.par_iter().cloned().collect(),
             events,

@@ -846,6 +846,7 @@ struct IrrigationConfig {
     capacity: u64,
     minimum_growth: u64,
     evaporation: u64,
+    evaporation_period_millis: Option<u64>,
     moisture: Vec<game_economy::FieldMoisture>,
     #[serde(default)]
     choices: Vec<game_economy::WaterChoice>,
@@ -1517,6 +1518,14 @@ fn scenario_with_options_inner(
             .is_some_and(|owner| owner.growth_unit_millis.is_some())
     {
         return Err("elapsed crop growth requires the interval simulation host".into());
+    }
+    if !interval_features
+        && scenario
+            .irrigation
+            .as_ref()
+            .is_some_and(|owner| owner.evaporation_period_millis.is_some())
+    {
+        return Err("elapsed irrigation requires the interval simulation host".into());
     }
     if !interval_features
         && scenario
@@ -2516,6 +2525,7 @@ fn scenario_with_options_inner(
                 capacity: config.capacity,
                 minimum_growth: config.minimum_growth,
                 evaporation: config.evaporation,
+                evaporation_period_millis: config.evaporation_period_millis,
                 moisture,
                 choices,
                 events: vec![],

@@ -189,6 +189,9 @@ impl CoreHost {
         if let Some(deadline) = conception {
             consumed = deadline.min(u128::from(consumed)) as u64;
         }
+        if let Some(deadline) = self.next_dry_field() {
+            consumed = consumed.min(deadline);
+        }
         let (crop_rates, crop_limit) = self.plan_crop_segment(consumed)?;
         consumed = crop_limit;
         let elapsed_owner = self
@@ -424,6 +427,10 @@ impl CoreHost {
         let paused_after_deaths = self.pause_incapacitated_rates(&deaths, &reductions, consumed)?;
         let renewal = self.stage_resource_renewal(consumed)?;
         let (growth, batches) = self.stage_crop_growth(crop_rates, consumed)?;
+        let moisture = self
+            .irrigation
+            .as_ref()
+            .and_then(|owner| owner.stage_evaporation(consumed));
         let Some(owner) = &self.fatigue else {
             let credits = self.plan_skill_practice(consumed);
             let recovery = self.stage_natural_recovery(consumed, &[], vitals.as_mut())?;
@@ -438,6 +445,12 @@ impl CoreHost {
             if advanced > 0 {
                 self.publish_resource_renewal(renewal);
                 self.publish_crop_growth(growth);
+                if let Some(moisture) = moisture {
+                    self.irrigation
+                        .as_mut()
+                        .expect("staged irrigation")
+                        .moisture = moisture;
+                }
                 if let Some(recovery) = recovery {
                     self.recovery = Some(recovery);
                 }
@@ -612,6 +625,12 @@ impl CoreHost {
         )?;
         self.publish_resource_renewal(renewal);
         self.publish_crop_growth(growth);
+        if let Some(moisture) = moisture {
+            self.irrigation
+                .as_mut()
+                .expect("staged irrigation")
+                .moisture = moisture;
+        }
         if let Some(recovery) = recovery {
             self.recovery = Some(recovery);
         }

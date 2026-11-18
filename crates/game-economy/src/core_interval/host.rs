@@ -1592,6 +1592,7 @@ impl CoreHost {
         let conception = self
             .next_conception()
             .and_then(|after| u64::try_from(after).ok());
+        let dry_field = self.next_dry_field();
         let first = [
             recovery,
             exposure,
@@ -1599,6 +1600,7 @@ impl CoreHost {
             purpose,
             delivery,
             conception,
+            dry_field,
         ]
         .into_iter()
         .flatten()
@@ -1617,6 +1619,7 @@ impl CoreHost {
                     purpose: purpose == Some(after_millis),
                     delivery: delivery == Some(after_millis),
                     conception: conception == Some(after_millis),
+                    dry_field: dry_field == Some(after_millis),
                     recovery: recovery == Some(after_millis),
                     exposure: exposure == Some(after_millis),
                 };
@@ -1627,6 +1630,7 @@ impl CoreHost {
                 deadline.purpose = purpose == Some(after_millis);
                 deadline.delivery = delivery == Some(after_millis);
                 deadline.conception = conception == Some(after_millis);
+                deadline.dry_field = dry_field == Some(after_millis);
             }
         }
         Ok(deadline)

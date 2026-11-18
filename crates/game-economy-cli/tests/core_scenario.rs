@@ -3717,6 +3717,98 @@ fn clonal_seed_offspring_mutate_once_and_survive_failed_harvests() {
 }
 
 #[test]
+fn elapsed_field_drying_pauses_growth_across_resume_and_physical_boundaries() {
+    use game_economy::core_interval::CoreHost;
+    use game_economy_agriculture::Phase;
+
+    let root = root();
+    let mut source =
+        std::fs::read_to_string(root.join("content/scenarios/economy-core-seasonal-seeds.toml"))
+            .unwrap()
+            .replacen(
+                "[cultivation]",
+                "[cultivation]\ngrowth_unit_millis = 1000",
+                1,
+            )
+            .replacen(
+                "[environment]",
+                "[environment]\nseason_unit_millis = 1000",
+                1,
+            );
+    source.push_str(
+        "\n[irrigation]\nwater = 'fresh-water'\ncapacity = 2\nminimum_growth = 1\n\
+         evaporation = 1\nevaporation_period_millis = 1000000\n\
+         moisture = [{ field = 1, amount = 2 }]\n",
+    );
+    let path =
+        std::env::temp_dir().join(format!("legacy-elapsed-drying-{}.toml", std::process::id()));
+    std::fs::write(&path, source).unwrap();
+    let loaded = game_economy_cli::core_scenario(&path, &root.join("content"));
+    std::fs::remove_file(path).unwrap();
+    let mut host = loaded.unwrap();
+    assert_eq!(host.advance_continuous(900_000, &[]).unwrap().failure, None);
+    let mut opening = host.snapshot();
+    opening.schedule = None;
+    opening.core.physical.work_interval = None;
+    let irrigation = opening.irrigation.as_mut().unwrap();
+    assert_eq!(irrigation.moisture[0].amount, 2);
+    assert_eq!(irrigation.moisture[0].evaporation_remainder, 900_000);
+    irrigation.evaporation_period_millis = Some(200);
+    irrigation.moisture[0].evaporation_remainder = 0;
+    let agriculture = opening.agriculture.as_mut().unwrap();
+    assert_eq!(agriculture.fields[0].phase, Phase::Growing);
+    agriculture.fields[0].remaining = 1;
+
+    let run = |quantum: u64, chunk: u64, workers: usize| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut start = opening.clone();
+                start.core.physical.tick_millis = quantum;
+                let mut host = CoreHost::begin(start, &[]).unwrap();
+                let deadline = host.next_deadline(None).unwrap();
+                assert_eq!(deadline.after_millis, 400);
+                assert!(deadline.dry_field);
+                let mut elapsed = 0;
+                let mut wet_growth = None;
+                for target in [275, 400, 1000] {
+                    while elapsed < target {
+                        let progressed = host.progress(chunk.min(target - elapsed)).unwrap();
+                        assert!(progressed > 0);
+                        elapsed += progressed;
+                        if elapsed % quantum == 0 {
+                            host.settle().unwrap();
+                            host = CoreHost::begin(host.snapshot(), &[]).unwrap();
+                        }
+                    }
+                    let state = host.snapshot();
+                    let field = &state.irrigation.as_ref().unwrap().moisture[0];
+                    let agriculture = state.agriculture.as_ref().unwrap();
+                    assert_eq!(agriculture.fields[0].phase, Phase::Growing);
+                    assert_eq!(agriculture.fields[0].remaining, 1);
+                    let growth = &agriculture.growth_clock.as_ref().unwrap().remainders;
+                    if target == 275 {
+                        assert_eq!((field.amount, field.evaporation_remainder), (1, 75));
+                        assert_eq!(host.next_deadline(None).unwrap().after_millis, 125);
+                    } else {
+                        assert_eq!((field.amount, field.evaporation_remainder), (0, 0));
+                        assert!(!growth.is_empty());
+                        assert_eq!(wet_growth.get_or_insert_with(|| growth.clone()), growth);
+                    }
+                    host = CoreHost::resume(
+                        serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap(),
+                    )
+                    .unwrap();
+                }
+                wet_growth.unwrap()
+            })
+    };
+    assert_eq!(run(1000, 1000, 1), run(700, 31, 4));
+}
+
+#[test]
 fn elapsed_crop_growth_integrates_seasons_and_allocates_seed_batches_at_ripening() {
     use game_economy::core_interval::CoreHost;
     use game_economy_agriculture::Phase;

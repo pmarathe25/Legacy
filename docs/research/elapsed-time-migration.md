@@ -75,8 +75,10 @@ Gathering and grazing still use boundary actions. Crop scenarios can set
 `cultivation.growth_unit_millis` to separate crop duration from settlement.
 The host integrates fractional growth up to season changes and ripening
 deadlines using the opening moisture and each seed cohort's seasonal traits.
-Ripening and descendant batch allocation commit together. Planting, harvest,
-and changes to moisture still use boundary actions.
+Ripening and descendant batch allocation commit together. The optional
+`irrigation.evaporation_period_millis` retains fractional water loss and pauses
+growth at the exact drying deadline. Planting, harvest, and actors adding
+water still use boundary actions.
 An elapsed environment can set `exposure_period_millis` to schedule personal
 hazard damage and shelter rotation at fixed simulated times. The host uses
 the season just before each exposure event and applies it before new choices

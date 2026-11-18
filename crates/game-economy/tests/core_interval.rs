@@ -7483,7 +7483,8 @@ fn irrigation_consumes_contested_water_and_gates_next_growth() {
             fields: (1..=2).map(|id| Field {id, region: 1, crop: 1, phase: Phase::Growing, remaining: 1}).collect(), policies: vec![], max_hunger: 10,
         };
         let irrigation = Irrigation {water: 3, capacity: 2, minimum_growth: 1, evaporation: 0,
-            moisture: vec![Moisture {field: 1, amount: 0}, Moisture {field: 2, amount: 0}],
+            evaporation_period_millis: None,
+            moisture: vec![Moisture {field: 1, amount: 0, evaporation_remainder: 0}, Moisture {field: 2, amount: 0, evaporation_remainder: 0}],
             choices: vec![Choice {person: 2, field: 1, quantity: 1, willing: false, hunger_limit: None, pressured_by: Some(1), fear_at_least: Some(1), obligation_at_least: None, disregard_claims: false},
                 Choice {person: 3, field: 2, quantity: 1, willing: true, hunger_limit: None, pressured_by: None, fear_at_least: None, obligation_at_least: None, disregard_claims: false}], events: vec![]};
         let rules = serde_json::from_value(serde_json::json!({"minimum":-10,"maximum":10,"initial":0,"fulfilled_gain":1,"default_loss":1})).unwrap();
@@ -8714,8 +8715,9 @@ fn core_host_cultivation_benchmark() {
             capacity: 1,
             minimum_growth: 1,
             evaporation: 0,
+            evaporation_period_millis: None,
             moisture: (1..count)
-                .map(|field| game_economy_agriculture::irrigation::Moisture { field, amount: 0 })
+                .map(|field| game_economy_agriculture::irrigation::Moisture { field, amount: 0, evaporation_remainder: 0 })
                 .collect(),
             choices: (2..=count)
                 .map(|person| game_economy_agriculture::irrigation::Choice {

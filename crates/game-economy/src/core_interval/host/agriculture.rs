@@ -5,6 +5,10 @@ type CultivationClaims = Option<(game_economy_claims::Claims, Option<game_opinio
 type CropProgress = (Option<Growth>, Option<game_lots::BatchAllocation>);
 
 impl CoreHost {
+    pub(super) fn next_dry_field(&self) -> Option<u64> {
+        u64::try_from(self.irrigation.as_ref()?.next_dry_after()?).ok()
+    }
+
     pub(super) fn plan_crop_segment(
         &self,
         requested: u64,

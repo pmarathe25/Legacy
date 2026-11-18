@@ -1971,6 +1971,7 @@ water = "fresh-water"
 capacity = 2
 minimum_growth = 1
 evaporation = 1
+evaporation_period_millis = 3600000
 moisture = [{ field = 1, amount = 0 }]
 choices = [{ person = 7, field = 1, quantity = 1, willing = true }]
 
