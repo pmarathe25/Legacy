@@ -5,7 +5,7 @@ pub use game_family_model::{
     Birth, FamilyEvent, FamilyTotals, LifeInput, MatePreference, Member, Pregnancy,
 };
 pub use lifetimes::ElapsedLifetimes;
-pub use phase::{DeliveryDraft, Draft};
+pub use phase::{Draft, ElapsedFamilyDraft};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 

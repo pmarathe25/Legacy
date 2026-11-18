@@ -500,6 +500,81 @@ fn elapsed_delivery_joins_a_maternal_journey_and_loses_to_fatal_harm() {
 }
 
 #[test]
+fn inherited_mate_desire_controls_conception_on_an_elapsed_opportunity() {
+    use game_economy::core_interval::CoreRunEvent;
+
+    let run = |quantum, workers, allele| {
+        rayon::ThreadPoolBuilder::new().num_threads(workers).build().unwrap().install(|| {
+            let mut core = fixture();
+            core.physical.tick_millis = quantum;
+            core.travel = None;
+            core.people[1].region = Some(1);
+            core.nutrition = None;
+            core.pending_food.clear();
+            core.rules.hunger_per_tick = 0;
+            core.rules.starvation_damage = 0;
+            let profile = |desire, genetic_weight| serde_json::json!({
+                "desire":desire,"genetic_weight":genetic_weight,"affinity_weight":0,
+                "attraction_weight":0,"hunger_weight":0,"dependent_weight":0,
+            });
+            let snapshot: CoreHostSnapshot = serde_json::from_value(serde_json::json!({
+                "core":core,
+                "family": {
+                    "elapsed_lifetimes":{"unit_millis":200,"elapsed_gestation":true,"conception_period_millis":200},
+                    "rules":{"adult_age":2,"fertile_until":10,"gestation":2,"birth_spacing":3,
+                        "lifespan_min":11,"lifespan_max":11,"conception_one_in":1,
+                        "minimum_health":1,"maximum_hunger":100,"newborn_health":50,
+                        "mutation_per_million":0,"mutation_step":0,"subjective_mating":true},
+                    "members":[
+                        {"id":1,"age":3,"mate_preference":profile(0,0),
+                            "genome":{"sex":"Male","alleles":[[100,100],[100,100],[100,100],[100,100]]}},
+                        {"id":2,"age":3,"mate_preference":profile(500,500),
+                            "genome":{"sex":"Female","alleles":[[1000,1000],[100,100],[100,100],[100,100]],"mate_desire":[allele,allele]}}
+                    ],"next_id":3
+                }
+            })).unwrap();
+            let mut host = CoreHost::begin(snapshot, &[(1,1)]).unwrap();
+            host.enable_schedule(1000,1).unwrap();
+            for step in [17, 31, 151] {
+                assert_eq!(host.advance_continuous(step,&[]).unwrap().failure,None);
+            }
+            let deadline = host.next_deadline(None).unwrap();
+            assert!(deadline.conception);
+            assert_eq!(deadline.after_millis,1);
+            let due_run = host.advance_continuous(1,&[]).unwrap();
+            assert_eq!(due_run.failure,None);
+            let events: Vec<_> = due_run.events.iter().filter_map(|event| match event {
+                CoreRunEvent::FamilyTransitions {at_millis, events} => Some((*at_millis, events)),
+                _ => None,
+            }).collect();
+            let saved = host.snapshot();
+            let family = saved.family.as_ref().unwrap();
+            assert!(family.members.iter().all(|member| member.partner.is_none()));
+            if allele == 1000 {
+                assert_eq!(events.len(),1);
+                assert_eq!(events[0].0,200);
+                assert_eq!(events[0].1[0].kind,"conception");
+                let pregnancy = family.members[1].pregnancy.unwrap();
+                assert_eq!(pregnancy.father,1);
+                assert_eq!(pregnancy.due_at_millis,Some(600));
+            } else {
+                assert!(events.is_empty());
+                assert!(family.members[1].pregnancy.is_none());
+            }
+            let json = serde_json::to_string(&saved).unwrap();
+            let mut host = CoreHost::resume(serde_json::from_str(&json).unwrap()).unwrap();
+            let later = host.advance_continuous(199,&[]).unwrap();
+            assert_eq!(later.failure,None);
+            assert!(!later.events.iter().any(|event| matches!(event, CoreRunEvent::FamilyTransitions {..})));
+        })
+    };
+    for allele in [0, 1000] {
+        run(1000, 1, allele);
+        run(280, 4, allele);
+    }
+}
+
+#[test]
 fn fatal_starvation_wins_an_arrival_tie_and_places_the_body_at_the_source() {
     let mut state = fixture();
     state.nutrition = None;

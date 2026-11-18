@@ -42,6 +42,17 @@ impl CoreHost {
         Some(deadline.saturating_sub(self.core.simulated_millis()))
     }
 
+    pub(super) fn next_conception(&self) -> Option<u128> {
+        let period = u128::from(
+            self.family
+                .as_ref()?
+                .elapsed_lifetimes
+                .as_ref()?
+                .conception_period_millis?,
+        );
+        Some(period - self.core.simulated_millis() % period)
+    }
+
     fn birth_preferences(&self, owner: &game_economy_family::Families) -> (bool, Option<bool>) {
         let birth_choices = owner
             .rules
@@ -65,14 +76,45 @@ impl CoreHost {
         people: &[Person],
         now: u128,
         staged_purpose: Option<&CorePurpose>,
-    ) -> Result<ElapsedFamilyFrame, String> {
-        let current = self.family.as_ref().expect("delivery has family owner");
+        delivery_due: bool,
+        conception_due: bool,
+    ) -> Result<Option<ElapsedFamilyFrame>, String> {
+        let current = self.family.as_ref().expect("family deadline has an owner");
         let tick = self.core.physical.tick();
-        let game_economy_family::DeliveryDraft {
+        let mut conception = if conception_due {
+            let feelings = mate_feelings(self.opinions.as_ref());
+            game_economy_family::choose_conceptions_elapsed(
+                current,
+                people,
+                self.core.seed,
+                tick,
+                now,
+                &feelings,
+            )?
+        } else {
+            None
+        };
+        let staged = if delivery_due {
+            let base = conception.as_ref().map_or(current, |draft| &draft.families);
+            let mut delivery =
+                game_economy_family::deliver_elapsed(base, people, self.core.seed, tick, now)?;
+            if let Some(conception) = conception.take() {
+                let mut events = conception.events;
+                events.append(&mut delivery.events);
+                delivery.events = events;
+            }
+            Some(delivery)
+        } else {
+            conception
+        };
+        let Some(game_economy_family::ElapsedFamilyDraft {
             families,
             births,
             events,
-        } = game_economy_family::deliver_elapsed(current, people, self.core.seed, tick, now)?;
+        }) = staged
+        else {
+            return Ok(None);
+        };
         let newborns = births.par_iter().map(|birth| birth.id).collect();
         let maternal = births
             .par_iter()
@@ -95,7 +137,7 @@ impl CoreHost {
             game_economy_family::BirthBatch::for_people(tick, &frame.newborns),
         )?;
         let health = self.stage_birth_health_at(Some(&frame), tick, Some(tick));
-        Ok(ElapsedFamilyFrame {
+        Ok(Some(ElapsedFamilyFrame {
             frame,
             children: births,
             events,
@@ -104,7 +146,7 @@ impl CoreHost {
             skills,
             purpose,
             health,
-        })
+        }))
     }
 
     pub(super) fn publish_elapsed_family(
@@ -302,24 +344,11 @@ impl CoreHost {
             return Ok(None);
         };
         let tick = draft.events().tick;
-        let opinions = self
-            .opinions
-            .as_ref()
-            .filter(|_| owner.rules.subjective_mating)
-            .map(game_opinions::Opinions::index);
-        let feelings = |observer, target| {
-            opinions
+        let feelings = mate_feelings(
+            self.opinions
                 .as_ref()
-                .map_or(game_economy_family::MateFeelings::default(), |index| {
-                    let (trust, affinity, fear, obligation) = index.subjective(observer, target);
-                    game_economy_family::MateFeelings {
-                        trust,
-                        affinity,
-                        fear,
-                        obligation,
-                    }
-                })
-        };
+                .filter(|_| owner.rules.subjective_mating),
+        );
         let (personal_meals, personal_work) = self.birth_preferences(owner);
         let next = game_economy_family::advance_with_clock(
             owner,
@@ -438,5 +467,24 @@ impl CoreHost {
                 .admit_births_validated(&health.owner, &family.births, self.core.seed, tick);
         }
         (next.owner.cases.len() != health.owner.cases.len()).then_some(next)
+    }
+}
+
+fn mate_feelings(
+    opinions: Option<&game_opinions::Opinions>,
+) -> impl Fn(u64, u64) -> game_economy_family::MateFeelings + Sync + '_ {
+    let opinions = opinions.map(game_opinions::Opinions::index);
+    move |observer, target| {
+        opinions
+            .as_ref()
+            .map_or_else(game_economy_family::MateFeelings::default, |index| {
+                let (trust, affinity, fear, obligation) = index.subjective(observer, target);
+                game_economy_family::MateFeelings {
+                    trust,
+                    affinity,
+                    fear,
+                    obligation,
+                }
+            })
     }
 }

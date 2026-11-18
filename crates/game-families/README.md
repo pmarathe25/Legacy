@@ -16,7 +16,10 @@ Set `elapsed_gestation = true` in the same table to schedule pregnancy and
 maternal recovery independently of settlement. A birth commits physical custody
 and the newborn's state together. An infant born during travel joins the
 mother's actual journey position. Fatal maternal harm at the same instant
-produces a pregnancy loss. Encounter opportunities still use the boundary clock.
+produces a pregnancy loss. With subjective mating enabled, a positive
+`conception_period_millis` schedules conception opportunities at multiples of
+that duration. `conception_one_in` applies per opportunity in that mode.
+Partnership decisions still occur at settlement.
 
 Each person retains an individual demographic record, including recorded birth,
 age at death, parents, reproductive opt-in, partner, pregnancy and four diploid

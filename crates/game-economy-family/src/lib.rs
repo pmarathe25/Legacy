@@ -3,7 +3,7 @@ mod birth_placement;
 pub use birth_placement::BirthPlacement;
 use game_economy_person::{Person, travel::Travel};
 use game_families::LifeInput;
-pub use game_families::{Birth, BirthBatch, DeliveryDraft, Families, FamilyEvent};
+pub use game_families::{Birth, BirthBatch, ElapsedFamilyDraft, Families, FamilyEvent};
 pub use game_family_model::MateFeelings;
 use game_family_model::{ContactPartition, PhysicalView};
 use rayon::prelude::*;
@@ -462,9 +462,22 @@ pub fn deliver_elapsed(
     seed: u64,
     tick: u64,
     now: u128,
-) -> Result<DeliveryDraft, String> {
+) -> Result<ElapsedFamilyDraft, String> {
     family
         .deliver_elapsed(&View::new(people, None, None), seed, tick, now)
+        .map_err(str::to_owned)
+}
+
+pub fn choose_conceptions_elapsed(
+    family: &Families,
+    people: &[Person],
+    seed: u64,
+    tick: u64,
+    now: u128,
+    feelings: &(dyn Fn(u64, u64) -> MateFeelings + Sync),
+) -> Result<Option<ElapsedFamilyDraft>, String> {
+    family
+        .choose_conceptions_elapsed(&View::new(people, None, Some(feelings)), seed, tick, now)
         .map_err(str::to_owned)
 }
 

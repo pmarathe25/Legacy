@@ -94,8 +94,9 @@ Scheduled runs emit timestamped incapacitations and identify natural deaths.
 Work capability and care use age at the actual instant when the calendar is
 enabled. `family.elapsed_lifetimes.elapsed_gestation` also schedules deliveries
 and maternal recovery independently. Delivery events carry exact elapsed times
-in the history stream. Encounter rolls, most family history, and succession
-still use physical settlement.
+in the history stream. `conception_period_millis` gives subjective conception
+opportunities their own configured cadence. Partnership decisions, most family
+history, and succession still use physical settlement.
 Purpose can set `purpose.rules.elapsed_period_millis`. Deprivation and its
 physical consequences then apply at multiples of that period. A physical
 settlement applies work outcomes without charging for elapsed time again.

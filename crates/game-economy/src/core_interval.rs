@@ -134,6 +134,7 @@ pub struct CoreDeadline {
     pub food_health: bool,
     pub purpose: bool,
     pub delivery: bool,
+    pub conception: bool,
 }
 /// Travelers published at a partial-interval offset.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -446,6 +447,7 @@ impl CoreInterval {
             exposure: false,
             purpose: false,
             delivery: false,
+            conception: false,
             food_health: food_health == Some(after),
         })
     }

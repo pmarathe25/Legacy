@@ -14,6 +14,9 @@ pub struct ElapsedLifetimes {
     /// Schedule gestation and maternal recovery in elapsed units.
     #[serde(default)]
     pub elapsed_gestation: bool,
+    /// Duration between autonomous conception opportunities.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub conception_period_millis: Option<u64>,
     /// Natural mortality deadlines ordered by time, then individual identity.
     #[serde(default)]
     deadlines: Arc<Vec<(u128, u64)>>,
@@ -30,6 +33,7 @@ impl PartialEq for ElapsedLifetimes {
         self.unit_millis == other.unit_millis
             && self.deadlines == other.deadlines
             && self.elapsed_gestation == other.elapsed_gestation
+            && self.conception_period_millis == other.conception_period_millis
             && self.birth_recovery == other.birth_recovery
     }
 }
@@ -85,6 +89,13 @@ impl ElapsedLifetimes {
     ) -> Result<(), &'static str> {
         if self.unit_millis == 0 {
             return Err("natural mortality time unit must be positive");
+        }
+        if self.conception_period_millis.is_some_and(|period| {
+            period == 0 || !self.elapsed_gestation || !rules.subjective_mating
+        }) {
+            return Err(
+                "elapsed conception requires a positive period, elapsed gestation and subjective mating",
+            );
         }
         if now == 0 && self.deadlines.is_empty() {
             let mut deadlines: Vec<_> = members

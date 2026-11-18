@@ -10,7 +10,7 @@ pub struct Draft {
     pub births: Vec<Birth>,
     pub deaths: BTreeSet<u64>,
 }
-pub struct DeliveryDraft {
+pub struct ElapsedFamilyDraft {
     pub families: Families,
     pub births: Vec<Birth>,
     pub events: Vec<FamilyEvent>,
@@ -24,10 +24,13 @@ fn event(tick: u64, kind: &str, people: Vec<u64>, region: Option<u64>) -> Family
     }
 }
 fn eligible(m: &Member, p: &LifeInput, rules: &FamilyRules) -> bool {
+    eligible_at_age(m, p, rules, m.age)
+}
+fn eligible_at_age(m: &Member, p: &LifeInput, rules: &FamilyRules, age: u64) -> bool {
     m.alive
         && m.reproduction_allowed
-        && m.age >= rules.adult_age
-        && m.age < rules.fertile_until
+        && age >= rules.adult_age
+        && age < rules.fertile_until
         && p.region.is_some()
         && p.health >= rules.minimum_health
         && p.hunger <= rules.maximum_hunger
@@ -209,13 +212,106 @@ fn subjective_partnerships(
         .collect()
 }
 impl Families {
+    fn parallel_copy(&self) -> Self {
+        Self {
+            rules: self.rules.clone(),
+            members: self.members.par_iter().cloned().collect(),
+            next_id: self.next_id,
+            last_tick: self.last_tick,
+            elapsed_lifetimes: self.elapsed_lifetimes.clone(),
+            totals: self.totals.clone(),
+            events: self.events.par_iter().cloned().collect(),
+        }
+    }
+
+    /// Each participant evaluates an encounter at this elapsed opportunity.
+    pub fn choose_conceptions_elapsed(
+        &self,
+        physical: &impl game_family_model::PhysicalView,
+        seed: u64,
+        tick: u64,
+        now: u128,
+    ) -> Result<Option<ElapsedFamilyDraft>, &'static str> {
+        let period = self
+            .elapsed_lifetimes
+            .as_ref()
+            .and_then(|calendar| calendar.conception_period_millis)
+            .ok_or("elapsed conception has no period")?;
+        if period == 0 || now == 0 || !now.is_multiple_of(u128::from(period)) {
+            return Err("conception is outside its elapsed opportunity");
+        }
+        let mut parents: Vec<_> = self
+            .members
+            .par_iter()
+            .filter(|member| {
+                member.alive
+                    && self.age_at(member, now) < self.rules.adult_age
+                    && physical.read(member.id).health > 0
+            })
+            .flat_map_iter(|member| member.parents.iter().copied())
+            .collect();
+        parents.par_sort_unstable();
+        let dependents = |id| {
+            (parents.partition_point(|parent| *parent <= id)
+                - parents.partition_point(|parent| *parent < id)) as u64
+        };
+        let mut choices = prepare_conceptions(
+            self,
+            &self.members,
+            physical,
+            &dependents,
+            seed,
+            ConceptionTime {
+                tick,
+                now: Some(now),
+                exact: true,
+            },
+        )?;
+        if choices.is_empty() {
+            return Ok(None);
+        }
+        choices.par_sort_unstable_by_key(|choice| choice.0);
+        let mut families = self.parallel_copy();
+        families.members.par_iter_mut().for_each(|member| {
+            if let Ok(choice) = choices.binary_search_by_key(&member.id, |choice| choice.0) {
+                member.pregnancy = Some(choices[choice].1);
+            }
+        });
+        families.totals.conceptions = families
+            .totals
+            .conceptions
+            .checked_add(choices.len() as u64)
+            .ok_or("family counter overflow")?;
+        families
+            .elapsed_lifetimes
+            .as_mut()
+            .expect("checked conception clock")
+            .refresh_deliveries(&families.members);
+        let events = choices
+            .par_iter()
+            .map(|&(mother, pregnancy)| {
+                event(
+                    tick,
+                    "conception",
+                    vec![mother, pregnancy.father],
+                    physical.read(mother).region,
+                )
+            })
+            .collect();
+        Ok(Some(ElapsedFamilyDraft {
+            families,
+            births: Vec::new(),
+            events,
+        }))
+    }
+
     pub fn deliver_elapsed(
         &self,
         physical: &impl game_family_model::PhysicalView,
         seed: u64,
         tick: u64,
         now: u128,
-    ) -> Result<DeliveryDraft, &'static str> {
+    ) -> Result<ElapsedFamilyDraft, &'static str> {
         let calendar = self
             .elapsed_lifetimes
             .as_ref()
@@ -241,15 +337,7 @@ impl Families {
                 millis: Some(now),
             },
         )?;
-        let mut families = Families {
-            rules: self.rules.clone(),
-            members: self.members.par_iter().cloned().collect(),
-            next_id: self.next_id,
-            last_tick: self.last_tick,
-            elapsed_lifetimes: self.elapsed_lifetimes.clone(),
-            totals: self.totals.clone(),
-            events: self.events.par_iter().cloned().collect(),
-        };
+        let mut families = self.parallel_copy();
         let mut events: Vec<_> = families
             .members
             .par_iter_mut()
@@ -293,7 +381,7 @@ impl Families {
         next.refresh_deliveries(&families.members);
         events.extend(stage.events);
         events.par_sort_unstable_by(|a, b| (&a.kind, &a.people).cmp(&(&b.kind, &b.people)));
-        Ok(DeliveryDraft {
+        Ok(ElapsedFamilyDraft {
             families,
             births: stage.births,
             events,
@@ -537,126 +625,23 @@ impl Families {
             drop(profile_phase);
             profile_phase = game_diagnostics::span("family.conceptions");
         }
-        let mut prospective_fathers: Vec<_> = if rules.subjective_mating {
-            members
-                .par_iter()
-                .filter_map(|m| {
-                    let person = physical.read(m.id);
-                    (m.genome.sex == Sex::Male
-                        && !physical.controlled(m.id)
-                        && eligible(m, &person, rules))
-                    .then(|| (person.region.unwrap(), physical.contact_partition(m.id), m))
-                })
-                .collect()
-        } else {
-            Vec::new()
-        };
-        prospective_fathers.par_sort_unstable_by_key(|(region, partition, father)| {
-            (
-                *region,
-                *partition,
-                random(seed ^ 0x46415448, father.id, tick),
-                father.id,
-            )
-        });
-        let conceptions: Vec<_> = members
-            .par_iter()
-            .filter_map(|mother| {
-                if mother.genome.sex != Sex::Female
-                    || physical.controlled(mother.id)
-                    || mother.pregnancy.is_some()
-                    || match calendar
-                        .filter(|calendar| calendar.elapsed_gestation)
-                        .zip(now)
-                    {
-                        Some((calendar, now)) => calendar
-                            .birth_recovery
-                            .get(&mother.id)
-                            .is_some_and(|due| *due > now),
-                        None => mother.next_conception > tick,
-                    }
-                    || !eligible(mother, &physical.read(mother.id), rules)
-                {
-                    return None;
-                }
-                let mother_person = physical.read(mother.id);
-                let father = if rules.subjective_mating {
-                    if !seeks_mate(
-                        mother,
-                        &mother_person,
-                        dependent_count(mother.id),
-                        seed,
+        let conceptions =
+            if calendar.is_some_and(|calendar| calendar.conception_period_millis.is_some()) {
+                Vec::new()
+            } else {
+                prepare_conceptions(
+                    self,
+                    &members,
+                    physical,
+                    &dependent_count,
+                    seed,
+                    ConceptionTime {
                         tick,
-                    ) {
-                        return None;
-                    }
-                    let area = (mother_person.region?, physical.contact_partition(mother.id));
-                    let first = prospective_fathers.partition_point(|row| (row.0, row.1) < area);
-                    let end = prospective_fathers.partition_point(|row| (row.0, row.1) <= area);
-                    if first == end {
-                        return None;
-                    }
-                    let offset = (random(seed ^ 0x5345454b, mother.id, tick) % (end - first) as u64)
-                        as usize;
-                    let mother_ancestors = ancestors(mother.id, &index);
-                    (0..(end - first).min(32))
-                        .map(|n| prospective_fathers[first + (offset + n) % (end - first)].2)
-                        .filter(|father| {
-                            mother_ancestors.is_disjoint(&ancestors(father.id, &index))
-                        })
-                        .filter_map(|father| {
-                            mutual_mate_score(mother, father, physical, seed)
-                                .map(|score| (father, score))
-                        })
-                        .max_by_key(|(father, score)| (*score, std::cmp::Reverse(father.id)))?
-                        .0
-                } else {
-                    mother.partner.and_then(|p| index.get(&p))?
-                };
-                let chance = 500 + u64::from(mother.genome.expressed(0));
-                if father.genome.sex != Sex::Male
-                    || physical.controlled(father.id)
-                    || !ancestors(mother.id, &index).is_disjoint(&ancestors(father.id, &index))
-                    || !eligible(father, &physical.read(father.id), rules)
-                    || physical.read(father.id).region != physical.read(mother.id).region
-                    || physical.contact_partition(father.id)
-                        != physical.contact_partition(mother.id)
-                    || !random(seed ^ 97, mother.id, tick).is_multiple_of(rules.conception_one_in)
-                    || random(seed ^ 107, mother.id, tick) % 1500 >= chance
-                {
-                    return None;
-                }
-                Some((|| {
-                    let (due, due_at_millis) = match calendar
-                        .filter(|calendar| calendar.elapsed_gestation)
-                        .zip(now)
-                    {
-                        Some((calendar, now)) => (
-                            tick,
-                            Some(
-                                now.checked_add(
-                                    u128::from(calendar.unit_millis) * u128::from(rules.gestation),
-                                )
-                                .ok_or("elapsed gestation overflow")?,
-                            ),
-                        ),
-                        None => (
-                            tick.checked_add(rules.gestation)
-                                .ok_or("gestation overflow")?,
-                            None,
-                        ),
-                    };
-                    Ok((
-                        mother.id,
-                        Pregnancy {
-                            father: father.id,
-                            due,
-                            due_at_millis,
-                        },
-                    ))
-                })())
-            })
-            .collect::<Result<_, _>>()?;
+                        now,
+                        exact: false,
+                    },
+                )?
+            };
         events.par_extend(conceptions.par_iter().map(|(mother, pregnancy)| {
             event(
                 tick,
@@ -771,6 +756,159 @@ impl Families {
             deaths,
         })
     }
+}
+
+struct ConceptionTime {
+    tick: u64,
+    now: Option<u128>,
+    exact: bool,
+}
+
+fn elapsed_entropy(now: u128) -> u64 {
+    now as u64 ^ ((now >> 64) as u64).rotate_left(29)
+}
+
+fn prepare_conceptions(
+    family: &Families,
+    members: &[Member],
+    physical: &impl game_family_model::PhysicalView,
+    dependent_count: &(impl Fn(u64) -> u64 + Sync),
+    seed: u64,
+    time: ConceptionTime,
+) -> Result<Vec<(u64, Pregnancy)>, &'static str> {
+    let rules = &family.rules;
+    let calendar = family.elapsed_lifetimes.as_ref();
+    let tick = time.tick;
+    let now = time.now;
+    let entropy = if time.exact {
+        elapsed_entropy(now.expect("elapsed conception instant"))
+    } else {
+        tick
+    };
+    let is_eligible = |member: &Member, person: &LifeInput| {
+        let age = if time.exact {
+            family.age_at(member, now.expect("elapsed conception instant"))
+        } else {
+            member.age
+        };
+        eligible_at_age(member, person, rules, age)
+    };
+    let index = OrderedMemberIndex::new(members);
+    let mut prospective_fathers: Vec<_> = if rules.subjective_mating {
+        members
+            .par_iter()
+            .filter_map(|m| {
+                let person = physical.read(m.id);
+                (m.genome.sex == Sex::Male && !physical.controlled(m.id) && is_eligible(m, &person))
+                    .then(|| (person.region.unwrap(), physical.contact_partition(m.id), m))
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+    prospective_fathers.par_sort_unstable_by_key(|(region, partition, father)| {
+        (
+            *region,
+            *partition,
+            random(seed ^ 0x46415448, father.id, entropy),
+            father.id,
+        )
+    });
+    members
+        .par_iter()
+        .filter_map(|mother| {
+            if mother.genome.sex != Sex::Female
+                || physical.controlled(mother.id)
+                || mother.pregnancy.is_some()
+                || match calendar
+                    .filter(|calendar| calendar.elapsed_gestation)
+                    .zip(now)
+                {
+                    Some((calendar, now)) => calendar
+                        .birth_recovery
+                        .get(&mother.id)
+                        .is_some_and(|due| *due > now),
+                    None => mother.next_conception > tick,
+                }
+                || !is_eligible(mother, &physical.read(mother.id))
+            {
+                return None;
+            }
+            let mother_person = physical.read(mother.id);
+            let father = if rules.subjective_mating {
+                if !seeks_mate(
+                    mother,
+                    &mother_person,
+                    dependent_count(mother.id),
+                    seed,
+                    entropy,
+                ) {
+                    return None;
+                }
+                let area = (mother_person.region?, physical.contact_partition(mother.id));
+                let first = prospective_fathers.partition_point(|row| (row.0, row.1) < area);
+                let end = prospective_fathers.partition_point(|row| (row.0, row.1) <= area);
+                if first == end {
+                    return None;
+                }
+                let offset =
+                    (random(seed ^ 0x5345454b, mother.id, entropy) % (end - first) as u64) as usize;
+                let mother_ancestors = ancestors(mother.id, &index);
+                (0..(end - first).min(32))
+                    .map(|n| prospective_fathers[first + (offset + n) % (end - first)].2)
+                    .filter(|father| mother_ancestors.is_disjoint(&ancestors(father.id, &index)))
+                    .filter_map(|father| {
+                        mutual_mate_score(mother, father, physical, seed)
+                            .map(|score| (father, score))
+                    })
+                    .max_by_key(|(father, score)| (*score, std::cmp::Reverse(father.id)))?
+                    .0
+            } else {
+                mother.partner.and_then(|p| index.get(&p))?
+            };
+            let chance = 500 + u64::from(mother.genome.expressed(0));
+            if father.genome.sex != Sex::Male
+                || physical.controlled(father.id)
+                || !ancestors(mother.id, &index).is_disjoint(&ancestors(father.id, &index))
+                || !is_eligible(father, &physical.read(father.id))
+                || physical.read(father.id).region != physical.read(mother.id).region
+                || physical.contact_partition(father.id) != physical.contact_partition(mother.id)
+                || !random(seed ^ 97, mother.id, entropy).is_multiple_of(rules.conception_one_in)
+                || random(seed ^ 107, mother.id, entropy) % 1500 >= chance
+            {
+                return None;
+            }
+            Some((|| {
+                let (due, due_at_millis) = match calendar
+                    .filter(|calendar| calendar.elapsed_gestation)
+                    .zip(now)
+                {
+                    Some((calendar, now)) => (
+                        entropy,
+                        Some(
+                            now.checked_add(
+                                u128::from(calendar.unit_millis) * u128::from(rules.gestation),
+                            )
+                            .ok_or("elapsed gestation overflow")?,
+                        ),
+                    ),
+                    None => (
+                        tick.checked_add(rules.gestation)
+                            .ok_or("gestation overflow")?,
+                        None,
+                    ),
+                };
+                Ok((
+                    mother.id,
+                    Pregnancy {
+                        father: father.id,
+                        due,
+                        due_at_millis,
+                    },
+                ))
+            })())
+        })
+        .collect()
 }
 
 /// Physical age and mortality use only the opening family and physical views.

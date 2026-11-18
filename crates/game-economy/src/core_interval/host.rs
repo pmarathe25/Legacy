@@ -1589,10 +1589,20 @@ impl CoreHost {
         let delivery = self
             .next_delivery()
             .and_then(|after| u64::try_from(after).ok());
-        let first = [recovery, exposure, natural_death, purpose, delivery]
-            .into_iter()
-            .flatten()
-            .min();
+        let conception = self
+            .next_conception()
+            .and_then(|after| u64::try_from(after).ok());
+        let first = [
+            recovery,
+            exposure,
+            natural_death,
+            purpose,
+            delivery,
+            conception,
+        ]
+        .into_iter()
+        .flatten()
+        .min();
         if let Some(after_millis) = first {
             if after_millis < deadline.after_millis {
                 deadline = CoreDeadline {
@@ -1606,6 +1616,7 @@ impl CoreHost {
                     food_health: false,
                     purpose: purpose == Some(after_millis),
                     delivery: delivery == Some(after_millis),
+                    conception: conception == Some(after_millis),
                     recovery: recovery == Some(after_millis),
                     exposure: exposure == Some(after_millis),
                 };
@@ -1615,6 +1626,7 @@ impl CoreHost {
                 deadline.exposure = exposure == Some(after_millis);
                 deadline.purpose = purpose == Some(after_millis);
                 deadline.delivery = delivery == Some(after_millis);
+                deadline.conception = conception == Some(after_millis);
             }
         }
         Ok(deadline)

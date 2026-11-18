@@ -185,6 +185,10 @@ impl CoreHost {
         if let Some(deadline) = delivery {
             consumed = deadline.min(u128::from(consumed)) as u64;
         }
+        let conception = self.next_conception();
+        if let Some(deadline) = conception {
+            consumed = deadline.min(u128::from(consumed)) as u64;
+        }
         let (crop_rates, crop_limit) = self.plan_crop_segment(consumed)?;
         consumed = crop_limit;
         let elapsed_owner = self
@@ -289,12 +293,14 @@ impl CoreHost {
         let natural_death_due = natural_death == Some(u128::from(consumed));
         let purpose_due = purpose == Some(consumed);
         let delivery_due = delivery == Some(u128::from(consumed));
+        let conception_due = conception == Some(u128::from(consumed));
         let food_health_due = self.core.next_food_health() == Some(u128::from(consumed));
         let mut vitals = (has_injuries
             || exposure_due
             || natural_death_due
             || purpose_due
             || delivery_due
+            || conception_due
             || food_health_due
             || ordinary_recovery_due
             || self.core.next_metabolism() == Some(consumed))
@@ -355,13 +361,15 @@ impl CoreHost {
         } else {
             None
         };
-        let delivery = if delivery_due {
+        let delivery = if delivery_due || conception_due {
             let now = self.core.simulated_millis() + u128::from(consumed);
-            Some(self.stage_elapsed_family(
+            self.stage_elapsed_family(
                 &vitals.as_ref().expect("delivery vitals").people,
                 now,
                 purpose.as_ref(),
-            )?)
+                delivery_due,
+                conception_due,
+            )?
         } else {
             None
         };
