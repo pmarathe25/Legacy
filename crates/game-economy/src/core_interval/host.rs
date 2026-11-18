@@ -18,6 +18,7 @@ mod fauna;
 mod food_search;
 mod gathering;
 mod giving;
+mod goal_transport;
 mod goals;
 mod hauling;
 mod hauling_requests;
@@ -1258,8 +1259,8 @@ impl CoreHost {
             owner.validate(&people, &goods, &view, core.travel.as_ref())?;
         }
         if let Some(owner) = &mut local_transport {
-            if !owner.goal_fetchers.is_empty() {
-                return Err("goal-directed carrying is not yet supported".into());
+            if !owner.goal_fetchers.is_empty() && goals.is_none() {
+                return Err("goal-directed carrying requires personal goals".into());
             }
             owner.normalize();
             let people: HashSet<_> = core.people.par_iter().map(|p| p.id).collect();

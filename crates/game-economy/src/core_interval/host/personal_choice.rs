@@ -807,10 +807,9 @@ impl CoreHost {
                     .as_ref()
                     .is_some_and(|owner| !owner.policies.is_empty()))
             || (domain.is_none_or(|domain| domain == CARRYING)
-                && self
-                    .local_transport
-                    .as_ref()
-                    .is_some_and(|owner| !owner.policies.is_empty()))
+                && self.local_transport.as_ref().is_some_and(|owner| {
+                    !owner.policies.is_empty() || !owner.goal_fetchers.is_empty()
+                }))
             || (domain.is_none_or(|domain| domain == GATHERING)
                 && self
                     .gathering
@@ -1018,14 +1017,18 @@ impl CoreHost {
         let carrying = || -> Vec<CoreChoiceIntent> {
             if domain.is_none_or(|domain| domain == CARRYING)
                 && let Some(owner) = &self.local_transport
-                && !owner.policies.is_empty()
+                && (!owner.policies.is_empty() || !owner.goal_fetchers.is_empty())
             {
                 #[cfg(feature = "profile")]
                 let _span = game_diagnostics::span("choice.preview.carrying");
+                let needs = self.goal_fetch_needs(owner);
+                let view = view.as_ref().expect("carrying view");
+                let goal = (!needs.is_empty())
+                    .then(|| self.goal_carry_context(owner, view, &busy, &needs));
                 let opportunities = game_economy_local_transport::Context {
                     owner,
                     people: &self.core.people,
-                    view: view.as_ref().expect("carrying view"),
+                    view,
                     opinions: self.opinions.as_ref(),
                     claims: claims.as_ref(),
                     busy: &busy,
@@ -1033,7 +1036,7 @@ impl CoreHost {
                     manual: None,
                     walking: owner.walking.as_ref(),
                 }
-                .direct_opportunities();
+                .opportunities(goal.as_ref());
                 let rows: Vec<_> = opportunities
                     .into_par_iter()
                     .map(|opportunity| CoreChoiceIntent {

@@ -210,14 +210,23 @@ impl Search<'_> {
 }
 impl Context<'_> {
     pub fn prepare(&self, base: u64) -> Result<Plan, String> {
+        finish(self.choices(false), base, None)
+    }
+
+    /// Interval actors use only their current endpoint and their own cargo.
+    pub(super) fn directed_choices(&self) -> Vec<Choice> {
+        self.choices(true)
+    }
+
+    fn choices(&self, local_only: bool) -> Vec<Choice> {
         if self.needs.is_empty() || !self.owner.goal_fetchers.par_iter().any(|p| p.enabled) {
-            return finish(vec![], base, None);
+            return Vec::new();
         }
         let mut recipes: Vec<_> = self.recipes.par_iter().collect();
         if recipes.par_windows(2).any(|pair| pair[0].id > pair[1].id) {
             recipes.par_sort_unstable_by_key(|recipe| recipe.id);
         }
-        let visible_stores = if self.owner.walking.is_some() {
+        let visible_stores = if local_only || self.owner.walking.is_some() {
             &[][..]
         } else {
             self.owner.stores.as_slice()
@@ -251,8 +260,7 @@ impl Context<'_> {
             Vec::new()
         };
         producers.par_sort_unstable_by_key(|row| (row.0, row.1.id));
-        let rows: Vec<_> = self
-            .owner
+        self.owner
             .goal_fetchers
             .par_iter()
             .filter_map(|preference| {
@@ -269,7 +277,7 @@ impl Context<'_> {
                     .map(|i| &self.people[i])?;
                 if person.controlled
                     || person.health == 0
-                    || !person.willing_to_work
+                    || (!local_only && !person.willing_to_work)
                     || person.hunger > self.max_hunger
                 {
                     return None;
@@ -314,7 +322,6 @@ impl Context<'_> {
                 }
                 .choose(recipe, &mut [0; MAX_DEPTH], 0, &mut budget)
             })
-            .collect();
-        finish(rows, base, None)
+            .collect()
     }
 }

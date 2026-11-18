@@ -374,7 +374,11 @@ impl Context<'_> {
 
     /// Direct policy opportunities without physical transactions; excludes manual requests.
     pub fn direct_opportunities(&self) -> Vec<Opportunity> {
-        self.direct_choices()
+        self.opportunities(None)
+    }
+
+    pub fn opportunities(&self, goals: Option<&goal::Context<'_>>) -> Vec<Opportunity> {
+        self.choices_with_goals(goals)
             .into_par_iter()
             .map(|row| Opportunity {
                 person: row.person,
@@ -384,6 +388,24 @@ impl Context<'_> {
                 quantity: row.quantity,
             })
             .collect()
+    }
+
+    pub fn prepare_with_goals(&self, base: u64, goals: &goal::Context<'_>) -> Result<Plan, String> {
+        finish(self.choices_with_goals(Some(goals)), base, self.claims)
+    }
+
+    fn choices_with_goals(&self, goals: Option<&goal::Context<'_>>) -> Vec<Choice> {
+        let mut choices = self.direct_choices();
+        if let Some(goals) = goals {
+            let selected: HashSet<_> = choices.par_iter().map(|row| row.person).collect();
+            choices.par_extend(
+                goals
+                    .directed_choices()
+                    .into_par_iter()
+                    .filter(|row| !selected.contains(&row.person)),
+            );
+        }
+        choices
     }
 
     pub fn prepare(&self, base: u64) -> Result<Plan, String> {

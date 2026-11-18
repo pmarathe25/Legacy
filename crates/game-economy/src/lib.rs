@@ -4146,6 +4146,7 @@ impl Economy {
                     });
                     let searches = if has_goal_search {
                         local_walking::goal_search(local_walking::GoalSearchContext {
+                            honors_work_inclination: true,
                             owner,
                             walking,
                             people: &self.people,

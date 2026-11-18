@@ -27,7 +27,7 @@ impl CoreHost {
         let Some(owner) = self.local_transport.as_ref() else {
             return Ok(CoreLocalTransportResults::default());
         };
-        if owner.policies.is_empty() {
+        if owner.policies.is_empty() && owner.goal_fetchers.is_empty() {
             return Ok(CoreLocalTransportResults::default());
         }
         let tick = self.core.physical.tick();
@@ -62,7 +62,12 @@ impl CoreHost {
             manual: None,
             walking: owner.walking.as_ref(),
         };
-        let plan = context.prepare(1)?;
+        let needs = self.goal_fetch_needs(owner);
+        let plan = if needs.is_empty() {
+            context.prepare(1)?
+        } else {
+            context.prepare_with_goals(1, &self.goal_carry_context(owner, &view, &busy, &needs))?
+        };
         if plan.actions.is_empty() {
             return Ok(CoreLocalTransportResults::default());
         }

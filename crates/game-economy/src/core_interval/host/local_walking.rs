@@ -167,7 +167,7 @@ impl CoreHost {
         let busy = self.local_walk_exclusions(blocked);
         let claims = self.claims.as_ref().map(game_economy_claims::Claims::index);
         let view = self.core.physical.view(tick)?;
-        let choices = game_economy_local_transport::walking::personal_requests(
+        let mut choices = game_economy_local_transport::walking::personal_requests(
             owner,
             walking,
             &self.core.people,
@@ -176,6 +176,18 @@ impl CoreHost {
             self.opinions.as_ref(),
             (u32::MAX, self.core.physical.goods(), claims.as_ref()),
         );
+        let goals = if owner.goal_fetchers.is_empty() {
+            None
+        } else {
+            let mut occupied = busy.clone();
+            occupied.par_extend(choices.par_iter().map(|option| option.person));
+            occupied.par_sort_unstable();
+            occupied.dedup();
+            let plan = self.plan_local_goal_routes(owner, walking, &view, &occupied)?;
+            choices.par_extend(plan.requests.par_iter().copied());
+            choices.par_sort_unstable_by_key(|request| request.person);
+            Some(plan)
+        };
         let mut halting: Vec<_> = walking
             .positions
             .par_iter()
@@ -201,7 +213,10 @@ impl CoreHost {
             .into_par_iter()
             .filter(|request| !walking.moving(request.person, request.region))
             .collect();
-        if starts.is_empty() && halting.is_empty() {
+        if starts.is_empty()
+            && halting.is_empty()
+            && goals.as_ref().is_none_or(|plan| plan.searches.is_empty())
+        {
             return Ok(Vec::new());
         }
         let mut next = walking.prepare(&self.core.people, &starts, tick)?;
@@ -210,10 +225,18 @@ impl CoreHost {
         clock.paused.par_sort_unstable();
         clock.paused.dedup();
         let events = next.events.par_iter().cloned().collect();
-        self.local_transport
-            .as_mut()
-            .expect("local transport")
-            .walking = Some(next);
+        let owner = self.local_transport.as_mut().expect("local transport");
+        owner.walking = Some(next);
+        if let Some(plan) = goals {
+            let mut edits = plan.searches;
+            edits.par_sort_unstable_by_key(|row| row.person);
+            owner.goal_fetchers.par_iter_mut().for_each(|preference| {
+                if let Ok(index) = edits.binary_search_by_key(&preference.person, |row| row.person)
+                {
+                    preference.search = Some(edits[index].search.clone());
+                }
+            });
+        }
         self.work_checked_revision = None;
         Ok(events)
     }

@@ -8,6 +8,15 @@ duration and paused state survive saving. Local carrying checks the endpoint
 the person has reached. The interval player can use `walk stock`,
 `walk store ID`, `pause-walk`, and `resume-walk`.
 
+An interval `[[local_transport.goal_fetchers]]` entry can enable a person's
+own supply trips for their active craft goal. Its optional `search` defines
+known stores, a bounded number of visits, a retry duration, and a maximum
+search duration. `retry_ticks` and `max_ticks` count elapsed walking units.
+The person observes a store's supply on arrival, may move on to another
+known store, and can carry actual materials back to regional stock. The
+chosen transfer can compete with the person's other decisions. A shortage
+at a remote store becomes apparent only after they reach it.
+
 Distinct named stores have their own capacity and dated physical custody. Individuals can choose to pick up goods and deposit them at another store or regional stock on separate boundaries. The actor retains custody between actions and may stop, while physical transactions resolve competing uses and preserve expiry. Fear or felt obligation may independently motivate a carrier; no organization or agreement compels them.
 
 A policy can use `{ kind = "person" }` as its destination to express an

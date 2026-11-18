@@ -97,6 +97,7 @@ pub struct GoalSearchContext<'a> {
     pub underage: &'a [u64],
     pub max_hunger: u32,
     pub tick: u64,
+    pub honors_work_inclination: bool,
 }
 
 pub struct MissionReturnContext<'a> {
@@ -369,6 +370,7 @@ pub fn goal_search(context: GoalSearchContext<'_>) -> Result<Vec<SearchProposal>
                 .map(|index| context.needs[index].recipe);
             if search.active_recipe.is_some()
                 && (context.tick >= search.expires_at
+                    || (!context.honors_work_inclination && selected.is_none())
                     || selected.is_some_and(|recipe| Some(recipe) != search.active_recipe))
             {
                 search.active_recipe = None;
@@ -392,7 +394,7 @@ pub fn goal_search(context: GoalSearchContext<'_>) -> Result<Vec<SearchProposal>
                 || !search.willing
                 || person.controlled
                 || person.health == 0
-                || !person.willing_to_work
+                || (context.honors_work_inclination && !person.willing_to_work)
                 || person.hunger > context.max_hunger
                 || context.busy.binary_search(&person.id).is_ok()
                 || context.underage.binary_search(&person.id).is_ok()

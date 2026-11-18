@@ -31,13 +31,6 @@ impl CoreHostSnapshot {
             unsupported.push("construction");
         }
         if state
-            .local_transport
-            .as_ref()
-            .is_some_and(|owner| !owner.goal_fetchers.is_empty())
-        {
-            unsupported.push("local_transport");
-        }
-        if state
             .dynamics
             .as_ref()
             .is_some_and(|owner| owner.disease.is_none() && !owner.treatment.is_empty())

@@ -1059,6 +1059,157 @@ location = { kind = "at", region = 1, endpoint = { kind = "store", id = 1 } }
 }
 
 #[test]
+fn a_person_visits_known_stores_for_their_own_goal_and_returns_with_actual_supplies() {
+    use game_economy::LocalLocation;
+    use game_economy::core_interval::{CoreHost, CoreRunEvent};
+    use game_lots::Place;
+
+    let root = root();
+    let template =
+        std::fs::read_to_string(root.join("content/scenarios/economy-core-local-carry.toml"))
+            .unwrap();
+    let mut source = template
+        .split_once("[[local_transport.policies]]")
+        .unwrap()
+        .0
+        .replacen("seed = 7", "seed = 7\ndecision_period_millis = 100", 1);
+    source.push_str(r#"
+[[local_transport.stores]]
+id = 2
+region = 1
+name = "Wood store"
+capacity = 10
+goods = { timber = 5 }
+
+[[local_transport.goal_fetchers]]
+person = 1
+enabled = true
+max_quantity = 5
+search = { store = 1, alternatives = [2], max_visits = 2, willing = true, retry_ticks = 10, max_ticks = 30 }
+
+[local_transport.walking.elapsed]
+unit_millis = 100
+
+[[local_transport.walking.routes]]
+region = 1
+from = { kind = "stock" }
+to = { kind = "store", id = 1 }
+ticks = 2
+
+[[local_transport.walking.routes]]
+region = 1
+from = { kind = "store", id = 1 }
+to = { kind = "store", id = 2 }
+ticks = 1
+
+[[local_transport.walking.routes]]
+region = 1
+from = { kind = "store", id = 2 }
+to = { kind = "stock" }
+ticks = 2
+
+[goals]
+retry_interval = 3
+[[goals.people]]
+person = 1
+recipe = "fixture-tool"
+priority = 1
+target = 1
+"#);
+    let path = std::env::temp_dir().join(format!(
+        "legacy-interval-goal-carry-{}.toml",
+        std::process::id()
+    ));
+    std::fs::write(&path, source).unwrap();
+    let loaded = game_economy_cli::core_scenario(&path, &root.join("content"));
+    std::fs::remove_file(path).unwrap();
+    let opening = loaded.unwrap().snapshot();
+    let timber = opening
+        .core
+        .physical
+        .goods
+        .iter()
+        .find(|good| good.name == "timber")
+        .unwrap()
+        .id;
+    let run = |quantum, workers| {
+        let mut state = opening.clone();
+        state.core.physical.tick_millis = quantum;
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut host = CoreHost::resume(state).unwrap();
+                assert_eq!(host.advance_continuous(199, &[]).unwrap().failure, None);
+                assert!(matches!(
+                    host.local_location(1),
+                    Some(LocalLocation::Walking {
+                        to: game_economy::LocalEndpoint::Store { id: 1 },
+                        remaining: 1,
+                        ..
+                    })
+                ));
+                let stock = host.advance_continuous(101, &[]).unwrap();
+                assert_eq!(stock.failure, None);
+                assert!(
+                    stock
+                        .events
+                        .iter()
+                        .any(|event| matches!(event, CoreRunEvent::LocalCarries(rows)
+                if rows.iter().any(|row| row.good == timber && row.moved)))
+                );
+                let saved = host.snapshot();
+                let carried = saved
+                    .core
+                    .physical
+                    .custody
+                    .containers
+                    .iter()
+                    .find(|row| row.place == Place::Person(1))
+                    .unwrap()
+                    .used;
+                assert!(carried > 0);
+                let mut host = CoreHost::resume(
+                    serde_json::from_str(&serde_json::to_string(&saved).unwrap()).unwrap(),
+                )
+                .unwrap();
+                assert_eq!(host.advance_continuous(300, &[]).unwrap().failure, None);
+                let saved = host.snapshot();
+                let containers = &saved.core.physical.custody.containers;
+                assert_eq!(
+                    containers
+                        .iter()
+                        .find(|row| row.place == Place::Person(1))
+                        .unwrap()
+                        .used,
+                    0
+                );
+                let stock = containers
+                    .iter()
+                    .find(|row| {
+                        row.place
+                            == Place::Stock {
+                                region: 1,
+                                good: timber,
+                            }
+                    })
+                    .unwrap()
+                    .used;
+                let store = containers
+                    .iter()
+                    .find(|row| row.place == Place::Inventory(2))
+                    .unwrap()
+                    .used;
+                assert_eq!(stock, carried);
+                assert_eq!(stock + store, 5);
+                stock
+            })
+    };
+    assert_eq!(run(900_000, 1), run(270, 4));
+}
+
+#[test]
 fn people_can_choose_to_eat_at_stock_with_full_cargo_and_compete_for_one_portion() {
     use game_economy::core_interval::{CoreChoiceOutcome, CoreHost, CoreRunEvent};
     use game_lots::Place;
