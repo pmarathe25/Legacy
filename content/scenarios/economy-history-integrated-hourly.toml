@@ -41,6 +41,7 @@ max_work_hunger = 120
 
 [nutrition.rules]
 interval_millis = 86400000
+health_effect_delay_millis = 3600000
 capacity = [240, 64, 24, 30, 12, 30]
 initial = [180, 48, 18, 24, 8, 20]
 metabolism = [20, 2, 1, 1, 1, 1]

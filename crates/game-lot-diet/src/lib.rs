@@ -11,8 +11,23 @@ pub fn validate_pending(
     people: &HashSet<u64>,
     tick: u64,
 ) -> Result<(), String> {
+    validate_pending_at(pending, people, tick, None)
+}
+
+pub fn validate_pending_at(
+    pending: &[FoodEffect],
+    people: &HashSet<u64>,
+    tick: u64,
+    millis: Option<u128>,
+) -> Result<(), String> {
     if pending.par_iter().any(|row| {
-        row.at <= tick
+        let invalid_time = match row.at_millis {
+            Some(at) => {
+                millis.is_none_or(|now| at <= now) || row.health == 0 || row.nutrients != [0; 6]
+            }
+            None => row.at <= tick,
+        };
+        invalid_time
             || (row.health == 0 && row.nutrients == [0; 6])
             || !people.contains(&row.person)
     }) {
@@ -84,6 +99,7 @@ impl Plan {
                 (record.health != 0 || record.nutrients != [0; 6]).then_some(FoodEffect {
                     person: record.meal.person,
                     at: effect_tick,
+                    at_millis: None,
                     health: record.health,
                     nutrients: record.nutrients,
                 });
@@ -225,6 +241,7 @@ impl Plan {
                             .tick
                             .checked_add(1)
                             .ok_or("food effect tick overflow")?,
+                        at_millis: None,
                         health: record.health,
                         nutrients: record.nutrients,
                     })

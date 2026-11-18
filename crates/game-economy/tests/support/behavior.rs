@@ -206,6 +206,7 @@ fn fixture() -> State {
         nutrition: Some(Nutrition {
             rules: NutritionRules {
                 interval_millis: None,
+                health_effect_delay_millis: None,
                 interval: 1,
                 capacity: [100; 6],
                 initial: [0; 6],
@@ -2803,6 +2804,7 @@ fn confining_a_handler_separates_them_from_the_animal() {
 fn a_handler_who_dies_cannot_keep_a_physical_hold() {
     let mut initial = animal_restraint_fixture();
     initial.pending_food.push(FoodEffect {
+        at_millis: None,
         person: 1,
         at: 1,
         health: -100,
@@ -16751,6 +16753,7 @@ fn campaign_fixture() -> State {
         events: vec![],
     });
     state.pending_food = vec![FoodEffect {
+        at_millis: None,
         person: 3,
         at: 1,
         health: -100,
@@ -22064,6 +22067,7 @@ fn immortal_person_recovers_in_place_without_mortal_death_or_metabolism() {
         reserves: [40; 6],
     });
     initial.pending_food.push(FoodEffect {
+        at_millis: None,
         person: 5,
         at: 1,
         health: -100,
@@ -35960,12 +35964,14 @@ fn later_digestion_cannot_revive_a_person_who_died() {
     let mut state = fixture();
     state.pending_food = vec![
         FoodEffect {
+            at_millis: None,
             person: 3,
             at: 1,
             health: -100,
             nutrients: [0; 6],
         },
         FoodEffect {
+            at_millis: None,
             person: 3,
             at: 1,
             health: 100,
@@ -41163,6 +41169,7 @@ fn fear_can_start_requested_work_and_the_worker_can_leave_when_fear_fades() {
     assert_eq!(run(1), run(4));
     let mut fatal = initial.clone();
     fatal.pending_food.push(FoodEffect {
+        at_millis: None,
         person: 2,
         at: 1,
         health: -100,
@@ -41723,6 +41730,7 @@ fn recovery_uses_real_rest_and_does_not_revive_or_heal_starving_people() {
     assert_eq!(run(1), run(4));
     let mut fatal = initial;
     fatal.pending_food.push(FoodEffect {
+        at_millis: None,
         person: 1,
         at: 1,
         health: -100,
@@ -50964,6 +50972,7 @@ fn a_worker_who_dies_on_start_does_not_keep_a_site_binding() {
     initial.people[1].health = 1;
     initial.physical.recipes[0].ticks = 3;
     initial.pending_food.push(FoodEffect {
+        at_millis: None,
         person: 2,
         at: 1,
         health: -1,

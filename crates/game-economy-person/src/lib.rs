@@ -196,6 +196,21 @@ pub struct Draft {
     pub nutrition: Option<Nutrition>,
     pub pending: Vec<FoodEffect>,
 }
+
+/// Apply authored food physiology to a living person.
+pub fn apply_food_health(person: &mut Person, health_effect: i32, max_health: u32) {
+    if person.health == 0 {
+        return;
+    }
+    if health_effect < 0 {
+        person.health = person.health.saturating_sub(health_effect.unsigned_abs());
+    } else {
+        person.health = person
+            .health
+            .saturating_add(health_effect as u32)
+            .min(max_health);
+    }
+}
 pub fn prepare(
     people: &[Person],
     rules: &Rules,
@@ -231,7 +246,7 @@ fn prepare_inner(
 ) -> Draft {
     let mut due: Vec<_> = pending
         .par_iter()
-        .filter(|row| row.at <= tick)
+        .filter(|row| row.at_millis.is_none() && row.at <= tick)
         .copied()
         .collect();
     due.par_sort_unstable_by_key(|row| (row.person, row.at, row.health, row.nutrients));
@@ -283,14 +298,7 @@ fn prepare_inner(
                     if person.health == 0 {
                         break;
                     }
-                    if effect.health < 0 {
-                        person.health = person.health.saturating_sub(effect.health.unsigned_abs());
-                    } else {
-                        person.health = person
-                            .health
-                            .saturating_add(effect.health as u32)
-                            .min(rules.max_health);
-                    }
+                    apply_food_health(&mut person, effect.health, rules.max_health);
                     if let (Some(values), Some(nutrition_rules)) = (&mut values, nutrition_rules) {
                         for (index, value) in values.iter_mut().enumerate() {
                             *value = value
@@ -340,7 +348,7 @@ fn prepare_inner(
     });
     let mut pending: Vec<_> = pending
         .par_iter()
-        .filter(|row| row.at > tick)
+        .filter(|row| row.at_millis.is_some() || row.at > tick)
         .copied()
         .chain(effects.pending.into_par_iter())
         .collect();

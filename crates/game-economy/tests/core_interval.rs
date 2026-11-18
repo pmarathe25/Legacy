@@ -558,6 +558,7 @@ fn fixture() -> CoreSnapshot {
             rules: game_nutrition::Rules {
                 interval: 1,
                 interval_millis: None,
+                health_effect_delay_millis: None,
                 capacity: [10; 6],
                 initial: [2; 6],
                 metabolism: [1; 6],
@@ -577,6 +578,7 @@ fn fixture() -> CoreSnapshot {
             ],
         }),
         pending_food: vec![game_production_model::FoodEffect {
+            at_millis: None,
             person: 2,
             at: 1,
             health: 1,
@@ -4327,6 +4329,89 @@ fn elapsed_food_credits_nutrients_before_metabolism_and_deficiency_stops_work() 
     assert_eq!(saved.people[0].health, 0);
     assert_eq!(saved.physical.work[0].progress_remainder, 250);
     assert!(saved.physical.work_interval.unwrap().rates.is_empty());
+}
+
+#[test]
+fn delayed_food_health_survives_settlement_and_interrupts_work_once() {
+    fn run(quantum: u64, chunk: u64) -> u64 {
+        let mut opening = fixture();
+        opening.physical.tick_millis = quantum;
+        opening.physical.work_rate_period_millis = Some(1000);
+        opening.pending_food.clear();
+        opening.rules.hunger_per_tick = 0;
+        opening.rules.starvation_damage = 0;
+        opening.people[0].health = 1;
+        let rules = &mut opening.nutrition.as_mut().unwrap().rules;
+        rules.interval = 0;
+        rules.interval_millis = Some(1000);
+        rules.health_effect_delay_millis = Some(350);
+        opening.physical.goods[1].food = Some(game_production_model::FoodProfile {
+            portion: 1,
+            hunger_relief: 1,
+            nutrients: [("energy".to_owned(), 1)].into(),
+            health_effect: -1,
+            shelf_days: None,
+        });
+        opening.physical.custody.containers.push(
+            Container::new(
+                Place::Person(1),
+                2,
+                vec![Lot {
+                    batch: None,
+                    item: None,
+                    good: 2,
+                    quantity: 1,
+                    expires_at: None,
+                }],
+            )
+            .unwrap(),
+        );
+        opening
+            .physical
+            .custody
+            .containers
+            .sort_by_key(|row| row.place);
+        let mut core = CoreInterval::begin(opening, &[(1, 1)]).unwrap();
+        assert_eq!(core.progress(50).unwrap(), 50);
+        let meal = game_lot_diet::Meal {
+            action: 1,
+            person: 1,
+            good: 2,
+        };
+        assert!(core.eat(0, 50, &[meal]).unwrap().transactions[0].accepted);
+        assert_eq!(core.snapshot().pending_food[0].at_millis, Some(400));
+        let mut elapsed = 50;
+        for end in [200, 399, 400] {
+            while elapsed < end {
+                let step = core.progress(chunk.min(end - elapsed)).unwrap();
+                assert!(step > 0);
+                elapsed += step;
+                if elapsed % quantum == 0 {
+                    core.settle().unwrap();
+                    core = CoreInterval::begin(core.snapshot(), &[(1, 1)]).unwrap();
+                }
+            }
+            if end < 400 {
+                let state = core.snapshot();
+                assert_eq!(state.people[0].health, 1);
+                assert_eq!(state.pending_food.len(), 1);
+                core = CoreInterval::resume(
+                    serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap(),
+                )
+                .unwrap();
+            }
+            if end == 399 {
+                assert!(core.next_deadline(None).unwrap().food_health);
+            }
+        }
+        let state = core.snapshot();
+        assert_eq!(state.people[0].health, 0);
+        assert!(state.pending_food.is_empty());
+        assert!(state.physical.work_interval.unwrap().rates.is_empty());
+        state.physical.work[0].progress_remainder
+    }
+    assert_eq!(run(1000, 1000), 400);
+    assert_eq!(run(180, 37), 400);
 }
 
 #[test]

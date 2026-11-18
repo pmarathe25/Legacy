@@ -20,6 +20,9 @@ pub struct Rules {
     /// Apply metabolism at multiples of this duration from the simulation epoch.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub interval_millis: Option<u64>,
+    /// Time between actual consumption and its separate health effect.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub health_effect_delay_millis: Option<u64>,
     pub capacity: Nutrients,
     pub initial: Nutrients,
     pub metabolism: Nutrients,
@@ -46,16 +49,24 @@ pub struct Nutrition {
 
 impl Nutrition {
     pub fn validate(&self, people: &HashSet<u64>) -> Result<(), &'static str> {
-        if match self.rules.interval_millis {
+        let invalid_cadence = match self.rules.interval_millis {
             Some(millis) => millis == 0 || self.rules.interval != 0,
             None => self.rules.interval == 0,
-        } || (0..6).any(|i| {
-            self.rules.initial[i] > self.rules.capacity[i]
-                || self.rules.minimum[i] > self.rules.capacity[i]
-        }) || self.people.par_iter().any(|row| {
-            !people.contains(&row.person)
-                || (0..6).any(|i| row.reserves[i] > self.rules.capacity[i])
-        }) {
+        };
+        if invalid_cadence
+            || self
+                .rules
+                .health_effect_delay_millis
+                .is_some_and(|delay| delay == 0 || self.rules.interval_millis.is_none())
+            || (0..6).any(|i| {
+                self.rules.initial[i] > self.rules.capacity[i]
+                    || self.rules.minimum[i] > self.rules.capacity[i]
+            })
+            || self.people.par_iter().any(|row| {
+                !people.contains(&row.person)
+                    || (0..6).any(|i| row.reserves[i] > self.rules.capacity[i])
+            })
+        {
             return Err("invalid nutrition state");
         }
         let mut ids: Vec<_> = self.people.par_iter().map(|row| row.person).collect();
@@ -187,6 +198,7 @@ macro_rules! eat_scalar {
                 .push($crate::FoodEffect {
                     person: $person,
                     at,
+                    at_millis: None,
                     health: 0,
                     nutrients,
                 });

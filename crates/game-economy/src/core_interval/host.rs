@@ -1564,6 +1564,7 @@ impl CoreHost {
                     hunger: false,
                     death: false,
                     nutrition: false,
+                    food_health: false,
                     recovery: recovery == Some(after_millis),
                     exposure: exposure == Some(after_millis),
                 };

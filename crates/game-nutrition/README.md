@@ -9,8 +9,9 @@ In an interval scenario, set `nutrition.rules.interval_millis` to schedule
 metabolism and deficiency damage at exact elapsed deadlines. This replaces
 `nutrition.rules.interval`, which counts physical boundaries in older saves.
 The simulation applies a due metabolism event before new choices at that
-instant. It credits nutrients when actual food consumption commits. Delayed
-health effects from food still use the existing settlement schedule.
+instant. It credits nutrients when actual food consumption commits. Optional
+`nutrition.rules.health_effect_delay_millis` puts health effects on their own
+deadline relative to consumption. Old worlds use the settlement schedule.
 
 The reserve arrays use energy, protein, fat, fibre, vitamins, and minerals in
 that order. The model does not yet support adding new nutrient types in content.

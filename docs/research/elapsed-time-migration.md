@@ -78,15 +78,17 @@ the season just before each exposure event and applies it before new choices
 and ordinary healing at that instant. Legacy exposure still uses settlement.
 Optional `nutrition.rules.interval_millis` sets absolute metabolism deadlines
 and applies deficiency damage at those times. A meal credits nutrients at
-successful consumption in this mode. Delayed food health effects still settle
-at physical boundaries. The integrated history scenario uses elapsed nutrition.
+successful consumption in this mode. An explicit
+`nutrition.rules.health_effect_delay_millis` schedules food health effects
+relative to the actual consumption time. They survive settlement and
+save/reload. The integrated history scenario uses both elapsed modes.
 Older saves without these explicit rates retain their original quantum-based
 semantics. Interval snapshots also
 retain absolute milliseconds at the current boundary; an older snapshot
 derives this value from its original tick and quantum when loaded. This clock
 does not by itself convert other owners' tick-based state when a quantum
 changes. This does not yet convert
-delayed meal health effects, all fatigue decision opportunities, family
+all fatigue decision opportunities, family
 and animal clocks, other ecological processes, disease, or social randomness. In
 particular, a short physical quantum must not be advertised as a faithful
 minute-world until those owners have independent elapsed-time rules.

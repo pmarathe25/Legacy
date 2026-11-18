@@ -39,6 +39,9 @@ pub struct FoodEffects {
 pub struct FoodEffect {
     pub person: u64,
     pub at: u64,
+    /// Explicit due time for food health effects in the interval host.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub at_millis: Option<u128>,
     pub health: i32,
     #[serde(default)]
     pub nutrients: [u32; 6],
@@ -50,7 +53,8 @@ impl FoodEffects {
         now: u64,
     ) -> Result<(), &'static str> {
         if self.pending.iter().any(|row| {
-            row.at <= now
+            row.at_millis.is_some()
+                || row.at <= now
                 || (row.health == 0 && row.nutrients == [0; 6])
                 || !people.contains(&row.person)
         }) {

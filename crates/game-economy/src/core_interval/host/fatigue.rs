@@ -267,8 +267,10 @@ impl CoreHost {
             .map_or(&[][..], |draft| draft.consequences.as_slice());
         let has_injuries = !injuries.is_empty();
         let exposure_due = exposure == Some(consumed);
+        let food_health_due = self.core.next_food_health() == Some(u128::from(consumed));
         let mut vitals = (has_injuries
             || exposure_due
+            || food_health_due
             || ordinary_recovery_due
             || self.core.next_metabolism() == Some(consumed))
         .then(|| self.core.preview_people_progress(consumed, injuries))
@@ -338,7 +340,7 @@ impl CoreHost {
                 if let Some(paused) = paused_after_deaths {
                     self.paused_work_rates = paused;
                 }
-                if !deaths.is_empty() || recovery_due || exposure_due {
+                if !deaths.is_empty() || recovery_due || exposure_due || food_health_due {
                     self.work_checked_revision = None;
                 }
                 if let Some(owner) = staged_shared {
@@ -498,7 +500,7 @@ impl CoreHost {
         if let Some(paused) = paused_after_deaths {
             self.paused_work_rates = paused;
         }
-        if !deaths.is_empty() || recovery_due || has_injuries || exposure_due {
+        if !deaths.is_empty() || recovery_due || has_injuries || exposure_due || food_health_due {
             self.work_checked_revision = None;
         }
         self.activity = next;

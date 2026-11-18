@@ -88,6 +88,7 @@ pub struct CoreMealDraft {
 struct VitalsProgress {
     people: Vec<Person>,
     nutrition: Option<Nutrition>,
+    pending_food: Option<Vec<FoodEffect>>,
 }
 impl CoreMealDraft {
     pub fn transactions(&self) -> &[game_lots::TransactionOutcome] {
@@ -124,6 +125,7 @@ pub struct CoreDeadline {
     pub recovery: bool,
     pub nutrition: bool,
     pub exposure: bool,
+    pub food_health: bool,
 }
 /// Travelers published at a partial-interval offset.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -293,7 +295,13 @@ impl CoreInterval {
         if let Some(nutrition) = &nutrition {
             nutrition.validate(&ids).map_err(str::to_owned)?;
         }
-        game_lot_diet::validate_pending(&pending_food, &ids, physical.tick())?;
+        let now = boundary_millis
+            + u128::from(
+                physical
+                    .work_interval()
+                    .map_or(0, |interval| interval.elapsed_millis),
+            );
+        game_lot_diet::validate_pending_at(&pending_food, &ids, physical.tick(), Some(now))?;
         Ok(Self {
             generation: 0,
             seed,
@@ -395,6 +403,7 @@ impl CoreInterval {
             .map_err(str::to_owned)?;
         let recovery = game_economy_person::next_recovery(&self.people).map_err(str::to_owned)?;
         let nutrition = self.next_metabolism().map(u128::from);
+        let food_health = self.next_food_health();
         let after = [
             Some(u128::from(remaining)),
             work,
@@ -403,6 +412,7 @@ impl CoreInterval {
             death,
             recovery,
             nutrition,
+            food_health,
         ]
         .into_iter()
         .flatten()
@@ -418,6 +428,7 @@ impl CoreInterval {
             recovery: recovery == Some(after),
             nutrition: nutrition == Some(after),
             exposure: false,
+            food_health: food_health == Some(after),
         })
     }
     /// Progress no farther than the next observed deadline. A zero result
@@ -878,6 +889,22 @@ impl CoreInterval {
                     .for_each(|row| row.nutrients = [0; 6]);
                 next
             });
+        if let Some(delay) = self
+            .nutrition
+            .as_ref()
+            .and_then(|owner| owner.rules.health_effect_delay_millis)
+            && !effects.pending.is_empty()
+        {
+            let due = self
+                .simulated_millis()
+                .checked_add(u128::from(delay))
+                .ok_or("food health time overflow")?;
+            effects.pending.par_iter_mut().for_each(|row| {
+                if row.health != 0 {
+                    row.at_millis = Some(due);
+                }
+            });
+        }
         let mut pending_food = self.pending_food.clone();
         pending_food.extend(effects.pending);
         #[cfg(feature = "profile")]
@@ -961,6 +988,15 @@ impl CoreInterval {
             .next_metabolism(self.simulated_millis())
     }
 
+    fn next_food_health(&self) -> Option<u128> {
+        let now = self.simulated_millis();
+        self.pending_food
+            .par_iter()
+            .filter_map(|row| row.at_millis)
+            .min()
+            .map(|due| due - now)
+    }
+
     /// Limit progress to the physical boundary or the next elapsed physiology event.
     pub fn progress_limit(&self, requested_millis: u64) -> Result<u64, String> {
         let elapsed = self.elapsed_millis().ok_or("no physical interval")?;
@@ -972,10 +1008,15 @@ impl CoreInterval {
         let death = game_economy_person::next_starvation_death(&self.people, &self.rules, quantum)
             .map_err(str::to_owned)?;
         let recovery = game_economy_person::next_recovery(&self.people).map_err(str::to_owned)?;
-        Ok(earliest(
-            earliest(death, recovery),
+        Ok([
+            death,
+            recovery,
             self.next_metabolism().map(u128::from),
-        )
+            self.next_food_health(),
+        ]
+        .into_iter()
+        .flatten()
+        .min()
         .map_or(limit, |deadline| deadline.min(u128::from(limit)) as u64))
     }
 
@@ -1001,7 +1042,11 @@ impl CoreInterval {
             .generation
             .checked_add(1)
             .ok_or("core revision overflow")?;
-        let VitalsProgress { people, nutrition } = match staged_vitals {
+        let VitalsProgress {
+            people,
+            nutrition,
+            pending_food,
+        } = match staged_vitals {
             Some(vitals) => vitals,
             None => self.preview_people_progress(consumed, &[])?,
         };
@@ -1048,6 +1093,9 @@ impl CoreInterval {
         self.people = people;
         if let Some(nutrition) = nutrition {
             self.nutrition = Some(nutrition);
+        }
+        if let Some(pending_food) = pending_food {
+            self.pending_food = pending_food;
         }
         self.travel = travel;
         self.generation = generation;
@@ -1119,7 +1167,34 @@ impl CoreInterval {
                 state
             })
         });
-        Ok(VitalsProgress { people, nutrition })
+        let pending_food = if self.next_food_health() == Some(u128::from(consumed)) {
+            let now = self.simulated_millis() + u128::from(consumed);
+            let (mut due, pending): (Vec<_>, Vec<_>) = self
+                .pending_food
+                .par_iter()
+                .copied()
+                .partition(|row| row.at_millis == Some(now));
+            due.par_sort_unstable_by_key(|row| (row.person, row.health));
+            people.par_iter_mut().for_each(|person| {
+                let start = due.partition_point(|effect| effect.person < person.id);
+                let end = due.partition_point(|effect| effect.person <= person.id);
+                for effect in &due[start..end] {
+                    game_economy_person::apply_food_health(
+                        person,
+                        effect.health,
+                        self.rules.max_health,
+                    );
+                }
+            });
+            Some(pending)
+        } else {
+            None
+        };
+        Ok(VitalsProgress {
+            people,
+            nutrition,
+            pending_food,
+        })
     }
     /// Stage the full quantum without publishing physical or personal changes.
     /// An enclosing item owner retains its own rules, allocator and metadata.

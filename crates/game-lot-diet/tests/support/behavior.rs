@@ -260,6 +260,7 @@ fn pending_food_validation_matches_the_reference_across_workers() {
     let people: HashSet<_> = (1..=128).collect();
     let effects: Vec<_> = (1..=128)
         .map(|person| FoodEffect {
+            at_millis: None,
             person,
             at: 2,
             health: 0,
@@ -306,6 +307,7 @@ fn pending_food_validation_benchmark() {
     let people: HashSet<_> = (1..=count).collect();
     let effects: Vec<_> = (1..=count)
         .map(|person| FoodEffect {
+            at_millis: None,
             person,
             at: 2,
             health: 1,
