@@ -1,4 +1,4 @@
-//! Individual purpose follows completed work, including work published early.
+//! Individual purpose follows personal interpretations of realized activities.
 use super::*;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -26,6 +26,66 @@ impl CorePurpose {
 }
 
 impl CoreHost {
+    pub(super) fn next_purpose(&self) -> Option<u64> {
+        let period = self.purpose.as_ref()?.owner.rules.elapsed_period_millis?;
+        let offset = (self.core.simulated_millis() % u128::from(period)) as u64;
+        Some(period - offset)
+    }
+
+    pub(super) fn stage_elapsed_purpose(&self, people: &mut [Person], tick: u64) -> CorePurpose {
+        let previous = self
+            .purpose
+            .as_ref()
+            .expect("purpose deadline has an owner");
+        let owner = previous.owner.prepare(&[], tick, |id| alive(people, id));
+        harm(&owner, people, tick);
+        CorePurpose {
+            owner,
+            progress: previous.progress.clone(),
+        }
+    }
+
+    pub(super) fn record_personal_choices(
+        &mut self,
+        run: &mut CoreRun,
+        choices: Vec<CoreChoiceEvent>,
+    ) {
+        if choices.is_empty() {
+            return;
+        }
+        if let Some(purpose) = &mut self.purpose {
+            use game_purpose::{ActionOutcome, Experience};
+            let experiences: Vec<_> = choices
+                .par_iter()
+                .filter_map(|event| {
+                    let key = event.key?;
+                    let outcome = match event.outcome {
+                        CoreChoiceOutcome::Accepted => ActionOutcome::Accepted,
+                        CoreChoiceOutcome::Denied => ActionOutcome::Denied,
+                        CoreChoiceOutcome::Stopped => ActionOutcome::Stopped,
+                        _ => return None,
+                    };
+                    let index = self
+                        .core
+                        .people
+                        .binary_search_by_key(&event.actor, |person| person.id)
+                        .ok()?;
+                    if self.core.people[index].health == 0 {
+                        return None;
+                    }
+                    Some(Experience {
+                        person: event.actor,
+                        domain: key.domain,
+                        outcome,
+                        tick: event.tick,
+                    })
+                })
+                .collect();
+            purpose.owner.appraise(&experiences);
+        }
+        run.events.push(CoreRunEvent::PersonalChoices(choices));
+    }
+
     pub(super) fn stage_purpose_progress(&self, finished: &[u64]) -> Option<Vec<u64>> {
         let owner = self.purpose.as_ref()?;
         let mut progress = owner.progress.clone();
@@ -67,29 +127,43 @@ impl CoreHost {
                     outcome: game_purpose::Outcome::Blocked,
                 }),
         );
-        let next = current.owner.prepare(&events, tick, |id| {
-            people
-                .binary_search_by_key(&id, |person| person.id)
-                .ok()
-                .is_some_and(|index| people[index].health > 0)
-        });
-        let mut harmed: Vec<_> = next
-            .people
-            .par_iter()
-            .filter(|person| {
-                tick >= person.eligible_at && person.deprivation >= next.rules.damage_threshold
-            })
-            .map(|person| person.person)
-            .collect();
-        harmed.par_sort_unstable();
-        people.par_iter_mut().for_each(|person| {
-            if person.health > 0 && harmed.binary_search(&person.id).is_ok() {
-                person.health = person.health.saturating_sub(next.rules.damage);
-            }
-        });
+        let alive = |id| alive(people, id);
+        let next = if current.owner.rules.elapsed_period_millis.is_some() {
+            current.owner.settle_outcomes(&events, tick, alive)
+        } else {
+            let next = current.owner.prepare(&events, tick, alive);
+            harm(&next, people, tick);
+            next
+        };
         Some(CorePurpose {
             owner: next,
             progress: vec![],
         })
     }
+}
+
+fn alive(people: &[Person], id: u64) -> bool {
+    people
+        .binary_search_by_key(&id, |person| person.id)
+        .ok()
+        .is_some_and(|index| people[index].health > 0)
+}
+
+fn harm(owner: &game_purpose::Purpose, people: &mut [Person], tick: u64) {
+    if owner.rules.damage == 0 {
+        return;
+    }
+    let harmed: Vec<_> = owner
+        .people
+        .par_iter()
+        .filter(|person| {
+            tick >= person.eligible_at && person.deprivation >= owner.rules.damage_threshold
+        })
+        .map(|person| person.person)
+        .collect();
+    people.par_iter_mut().for_each(|person| {
+        if person.health > 0 && harmed.binary_search(&person.id).is_ok() {
+            person.health = person.health.saturating_sub(owner.rules.damage);
+        }
+    });
 }

@@ -8,6 +8,14 @@ pub(super) struct FamilyFrame {
 }
 
 impl CoreHost {
+    pub(super) fn next_natural_death(&self) -> Option<u128> {
+        self.family
+            .as_ref()?
+            .elapsed_lifetimes
+            .as_ref()?
+            .next_after(self.core.simulated_millis())
+    }
+
     /// Enroll only configured personal preferences; relationships and claims are not inherited.
     pub(super) fn inherit_birth_preferences(&mut self, newborns: &[u64], tick: u64) {
         let Some(family) = self
@@ -204,7 +212,7 @@ impl CoreHost {
                     .map(|row| row.enabled)
             })
             .flatten();
-        let next = game_economy_family::advance_validated_with_context(
+        let next = game_economy_family::advance_with_clock(
             owner,
             &mut draft.people.people,
             &mut draft.travel,
@@ -213,6 +221,7 @@ impl CoreHost {
             self.dependent_care.is_some() || personal_meals,
             None,
             Some(&feelings),
+            Some(self.core.simulated_millis()),
         )?;
         if let Some(available) = personal_work
             && !next.newborns.is_empty()

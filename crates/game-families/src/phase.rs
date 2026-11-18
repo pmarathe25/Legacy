@@ -234,13 +234,46 @@ impl Families {
         tick: u64,
         penalty: Option<(u64, u64)>,
     ) -> Result<Draft, &'static str> {
+        self.advance_phase(physical, seed, tick, penalty, None)
+    }
+
+    /// Settle family records after the elapsed host has applied natural mortality.
+    pub fn advance_validated_at(
+        &self,
+        physical: &impl game_family_model::PhysicalView,
+        seed: u64,
+        tick: u64,
+        now: u128,
+    ) -> Result<Draft, &'static str> {
+        self.advance_phase(physical, seed, tick, None, Some(now))
+    }
+
+    fn advance_phase(
+        &self,
+        physical: &impl game_family_model::PhysicalView,
+        seed: u64,
+        tick: u64,
+        penalty: Option<(u64, u64)>,
+        now: Option<u128>,
+    ) -> Result<Draft, &'static str> {
         #[cfg(feature = "profile")]
         let mut profile_phase = game_diagnostics::span("family.life");
         if self.last_tick.checked_add(1) != Some(tick) {
             return Err("family phase must advance one tick");
         }
+        let calendar = self.elapsed_lifetimes.as_ref();
+        if calendar.is_some() && now.is_none() {
+            return Err("elapsed natural mortality requires an interval host");
+        }
         let rules = &self.rules;
-        let (mut members, mut events) = stage_life(&self.members, rules, physical, tick, penalty)?;
+        let (mut members, mut events) = stage_life(
+            &self.members,
+            rules,
+            physical,
+            tick,
+            penalty,
+            calendar.is_none(),
+        )?;
         #[cfg(feature = "profile")]
         {
             drop(profile_phase);
@@ -551,6 +584,10 @@ impl Families {
             .filter(|e| e.kind == "death")
             .map(|e| e.people[0])
             .collect();
+        let elapsed_lifetimes = calendar
+            .zip(now)
+            .map(|(calendar, now)| calendar.advance(rules, &deaths, &newborns, now))
+            .transpose()?;
         members.extend(newborns);
         events.par_sort_unstable_by(|a, b| (&a.kind, &a.people).cmp(&(&b.kind, &b.people)));
         let counts = events
@@ -601,6 +638,7 @@ impl Families {
                 members,
                 next_id,
                 last_tick: tick,
+                elapsed_lifetimes,
                 totals,
                 events,
             },
@@ -617,6 +655,7 @@ fn stage_life(
     physical: &impl game_family_model::PhysicalView,
     tick: u64,
     penalty: Option<(u64, u64)>,
+    apply_boundary_mortality: bool,
 ) -> Result<(Vec<Member>, Vec<FamilyEvent>), &'static str> {
     // Clone directly into the staged generation, avoiding per-chunk member
     // buffers and a second population-sized flattening pass.
@@ -636,13 +675,10 @@ fn stage_life(
                             .ok_or("lifespan penalty overflow")?;
                     }
                     m.age = m.age.checked_add(1).ok_or("age overflow")?;
-                    let lifespan = rules.lifespan_min
-                        + ((u128::from(rules.lifespan_max - rules.lifespan_min)
-                            * u128::from(m.genome.expressed(3)))
-                            / 1000) as u64;
-                    let lifespan = lifespan.saturating_sub(m.lifespan_loss);
                     let person = physical.read(m.id);
-                    if person.health == 0 || m.age >= lifespan {
+                    if person.health == 0
+                        || (apply_boundary_mortality && m.age >= lifetimes::lifespan(rules, m))
+                    {
                         m.alive = false;
                         events.push(event(tick, "death", vec![m.id], person.region));
                         if let Some(p) = m.pregnancy.take() {

@@ -256,6 +256,115 @@ fn fatal_starvation_survives_resume_with_family_and_no_conflict_owner() {
 }
 
 #[test]
+fn elapsed_mortality_and_purpose_damage_interrupt_work_across_quanta() {
+    use game_economy::core_interval::{CoreRunEvent, Incapacitation};
+
+    fn run(
+        quantum: u64,
+        chunk: u64,
+        workers: usize,
+        natural: bool,
+    ) -> Vec<(u128, Vec<Incapacitation>)> {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut state = fixture();
+                state.nutrition = None;
+                state.pending_food.clear();
+                state.travel = None;
+                state.people[1].region = Some(2);
+                state.people[0].willing_to_work = true;
+                state.rules.hunger_per_tick = 0;
+                state.rules.starvation_damage = 0;
+                state.physical.tick_millis = quantum;
+                state.physical.work_rate_period_millis = Some(1000);
+                let mut scenario = serde_json::json!({
+                    "core": state,
+                    "family": {
+                        "elapsed_lifetimes": {"unit_millis":200},
+                        "rules": {"adult_age":2,"min_work_age":2,"fertile_until":10,"gestation":1,
+                            "birth_spacing":1,"lifespan_min":11,"lifespan_max":11,"conception_one_in":1,
+                            "minimum_health":1,"maximum_hunger":100,"newborn_health":50,
+                            "mutation_per_million":0,"mutation_step":0},
+                        "members": [
+                            {"id":1,"age":9,"genome":{"sex":"Male","alleles":[[100,100],[100,100],[100,100],[100,100]]}},
+                            {"id":2,"age":3,"genome":{"sex":"Female","alleles":[[100,100],[100,100],[100,100],[100,100]]}}
+                        ],"next_id":3
+                    }
+                });
+                if !natural {
+                    scenario["family"]["elapsed_lifetimes"] = serde_json::Value::Null;
+                    scenario["family"]["members"][0]["age"] = serde_json::json!(3);
+                    scenario["purpose"] = serde_json::json!({"owner": {
+                        "rules": {"max":20, "elapsed_period_millis":200, "per_tick":1,
+                            "blocked_increase":0, "completion_relief":0, "damage_threshold":10,
+                            "damage":100},
+                        "people": [{"person":1,"deprivation":8}]
+                    }});
+                }
+                let snapshot: CoreHostSnapshot = serde_json::from_value(scenario).unwrap();
+                let mut host = CoreHost::begin(snapshot, &[(1, 1)]).unwrap();
+                host.enable_schedule(1000, 1).unwrap();
+                let mut history = Vec::new();
+                let mut elapsed = 0;
+                for end in [399, 400, 1000] {
+                    while elapsed < end {
+                        let result = host.advance_continuous(chunk.min(end - elapsed), &[]).unwrap();
+                        assert_eq!(result.failure, None);
+                        assert!(result.elapsed_millis > 0);
+                        elapsed += result.elapsed_millis;
+                        history.extend(result.events.into_iter().filter_map(|event| match event {
+                            CoreRunEvent::Incapacitations {at_millis, people} => Some((at_millis, people)),
+                            _ => None,
+                        }));
+                    }
+                    let saved = host.snapshot();
+                    match end {
+                        399 => {
+                            assert_eq!(saved.core.people[0].health, 100);
+                            let deadline = host.next_deadline(None).unwrap();
+                            assert_eq!(deadline.death, natural);
+                            assert_eq!(deadline.purpose, !natural);
+                            assert_eq!(deadline.after_millis, 1);
+                            if let Some(purpose) = saved.purpose.as_ref() {
+                                assert_eq!(purpose.owner.people[0].deprivation, 9);
+                            }
+                        }
+                        400 => {
+                            assert_eq!(saved.core.people[0].health, 0);
+                            assert_eq!(saved.pending_vital_deaths, vec![1]);
+                            assert_eq!(saved.core.physical.work[0].progress_remainder, 400);
+                        }
+                        1000 => {
+                            assert_eq!(saved.family.as_ref().unwrap().totals.deaths, 1);
+                            assert!(saved.pending_vital_deaths.is_empty());
+                            assert_eq!(saved.core.people[1].health, 100);
+                        }
+                        _ => unreachable!(),
+                    }
+                    host = CoreHost::resume(serde_json::from_str(&serde_json::to_string(&saved).unwrap()).unwrap()).unwrap();
+                }
+                history
+            })
+    }
+
+    for natural in [false, true] {
+        let expected = vec![(
+            400,
+            vec![Incapacitation {
+                person: 1,
+                died: true,
+                natural_mortality: natural,
+            }],
+        )];
+        assert_eq!(run(1000, 1000, 1, natural), expected);
+        assert_eq!(run(180, 37, 4, natural), expected);
+    }
+}
+
+#[test]
 fn fatal_starvation_wins_an_arrival_tie_and_places_the_body_at_the_source() {
     let mut state = fixture();
     state.nutrition = None;
@@ -1653,9 +1762,9 @@ fn personally_chosen_rest_pauses_and_resumes_work_without_binding_the_person() {
 }
 
 #[test]
-fn individual_rest_inclinations_can_disagree_at_the_same_fatigue() {
+fn rest_choices_and_appraisals_are_personal() {
     use game_personal_choice::{Person as ChoicePerson, Preference};
-    fn run(workers: usize) -> CoreHostSnapshot {
+    fn run(workers: usize, same_action: bool) -> CoreHostSnapshot {
         rayon::ThreadPoolBuilder::new()
             .num_threads(workers)
             .build()
@@ -1680,7 +1789,15 @@ fn individual_rest_inclinations_can_disagree_at_the_same_fatigue() {
                     },
                 ];
                 let snapshot: CoreHostSnapshot = serde_json::from_value(serde_json::json!({
-                    "core": core, "fatigue": fatigue
+                    "core": core, "fatigue": fatigue,
+                    "purpose": {"owner": {
+                        "rules": {"max":20, "per_tick":0, "blocked_increase":0,
+                            "completion_relief":1, "damage_threshold":20, "damage":0},
+                        "people": [
+                            {"person":1, "deprivation":8, "appraisal":{"actions":[{"domain":21,"accepted":4}]}},
+                            {"person":2, "deprivation":8, "appraisal":{"actions":[{"domain":21,"accepted":-3}]}}
+                        ]
+                    }}
                 }))
                 .unwrap();
                 let mut host = CoreHost::begin(snapshot, &[(1, 1)]).unwrap();
@@ -1697,14 +1814,17 @@ fn individual_rest_inclinations_can_disagree_at_the_same_fatigue() {
                     }],
                     actions: vec![],
                 };
-                host.enable_personal_choices(vec![profile(1, 1000), profile(2, -1000)])
+                host.enable_personal_choices(vec![profile(1, 1000), profile(2, if same_action {1000} else {-1000})])
                     .unwrap();
                 let result = host.advance_continuous(1, &[]).unwrap();
                 assert_eq!(result.failure, None);
                 let state = host.snapshot();
                 let people = &state.fatigue.as_ref().unwrap().fatigue.people;
                 assert!(people[0].resting);
-                assert!(!people[1].resting);
+                assert_eq!(people[1].resting, same_action);
+                let purpose = &state.purpose.as_ref().unwrap().owner.people;
+                assert_eq!(purpose[0].deprivation, 4);
+                assert_eq!(purpose[1].deprivation, if same_action {11} else {8});
                 assert!(
                     state
                         .core
@@ -1725,7 +1845,8 @@ fn individual_rest_inclinations_can_disagree_at_the_same_fatigue() {
                 state
             })
     }
-    assert_eq!(run(1), run(4));
+    assert_eq!(run(1, false), run(4, false));
+    assert_eq!(run(1, true), run(4, true));
 }
 
 #[test]
@@ -1853,6 +1974,7 @@ fn timed_fatigue_tracks_early_completion_across_save_and_workers() {
                         owner: game_purpose::Purpose {
                             rules: game_purpose::Rules {
                                 max: 20,
+                                elapsed_period_millis: None,
                                 per_tick: 1,
                                 blocked_increase: 2,
                                 completion_relief: 4,
@@ -1864,11 +1986,13 @@ fn timed_fatigue_tracks_early_completion_across_save_and_workers() {
                                     person: 1,
                                     deprivation: 5,
                                     eligible_at: 0,
+                                    appraisal: None,
                                 },
                                 game_purpose::Person {
                                     person: 2,
                                     deprivation: 0,
                                     eligible_at: 0,
+                                    appraisal: None,
                                 },
                             ],
                         },
@@ -8072,8 +8196,8 @@ fn core_host_cultivation_benchmark() {
             }).collect(), acquaintances: vec![],
         }), goal_setbacks: vec![], purpose: std::env::var_os("LEGACY_PURPOSE").map(|_| game_economy::core_interval::CorePurpose {
             owner: game_purpose::Purpose {
-                rules: game_purpose::Rules { max: 100, per_tick: 1, blocked_increase: 1, completion_relief: 2, damage_threshold: 50, damage: 1 },
-                people: (1..=count).map(|person| game_purpose::Person { person, deprivation: 0, eligible_at: 0 }).collect(),
+                rules: game_purpose::Rules { max: 100, elapsed_period_millis: None, per_tick: 1, blocked_increase: 1, completion_relief: 2, damage_threshold: 50, damage: 1 },
+                people: (1..=count).map(|person| game_purpose::Person { person, deprivation: 0, eligible_at: 0, appraisal: None }).collect(),
             }, progress: vec![],
         }), animal_restraints: restraints.then(|| game_economy::AnimalRestraints {
             policies: (2..=count).map(|person| game_economy::AnimalCapturePolicy {

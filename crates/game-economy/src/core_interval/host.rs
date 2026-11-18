@@ -69,7 +69,7 @@ pub use player::{
 };
 pub use purpose::CorePurpose;
 pub use requests::{CoreDeliveryResults, CoreRequestResults};
-pub use scheduler::{CoreRun, CoreRunEvent, CoreSchedule, DecisionPhase};
+pub use scheduler::{CoreRun, CoreRunEvent, CoreSchedule, DecisionPhase, Incapacitation};
 pub use shared_work::{CoreAssistRecord, CoreAssistSession, CoreSharedWork};
 pub use sites::{CoreRepairResults, CoreSites};
 pub use skills::{CoreSkillCredit, CoreSkills};
@@ -581,7 +581,7 @@ impl CoreHost {
             irrigation,
             environment,
             recovery,
-            purpose,
+            mut purpose,
             gathering,
             fauna,
             hunting,
@@ -590,7 +590,7 @@ impl CoreHost {
             mut animal_products,
             mut animal_restraints,
             mut animal_handling,
-            family,
+            mut family,
             work_capabilities,
             dependent_care,
         } = options;
@@ -1137,7 +1137,7 @@ impl CoreHost {
         {
             return Err("invalid pending vital deaths".into());
         }
-        if let Some(owner) = &family {
+        if let Some(owner) = &mut family {
             let mut pending = pending_vital_deaths.clone();
             if let Some(conflict) = &personal_conflict {
                 pending.extend_from_slice(&conflict.pending_deaths);
@@ -1170,6 +1170,11 @@ impl CoreHost {
                 core.physical.tick(),
                 core.rules.max_health,
             )?;
+            if let Some(calendar) = &mut owner.elapsed_lifetimes {
+                let now = core.simulated_millis();
+                calendar.initialize(&owner.rules, &owner.members, now)?;
+                calendar.validate(&owner.members, &pending, now)?;
+            }
         } else if !pending_vital_deaths.is_empty()
             || personal_conflict
                 .as_ref()
@@ -1313,9 +1318,20 @@ impl CoreHost {
                 .validate(&people, &goods, core.physical.tick())
                 .map_err(str::to_owned)?;
         }
-        if let Some(owner) = &purpose {
+        if let Some(owner) = &mut purpose {
             let people: HashSet<_> = core.people.par_iter().map(|person| person.id).collect();
             owner.validate(&people)?;
+            if owner
+                .owner
+                .people
+                .par_windows(2)
+                .any(|rows| rows[0].person > rows[1].person)
+            {
+                owner
+                    .owner
+                    .people
+                    .par_sort_unstable_by_key(|row| row.person);
+            }
         }
         if !goal_setbacks.is_empty()
             && (goals.is_none()
@@ -1536,7 +1552,7 @@ impl CoreHost {
         {
             self.sync_work_rates(&[])?;
         }
-        self.progress_with_activity(millis, &[])
+        Ok(self.progress_with_activity(millis, &[])?.millis)
     }
     pub fn next_deadline(&mut self, hunger: Option<u32>) -> Result<CoreDeadline, String> {
         if self
@@ -1553,7 +1569,14 @@ impl CoreHost {
         let mut deadline = self.core.next_deadline(hunger)?;
         let recovery = self.next_ordinary_recovery();
         let exposure = self.next_environment_exposure();
-        let first = [recovery, exposure].into_iter().flatten().min();
+        let natural_death = self
+            .next_natural_death()
+            .and_then(|after| u64::try_from(after).ok());
+        let purpose = self.next_purpose();
+        let first = [recovery, exposure, natural_death, purpose]
+            .into_iter()
+            .flatten()
+            .min();
         if let Some(after_millis) = first {
             if after_millis < deadline.after_millis {
                 deadline = CoreDeadline {
@@ -1562,15 +1585,18 @@ impl CoreHost {
                     work: false,
                     arrival: false,
                     hunger: false,
-                    death: false,
+                    death: natural_death == Some(after_millis),
                     nutrition: false,
                     food_health: false,
+                    purpose: purpose == Some(after_millis),
                     recovery: recovery == Some(after_millis),
                     exposure: exposure == Some(after_millis),
                 };
             } else if after_millis == deadline.after_millis {
+                deadline.death |= natural_death == Some(after_millis);
                 deadline.recovery |= recovery == Some(after_millis);
                 deadline.exposure = exposure == Some(after_millis);
+                deadline.purpose = purpose == Some(after_millis);
             }
         }
         Ok(deadline)

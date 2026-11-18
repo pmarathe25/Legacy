@@ -84,6 +84,7 @@ pub fn enroll(
             person: id,
             deprivation: 0,
             eligible_at,
+            appraisal: None,
         })
         .collect();
     owner.people.par_extend(newborns);

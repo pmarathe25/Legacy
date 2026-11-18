@@ -209,11 +209,15 @@ pub fn family_with_cost(
         return Ok(None);
     };
     let old = family.ok_or("invocation cost requires family")?;
+    if old.elapsed_lifetimes.is_some() {
+        return Err("invocation lifespan costs require boundary family rules".into());
+    }
     let mut next = Families {
         rules: old.rules.clone(),
         members: old.members.par_iter().cloned().collect(),
         next_id: old.next_id,
         last_tick: old.last_tick,
+        elapsed_lifetimes: None,
         totals: old.totals.clone(),
         events: old.events.par_iter().cloned().collect(),
     };

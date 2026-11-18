@@ -6,6 +6,12 @@ This owner supplies a deterministic life-history phase to the economic simulatio
 `content/scenarios/families.toml` defines its parameters and initial people. All ages,
 gestation, recovery spacing and lifespan values are simulation ticks; the example
 deliberately accelerates generations and does not define a real-world calendar.
+In interval scenarios, `family.elapsed_lifetimes.unit_millis` gives the
+lifespan and founder age an explicit unit for natural mortality. The interval
+host builds the calendar at world creation and schedules each newborn from
+their birth instant. Physical death occurs at the saved deadline. The family
+phase records the death at settlement, and other family durations continue to
+use the boundary clock.
 
 Each person retains an individual demographic record, including recorded birth,
 age at death, parents, reproductive opt-in, partner, pregnancy and four diploid

@@ -10687,6 +10687,7 @@ fn purpose_deprivation_death_drives_real_succession() {
     initial.purpose = Some(Purpose {
         rules: PurposeRules {
             max: 10,
+            elapsed_period_millis: None,
             per_tick: 1,
             blocked_increase: 1,
             completion_relief: 1,
@@ -10697,6 +10698,7 @@ fn purpose_deprivation_death_drives_real_succession() {
             person: 3,
             deprivation: 4,
             eligible_at: 0,
+            appraisal: None,
         }],
     });
     let mut world = Economy::compile(initial).unwrap();
@@ -13745,6 +13747,7 @@ fn caregiver_can_choose_to_use_claimed_food_for_a_dependent() {
         members,
         next_id: 5,
         last_tick: 0,
+        elapsed_lifetimes: None,
         totals: FamilyTotals::default(),
         events: vec![],
     });
@@ -16749,6 +16752,7 @@ fn campaign_fixture() -> State {
             .collect(),
         next_id: 5,
         last_tick: 0,
+        elapsed_lifetimes: None,
         totals: FamilyTotals::default(),
         events: vec![],
     });
@@ -25324,6 +25328,7 @@ fn purpose_workload(count: u64) -> State {
     state.purpose = Some(Purpose {
         rules: PurposeRules {
             max: 100,
+            elapsed_period_millis: None,
             per_tick: 1,
             blocked_increase: 2,
             completion_relief: 5,
@@ -25335,6 +25340,7 @@ fn purpose_workload(count: u64) -> State {
                 person,
                 deprivation: 0,
                 eligible_at: 0,
+                appraisal: None,
             })
             .collect(),
     });
@@ -30551,6 +30557,7 @@ fn newborn_gets_custody_in_the_same_generation_as_contested_food() {
         members,
         next_id: 5,
         last_tick: 0,
+        elapsed_lifetimes: None,
         totals: FamilyTotals::default(),
         events: vec![],
     });
@@ -35736,6 +35743,7 @@ fn unavailable_goal_inputs_schedule_a_bounded_retry_without_pressuring_an_unwill
     initial.purpose = Some(Purpose {
         rules: PurposeRules {
             max: 20,
+            elapsed_period_millis: None,
             per_tick: 1,
             blocked_increase: 2,
             completion_relief: 3,
@@ -35747,11 +35755,13 @@ fn unavailable_goal_inputs_schedule_a_bounded_retry_without_pressuring_an_unwill
                 person: 2,
                 deprivation: 0,
                 eligible_at: 0,
+                appraisal: None,
             },
             PurposePerson {
                 person: 3,
                 deprivation: 0,
                 eligible_at: 0,
+                appraisal: None,
             },
         ],
     });
@@ -40910,6 +40920,7 @@ fn mixed_settlement(count: u64) -> State {
         members,
         next_id: count + 1,
         last_tick: 0,
+        elapsed_lifetimes: None,
         totals: FamilyTotals::default(),
         events: vec![],
     });
@@ -41630,6 +41641,7 @@ fn actual_completed_work_relieves_purpose_and_deprivation_can_harm_health() {
     initial.purpose = Some(Purpose {
         rules: PurposeRules {
             max: 20,
+            elapsed_period_millis: None,
             per_tick: 1,
             blocked_increase: 2,
             completion_relief: 3,
@@ -41641,11 +41653,13 @@ fn actual_completed_work_relieves_purpose_and_deprivation_can_harm_health() {
                 person: 2,
                 deprivation: 4,
                 eligible_at: 0,
+                appraisal: None,
             },
             PurposePerson {
                 person: 3,
                 deprivation: 4,
                 eligible_at: 0,
+                appraisal: None,
             },
         ],
     });
@@ -45713,6 +45727,7 @@ fn concentrated_upbringing_workload(count: u64) -> State {
             .collect(),
         next_id: count + 1,
         last_tick: 0,
+        elapsed_lifetimes: None,
         totals: FamilyTotals::default(),
         events: vec![],
     });

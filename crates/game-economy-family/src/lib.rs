@@ -380,9 +380,37 @@ pub fn advance_validated_with_context(
     partition: Option<&(dyn Fn(u64) -> ContactPartition + Sync)>,
     feelings: Option<&(dyn Fn(u64, u64) -> MateFeelings + Sync)>,
 ) -> Result<ResultFrame, String> {
-    let next = family
-        .advance_validated(&View::new(people, partition, feelings), seed, tick)
-        .map_err(str::to_owned)?;
+    advance_with_clock(
+        family,
+        people,
+        travel,
+        seed,
+        tick,
+        newborns_seek_meals,
+        partition,
+        feelings,
+        None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn advance_with_clock(
+    family: &Families,
+    people: &mut Vec<Person>,
+    travel: &mut Option<Travel>,
+    seed: u64,
+    tick: u64,
+    newborns_seek_meals: bool,
+    partition: Option<&(dyn Fn(u64) -> ContactPartition + Sync)>,
+    feelings: Option<&(dyn Fn(u64, u64) -> MateFeelings + Sync)>,
+    now: Option<u128>,
+) -> Result<ResultFrame, String> {
+    let physical = View::new(people, partition, feelings);
+    let next = match now {
+        Some(now) => family.advance_validated_at(&physical, seed, tick, now),
+        None => family.advance_validated(&physical, seed, tick),
+    }
+    .map_err(str::to_owned)?;
     let mut grown: Vec<_> = next
         .families
         .members

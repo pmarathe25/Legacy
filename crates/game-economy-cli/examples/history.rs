@@ -44,6 +44,7 @@ fn observations(events: &[CoreRunEvent], current_tick: &mut u64) -> Vec<Value> {
         CoreRunEvent::Meetings(rows) if !rows.is_empty() => Some(json!({"kind":"meetings","events":rows})),
         CoreRunEvent::WrittenExplanations(rows) if !rows.is_empty() => Some(json!({"kind":"written_explanations","events":rows})),
         CoreRunEvent::Disease(rows) if !rows.is_empty() => Some(json!({"kind":"disease","events":rows})),
+        CoreRunEvent::Incapacitations { at_millis, people } => Some(json!({"kind":"incapacitations","at_millis":at_millis,"people":people})),
         CoreRunEvent::Meals(rows) if !rows.is_empty() => Some(json!({"kind":"meals","events":rows})),
         CoreRunEvent::Treatments(rows) if !rows.is_empty() => Some(json!({"kind":"treatments","events":rows})),
         CoreRunEvent::Provisions(rows) if !rows.is_empty() => Some(json!({"kind":"provisions","events":rows})),

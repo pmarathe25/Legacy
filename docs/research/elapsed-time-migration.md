@@ -82,6 +82,15 @@ successful consumption in this mode. An explicit
 `nutrition.rules.health_effect_delay_millis` schedules food health effects
 relative to the actual consumption time. They survive settlement and
 save/reload. The integrated history scenario uses both elapsed modes.
+`family.elapsed_lifetimes.unit_millis` schedules natural mortality from a
+person's inherited lifespan and starting age, or from their actual birth
+instant. The saved calendar stops work and travel at the fatal instant.
+Scheduled runs emit timestamped incapacitations and identify natural deaths.
+Family records, pregnancies, age eligibility, and succession still settle
+at the physical boundary.
+Purpose can set `purpose.rules.elapsed_period_millis`. Deprivation and its
+physical consequences then apply at multiples of that period. A physical
+settlement applies work outcomes without charging for elapsed time again.
 Older saves without these explicit rates retain their original quantum-based
 semantics. Interval snapshots also
 retain absolute milliseconds at the current boundary; an older snapshot

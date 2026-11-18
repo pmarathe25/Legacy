@@ -29,13 +29,13 @@ pub use host::{
     CoreRepairResults, CoreRequestResults, CoreRun, CoreRunEvent, CoreSchedule, CoreSeenPerson,
     CoreSharedWork, CoreSites, CoreSkillCredit, CoreSkills, CoreSocial, CoreSocialResults,
     CoreToolRepairResults, CoreTreatmentResults, CoreWorkIntent, CoreWritingPracticeResults,
-    CoreWritingResults, DecisionPhase, MechanicalCapability, MechanicalCommunication,
-    MechanicalExploration, MechanicalLoadMaterial, MechanicalLoadOutcome, MechanicalLoadPolicy,
-    MechanicalLoadRequest, MechanicalLoadResult, MechanicalMaterial, MechanicalMemory,
-    MechanicalPolicy, MechanicalReactions, MechanicalTestimony, MechanicalTrialChange,
-    MechanicalWatchPolicy, MechanicalWitnessRequest, PersonalAttackPolicy, PersonalDefensePolicy,
-    PersonalHarm, PersonalStrikeReaction, StrikeCapability, StrikeFeeling, StrikeInterpretation,
-    WitnessedMechanicalResult, WoundCarePolicy, WoundTreatment,
+    CoreWritingResults, DecisionPhase, Incapacitation, MechanicalCapability,
+    MechanicalCommunication, MechanicalExploration, MechanicalLoadMaterial, MechanicalLoadOutcome,
+    MechanicalLoadPolicy, MechanicalLoadRequest, MechanicalLoadResult, MechanicalMaterial,
+    MechanicalMemory, MechanicalPolicy, MechanicalReactions, MechanicalTestimony,
+    MechanicalTrialChange, MechanicalWatchPolicy, MechanicalWitnessRequest, PersonalAttackPolicy,
+    PersonalDefensePolicy, PersonalHarm, PersonalStrikeReaction, StrikeCapability, StrikeFeeling,
+    StrikeInterpretation, WitnessedMechanicalResult, WoundCarePolicy, WoundTreatment,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -126,6 +126,7 @@ pub struct CoreDeadline {
     pub nutrition: bool,
     pub exposure: bool,
     pub food_health: bool,
+    pub purpose: bool,
 }
 /// Travelers published at a partial-interval offset.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -428,6 +429,7 @@ impl CoreInterval {
             recovery: recovery == Some(after),
             nutrition: nutrition == Some(after),
             exposure: false,
+            purpose: false,
             food_health: food_health == Some(after),
         })
     }

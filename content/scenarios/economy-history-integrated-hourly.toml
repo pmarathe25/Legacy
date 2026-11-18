@@ -562,6 +562,9 @@ seek_meals = true
 next_id = 61
 last_tick = 0
 
+[family.elapsed_lifetimes]
+unit_millis = 3600000
+
 [family.rules]
 adult_age = 140160
 min_work_age = 140160
@@ -1660,6 +1663,7 @@ people = []
 [purpose.rules]
 max = 100
 per_tick = 1
+elapsed_period_millis = 3600000
 blocked_increase = 1
 completion_relief = 4
 damage_threshold = 100
@@ -1667,9 +1671,11 @@ damage = 0
 [[purpose.people]]
 person = 1
 deprivation = 0
+appraisal = { completed_work = 1, actions = [{ domain = 6, accepted = 6 }, { domain = 18, accepted = 4 }] }
 [[purpose.people]]
 person = 2
 deprivation = 0
+appraisal = { completed_work = 0, actions = [{ domain = 3, accepted = 5 }] }
 [[purpose.people]]
 person = 3
 deprivation = 0

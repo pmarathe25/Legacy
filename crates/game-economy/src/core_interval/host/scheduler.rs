@@ -640,6 +640,10 @@ pub enum CoreRunEvent {
     Meetings(Vec<game_social::Encounter>),
     WrittenExplanations(Vec<game_language::writing::Explanation>),
     Disease(Vec<game_disease::Event>),
+    Incapacitations {
+        at_millis: u128,
+        people: Vec<Incapacitation>,
+    },
     Repairs(Vec<game_economy_building::maintenance::Event>),
     ToolRepairs(Vec<game_economy_work::tool_wear::RepairEvent>),
     Deliveries(Vec<game_lots::TransactionOutcome>),
@@ -671,6 +675,12 @@ pub enum CoreRunEvent {
     Departures(Vec<travel::DepartureOutcome>),
     FoodSearch(Vec<travel::DepartureOutcome>),
     Boundary(Box<Events>),
+}
+#[derive(Debug, PartialEq, Eq, serde::Serialize)]
+pub struct Incapacitation {
+    pub person: u64,
+    pub died: bool,
+    pub natural_mortality: bool,
 }
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct CoreRun {
@@ -1023,7 +1033,7 @@ impl CoreHost {
                             };
                         if !rest_events.is_empty() {
                             rest_dirty = true;
-                            run.events.push(CoreRunEvent::PersonalChoices(rest_events));
+                            self.record_personal_choices(&mut run, rest_events);
                         }
                         let mut rest_blocked = external_blocked.to_vec();
                         rest_blocked.par_extend(rest_choices.par_iter().copied());
@@ -1035,7 +1045,7 @@ impl CoreHost {
                             (Vec::new(), Vec::new())
                         };
                         if !choices.is_empty() {
-                            run.events.push(CoreRunEvent::PersonalChoices(choices));
+                            self.record_personal_choices(&mut run, choices);
                         }
                         attempt!('run, self.release_shared_helpers());
                         let deferred_meals: Vec<_> = schedule
@@ -1554,21 +1564,21 @@ impl CoreHost {
                             meal_people.par_extend(rest.par_iter().map(|choice| choice.person));
                             meal_people.par_sort_unstable();
                             meal_people.dedup();
-                            run.events.push(CoreRunEvent::PersonalChoices(events));
+                            self.record_personal_choices(&mut run, events);
                         }
                         let (actors, pending) = self.queue_cultivation(&intents);
                         meal_people.par_extend(actors.into_par_iter());
                         meal_people.par_sort_unstable();
                         meal_people.dedup();
                         if !pending.is_empty() {
-                            run.events.push(CoreRunEvent::PersonalChoices(pending));
+                            self.record_personal_choices(&mut run, pending);
                         }
                         let (actors, pending) = self.queue_gathering(&intents);
                         meal_people.par_extend(actors);
                         meal_people.par_sort_unstable();
                         meal_people.dedup();
                         if !pending.is_empty() {
-                            run.events.push(CoreRunEvent::PersonalChoices(pending));
+                            self.record_personal_choices(&mut run, pending);
                         }
                         let intents = Arc::new(
                             intents
@@ -1584,7 +1594,7 @@ impl CoreHost {
                                 .collect::<Vec<_>>(),
                         );
                         if !idle.is_empty() {
-                            run.events.push(CoreRunEvent::PersonalChoices(idle));
+                            self.record_personal_choices(&mut run, idle);
                         }
                         let round = self.core.decision_time_key();
                         let has_maintenance = people.par_iter().any(|person| {
@@ -1912,7 +1922,7 @@ impl CoreHost {
                         meal_people.dedup();
                         if !choices.is_empty() {
                             choices.par_sort_unstable_by_key(|choice| choice.actor);
-                            run.events.push(CoreRunEvent::PersonalChoices(choices));
+                            self.record_personal_choices(&mut run, choices);
                         }
                         self.schedule.as_mut().expect("active schedule").phase =
                             self.after_selected_batch(meal_people, intents, remaining);
@@ -1968,7 +1978,7 @@ impl CoreHost {
                         }
                         if !choices.is_empty() {
                             choices.par_sort_unstable_by_key(|choice| choice.actor);
-                            run.events.push(CoreRunEvent::PersonalChoices(choices));
+                            self.record_personal_choices(&mut run, choices);
                         }
                         self.schedule.as_mut().expect("active schedule").phase =
                             self.after_selected_batch(meal_people, intents, remaining);
@@ -2010,7 +2020,7 @@ impl CoreHost {
                         meal_people.dedup();
                         if !choices.is_empty() {
                             choices.par_sort_unstable_by_key(|choice| choice.actor);
-                            run.events.push(CoreRunEvent::PersonalChoices(choices));
+                            self.record_personal_choices(&mut run, choices);
                         }
                         self.schedule.as_mut().expect("active schedule").phase =
                             self.after_selected_batch(meal_people, intents, remaining);
@@ -2067,7 +2077,7 @@ impl CoreHost {
                         }
                         if !choices.is_empty() {
                             choices.par_sort_unstable_by_key(|row| row.actor);
-                            run.events.push(CoreRunEvent::PersonalChoices(choices));
+                            self.record_personal_choices(&mut run, choices);
                         }
                         self.schedule.as_mut().expect("active schedule").phase =
                             self.after_selected_batch(meal_people, intents, remaining);
@@ -2153,7 +2163,7 @@ impl CoreHost {
                         }
                         if !choices.is_empty() {
                             choices.par_sort_unstable_by_key(|event| event.actor);
-                            run.events.push(CoreRunEvent::PersonalChoices(choices));
+                            self.record_personal_choices(&mut run, choices);
                         }
                         self.schedule.as_mut().expect("active schedule").phase =
                             self.after_selected_batch(meal_people, intents, remaining);
@@ -2197,7 +2207,7 @@ impl CoreHost {
                         }
                         if !choices.is_empty() {
                             choices.par_sort_unstable_by_key(|event| event.actor);
-                            run.events.push(CoreRunEvent::PersonalChoices(choices));
+                            self.record_personal_choices(&mut run, choices);
                         }
                         self.schedule.as_mut().expect("active schedule").phase =
                             self.after_selected_batch(meal_people, intents, remaining);
@@ -2248,7 +2258,7 @@ impl CoreHost {
                         }
                         if !choices.is_empty() {
                             choices.par_sort_unstable_by_key(|event| event.actor);
-                            run.events.push(CoreRunEvent::PersonalChoices(choices));
+                            self.record_personal_choices(&mut run, choices);
                         }
                         self.schedule.as_mut().expect("active schedule").phase =
                             self.after_selected_batch(meal_people, intents, remaining);
@@ -2331,7 +2341,7 @@ impl CoreHost {
                         }
                         if !choices.is_empty() {
                             choices.par_sort_unstable_by_key(|event| event.actor);
-                            run.events.push(CoreRunEvent::PersonalChoices(choices));
+                            self.record_personal_choices(&mut run, choices);
                         }
                         self.schedule.as_mut().expect("active schedule").phase =
                             self.after_selected_batch(meal_people, intents, remaining);
@@ -2398,7 +2408,7 @@ impl CoreHost {
                         }
                         if !choices.is_empty() {
                             choices.par_sort_unstable_by_key(|event| event.actor);
-                            run.events.push(CoreRunEvent::PersonalChoices(choices));
+                            self.record_personal_choices(&mut run, choices);
                         }
                         self.schedule.as_mut().expect("active schedule").phase =
                             self.after_selected_batch(meal_people, intents, remaining);
@@ -2449,7 +2459,7 @@ impl CoreHost {
                         }
                         if !choices.is_empty() {
                             choices.par_sort_unstable_by_key(|event| event.actor);
-                            run.events.push(CoreRunEvent::PersonalChoices(choices));
+                            self.record_personal_choices(&mut run, choices);
                         }
                         self.schedule.as_mut().expect("active schedule").phase =
                             self.after_selected_batch(meal_people, intents, remaining);
@@ -2495,7 +2505,7 @@ impl CoreHost {
                         }
                         if !choices.is_empty() {
                             choices.par_sort_unstable_by_key(|event| event.actor);
-                            run.events.push(CoreRunEvent::PersonalChoices(choices));
+                            self.record_personal_choices(&mut run, choices);
                         }
                         self.schedule.as_mut().expect("active schedule").phase =
                             self.after_selected_batch(meal_people, intents, remaining);
@@ -2598,7 +2608,7 @@ impl CoreHost {
                         }
                         if !choices.is_empty() {
                             choices.par_sort_unstable_by_key(|event| event.actor);
-                            run.events.push(CoreRunEvent::PersonalChoices(choices));
+                            self.record_personal_choices(&mut run, choices);
                         }
                         self.schedule.as_mut().expect("active schedule").phase =
                             self.after_selected_batch(meal_people, intents, remaining);
@@ -2659,7 +2669,7 @@ impl CoreHost {
                         }
                         if !choices.is_empty() {
                             choices.par_sort_unstable_by_key(|event| event.actor);
-                            run.events.push(CoreRunEvent::PersonalChoices(choices));
+                            self.record_personal_choices(&mut run, choices);
                         }
                         let next = if let Some(remaining) = remaining {
                             self.after_selected_batch(meal_people, intents, remaining)
@@ -2751,7 +2761,7 @@ impl CoreHost {
                         }
                         if !choices.is_empty() {
                             choices.par_sort_unstable_by_key(|event| event.actor);
-                            run.events.push(CoreRunEvent::PersonalChoices(choices));
+                            self.record_personal_choices(&mut run, choices);
                         }
                         let next = if let Some(remaining) = remaining {
                             self.after_selected_batch(meal_people, intents, remaining)
@@ -2848,7 +2858,7 @@ impl CoreHost {
                         }
                         if !choices.is_empty() {
                             choices.par_sort_unstable_by_key(|event| event.actor);
-                            run.events.push(CoreRunEvent::PersonalChoices(choices));
+                            self.record_personal_choices(&mut run, choices);
                         }
                         let next = if let Some(remaining) = remaining {
                             self.after_selected_batch(meal_people, intents, remaining)
@@ -2935,7 +2945,7 @@ impl CoreHost {
                         }
                         if !choices.is_empty() {
                             choices.par_sort_unstable_by_key(|event| event.actor);
-                            run.events.push(CoreRunEvent::PersonalChoices(choices));
+                            self.record_personal_choices(&mut run, choices);
                         }
                         let next = if let Some(remaining) = remaining {
                             self.after_selected_batch(meal_people, intents, remaining)
@@ -3083,7 +3093,13 @@ impl CoreHost {
                 run.failure = Some("core schedule made no progress".into());
                 break;
             }
-            attempt!('run, self.progress_with_activity(step, external_blocked));
+            let elapsed = attempt!('run, self.progress_with_activity(step, external_blocked));
+            if !elapsed.incapacitations.is_empty() {
+                run.events.push(CoreRunEvent::Incapacitations {
+                    at_millis: self.core.simulated_millis(),
+                    people: elapsed.incapacitations,
+                });
+            }
         }
         run.elapsed_millis = self.core.elapsed_millis().expect("active interval") - start;
         Ok(run)
@@ -3146,18 +3162,16 @@ impl CoreHost {
                 .events
                 .push(CoreRunEvent::Boundary(Box::new(events)));
             if !schedule.settled_cultivation.is_empty() {
-                combined
-                    .events
-                    .push(CoreRunEvent::PersonalChoices(std::mem::take(
-                        &mut schedule.settled_cultivation,
-                    )));
+                self.record_personal_choices(
+                    &mut combined,
+                    std::mem::take(&mut schedule.settled_cultivation),
+                );
             }
             if !schedule.settled_gathering.is_empty() {
-                combined
-                    .events
-                    .push(CoreRunEvent::PersonalChoices(std::mem::take(
-                        &mut schedule.settled_gathering,
-                    )));
+                self.record_personal_choices(
+                    &mut combined,
+                    std::mem::take(&mut schedule.settled_gathering),
+                );
             }
             let Some(boundaries) = combined.boundaries.checked_add(1) else {
                 combined.failure = Some("boundary count overflow".into());

@@ -1,8 +1,10 @@
 //! Individual life history and hereditary state. Workers return drafts, never callbacks.
+mod lifetimes;
 mod phase;
 pub use game_family_model::{
     Birth, FamilyEvent, FamilyTotals, LifeInput, MatePreference, Member, Pregnancy,
 };
+pub use lifetimes::ElapsedLifetimes;
 pub use phase::Draft;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -61,6 +63,9 @@ pub struct Families {
     pub next_id: u64,
     #[serde(default)]
     pub last_tick: u64,
+    /// Optional absolute natural mortality calendar for interval hosts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub elapsed_lifetimes: Option<ElapsedLifetimes>,
     #[serde(default)]
     pub totals: FamilyTotals,
     /// Only this boundary's canonical receipts; a runner can stream the history.

@@ -1,5 +1,11 @@
 //! Accumulate actual elapsed activity for boundary-weighted fatigue.
 use super::*;
+
+#[derive(Default)]
+pub(super) struct ElapsedProgress {
+    pub millis: u64,
+    pub incapacitations: Vec<scheduler::Incapacitation>,
+}
 use game_economy_fatigue::TimedActivity;
 
 impl CoreHost {
@@ -155,7 +161,7 @@ impl CoreHost {
         &mut self,
         requested: u64,
         externally_busy: &[u64],
-    ) -> Result<u64, String> {
+    ) -> Result<ElapsedProgress, String> {
         let quantum = self.core.physical.tick_millis();
         let mut consumed = self.core.progress_limit(requested)?;
         let ordinary_recovery = self.next_ordinary_recovery();
@@ -164,6 +170,14 @@ impl CoreHost {
         }
         let exposure = self.next_environment_exposure();
         if let Some(deadline) = exposure {
+            consumed = consumed.min(deadline);
+        }
+        let natural_death = self.next_natural_death();
+        if let Some(deadline) = natural_death {
+            consumed = deadline.min(u128::from(consumed)) as u64;
+        }
+        let purpose = self.next_purpose();
+        if let Some(deadline) = purpose {
             consumed = consumed.min(deadline);
         }
         let (crop_rates, crop_limit) = self.plan_crop_segment(consumed)?;
@@ -177,7 +191,7 @@ impl CoreHost {
             // Each elapsed segment ends before an activity transition is published.
             consumed = consumed.min(self.core.next_deadline(None)?.after_millis);
             if consumed == 0 {
-                return Ok(0);
+                return Ok(ElapsedProgress::default());
             }
             let mut working: Vec<_> = self
                 .core
@@ -267,9 +281,13 @@ impl CoreHost {
             .map_or(&[][..], |draft| draft.consequences.as_slice());
         let has_injuries = !injuries.is_empty();
         let exposure_due = exposure == Some(consumed);
+        let natural_death_due = natural_death == Some(u128::from(consumed));
+        let purpose_due = purpose == Some(consumed);
         let food_health_due = self.core.next_food_health() == Some(u128::from(consumed));
         let mut vitals = (has_injuries
             || exposure_due
+            || natural_death_due
+            || purpose_due
             || food_health_due
             || ordinary_recovery_due
             || self.core.next_metabolism() == Some(consumed))
@@ -288,6 +306,48 @@ impl CoreHost {
                 Some(sample),
             );
         }
+        let natural_deaths: Vec<_> = if natural_death_due {
+            let now = self.core.simulated_millis() + u128::from(consumed);
+            let due = self
+                .family
+                .as_ref()
+                .unwrap()
+                .elapsed_lifetimes
+                .as_ref()
+                .unwrap()
+                .deaths_at(now);
+            let people = &mut vitals.as_mut().expect("staged natural mortality").people;
+            people
+                .par_iter_mut()
+                .filter_map(|person| {
+                    if person.health > 0
+                        && due.binary_search_by_key(&person.id, |row| row.1).is_ok()
+                    {
+                        person.health = 0;
+                        Some(person.id)
+                    } else {
+                        None
+                    }
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let purpose = if purpose_due {
+            let elapsed = self.core.elapsed_millis().expect("active interval");
+            let tick = self
+                .core
+                .physical
+                .tick()
+                .checked_add(u64::from(elapsed + consumed == quantum))
+                .ok_or("purpose eligibility tick overflow")?;
+            Some(self.stage_elapsed_purpose(
+                &mut vitals.as_mut().expect("staged elapsed purpose").people,
+                tick,
+            ))
+        } else {
+            None
+        };
         let deaths = if let Some(vitals) = &vitals {
             self.core
                 .people
@@ -306,6 +366,21 @@ impl CoreHost {
             )
             .map_err(str::to_owned)?
         };
+        let incapacitations = deaths
+            .par_iter()
+            .map(|&person| {
+                let index = self
+                    .core
+                    .people
+                    .binary_search_by_key(&person, |row| row.id)
+                    .expect("known elapsed casualty");
+                scheduler::Incapacitation {
+                    person,
+                    died: self.core.people[index].immortal.is_none(),
+                    natural_mortality: natural_deaths.binary_search(&person).is_ok(),
+                }
+            })
+            .collect();
         let mut pending = self.pending_vital_deaths.clone();
         if let Some(family) = &self.family {
             pending.par_extend(deaths.par_iter().copied().filter(|id| {
@@ -336,11 +411,19 @@ impl CoreHost {
                 if let Some(recovery) = recovery {
                     self.recovery = Some(recovery);
                 }
+                if let Some(purpose) = purpose {
+                    self.purpose = Some(purpose);
+                }
                 self.pending_vital_deaths = pending;
                 if let Some(paused) = paused_after_deaths {
                     self.paused_work_rates = paused;
                 }
-                if !deaths.is_empty() || recovery_due || exposure_due || food_health_due {
+                if !deaths.is_empty()
+                    || recovery_due
+                    || exposure_due
+                    || purpose_due
+                    || food_health_due
+                {
                     self.work_checked_revision = None;
                 }
                 if let Some(owner) = staged_shared {
@@ -350,10 +433,13 @@ impl CoreHost {
                 }
                 self.remember_skill_practice(credits);
             }
-            return Ok(advanced);
+            return Ok(ElapsedProgress {
+                millis: advanced,
+                incapacitations,
+            });
         };
         if consumed == 0 {
-            return Ok(0);
+            return Ok(ElapsedProgress::default());
         }
         let skill_practice = self.plan_skill_practice(consumed);
         let rates = &self
@@ -490,6 +576,9 @@ impl CoreHost {
         if let Some(recovery) = recovery {
             self.recovery = Some(recovery);
         }
+        if let Some(purpose) = purpose {
+            self.purpose = Some(purpose);
+        }
         if let Some(draft) = elapsed_draft {
             self.fatigue
                 .as_mut()
@@ -500,7 +589,13 @@ impl CoreHost {
         if let Some(paused) = paused_after_deaths {
             self.paused_work_rates = paused;
         }
-        if !deaths.is_empty() || recovery_due || has_injuries || exposure_due || food_health_due {
+        if !deaths.is_empty()
+            || recovery_due
+            || has_injuries
+            || exposure_due
+            || purpose_due
+            || food_health_due
+        {
             self.work_checked_revision = None;
         }
         self.activity = next;
@@ -510,7 +605,10 @@ impl CoreHost {
             self.record_assist_durations(&durations);
         }
         self.remember_skill_practice(skill_practice);
-        Ok(advanced)
+        Ok(ElapsedProgress {
+            millis: advanced,
+            incapacitations,
+        })
     }
 
     /// Use actual rested time in this segment, including work interruptions.

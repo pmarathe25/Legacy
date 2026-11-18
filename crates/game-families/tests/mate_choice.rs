@@ -129,6 +129,7 @@ fn family() -> Families {
         ],
         next_id: 4,
         last_tick: 0,
+        elapsed_lifetimes: None,
         totals: Default::default(),
         events: vec![],
     }

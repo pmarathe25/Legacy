@@ -3194,6 +3194,10 @@ impl Economy {
                 .nutrition
                 .as_ref()
                 .is_some_and(|owner| owner.rules.interval_millis.is_some())
+            || self
+                .purpose
+                .as_ref()
+                .is_some_and(|owner| owner.rules.elapsed_period_millis.is_some())
             || self.people.par_iter().any(|person| {
                 person
                     .immortal

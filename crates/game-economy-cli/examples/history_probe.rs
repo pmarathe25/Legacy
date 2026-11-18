@@ -118,6 +118,7 @@ fn run_steps(
                 }
                 CoreRunEvent::Work(row) => ("work_finished", row.finished.len()),
                 CoreRunEvent::Meetings(rows) => ("meetings", rows.len()),
+                CoreRunEvent::Incapacitations { people, .. } => ("incapacitations", people.len()),
                 CoreRunEvent::PersonalChoices(rows) => {
                     for row in rows {
                         let domain = row.key.map_or(0, |key| key.domain);
