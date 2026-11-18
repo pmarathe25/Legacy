@@ -87,6 +87,11 @@ pub fn apply(
         || environment.season(tick),
         |millis| environment.season_at(millis, tick),
     );
+    let exposure_index = elapsed
+        .zip(environment.exposure_period_millis)
+        .map_or(u128::from(tick.saturating_sub(1)), |(millis, period)| {
+            millis / u128::from(period)
+        });
     people.par_iter_mut().for_each(|person| {
         if person.health == 0 {
             return;
@@ -103,7 +108,7 @@ pub fn apply(
                 .binary_search(&(hazard.region, person.id))
                 .ok()
                 .is_some_and(|index| {
-                    let offset = (tick.saturating_sub(1) % count as u64) as usize;
+                    let offset = (exposure_index % count as u128) as usize;
                     (index - first + count - offset) % count < capacity
                 });
         let damage = hazard.damage.saturating_sub(if sheltered {

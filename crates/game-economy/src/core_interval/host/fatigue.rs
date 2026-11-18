@@ -162,6 +162,12 @@ impl CoreHost {
         if let Some(deadline) = ordinary_recovery {
             consumed = consumed.min(deadline);
         }
+        let exposure = self.next_environment_exposure();
+        if let Some(deadline) = exposure {
+            consumed = consumed.min(deadline);
+        }
+        let (crop_rates, crop_limit) = self.plan_crop_segment(consumed)?;
+        consumed = crop_limit;
         let elapsed_owner = self
             .fatigue
             .as_ref()
@@ -260,11 +266,26 @@ impl CoreHost {
             .as_ref()
             .map_or(&[][..], |draft| draft.consequences.as_slice());
         let has_injuries = !injuries.is_empty();
+        let exposure_due = exposure == Some(consumed);
         let mut vitals = (has_injuries
+            || exposure_due
             || ordinary_recovery_due
             || self.core.next_metabolism() == Some(consumed))
         .then(|| self.core.preview_people_progress(consumed, injuries))
         .transpose()?;
+        if exposure_due {
+            let tick = self.core.physical.tick();
+            let view = self.core.physical.view(tick)?;
+            let sample = self.core.simulated_millis() + u128::from(consumed) - 1;
+            crate::environment::apply(
+                self.environment.as_ref(),
+                &view,
+                self.core.travel.as_ref(),
+                &mut vitals.as_mut().expect("staged exposure").people,
+                tick,
+                Some(sample),
+            );
+        }
         let deaths = if let Some(vitals) = &vitals {
             self.core
                 .people
@@ -300,14 +321,16 @@ impl CoreHost {
             self.stage_fatal_assistance(&deaths, &durations, consumed)?;
         let paused_after_deaths = self.pause_incapacitated_rates(&deaths, &reductions, consumed)?;
         let renewal = self.stage_resource_renewal(consumed)?;
+        let (growth, batches) = self.stage_crop_growth(crop_rates, consumed)?;
         let Some(owner) = &self.fatigue else {
             let credits = self.plan_skill_practice(consumed);
             let recovery = self.stage_natural_recovery(consumed, &[], vitals.as_mut())?;
             let advanced = self
                 .core
-                .progress_adjusting(consumed, &reductions, vitals)?;
+                .progress_adjusting(consumed, &reductions, vitals, batches)?;
             if advanced > 0 {
                 self.publish_resource_renewal(renewal);
+                self.publish_crop_growth(growth);
                 if let Some(recovery) = recovery {
                     self.recovery = Some(recovery);
                 }
@@ -315,7 +338,7 @@ impl CoreHost {
                 if let Some(paused) = paused_after_deaths {
                     self.paused_work_rates = paused;
                 }
-                if !deaths.is_empty() || recovery_due {
+                if !deaths.is_empty() || recovery_due || exposure_due {
                     self.work_checked_revision = None;
                 }
                 if let Some(owner) = staged_shared {
@@ -459,8 +482,9 @@ impl CoreHost {
         let recovery = self.stage_natural_recovery(consumed, &next, vitals.as_mut())?;
         let advanced = self
             .core
-            .progress_adjusting(consumed, &reductions, vitals)?;
+            .progress_adjusting(consumed, &reductions, vitals, batches)?;
         self.publish_resource_renewal(renewal);
+        self.publish_crop_growth(growth);
         if let Some(recovery) = recovery {
             self.recovery = Some(recovery);
         }
@@ -474,7 +498,7 @@ impl CoreHost {
         if let Some(paused) = paused_after_deaths {
             self.paused_work_rates = paused;
         }
-        if !deaths.is_empty() || recovery_due || has_injuries {
+        if !deaths.is_empty() || recovery_due || has_injuries || exposure_due {
             self.work_checked_revision = None;
         }
         self.activity = next;

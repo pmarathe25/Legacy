@@ -4096,6 +4096,71 @@ fn local_interval_transfer_moves_real_custody_and_preserves_inflight_work() {
 }
 
 #[test]
+fn elapsed_regional_exposure_schedules_shelter_rotation_and_stops_fatal_work() {
+    fn run(quantum: u64, chunk: u64) -> (Vec<u32>, u64) {
+        let mut core = fixture();
+        core.physical.tick_millis = quantum;
+        core.physical.work_rate_period_millis = Some(1000);
+        core.people[0].health = 1;
+        core.people[1].health = 6;
+        core.people[1].region = Some(1);
+        core.travel = None;
+        core.nutrition = None;
+        core.pending_food.clear();
+        core.rules.hunger_per_tick = 0;
+        core.rules.starvation_damage = 0;
+        let state: CoreHostSnapshot = serde_json::from_value(serde_json::json!({
+            "core": core,
+            "environment": { "exposure_period_millis": 125, "regions": [
+                { "region": 1, "damage": 2, "shelter": 1, "shelter_reduction": 2 }
+            ] }
+        }))
+        .unwrap();
+        let mut host = CoreHost::begin(state, &[(1, 1)]).unwrap();
+        if quantum > 125 {
+            assert!(host.next_deadline(None).unwrap().exposure);
+        }
+        let mut elapsed = 0;
+        for end in [125, 250] {
+            while elapsed < end {
+                let advanced = host.progress(chunk.min(end - elapsed)).unwrap();
+                assert!(advanced > 0);
+                elapsed += advanced;
+                if elapsed % quantum == 0 {
+                    host.settle().unwrap();
+                    host = CoreHost::begin(host.snapshot(), &[(1, 1)]).unwrap();
+                }
+            }
+            if end == 125 {
+                let snapshot = host.snapshot();
+                assert_eq!(snapshot.core.people[0].health, 1);
+                assert_eq!(snapshot.core.people[1].health, 4);
+                host = CoreHost::resume(
+                    serde_json::from_str(&serde_json::to_string(&snapshot).unwrap()).unwrap(),
+                )
+                .unwrap();
+            }
+        }
+        let snapshot = host.snapshot();
+        assert!(
+            snapshot
+                .core
+                .physical
+                .work_interval
+                .unwrap()
+                .rates
+                .is_empty()
+        );
+        (
+            snapshot.core.people.into_iter().map(|p| p.health).collect(),
+            snapshot.core.physical.work[0].progress_remainder,
+        )
+    }
+    assert_eq!(run(1000, 250), (vec![0, 4], 250));
+    assert_eq!(run(80, 37), run(1000, 250));
+}
+
+#[test]
 fn elapsed_recovery_uses_actual_rested_time_across_boundary_changes() {
     fn run(quantum: u64, chunk: u64) -> u32 {
         let mut core = fixture();
@@ -6568,6 +6633,7 @@ fn boundary_cultivation_uses_real_seeds_grows_and_harvests_after_reload() {
                 )
                 .unwrap();
                 let agriculture = Agriculture {
+                    growth_clock: None,
                     provenance: None,
                     inherit_births: false,
                     requests: None,
@@ -6726,6 +6792,7 @@ fn boundary_cultivation_uses_real_seeds_grows_and_harvests_after_reload() {
                     harvest_allowed: harvest,
                 };
                 seasonal.environment = Some(game_environment::Environment {
+                    exposure_period_millis: None,
                     season_unit_millis: None,
                     regions: vec![],
                     seasons: vec![
@@ -6758,6 +6825,7 @@ fn boundary_cultivation_uses_real_seeds_grows_and_harvests_after_reload() {
                 exposure.core.people.truncate(2);
                 exposure.agriculture = None;
                 exposure.environment = Some(game_environment::Environment {
+                    exposure_period_millis: None,
                     season_unit_millis: None,
                     regions: vec![game_environment::Hazard {
                         region: 1,
@@ -6872,7 +6940,7 @@ fn irrigation_consumes_contested_water_and_gates_next_growth() {
         initial.physical.goods.push(Good {id: 3, name: "water".into(), food: None});
         initial.physical.custody.containers.push(Container::new(Place::Stock {region: 1, good: 3}, 10, vec![Lot { batch: None,item: None, good: 3, quantity: 1, expires_at: None}]).unwrap());
         initial.physical.custody.containers.sort_by_key(|row| row.place);
-        let agriculture = Agriculture { provenance: None,
+        let agriculture = Agriculture { growth_clock: None, provenance: None,
             inherit_births: false, requests: None, soil: None, crops: vec![Crop {id: 1, seed: 1, seed_quantity: 1, output: 2, output_quantity: 1, growth_ticks: 1}],
             fields: (1..=2).map(|id| Field {id, region: 1, crop: 1, phase: Phase::Growing, remaining: 1}).collect(), policies: vec![], max_hunger: 10,
         };
@@ -7800,6 +7868,7 @@ fn core_host_cultivation_benchmark() {
     )
     .unwrap();
     let mut agriculture = Agriculture {
+        growth_clock: None,
         provenance: None,
         inherit_births: false,
         requests: None,
@@ -8079,6 +8148,7 @@ fn core_host_cultivation_benchmark() {
             }
         }),
         environment: exposure.then(|| game_environment::Environment {
+            exposure_period_millis: None,
             season_unit_millis: None,
             regions: vec![game_environment::Hazard {
                 region: 1,
@@ -14694,7 +14764,7 @@ fn family_birth_custody_and_worker_death_commit_atomically() {
                 caring.family.as_mut().unwrap().members[0].age = 3;
                 caring.core.physical.recipes[0].ticks = 1;
                 caring.core.physical.work[0].job.remaining = 1;
-                caring.agriculture = Some(game_economy_agriculture::Agriculture { provenance: None,
+                caring.agriculture = Some(game_economy_agriculture::Agriculture { growth_clock: None, provenance: None,
                     inherit_births: false, requests: None, soil: None,
                     crops: vec![game_economy_agriculture::Crop { id: 1, seed: 1, seed_quantity: 1,
                         output: 2, output_quantity: 1, growth_ticks: 1 }],
@@ -14798,7 +14868,7 @@ fn family_birth_custody_and_worker_death_commit_atomically() {
                     capacity: 1, regrowth: 0, renewal_rate: None, renewal_remainder: 0, seasonal: false, yield_per_action: 1 }],
                 policies: vec![game_economy::GatherPolicy { person: 2, node: 1, willing: true,
                     pressured_by: Some(1), pressure_threshold: Some(1) }] });
-            inherited.agriculture = Some(game_economy_agriculture::Agriculture { provenance: None,
+            inherited.agriculture = Some(game_economy_agriculture::Agriculture { growth_clock: None, provenance: None,
                 inherit_births: true, requests: None, soil: None,
                 crops: vec![game_economy_agriculture::Crop { id: 1, seed: 1, seed_quantity: 1,
                     output: 2, output_quantity: 1, growth_ticks: 1 }],
@@ -14944,7 +15014,7 @@ fn family_birth_custody_and_worker_death_commit_atomically() {
             *seed = Container::new(seed.place, 10, vec![Lot { batch: None,
                 item: None, good: 1, quantity: 1, expires_at: None,
             }]).unwrap();
-            farming.agriculture = Some(game_economy_agriculture::Agriculture { provenance: None,
+            farming.agriculture = Some(game_economy_agriculture::Agriculture { growth_clock: None, provenance: None,
                 inherit_births: false, requests: None, soil: None,
                 crops: vec![game_economy_agriculture::Crop { id: 1, seed: 1, seed_quantity: 1,
                     output: 2, output_quantity: 1, growth_ticks: 1 }],

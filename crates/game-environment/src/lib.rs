@@ -5,6 +5,9 @@ use std::collections::HashSet;
 #[serde(deny_unknown_fields)]
 pub struct Environment {
     pub regions: Vec<Hazard>,
+    /// Apply a regional exposure event at each multiple of this elapsed duration.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exposure_period_millis: Option<u64>,
     /// Milliseconds represented by one calendar duration unit. Absent in legacy saves.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub season_unit_millis: Option<u64>,
@@ -45,6 +48,13 @@ impl Environment {
         if self.season_unit_millis == Some(0) {
             return Err("season duration unit must be positive".into());
         }
+        if self.exposure_period_millis == Some(0)
+            || (self.exposure_period_millis.is_some()
+                && !self.seasons.is_empty()
+                && self.season_unit_millis.is_none())
+        {
+            return Err("invalid elapsed regional exposure cadence or calendar".into());
+        }
         let mut seen = HashSet::new();
         let mut names = HashSet::new();
         let mut duration = 0u64;
@@ -69,6 +79,34 @@ impl Environment {
             return Err("invalid regional exposure".into());
         }
         Ok(())
+    }
+
+    pub fn next_exposure(&self, now: u128) -> Option<u64> {
+        let period = self.exposure_period_millis.filter(|&period| period != 0)?;
+        (!self.regions.is_empty()).then(|| period - (now % u128::from(period)) as u64)
+    }
+
+    /// Elapsed time to the next named season, including across cycle wrap.
+    pub fn next_season_change(&self, now: u128) -> Option<u128> {
+        let unit = u128::from(self.season_unit_millis.filter(|unit| *unit > 0)?);
+        if self.seasons.len() < 2 {
+            return None;
+        }
+        let cycle = self.seasons.iter().try_fold(0u128, |sum, season| {
+            sum.checked_add(u128::from(season.duration) * unit)
+        })?;
+        if cycle == 0 {
+            return None;
+        }
+        let mut offset = now % cycle;
+        for season in &self.seasons {
+            let duration = u128::from(season.duration) * unit;
+            if offset < duration {
+                return Some(duration - offset);
+            }
+            offset -= duration;
+        }
+        None
     }
     /// Tick one is the first tick of the first season; tick zero shares its name.
     pub fn season(&self, tick: u64) -> Option<&Season> {

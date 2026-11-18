@@ -34,6 +34,9 @@ pub struct SeedProfile {
 pub struct Planting {
     pub field: u64,
     pub tick: u64,
+    /// Absolute planting time when growth uses an elapsed clock.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub planted_at_millis: Option<u128>,
     /// The actual planter, when recorded; old saves may not contain one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub planter: Option<u64>,
@@ -42,6 +45,14 @@ pub struct Planting {
     /// Assigned once when the field matures; absent before maturation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub offspring: Option<Vec<crate::reproduction::Offspring>>,
+}
+
+impl Planting {
+    pub(crate) fn reproduction_key(&self) -> u64 {
+        self.planted_at_millis.map_or(self.tick, |instant| {
+            instant as u64 ^ ((instant >> 64) as u64).rotate_left(29)
+        })
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -237,6 +248,7 @@ impl Provenance {
         actors: &[u64],
         events: &Events,
         decisions: &[&game_lots::TransactionOutcome],
+        planted_at_millis: Option<u128>,
     ) -> Result<Self, String> {
         if changes.len() != actors.len() {
             return Err("invalid cultivation actors".into());
@@ -288,6 +300,7 @@ impl Provenance {
                     Some(Planting {
                         field,
                         tick: events.tick,
+                        planted_at_millis,
                         planter: Some(actor),
                         seeds: receipt.movement.lots.to_vec(),
                         offspring: None,

@@ -3717,6 +3717,117 @@ fn clonal_seed_offspring_mutate_once_and_survive_failed_harvests() {
 }
 
 #[test]
+fn elapsed_crop_growth_integrates_seasons_and_allocates_seed_batches_at_ripening() {
+    use game_economy::core_interval::CoreHost;
+    use game_economy_agriculture::Phase;
+
+    fn run(quantum: u64, chunk: u64, workers: usize) -> serde_json::Value {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let root = root();
+                let source = std::fs::read_to_string(
+                    root.join("content/scenarios/economy-core-seasonal-seeds.toml"),
+                )
+                .unwrap()
+                .replacen(
+                    "[cultivation]",
+                    "[cultivation]\ngrowth_unit_millis = 1000",
+                    1,
+                )
+                .replacen(
+                    "[environment]",
+                    "[environment]\nseason_unit_millis = 1",
+                    1,
+                );
+                let path = std::env::temp_dir().join(format!(
+                    "legacy-elapsed-crop-{}-{quantum}.toml",
+                    std::process::id()
+                ));
+                std::fs::write(&path, source).unwrap();
+                let loaded = game_economy_cli::core_scenario(&path, &root.join("content"));
+                std::fs::remove_file(path).unwrap();
+                let mut host = loaded.unwrap();
+                assert_eq!(host.advance_continuous(900_000, &[]).unwrap().failure, None);
+                let mut opening = host.snapshot();
+                assert_eq!(opening.core.boundary_millis, Some(900_000));
+                opening.schedule = None;
+                opening.core.physical.work_interval = None;
+                opening.core.physical.tick_millis = quantum;
+                let environment = opening.environment.as_mut().unwrap();
+                environment.season_unit_millis = Some(1);
+                let warm = &mut environment.seasons[0];
+                warm.duration = 600;
+                let mut cold = warm.clone();
+                cold.name = "cold".into();
+                cold.duration = 200;
+                cold.tending_allowed = false;
+                environment.seasons.push(cold);
+                let agriculture = opening.agriculture.as_mut().unwrap();
+                assert_eq!(agriculture.growth_clock.as_ref().unwrap().unit_millis, 1000);
+                assert_eq!(agriculture.fields[0].phase, Phase::Growing);
+                agriculture.fields[0].remaining = 1;
+                let provenance = agriculture.provenance.as_ref().unwrap();
+                assert_eq!(provenance.plantings[0].seeds[0].batch, Some(12));
+                assert_eq!(provenance.plantings[0].planted_at_millis, Some(900_000));
+                let rates = agriculture
+                    .elapsed_growth_rates(Some(&environment.seasons[0]), None)
+                    .unwrap()
+                    .unwrap();
+                let draft = agriculture
+                    .stage_elapsed_growth(rates, 1, 7)
+                    .unwrap()
+                    .resolve(None)
+                    .unwrap();
+                let mut changed = agriculture.clone();
+                changed.fields[0].remaining += 1;
+                assert!(draft.validate(&changed).is_err());
+                let first_batch = opening.core.physical.custody.next_batch.unwrap();
+                let mut host = CoreHost::begin(opening, &[]).unwrap();
+                let mut elapsed = 0;
+                for end in [650, 866, 867] {
+                    while elapsed < end {
+                        let step = host.progress(chunk.min(end - elapsed)).unwrap();
+                        assert!(step > 0);
+                        elapsed += step;
+                        if elapsed % quantum == 0 {
+                            host.settle().unwrap();
+                            host = CoreHost::begin(host.snapshot(), &[]).unwrap();
+                        }
+                    }
+                    let state = host.snapshot();
+                    if end < 867 {
+                        let field = &state.agriculture.as_ref().unwrap().fields[0];
+                        assert_eq!(field.phase, Phase::Growing);
+                        assert_eq!(state.core.physical.custody.next_batch, Some(first_batch));
+                    }
+                    host = CoreHost::resume(
+                        serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap(),
+                    )
+                    .unwrap();
+                }
+                let state = host.snapshot();
+                let agriculture = state.agriculture.unwrap();
+                assert_eq!(agriculture.fields[0].phase, Phase::Ripe);
+                assert!(agriculture.growth_clock.unwrap().remainders.is_empty());
+                let provenance = agriculture.provenance.unwrap();
+                let offspring = provenance.plantings[0].offspring.as_ref().unwrap();
+                let next_batch = state.core.physical.custody.next_batch.unwrap();
+                assert!(next_batch > first_batch);
+                assert!(
+                    offspring
+                        .iter()
+                        .all(|seed| (first_batch..next_batch).contains(&seed.batch))
+                );
+                serde_json::json!({"offspring": offspring, "next_batch": next_batch})
+            })
+    }
+    assert_eq!(run(1000, 1000, 1), run(300, 37, 4));
+}
+
+#[test]
 fn cultivation_opportunities_use_absolute_season_time() {
     use game_economy::core_interval::CoreHost;
 

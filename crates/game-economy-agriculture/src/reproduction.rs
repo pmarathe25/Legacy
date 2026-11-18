@@ -314,7 +314,7 @@ pub(crate) fn prepare_maturation(
                     Some(pool),
                     world_seed,
                     record.field,
-                    record.tick,
+                    record.reproduction_key(),
                 )
             } else {
                 candidates(
@@ -323,7 +323,7 @@ pub(crate) fn prepare_maturation(
                     &record.seeds,
                     world_seed,
                     record.field,
-                    record.tick,
+                    record.reproduction_key(),
                 )
             }
             .map(|children| (record.field, children))
@@ -580,6 +580,7 @@ mod tests {
             .map(|field| Planting {
                 field,
                 tick: 1,
+                planted_at_millis: None,
                 planter: None,
                 seeds: vec![Lot {
                     good: 1,

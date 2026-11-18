@@ -1002,6 +1002,22 @@ impl CoreHost {
             )?;
         }
         if let Some(owner) = &agriculture {
+            if owner.provenance.as_ref().is_some_and(|provenance| {
+                provenance.plantings.par_iter().any(|record| {
+                    record
+                        .planted_at_millis
+                        .is_some_and(|at| at > core.simulated_millis())
+                })
+            }) {
+                return Err("crop planting is in the future".into());
+            }
+            if owner.growth_clock.is_some()
+                && environment.as_ref().is_some_and(|owner| {
+                    owner.season_unit_millis.is_none() && !owner.seasons.is_empty()
+                })
+            {
+                return Err("elapsed crop growth requires an elapsed calendar".into());
+            }
             let view = core.physical.view(core.physical.tick())?;
             owner.validate(&core.people, core.physical.goods(), &view)?;
             if let Some(genetics) = owner
@@ -1530,21 +1546,30 @@ impl CoreHost {
         {
             self.sync_work_rates(&[])?;
         }
+        self.host_deadline(hunger)
+    }
+
+    fn host_deadline(&self, hunger: Option<u32>) -> Result<CoreDeadline, String> {
         let mut deadline = self.core.next_deadline(hunger)?;
-        if let Some(recovery) = self.next_ordinary_recovery() {
-            if recovery < deadline.after_millis {
+        let recovery = self.next_ordinary_recovery();
+        let exposure = self.next_environment_exposure();
+        let first = [recovery, exposure].into_iter().flatten().min();
+        if let Some(after_millis) = first {
+            if after_millis < deadline.after_millis {
                 deadline = CoreDeadline {
-                    after_millis: recovery,
+                    after_millis,
                     quantum: false,
                     work: false,
                     arrival: false,
                     hunger: false,
                     death: false,
-                    recovery: true,
                     nutrition: false,
+                    recovery: recovery == Some(after_millis),
+                    exposure: exposure == Some(after_millis),
                 };
-            } else if recovery == deadline.after_millis {
-                deadline.recovery = true;
+            } else if after_millis == deadline.after_millis {
+                deadline.recovery |= recovery == Some(after_millis);
+                deadline.exposure = exposure == Some(after_millis);
             }
         }
         Ok(deadline)
@@ -1554,6 +1579,12 @@ impl CoreHost {
         self.recovery
             .as_ref()?
             .next_elapsed(self.core.simulated_millis())
+    }
+
+    fn next_environment_exposure(&self) -> Option<u64> {
+        self.environment
+            .as_ref()?
+            .next_exposure(self.core.simulated_millis())
     }
     pub fn publish_arrivals(&mut self) -> Result<Option<CoreArrivals>, String> {
         self.core.publish_arrivals()
@@ -2501,11 +2532,9 @@ impl CoreHost {
             .as_ref()
             .and_then(|finished| self.stage_purpose(finished, &mut draft.people.people, tick));
         let fatigue = self.stage_fatigue(&mut draft.people.people)?;
-        if self
-            .environment
-            .as_ref()
-            .is_some_and(|owner| !owner.regions.is_empty())
-        {
+        if self.environment.as_ref().is_some_and(|owner| {
+            owner.exposure_period_millis.is_none() && !owner.regions.is_empty()
+        }) {
             let tick = draft.events().tick;
             let view = self.core.physical.view(tick)?;
             crate::environment::apply(

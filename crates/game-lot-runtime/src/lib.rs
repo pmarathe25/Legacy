@@ -275,6 +275,18 @@ impl Runtime {
         pause_jobs: &[u64],
         reductions: &[(u64, u64)],
     ) -> Result<(u64, Vec<(u64, u64)>), String> {
+        self.progress_work_interval_with_batches(requested_millis, pause_jobs, reductions, None)
+    }
+
+    /// Publish reserved batch identities for another staged physical owner
+    /// at the same time as elapsed work and rate changes.
+    pub fn progress_work_interval_with_batches(
+        &mut self,
+        requested_millis: u64,
+        pause_jobs: &[u64],
+        reductions: &[(u64, u64)],
+        allocation: Option<game_lots::BatchAllocation>,
+    ) -> Result<(u64, Vec<(u64, u64)>), String> {
         let interval = self
             .work_interval
             .as_ref()
@@ -303,8 +315,21 @@ impl Runtime {
         }
         let consumed = requested_millis.min(self.tick_millis - interval.elapsed_millis);
         if consumed == 0 {
+            if allocation.is_some() {
+                return Err("a batch allocation requires positive elapsed time".into());
+            }
             return Ok((0, Vec::new()));
         }
+        let custody = allocation
+            .map(|allocation| {
+                let mut draft = self.store.prepare_transactions_now(0, &[])?;
+                if !draft.spoiled().is_empty() {
+                    return Err("elapsed batches cannot publish pending spoilage".to_string());
+                }
+                self.store.attach_batch_allocation(&mut draft, allocation)?;
+                Ok(draft)
+            })
+            .transpose()?;
         let period = self.work_rate_period_millis();
         let paused: Vec<_> = interval
             .rates
@@ -328,6 +353,12 @@ impl Runtime {
         let mut interval = self.work_interval.take().expect("checked interval");
         let result = self.apply_work_progress(&interval.rates, consumed);
         if result.is_ok() {
+            if let Some(draft) = custody {
+                self.store
+                    .commit(draft)
+                    .expect("validated custody unchanged by work progress");
+                interval.custody_revision = self.store.revision();
+            }
             interval.elapsed_millis += consumed;
             interval.rates.retain(|rate| {
                 paused

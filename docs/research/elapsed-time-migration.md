@@ -66,8 +66,16 @@ fractions across boundaries. In an interval scenario, `gathering.elapsed_renewal
 credits new stock as time passes, before any withdrawal at the later boundary.
 Renewable nodes then require explicit rates and seasonal rates require an elapsed
 calendar if seasons are configured. Older saves retain settlement-based renewal.
-Gathering, crop growth, regional exposure, and grazing still use boundary
-actions.
+Gathering and grazing still use boundary actions. Crop scenarios can set
+`cultivation.growth_unit_millis` to separate crop duration from settlement.
+The host integrates fractional growth up to season changes and ripening
+deadlines using the opening moisture and each seed cohort's seasonal traits.
+Ripening and descendant batch allocation commit together. Planting, harvest,
+and changes to moisture still use boundary actions.
+An elapsed environment can set `exposure_period_millis` to schedule personal
+hazard damage and shelter rotation at fixed simulated times. The host uses
+the season just before each exposure event and applies it before new choices
+and ordinary healing at that instant. Legacy exposure still uses settlement.
 Optional `nutrition.rules.interval_millis` sets absolute metabolism deadlines
 and applies deficiency damage at those times. A meal credits nutrients at
 successful consumption in this mode. Delayed food health effects still settle

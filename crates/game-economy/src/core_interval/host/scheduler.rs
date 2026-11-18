@@ -917,7 +917,7 @@ impl CoreHost {
                 break;
             }
             attempt!('run, self.sync_work_rates(blocked));
-            let deadline = attempt!('run, self.core.next_deadline(None));
+            let deadline = attempt!('run, self.host_deadline(None));
             if deadline.after_millis == 0 {
                 let mut handled = false;
                 if deadline.arrival

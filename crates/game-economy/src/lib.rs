@@ -3203,12 +3203,10 @@ impl Economy {
         {
             return Err("elapsed physiology requires the interval host".into());
         }
-        if self
-            .environment
-            .as_ref()
-            .is_some_and(|owner| owner.season_unit_millis.is_some())
-        {
-            return Err("elapsed seasons require the interval host".into());
+        if self.environment.as_ref().is_some_and(|owner| {
+            owner.season_unit_millis.is_some() || owner.exposure_period_millis.is_some()
+        }) {
+            return Err("elapsed environment rules require the interval host".into());
         }
         if self.travel.as_ref().is_some_and(|owner| {
             owner
@@ -3231,6 +3229,13 @@ impl Economy {
             .is_some_and(|owner| owner.elapsed.is_some())
         {
             return Err("elapsed recovery requires the interval host".into());
+        }
+        if self
+            .agriculture
+            .as_ref()
+            .is_some_and(|owner| owner.growth_clock.is_some())
+        {
+            return Err("elapsed crop growth requires the interval host".into());
         }
         #[cfg(feature = "profile")]
         let mut profile_phase = game_diagnostics::span("economy.setup");

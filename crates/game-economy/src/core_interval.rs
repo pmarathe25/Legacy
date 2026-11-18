@@ -123,6 +123,7 @@ pub struct CoreDeadline {
     pub death: bool,
     pub recovery: bool,
     pub nutrition: bool,
+    pub exposure: bool,
 }
 /// Travelers published at a partial-interval offset.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -416,6 +417,7 @@ impl CoreInterval {
             death: death == Some(after),
             recovery: recovery == Some(after),
             nutrition: nutrition == Some(after),
+            exposure: false,
         })
     }
     /// Progress no farther than the next observed deadline. A zero result
@@ -980,7 +982,7 @@ impl CoreInterval {
     /// Progress without repeating decisions, publishing arrivals, or completing work.
     /// Failed validation leaves all owners unchanged.
     pub fn progress(&mut self, requested_millis: u64) -> Result<u64, String> {
-        self.progress_adjusting(requested_millis, &[], None)
+        self.progress_adjusting(requested_millis, &[], None, None)
     }
 
     fn progress_adjusting(
@@ -988,6 +990,7 @@ impl CoreInterval {
         requested_millis: u64,
         reductions: &[(u64, u64)],
         staged_vitals: Option<VitalsProgress>,
+        batches: Option<game_lots::BatchAllocation>,
     ) -> Result<u64, String> {
         let quantum = self.physical.tick_millis();
         let consumed = self.progress_limit(requested_millis)?;
@@ -1016,7 +1019,7 @@ impl CoreInterval {
                 (before.health > 0 && after.health == 0).then_some(before.id)
             })
             .collect();
-        let advanced = if dead.is_empty() && reductions.is_empty() {
+        let advanced = if dead.is_empty() && reductions.is_empty() && batches.is_none() {
             self.physical.progress_work_interval(consumed)?
         } else {
             let interval = self
@@ -1038,7 +1041,7 @@ impl CoreInterval {
                 })
                 .collect();
             self.physical
-                .progress_work_interval_adjusting(consumed, &paused, reductions)?
+                .progress_work_interval_with_batches(consumed, &paused, reductions, batches)?
                 .0
         };
         debug_assert_eq!(advanced, consumed);

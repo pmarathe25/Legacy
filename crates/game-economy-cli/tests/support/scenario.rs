@@ -108,6 +108,7 @@ fn player_sees_and_gives_only_to_people_at_the_same_local_position() {
         .unwrap()
         .id;
     initial.agriculture = Some(game_economy::Agriculture {
+        growth_clock: None,
         provenance: None,
         soil: None,
         inherit_births: false,

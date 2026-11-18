@@ -592,6 +592,8 @@ struct HaulingPolicyConfig {
 struct EnvironmentConfig {
     regions: Vec<HazardConfig>,
     #[serde(default)]
+    exposure_period_millis: Option<u64>,
+    #[serde(default)]
     season_unit_millis: Option<u64>,
     #[serde(default)]
     seasons: Vec<game_economy::Season>,
@@ -641,6 +643,7 @@ fn resolve_environment(
         .collect::<Result<Vec<_>, String>>()?;
     Ok(game_economy::Environment {
         regions,
+        exposure_period_millis: config.exposure_period_millis,
         season_unit_millis: config.season_unit_millis,
         seasons: config.seasons,
     })
@@ -809,6 +812,8 @@ struct MedicalPolicyConfig {
 #[serde(deny_unknown_fields)]
 struct Cultivation {
     max_hunger: u32,
+    #[serde(default)]
+    growth_unit_millis: Option<u64>,
     #[serde(default)]
     track_seed_batches: bool,
     #[serde(default)]
@@ -1507,6 +1512,14 @@ fn scenario_with_options_inner(
     }
     if !interval_features
         && scenario
+            .cultivation
+            .as_ref()
+            .is_some_and(|owner| owner.growth_unit_millis.is_some())
+    {
+        return Err("elapsed crop growth requires the interval simulation host".into());
+    }
+    if !interval_features
+        && scenario
             .route_closures
             .iter()
             .any(|closure| closure.unit_millis.is_some())
@@ -1514,12 +1527,11 @@ fn scenario_with_options_inner(
         return Err("elapsed route closures require the interval simulation host".into());
     }
     if !interval_features
-        && scenario
-            .environment
-            .as_ref()
-            .is_some_and(|owner| owner.season_unit_millis.is_some())
+        && scenario.environment.as_ref().is_some_and(|owner| {
+            owner.season_unit_millis.is_some() || owner.exposure_period_millis.is_some()
+        })
     {
-        return Err("elapsed seasons require the interval simulation host".into());
+        return Err("elapsed environment rules require the interval simulation host".into());
     }
     if (scenario.language.is_some() || !scenario.language_topic_profiles.is_empty())
         && !interval_features
@@ -2447,7 +2459,7 @@ fn scenario_with_options_inner(
             let crops = crop_content::load(
                 &content.join("agriculture"),
                 &production.goods,
-                scenario.tick_millis,
+                state.growth_unit_millis.unwrap_or(scenario.tick_millis),
             )?;
             let fields = state
                 .fields
@@ -2467,6 +2479,12 @@ fn scenario_with_options_inner(
                 })
                 .collect::<Result<Vec<_>, String>>()?;
             Ok(Agriculture {
+                growth_clock: state.growth_unit_millis.map(|unit_millis| {
+                    game_economy_agriculture::elapsed_growth::GrowthClock {
+                        unit_millis,
+                        remainders: vec![],
+                    }
+                }),
                 provenance: state.track_seed_batches.then(|| {
                     game_economy_agriculture::provenance::Provenance {
                         profiles: std::sync::Arc::new(seed_profiles),

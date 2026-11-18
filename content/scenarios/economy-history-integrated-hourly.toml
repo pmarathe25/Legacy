@@ -1877,6 +1877,7 @@ minds = []
 
 [environment]
 season_unit_millis = 3600000
+exposure_period_millis = 3600000
 [[environment.regions]]
 region = 1
 damage = 1
@@ -1907,6 +1908,7 @@ tending_allowed = true
 harvest_allowed = true
 
 [cultivation]
+growth_unit_millis = 3600000
 max_hunger = 120
 inherit_births = true
 track_seed_batches = true

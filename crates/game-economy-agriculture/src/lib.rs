@@ -1,6 +1,7 @@
 //! Parallel cultivation over real seed and dated harvest custody.
 pub mod amendment;
 pub mod content;
+pub mod elapsed_growth;
 pub mod genetics;
 pub mod irrigation;
 pub mod opportunities;
@@ -60,6 +61,8 @@ pub struct Policy {
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Agriculture {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub growth_clock: Option<elapsed_growth::GrowthClock>,
     /// Optional physical seed history for currently planted fields.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provenance: Option<provenance::Provenance>,
@@ -81,6 +84,7 @@ pub struct Agriculture {
 impl Clone for Agriculture {
     fn clone(&self) -> Self {
         Self {
+            growth_clock: self.growth_clock.clone(),
             provenance: self.provenance.clone(),
             inherit_births: self.inherit_births,
             requests: self.requests.clone(),
@@ -171,6 +175,9 @@ impl Agriculture {
         Ok(next)
     }
     pub fn validate(&self, people: &[Person], goods: &[Good], view: &View) -> Result<(), String> {
+        if let Some(clock) = &self.growth_clock {
+            clock.validate(&self.fields)?;
+        }
         let ids: HashSet<_> = people.par_iter().map(|p| p.id).collect();
         let goods: HashSet<_> = goods.par_iter().map(|g| g.id).collect();
         let mut crops: Vec<_> = self.crops.par_iter().collect();
@@ -855,7 +862,7 @@ impl Context<'_> {
         let mut fields: Vec<_> = self.agriculture.fields.par_iter().cloned().collect();
         fields
             .par_iter_mut()
-            .filter(|f| f.phase == Phase::Growing)
+            .filter(|f| self.agriculture.growth_clock.is_none() && f.phase == Phase::Growing)
             .for_each(|f| {
                 let factor = self.season.map_or(1000, |s| {
                     if s.tending_allowed {
@@ -964,6 +971,15 @@ impl Plan {
         });
     }
     pub fn publish(self, owner: &Agriculture, events: &Events) -> Result<Agriculture, String> {
+        self.publish_at(owner, events, None)
+    }
+
+    pub fn publish_at(
+        self,
+        owner: &Agriculture,
+        events: &Events,
+        planted_at_millis: Option<u128>,
+    ) -> Result<Agriculture, String> {
         #[cfg(feature = "profile")]
         let _phase = game_diagnostics::span("agriculture.publish");
         self.plant
@@ -983,7 +999,15 @@ impl Plan {
         let provenance = owner
             .provenance
             .as_ref()
-            .map(|provenance| provenance.stage(&self.changes, &self.actors, events, &decisions))
+            .map(|provenance| {
+                provenance.stage(
+                    &self.changes,
+                    &self.actors,
+                    events,
+                    &decisions,
+                    planted_at_millis,
+                )
+            })
             .transpose()?;
         let provenance = match (provenance, self.maturations) {
             (Some(owner), Some(maturations)) => Some(owner.mature(maturations)?),
@@ -1049,6 +1073,7 @@ impl Plan {
             .map(|prepared| prepared.publish(&changes, &decisions))
             .transpose()?;
         Ok(Agriculture {
+            growth_clock: owner.growth_clock.clone(),
             provenance,
             inherit_births: owner.inherit_births,
             requests,

@@ -157,6 +157,7 @@ mod tests {
     #[test]
     fn discovery_is_bounded_personal_and_does_not_advance_fields() {
         let owner = Agriculture {
+            growth_clock: None,
             provenance: Some(crate::provenance::Provenance {
                 profiles: Arc::new(vec![crate::provenance::SeedProfile {
                     person: 1,
@@ -235,6 +236,7 @@ mod tests {
             .and_then(|v| v.parse::<u64>().ok())
             .unwrap_or(100_000);
         let owner = Agriculture {
+            growth_clock: None,
             provenance: None,
             inherit_births: false,
             requests: None,

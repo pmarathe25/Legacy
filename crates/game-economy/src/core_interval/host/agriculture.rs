@@ -1,8 +1,79 @@
 //! Boundary cultivation, staged with the common physical generation.
 use super::*;
+use game_economy_agriculture::elapsed_growth::{Growth, Rates};
 type CultivationClaims = Option<(game_economy_claims::Claims, Option<game_opinions::Opinions>)>;
+type CropProgress = (Option<Growth>, Option<game_lots::BatchAllocation>);
 
 impl CoreHost {
+    pub(super) fn plan_crop_segment(
+        &self,
+        requested: u64,
+    ) -> Result<(Option<Rates<'_>>, u64), String> {
+        let Some(owner) = self
+            .agriculture
+            .as_ref()
+            .filter(|owner| owner.growth_clock.is_some())
+        else {
+            return Ok((None, requested));
+        };
+        if !owner
+            .fields
+            .par_iter()
+            .any(|field| field.phase == game_economy_agriculture::Phase::Growing)
+        {
+            return Ok((None, requested));
+        }
+        let now = self.core.simulated_millis();
+        let season_change = self
+            .environment
+            .as_ref()
+            .and_then(|environment| environment.next_season_change(now));
+        let rates = owner.elapsed_growth_rates(
+            self.current_season(self.core.physical.tick()),
+            self.irrigation.as_ref(),
+        )?;
+        let maturation = rates.as_ref().and_then(Rates::next_maturation);
+        let consumed = [season_change, maturation]
+            .into_iter()
+            .flatten()
+            .fold(u128::from(requested), u128::min) as u64;
+        Ok((rates, consumed))
+    }
+
+    pub(super) fn stage_crop_growth(
+        &self,
+        rates: Option<Rates<'_>>,
+        millis: u64,
+    ) -> Result<CropProgress, String> {
+        let Some(rates) = rates.filter(|_| millis > 0) else {
+            return Ok((None, None));
+        };
+        let owner = self.agriculture.as_ref().expect("elapsed crop owner");
+        let draft = owner.stage_elapsed_growth(rates, millis, self.core.seed)?;
+        let batch_count = draft.batch_count();
+        let batch_owner = game_economy_agriculture::reproduction::BATCH_OWNER;
+        let allocation = (batch_count > 0)
+            .then(|| {
+                self.core.physical.plan_batches(&[game_lots::BatchCount {
+                    owner: batch_owner,
+                    count: batch_count,
+                }])
+            })
+            .transpose()?;
+        let first = allocation
+            .as_ref()
+            .and_then(|allocation| allocation.range(batch_owner).map(|range| range.start));
+        let growth = draft.resolve(first)?;
+        growth.validate(owner)?;
+        Ok((Some(growth), allocation))
+    }
+
+    pub(super) fn publish_crop_growth(&mut self, growth: Option<Growth>) {
+        if let Some(growth) = growth {
+            growth.publish_validated(self.agriculture.as_mut().expect("staged crop growth"));
+        }
+    }
+
     pub(super) fn current_season(&self, legacy_tick: u64) -> Option<&game_environment::Season> {
         self.environment
             .as_ref()
@@ -310,7 +381,11 @@ impl CoreHost {
         } else {
             None
         };
-        Ok((Some(plan.publish(owner, events)?), claims))
+        let planting_time = owner
+            .growth_clock
+            .is_some()
+            .then(|| self.core.simulated_millis());
+        Ok((Some(plan.publish_at(owner, events, planting_time)?), claims))
     }
     pub(super) fn plan_cultivation(
         &self,

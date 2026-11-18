@@ -2,6 +2,13 @@
 
 People choose field work according to their own preferences and pressures. Planting consumes actual seed; crops grow while the worker is free; harvest creates dated goods only if physical storage admits them. Fields are physical state, not an institution or employer.
 
+Interval scenarios can set `cultivation.growth_unit_millis`. Authored crop
+durations use this unit independently of the settlement interval. Fields
+retain fractional growth and ripen at their elapsed deadline, accounting for
+season, genetics, and committed moisture. At ripening, new seed batch IDs
+commit with the field and its provenance. Planting, harvest, and irrigation
+actions still settle at physical boundaries.
+
 Set `track_seed_batches = true` in a cultivation scenario to retain the exact
 seed cohorts actually consumed when a field is planted. These records are
 prepared from accepted physical receipts, persist while a crop grows or a

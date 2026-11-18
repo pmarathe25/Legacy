@@ -2137,6 +2137,7 @@ fn seasonal_patch_renewal_preserves_fractional_rates_and_save_continuity() {
         ],
     });
     state.environment = Some(Environment {
+        exposure_period_millis: None,
         season_unit_millis: None,
         regions: vec![],
         seasons: vec![
@@ -2233,6 +2234,7 @@ fn animals_graze_only_the_actual_seasonal_renewal() {
         }],
     });
     state.environment = Some(Environment {
+        exposure_period_millis: None,
         season_unit_millis: None,
         regions: vec![],
         seasons: vec![Season {
@@ -9412,6 +9414,7 @@ fn regional_exposure_rotates_finite_shelter_and_survives_reload() {
         person.seek_meals = false;
     }
     initial.environment = Some(Environment {
+        exposure_period_millis: None,
         season_unit_millis: None,
         regions: vec![Hazard {
             region: 1,
@@ -9475,6 +9478,7 @@ fn shelter_capacity_follows_physical_stock_at_each_boundary() {
         p.seek_meals = false;
     }
     initial.environment = Some(Environment {
+        exposure_period_millis: None,
         season_unit_millis: None,
         regions: vec![Hazard {
             region: 1,
@@ -9525,6 +9529,7 @@ fn seasons_gate_planting_and_grow_crops_at_authored_rate() {
     }
     initial.people[1].controlled = true;
     initial.agriculture = Some(Agriculture {
+        growth_clock: None,
         provenance: None,
         soil: None,
         inherit_births: false,
@@ -9557,6 +9562,7 @@ fn seasons_gate_planting_and_grow_crops_at_authored_rate() {
         harvest_allowed: true,
     };
     initial.environment = Some(Environment {
+        exposure_period_millis: None,
         season_unit_millis: None,
         regions: vec![],
         seasons: vec![season("cold", 1, false, 0), season("warm", 8, true, 500)],
@@ -9872,6 +9878,7 @@ fn travelers_are_exposed_even_when_shelter_is_available() {
         journeys: vec![],
     });
     initial.environment = Some(Environment {
+        exposure_period_millis: None,
         season_unit_millis: None,
         regions: vec![Hazard {
             region: 1,
@@ -9958,6 +9965,7 @@ fn exposure_death_updates_actual_family_and_lineage() {
     initial.pending_food.clear();
     initial.people[2].health = 1;
     initial.environment = Some(Environment {
+        exposure_period_millis: None,
         season_unit_millis: None,
         regions: vec![Hazard {
             region: 1,
@@ -13527,6 +13535,7 @@ fn cultivation_retries_another_person_and_observes_claimed_seed_use() {
         claims: Some(Claims::default()),
     });
     initial.agriculture = Some(Agriculture {
+        growth_clock: None,
         provenance: None,
         soil: None,
         inherit_births: false,
@@ -16950,6 +16959,7 @@ fn newborn_farming_inclinations_are_optional_and_do_not_inherit_pressure() {
         person.seek_meals = false;
     }
     initial.agriculture = Some(Agriculture {
+        growth_clock: None,
         provenance: None,
         soil: None,
         inherit_births: true,
@@ -35846,6 +35856,7 @@ fn crops_consume_seed_grow_without_labor_and_harvest_only_from_personal_choice()
         affinity: 0,
     }];
     initial.agriculture = Some(Agriculture {
+        growth_clock: None,
         provenance: None,
         soil: None,
         inherit_births: false,
@@ -36274,6 +36285,7 @@ fn field_workload(count: u64) -> State {
     )
     .unwrap();
     initial.agriculture = Some(Agriculture {
+        growth_clock: None,
         provenance: None,
         soil: None,
         inherit_births: false,
@@ -36910,6 +36922,7 @@ fn farming_and_gathering_share_one_atomic_stock_boundary() {
         p.seek_meals = false;
     }
     initial.agriculture = Some(Agriculture {
+        growth_clock: None,
         provenance: None,
         soil: None,
         inherit_births: false,
@@ -37780,6 +37793,7 @@ fn concentrated_exposure_benchmark() {
         .unwrap_or(100_000u64);
     let mut initial = concentrated(count);
     initial.environment = Some(Environment {
+        exposure_period_millis: None,
         season_unit_millis: None,
         regions: vec![Hazard {
             region: 1,
@@ -58141,6 +58155,7 @@ fn irrigation_fixture() -> State {
         person.hunger = 0;
     }
     state.agriculture = Some(Agriculture {
+        growth_clock: None,
         provenance: None,
         soil: None,
         inherit_births: false,
@@ -58313,6 +58328,7 @@ fn irrigation_boundary_benchmark() {
     )
     .unwrap();
     state.agriculture = Some(Agriculture {
+        growth_clock: None,
         provenance: None,
         soil: None,
         inherit_births: false,
