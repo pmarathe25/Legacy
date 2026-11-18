@@ -240,77 +240,7 @@ impl Families {
             return Err("family phase must advance one tick");
         }
         let rules = &self.rules;
-        // Clone directly into the staged generation, avoiding per-chunk member
-        // buffers and a second population-sized flattening pass.
-        let mut members: Vec<_> = self.members.par_iter().cloned().collect();
-        let chunks: Vec<Result<_, &'static str>> = members
-            .par_chunks_mut(1024)
-            .map(|chunk| {
-                let mut events = Vec::new();
-                for m in chunk {
-                    if m.alive {
-                        if let Some((person, amount)) = penalty
-                            && m.id == person
-                        {
-                            m.lifespan_loss = m
-                                .lifespan_loss
-                                .checked_add(amount)
-                                .ok_or("lifespan penalty overflow")?;
-                        }
-                        m.age = m.age.checked_add(1).ok_or("age overflow")?;
-                        let lifespan = rules.lifespan_min
-                            + ((u128::from(rules.lifespan_max - rules.lifespan_min)
-                                * u128::from(m.genome.expressed(3)))
-                                / 1000) as u64;
-                        let lifespan = lifespan.saturating_sub(m.lifespan_loss);
-                        let person = physical.read(m.id);
-                        if person.health == 0 || m.age >= lifespan {
-                            m.alive = false;
-                            events.push(event(tick, "death", vec![m.id], person.region));
-                            if let Some(p) = m.pregnancy.take() {
-                                events.push(event(
-                                    tick,
-                                    "pregnancy_loss",
-                                    vec![m.id, p.father],
-                                    person.region,
-                                ));
-                            }
-                        } else if m.age == rules.adult_age {
-                            events.push(event(tick, "adulthood", vec![m.id], person.region));
-                        }
-                    }
-                }
-                Ok(events)
-            })
-            .collect();
-        let event_chunks = chunks.into_iter().collect::<Result<Vec<_>, _>>()?;
-        let mut events: Vec<_> = event_chunks.into_par_iter().flatten().collect();
-        if members.par_windows(2).any(|pair| pair[0].id > pair[1].id) {
-            members.par_sort_unstable_by_key(|m| m.id);
-        }
-        let alive: Vec<_> = members
-            .par_iter()
-            .filter(|m| m.alive)
-            .map(|m| m.id)
-            .collect();
-        let dense_alive = alive.first().and_then(|first| {
-            alive.last().and_then(|last| {
-                (last.checked_sub(*first) == Some((alive.len() - 1) as u64))
-                    .then_some((*first, *last))
-            })
-        });
-        members.par_iter_mut().for_each(|m| {
-            if !m.alive
-                || m.partner.is_some_and(|p| {
-                    dense_alive.map_or_else(
-                        || alive.binary_search(&p).is_err(),
-                        |(first, last)| p < first || p > last,
-                    )
-                })
-            {
-                m.partner = None;
-            }
-        });
+        let (mut members, mut events) = stage_life(&self.members, rules, physical, tick, penalty)?;
         #[cfg(feature = "profile")]
         {
             drop(profile_phase);
@@ -464,79 +394,14 @@ impl Families {
             drop(profile_phase);
             profile_phase = game_diagnostics::span("family.births");
         }
-        let due: Vec<_> = members
-            .par_iter()
-            .filter(|m| m.alive && m.pregnancy.as_ref().is_some_and(|p| p.due <= tick))
-            .collect();
-        let next_id = self
-            .next_id
-            .checked_add(due.len() as u64)
-            .ok_or("birth identity overflow")?;
-        let children: Vec<Result<_, &'static str>> = due
-            .par_iter()
-            .enumerate()
-            .map(|(offset, mother)| {
-                let father = &index[&mother.pregnancy.as_ref().unwrap().father];
-                let id = self.next_id + offset as u64;
-                let genome = inherit(
-                    &mother.genome,
-                    &father.genome,
-                    seed,
-                    mother.id,
-                    tick,
-                    rules.mutation_per_million,
-                    rules.mutation_step,
-                );
-                let child = Member {
-                    id,
-                    born: Some(tick),
-                    age: 0,
-                    lifespan_loss: 0,
-                    genome,
-                    parents: vec![mother.id, father.id].into(),
-                    partner: None,
-                    pregnancy: None,
-                    next_conception: 0,
-                    alive: true,
-                    reproduction_allowed: true,
-                    reconsider_partnership: mother.reconsider_partnership,
-                    mate_preference: None,
-                };
-                let recover = tick
-                    .checked_add(rules.birth_spacing)
-                    .ok_or("birth spacing overflow")?;
-                Ok((
-                    child,
-                    Birth {
-                        id,
-                        mother: mother.id,
-                        region: physical.read(mother.id).region,
-                        health: rules.newborn_health,
-                    },
-                    recover,
-                ))
-            })
-            .collect();
-        let children: Vec<_> = children.into_par_iter().collect::<Result<_, _>>()?;
-        events.par_extend(children.par_iter().map(|(child, birth, _)| {
-            event(
-                tick,
-                "birth",
-                vec![child.id, child.parents[0], child.parents[1]],
-                birth.region,
-            )
-        }));
-        let mut recovered: Vec<_> = children
-            .par_iter()
-            .map(|(_, birth, recover)| (birth.mother, *recover))
-            .collect();
-        if recovered.par_windows(2).any(|pair| pair[0].0 > pair[1].0) {
-            recovered.par_sort_unstable_by_key(|row| row.0);
-        }
-        let (newborns, births): (Vec<_>, Vec<_>) = children
-            .into_par_iter()
-            .map(|(child, birth, _)| (child, birth))
-            .unzip();
+        let BirthStage {
+            next_id,
+            recovered,
+            newborns,
+            births,
+            events: birth_events,
+        } = stage_births(self.next_id, &members, &index, rules, physical, seed, tick)?;
+        events.par_extend(birth_events);
         #[cfg(feature = "profile")]
         {
             drop(profile_phase);
@@ -743,4 +608,187 @@ impl Families {
             deaths,
         })
     }
+}
+
+/// Physical age and mortality use only the opening family and physical views.
+fn stage_life(
+    opening: &[Member],
+    rules: &FamilyRules,
+    physical: &impl game_family_model::PhysicalView,
+    tick: u64,
+    penalty: Option<(u64, u64)>,
+) -> Result<(Vec<Member>, Vec<FamilyEvent>), &'static str> {
+    // Clone directly into the staged generation, avoiding per-chunk member
+    // buffers and a second population-sized flattening pass.
+    let mut members: Vec<_> = opening.par_iter().cloned().collect();
+    let chunks: Vec<Result<_, &'static str>> = members
+        .par_chunks_mut(1024)
+        .map(|chunk| {
+            let mut events = Vec::new();
+            for m in chunk {
+                if m.alive {
+                    if let Some((person, amount)) = penalty
+                        && m.id == person
+                    {
+                        m.lifespan_loss = m
+                            .lifespan_loss
+                            .checked_add(amount)
+                            .ok_or("lifespan penalty overflow")?;
+                    }
+                    m.age = m.age.checked_add(1).ok_or("age overflow")?;
+                    let lifespan = rules.lifespan_min
+                        + ((u128::from(rules.lifespan_max - rules.lifespan_min)
+                            * u128::from(m.genome.expressed(3)))
+                            / 1000) as u64;
+                    let lifespan = lifespan.saturating_sub(m.lifespan_loss);
+                    let person = physical.read(m.id);
+                    if person.health == 0 || m.age >= lifespan {
+                        m.alive = false;
+                        events.push(event(tick, "death", vec![m.id], person.region));
+                        if let Some(p) = m.pregnancy.take() {
+                            events.push(event(
+                                tick,
+                                "pregnancy_loss",
+                                vec![m.id, p.father],
+                                person.region,
+                            ));
+                        }
+                    } else if m.age == rules.adult_age {
+                        events.push(event(tick, "adulthood", vec![m.id], person.region));
+                    }
+                }
+            }
+            Ok(events)
+        })
+        .collect();
+    let event_chunks = chunks.into_iter().collect::<Result<Vec<_>, _>>()?;
+    let events: Vec<_> = event_chunks.into_par_iter().flatten().collect();
+    if members.par_windows(2).any(|pair| pair[0].id > pair[1].id) {
+        members.par_sort_unstable_by_key(|m| m.id);
+    }
+    let alive: Vec<_> = members
+        .par_iter()
+        .filter(|m| m.alive)
+        .map(|m| m.id)
+        .collect();
+    let dense_alive = alive.first().and_then(|first| {
+        alive.last().and_then(|last| {
+            (last.checked_sub(*first) == Some((alive.len() - 1) as u64)).then_some((*first, *last))
+        })
+    });
+    members.par_iter_mut().for_each(|m| {
+        if !m.alive
+            || m.partner.is_some_and(|p| {
+                dense_alive.map_or_else(
+                    || alive.binary_search(&p).is_err(),
+                    |(first, last)| p < first || p > last,
+                )
+            })
+        {
+            m.partner = None;
+        }
+    });
+    Ok((members, events))
+}
+
+struct BirthStage {
+    next_id: u64,
+    recovered: Vec<(u64, u64)>,
+    newborns: Vec<Member>,
+    births: Vec<Birth>,
+    events: Vec<FamilyEvent>,
+}
+
+/// Stage the births that are physically due, independently of any new encounter.
+fn stage_births(
+    first_id: u64,
+    members: &[Member],
+    index: &OrderedMemberIndex<'_>,
+    rules: &FamilyRules,
+    physical: &impl game_family_model::PhysicalView,
+    seed: u64,
+    tick: u64,
+) -> Result<BirthStage, &'static str> {
+    let due: Vec<_> = members
+        .par_iter()
+        .filter(|m| m.alive && m.pregnancy.as_ref().is_some_and(|p| p.due <= tick))
+        .collect();
+    let next_id = first_id
+        .checked_add(due.len() as u64)
+        .ok_or("birth identity overflow")?;
+    let children: Vec<Result<_, &'static str>> = due
+        .par_iter()
+        .enumerate()
+        .map(|(offset, mother)| {
+            let father = &index[&mother.pregnancy.as_ref().unwrap().father];
+            let id = first_id + offset as u64;
+            let genome = inherit(
+                &mother.genome,
+                &father.genome,
+                seed,
+                mother.id,
+                tick,
+                rules.mutation_per_million,
+                rules.mutation_step,
+            );
+            let child = Member {
+                id,
+                born: Some(tick),
+                age: 0,
+                lifespan_loss: 0,
+                genome,
+                parents: vec![mother.id, father.id].into(),
+                partner: None,
+                pregnancy: None,
+                next_conception: 0,
+                alive: true,
+                reproduction_allowed: true,
+                reconsider_partnership: mother.reconsider_partnership,
+                mate_preference: None,
+            };
+            let recover = tick
+                .checked_add(rules.birth_spacing)
+                .ok_or("birth spacing overflow")?;
+            Ok((
+                child,
+                Birth {
+                    id,
+                    mother: mother.id,
+                    region: physical.read(mother.id).region,
+                    health: rules.newborn_health,
+                },
+                recover,
+            ))
+        })
+        .collect();
+    let children: Vec<_> = children.into_par_iter().collect::<Result<_, _>>()?;
+    let events = children
+        .par_iter()
+        .map(|(child, birth, _)| {
+            event(
+                tick,
+                "birth",
+                vec![child.id, child.parents[0], child.parents[1]],
+                birth.region,
+            )
+        })
+        .collect();
+    let mut recovered: Vec<_> = children
+        .par_iter()
+        .map(|(_, birth, recover)| (birth.mother, *recover))
+        .collect();
+    if recovered.par_windows(2).any(|pair| pair[0].0 > pair[1].0) {
+        recovered.par_sort_unstable_by_key(|row| row.0);
+    }
+    let (newborns, births): (Vec<_>, Vec<_>) = children
+        .into_par_iter()
+        .map(|(child, birth, _)| (child, birth))
+        .unzip();
+    Ok(BirthStage {
+        next_id,
+        recovered,
+        newborns,
+        births,
+        events,
+    })
 }
