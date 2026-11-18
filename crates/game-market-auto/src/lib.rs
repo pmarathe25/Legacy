@@ -3,9 +3,10 @@ use game_market_proposals as proposals;
 mod custody;
 pub mod validation;
 use game_goods_cargo::{Exchange, GoodsCargo};
-use game_market::{Decision, DecisionDraft, Influence, Market, Offer, Outcome, Policy};
+use game_market::{Decision, DecisionDraft, Influence, Market, Outcome, Policy};
 use game_production_model::{Amount, Good, PersonSnapshot};
 use rayon::prelude::*;
+use std::cmp::Reverse;
 pub type Together<'a> = dyn Fn(u64, u64) -> bool + Sync + 'a;
 struct Accepted {
     market: DecisionDraft,
@@ -93,7 +94,7 @@ fn prepare_acceptance(
         drop(phase);
         phase = game_diagnostics::span("market.accept.candidates");
     }
-    let rows: Vec<Option<(Offer, Exchange)>> = market
+    let rows: Vec<_> = market
         .offers
         .par_iter()
         .map(|offer| -> Result<_, String> {
@@ -132,24 +133,25 @@ fn prepare_acceptance(
                     .as_ref()
                     .map_or(0, |index| index.fear(offer.recipient, offer.proposer)),
             );
-            if received.saturating_add(social) < required {
+            let Some(surplus) = received.saturating_add(social).checked_sub(required) else {
                 return Ok(None);
-            }
+            };
             Ok(Some((
-                offer.clone(),
+                offer,
                 Exchange {
                     a: offer.proposer,
                     b: offer.recipient,
                     offer_a: offer.give.clone(),
                     offer_b: offer.receive.clone(),
                 },
+                surplus,
             )))
         })
         .collect::<Result<_, _>>()?;
     let candidates: Vec<_> = rows.into_par_iter().flatten().collect();
     let exchanges: Vec<_> = candidates
         .par_iter()
-        .map(|(_, exchange)| exchange.clone())
+        .map(|(_, exchange, _)| exchange.clone())
         .collect();
     #[cfg(feature = "profile")]
     {
@@ -162,12 +164,46 @@ fn prepare_acceptance(
         drop(phase);
         phase = game_diagnostics::span("market.accept.selection");
     }
-    // Each participant's first sorted claim has their lowest feasible offer ID.
+    // Each recipient chooses among their feasible offers. Only these choices
+    // enter shared custody arbitration, including when one proposer made
+    // several offers to the same recipient.
+    let mut preferences: Vec<_> = candidates
+        .par_iter()
+        .zip(feasible.par_iter())
+        .filter_map(|((offer, _, surplus), change)| {
+            change
+                .as_ref()
+                .map(|_| (offer.recipient, Reverse(*surplus), offer.id))
+        })
+        .collect();
+    if preferences
+        .par_windows(2)
+        .any(|pair| pair[0].0 >= pair[1].0)
+    {
+        preferences.par_sort_unstable();
+    }
+    let mut preferred = Vec::new();
+    if preferences
+        .par_windows(2)
+        .any(|pair| pair[0].0 == pair[1].0)
+    {
+        preferred = preferences
+            .par_chunk_by(|a, b| a.0 == b.0)
+            .map(|group| group[0].2)
+            .collect();
+        preferred.par_sort_unstable();
+    }
+    let chosen = |id| preferred.is_empty() || preferred.binary_search(&id).is_ok();
+
+    // An outstanding proposal expresses willingness. Where the preferred
+    // exchanges overlap, each participant can execute one action this round.
     let mut claims: Vec<_> = candidates
         .par_iter()
         .zip(feasible.par_iter())
-        .filter(|(_, change)| change.is_some())
-        .flat_map_iter(|((offer, _), _)| [(offer.proposer, offer.id), (offer.recipient, offer.id)])
+        .filter(|((offer, _, _), change)| change.is_some() && chosen(offer.id))
+        .flat_map_iter(|((offer, _, _), _)| {
+            [(offer.proposer, offer.id), (offer.recipient, offer.id)]
+        })
         .collect();
     if claims.par_windows(2).any(|pair| pair[0] > pair[1]) {
         claims.par_sort_unstable();
@@ -189,12 +225,13 @@ fn prepare_acceptance(
     let mut selected: Vec<_> = candidates
         .into_par_iter()
         .zip(feasible.into_par_iter())
-        .filter(|((offer, _), change)| {
+        .filter(|((offer, _, _), change)| {
             change.is_some()
+                && chosen(offer.id)
                 && (!conflicts
                     || (lowest(offer.proposer, offer.id) && lowest(offer.recipient, offer.id)))
         })
-        .map(|((offer, _), change)| (offer, change.expect("feasible exchange")))
+        .map(|((offer, _, _), change)| (offer, change.expect("feasible exchange")))
         .collect();
     if selected.is_empty() {
         return Ok(None);
@@ -488,7 +525,7 @@ impl<'a> Context<'a> {
 mod tests {
     use super::*;
     use game_goods_cargo::GoodsHolding;
-    use game_market::Value;
+    use game_market::{Offer, Value};
 
     #[test]
     fn selected_offers_and_committed_cargo_share_the_same_decision() {

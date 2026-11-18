@@ -31,11 +31,7 @@ impl CoreHost {
             self.core
                 .people
                 .par_iter()
-                .filter(|person| {
-                    person.controlled
-                        || person.health == 0
-                        || person.hunger > self.core.rules.max_work_hunger
-                })
+                .filter(|person| person.controlled || person.health == 0)
                 .map(|person| person.id),
         );
         busy.par_extend(

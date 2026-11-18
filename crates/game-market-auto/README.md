@@ -1,6 +1,6 @@
 # autonomous market
 
-Opted-in recipients assess pending offers using their authored values. Only feasible offers enter deterministic priority matching; the lowest offer ID must be preferred by both participants for an exchange to proceed. Matching is conservative and may defer otherwise feasible offers. Missing valuations prevent acceptance, and equal value is accepted when minimum gain is zero.
+Opted-in recipients rank feasible pending offers by their own valuations and social incentives. The recipient chooses the greatest surplus, with offer ID resolving equal scores. Competing chosen exchanges that use the same person's custody enter deterministic arbitration. An unselected offer remains available for later consideration or withdrawal. Missing valuations prevent acceptance, and equal value is accepted when minimum gain is zero.
 
 A policy with `propose = true` also lets its person propose trades using their valuations and visible local carried goods. A proposal does not transfer goods: its recipient independently evaluates it at a later boundary. Missing valuations prevent proposals, and competing participants can defer each other under the conservative priority rule.
 

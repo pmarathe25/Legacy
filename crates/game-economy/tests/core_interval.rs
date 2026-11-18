@@ -16703,6 +16703,61 @@ fn scheduled_personal_exchange_emerges_from_separate_choices() {
 }
 
 #[test]
+fn a_hungry_recipient_selects_the_preferred_later_offer_from_the_same_person() {
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut snapshot = personal_exchange_fixture(true, false);
+                snapshot.core.people[3].hunger = snapshot.core.rules.max_work_hunger + 1;
+                let mut host = CoreHost::begin(snapshot, &[(1, 1)]).unwrap();
+                for quantity in [1, 2] {
+                    let proposal = game_market::Proposal {
+                        proposer: 3,
+                        recipient: 4,
+                        give: vec![Amount { good: 1, quantity }],
+                        receive: vec![Amount {
+                            good: 2,
+                            quantity: 1,
+                        }],
+                    };
+                    assert_eq!(
+                        host.propose_personal_exchanges(&[proposal]).unwrap(),
+                        [quantity]
+                    );
+                }
+                let result = host.respond_to_personal_exchanges(&[]).unwrap();
+                assert_eq!(result.offers, [2]);
+                let state = host.snapshot();
+                let market = state.market.as_ref().unwrap();
+                assert_eq!(market.offers.len(), 1);
+                assert_eq!(market.offers[0].id, 1);
+                let buyer = state
+                    .core
+                    .physical
+                    .custody
+                    .containers
+                    .iter()
+                    .find(|row| row.place == Place::Person(4))
+                    .unwrap();
+                assert_eq!(buyer.lots.len(), 1);
+                assert_eq!((buyer.lots[0].good, buyer.lots[0].quantity), (1, 2));
+                let saved = serde_json::to_string(&state).unwrap();
+                assert_eq!(
+                    CoreHost::resume(serde_json::from_str(&saved).unwrap())
+                        .unwrap()
+                        .snapshot(),
+                    state
+                );
+                state
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
 fn independent_personal_exchanges_settle_together() {
     let run = |workers| {
         rayon::ThreadPoolBuilder::new()
