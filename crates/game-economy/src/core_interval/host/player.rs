@@ -47,6 +47,7 @@ pub struct CorePlayerView {
     pub offset_millis: u64,
     pub person: Person,
     pub journey: Option<travel::Journey>,
+    pub route_reports: Vec<travel::RouteObservation>,
     pub possessions: Vec<game_lots::Lot>,
     pub nearby: Vec<CoreSeenPerson>,
     pub wound: Option<CorePlayerWound>,
@@ -245,6 +246,15 @@ impl CoreHost {
                 .ok()
                 .map(|index| travel.journeys[index].clone())
         });
+        let mut route_reports: Vec<_> = self
+            .core
+            .travel
+            .iter()
+            .flat_map(|travel| &travel.observations)
+            .filter(|report| report.person == id)
+            .cloned()
+            .collect();
+        route_reports.sort_unstable_by_key(|report| (report.source, report.destination));
         let possessions = self
             .core
             .physical
@@ -332,6 +342,7 @@ impl CoreHost {
             offset_millis: self.core.elapsed_millis().ok_or("no physical interval")?,
             person: person.clone(),
             journey,
+            route_reports,
             possessions,
             nearby,
             wound,

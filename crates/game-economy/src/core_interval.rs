@@ -302,6 +302,14 @@ impl CoreInterval {
                     .work_interval()
                     .map_or(0, |interval| interval.elapsed_millis),
             );
+        if travel.as_ref().is_some_and(|owner| {
+            owner
+                .observations
+                .par_iter()
+                .any(|row| row.observed_at_millis.is_some_and(|at| at > now))
+        }) {
+            return Err("route report is dated after the current simulated time".into());
+        }
         game_lot_diet::validate_pending_at(&pending_food, &ids, physical.tick(), Some(now))?;
         Ok(Self {
             generation: 0,

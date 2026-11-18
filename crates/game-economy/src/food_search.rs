@@ -3,7 +3,7 @@ use game_economy_claims::Index as Claims;
 use game_economy_knowledge::Knowledge;
 use game_economy_person::{
     Person,
-    travel::{Departure, Travel, known_paths, routes},
+    travel::{Departure, RouteReview, Travel, known_paths_at, routes},
 };
 use game_lots::{Place, View};
 use game_production_model::Good;
@@ -18,6 +18,8 @@ pub struct Preference {
     pub enabled: bool,
     #[serde(default)]
     pub next_review: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_review_millis: Option<u128>,
     /// A remembered destination remains personal while intermediate legs are traveled.
     #[serde(default)]
     pub target: Option<u64>,
@@ -70,6 +72,7 @@ pub fn enroll(owner: Option<&mut FoodSearch>, family: Option<&crate::Families>, 
                 person: m.id,
                 enabled,
                 next_review: tick,
+                next_review_millis: None,
                 target: None,
             })
         })
@@ -99,10 +102,13 @@ impl FoodSearch {
             .collect();
         if ids.par_windows(2).any(|p| p[0] == p[1])
             || ids.par_iter().any(|id| !people.contains(id))
-            || self
-                .people
-                .par_iter()
-                .any(|p| p.target.is_some_and(|id| !regions.contains(&id)))
+            || self.people.par_iter().any(|p| {
+                p.target.is_some_and(|id| !regions.contains(&id))
+                    || (p.next_review_millis.is_some()
+                        && travel
+                            .and_then(|travel| travel.travel_unit_millis)
+                            .is_none())
+            })
         {
             return Err("invalid personal food search preference".into());
         }
@@ -116,12 +122,43 @@ impl FoodSearch {
         tick: u64,
         backoff_abandoned: bool,
     ) -> Result<(), String> {
-        let next = if departures.is_empty() && (!backoff_abandoned || abandoned.is_empty()) {
+        self.publish_at(
+            departures,
+            targets,
+            abandoned,
+            tick,
+            None,
+            backoff_abandoned,
+        )
+    }
+
+    pub fn publish_at(
+        &mut self,
+        departures: &[Departure],
+        targets: &[(u64, u64)],
+        abandoned: &[u64],
+        tick: u64,
+        elapsed: Option<(u128, u64)>,
+        backoff_abandoned: bool,
+    ) -> Result<(), String> {
+        let deferred = !departures.is_empty() || (backoff_abandoned && !abandoned.is_empty());
+        let next = if elapsed.is_some() || !deferred {
             tick
         } else {
             tick.checked_add(self.retry_ticks)
                 .ok_or("food search review overflow")?
         };
+        let next_millis = elapsed
+            .map(|(now, unit)| {
+                let delay = if deferred {
+                    u128::from(unit) * u128::from(self.retry_ticks)
+                } else {
+                    0
+                };
+                now.checked_add(delay)
+                    .ok_or("elapsed food search review overflow")
+            })
+            .transpose()?;
         let mut ids: Vec<_> = departures.par_iter().map(|d| d.person).collect();
         ids.par_sort_unstable();
         let mut targets: Vec<_> = targets.par_iter().copied().collect();
@@ -131,6 +168,7 @@ impl FoodSearch {
         self.people.par_iter_mut().for_each(|p| {
             if ids.binary_search(&p.person).is_ok() {
                 p.next_review = next;
+                p.next_review_millis = next_millis;
                 p.target = targets
                     .binary_search_by_key(&p.person, |row| row.0)
                     .ok()
@@ -139,6 +177,7 @@ impl FoodSearch {
                 p.target = None;
                 if backoff_abandoned {
                     p.next_review = next;
+                    p.next_review_millis = next_millis;
                 }
             }
         });
@@ -162,9 +201,15 @@ pub struct Context<'a> {
     pub claims: Option<&'a Claims<'a>>,
     pub busy: &'a [u64],
     pub now: u64,
+    pub now_millis: Option<u128>,
 }
 impl Context<'_> {
     pub fn prepare(&self) -> Plan {
+        let route_review = RouteReview {
+            tick: self.now,
+            elapsed: self.now_millis.zip(self.travel.travel_unit_millis),
+            delay: self.owner.retry_ticks,
+        };
         let portions: HashMap<_, _> = self
             .goods
             .iter()
@@ -263,8 +308,12 @@ impl Context<'_> {
                 if preference.target == Some(region) {
                     return Some((person.id, None));
                 }
+                let deferred = match self.now_millis.zip(preference.next_review_millis) {
+                    Some((now, next)) => now < next,
+                    None => self.now < preference.next_review,
+                };
                 if self.busy.binary_search(&person.id).is_ok()
-                    || (self.now < preference.next_review
+                    || (deferred
                         && (preference.target.is_none()
                             || !self.travel.closures.is_empty()
                             || self.travel.personal_routing))
@@ -282,14 +331,12 @@ impl Context<'_> {
                 });
                 let personal_routes = personal_reports
                     .filter(|reports| reports.len() > 1)
-                    .map(|reports| known_paths(reports, region, self.now, self.owner.retry_ticks));
+                    .map(|reports| known_paths_at(reports, region, route_review));
                 let path = |destination| match personal_reports {
                     Some([report]) => {
                         if report.source == region
                             && report.destination == destination
-                            && (report.open
-                                || self.now.saturating_sub(report.observed_at)
-                                    >= self.owner.retry_ticks)
+                            && route_review.permits(report)
                         {
                             report.estimated_ticks.map(|ticks| (ticks, destination))
                         } else {

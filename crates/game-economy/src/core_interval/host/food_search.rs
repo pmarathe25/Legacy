@@ -228,14 +228,18 @@ impl CoreHost {
             claims: claims.as_ref(),
             busy: &busy,
             now: tick,
+            now_millis: Some(self.core.simulated_millis()),
         }
         .prepare();
         plan.departures.par_sort_unstable_by_key(|row| row.person);
-        next_owner.search.publish(
+        next_owner.search.publish_at(
             &plan.departures,
             &plan.targets,
             &plan.abandoned,
             tick,
+            travel
+                .travel_unit_millis
+                .map(|unit| (self.core.simulated_millis(), unit)),
             travel.personal_routing,
         )?;
         if plan.departures.is_empty() {

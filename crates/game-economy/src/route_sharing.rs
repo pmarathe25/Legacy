@@ -90,7 +90,7 @@ pub fn prepare(
             report.person,
             report.source,
             report.destination,
-            report.observed_at,
+            report.timestamp(),
             report.learned_from,
         )
     });

@@ -2669,6 +2669,7 @@ fn core_host_departure_benchmark() {
                         person,
                         enabled: true,
                         next_review: 0,
+                        next_review_millis: None,
                         target: None,
                     })
                     .collect(),
@@ -2846,15 +2847,133 @@ fn elapsed_route_closure_reopens_inside_a_physical_interval_after_resume() {
             assert_eq!(core.progress(step).unwrap(), step);
         }
         assert!(!core.depart(0, 121, &requests, &[]).unwrap()[0].departed);
+        assert_eq!(
+            core.snapshot().travel.unwrap().observations[0].observed_at_millis,
+            Some(121)
+        );
         let saved = serde_json::to_string(&core.snapshot()).unwrap();
         let mut core = CoreInterval::resume(serde_json::from_str(&saved).unwrap()).unwrap();
         assert_eq!(core.progress(1).unwrap(), 1);
         assert!(core.depart(0, 122, &requests, &[]).unwrap()[0].departed);
-        assert!(core.snapshot().travel.unwrap().observations[0].open);
+        let travel = core.snapshot().travel.unwrap();
+        assert!(travel.observations[0].open);
+        assert_eq!(travel.observations[0].observed_at_millis, Some(122));
     }
 
     run(1000, &[121]);
     run(250, &[7, 13, 101]);
+}
+
+#[test]
+fn personal_route_backoff_uses_the_time_of_the_blocked_attempt() {
+    use game_economy_person::travel::{Closure, DepartureOutcome, RouteObservation};
+
+    let run = |quantum, workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut core = fixture();
+                core.physical.tick_millis = quantum;
+                core.nutrition = None;
+                core.pending_food.clear();
+                core.rules.hunger_per_tick = 0;
+                core.rules.starvation_damage = 0;
+                core.people[1].region = Some(1);
+                core.people[1].hunger = 5;
+                core.people[1].seek_meals = true;
+                core.physical
+                    .custody
+                    .containers
+                    .push(Container::new(Place::Person(2), 10, vec![]).unwrap());
+                core.physical
+                    .custody
+                    .containers
+                    .sort_by_key(|row| row.place);
+                core.physical.goods[1].food = Some(game_production_model::FoodProfile {
+                    portion: 1,
+                    hunger_relief: 1,
+                    nutrients: Default::default(),
+                    health_effect: 0,
+                    shelf_days: None,
+                });
+                let travel = core.travel.as_mut().unwrap();
+                travel.travel_unit_millis = Some(40);
+                travel.journeys.clear();
+                travel.personal_routing = true;
+                travel.observations = vec![RouteObservation {
+                    person: 2,
+                    source: 1,
+                    destination: 2,
+                    open: true,
+                    observed_at: 0,
+                    observed_at_millis: None,
+                    estimated_ticks: Some(2),
+                    witness: Some(2),
+                    learned_from: None,
+                }];
+                travel.closures = vec![Closure {
+                    source: 1,
+                    destination: 2,
+                    start: 0,
+                    end: 4,
+                    unit_millis: Some(40),
+                }];
+                let snapshot: CoreHostSnapshot = serde_json::from_value(serde_json::json!({
+                    "core":core,
+                    "knowledge":{"max_records":4,"minds":[{"person":2,"records":[
+                        {"region":2,"food":10,"observed_at":0,"witness":1,"learned_from":1}]}]},
+                    "food_search":{"search":{"min_hunger":5,"min_report_food":1,"max_report_age":20,
+                        "retry_ticks":3,"people":[{"person":2,"enabled":true}]}}
+                }))
+                .unwrap();
+                let mut host = CoreHost::begin(snapshot, &[(1, 1)]).unwrap();
+                host.enable_schedule(1000, 1).unwrap();
+                assert_eq!(host.advance_continuous(100, &[2]).unwrap().failure, None);
+                assert_eq!(
+                    host.seek_food_autonomously(&[]).unwrap(),
+                    [DepartureOutcome {
+                        person: 2,
+                        departed: false
+                    }]
+                );
+                let blocked = host.snapshot();
+                assert_eq!(
+                    blocked.food_search.unwrap().search.people[0].next_review_millis,
+                    Some(220)
+                );
+                assert_eq!(
+                    blocked.core.travel.unwrap().observations[0].observed_at_millis,
+                    Some(100)
+                );
+                assert_eq!(host.advance_continuous(119, &[2]).unwrap().failure, None);
+                assert!(host.seek_food_autonomously(&[]).unwrap().is_empty());
+                let saved = serde_json::to_string(&host.snapshot()).unwrap();
+                let mut host = CoreHost::resume(serde_json::from_str(&saved).unwrap()).unwrap();
+                assert_eq!(host.advance_continuous(1, &[2]).unwrap().failure, None);
+                assert_eq!(
+                    host.seek_food_autonomously(&[]).unwrap(),
+                    [DepartureOutcome {
+                        person: 2,
+                        departed: true
+                    }]
+                );
+                let travel = host.snapshot().core.travel.unwrap();
+                assert_eq!(travel.observations[0].observed_at_millis, Some(220));
+                assert_eq!(travel.journeys[0].destination, 2);
+                let mut player = host.snapshot();
+                player.core.people[1].controlled = true;
+                let owner = player.core.travel.as_mut().unwrap();
+                let mut other = owner.observations[0].clone();
+                other.person = 1;
+                owner.observations.push(other);
+                let private = CoreHost::resume(player).unwrap().player_view(2).unwrap();
+                assert_eq!(private.route_reports, travel.observations);
+            })
+    };
+    run(1000, 1);
+    run(180, 4);
 }
 
 #[test]
@@ -3006,7 +3125,7 @@ fn food_search_follows_personal_report_even_when_it_is_stale() {
         let search = game_economy::FoodSearch {
             min_hunger: 5, min_report_food: 1, max_report_age: 20, retry_ticks: 3,
             inherit_births: false, people: vec![game_economy::FoodSearchPreference {
-                person: 2, enabled: true, next_review: 0, target: None,
+                person: 2, enabled: true, next_review: 0, next_review_millis: None, target: None,
             }],
         };
         let snapshot = CoreHostSnapshot { work_capabilities: None, personal_conflict: None, mechanics: None,
@@ -15182,7 +15301,7 @@ fn family_birth_custody_and_worker_death_commit_atomically() {
                 search: game_economy::FoodSearch { min_hunger: 5, min_report_food: 1,
                     max_report_age: 20, retry_ticks: 3, inherit_births: true,
                     people: vec![game_economy::FoodSearchPreference { person: 2, enabled: true,
-                        next_review: 0, target: Some(2) }] }, knowledge: None, claims: None,
+                        next_review: 0, next_review_millis: None, target: Some(2) }] }, knowledge: None, claims: None,
             });
             inherited.opinions = Some(serde_json::from_value(serde_json::json!({
                 "rules": {"minimum": -10, "maximum": 10, "initial": 0, "fulfilled_gain": 1, "default_loss": 1},

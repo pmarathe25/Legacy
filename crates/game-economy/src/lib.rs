@@ -1357,6 +1357,7 @@ impl Economy {
                 person,
                 enabled,
                 next_review: 0,
+                next_review_millis: None,
                 target: None,
             });
         }
@@ -6091,6 +6092,7 @@ impl Economy {
                     claims: claims.as_ref(),
                     busy: &busy,
                     now: self.tick(),
+                    now_millis: None,
                 }
                 .prepare()
             });

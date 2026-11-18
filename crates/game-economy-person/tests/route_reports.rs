@@ -7,6 +7,7 @@ fn report(person: u64, source: u64, tick: u64, open: bool) -> RouteObservation {
         destination: source + 1,
         open,
         observed_at: tick,
+        observed_at_millis: None,
         estimated_ticks: Some(2),
         witness: Some(person),
         learned_from: None,
@@ -81,6 +82,22 @@ fn independent_replacements_keep_newer_evidence_and_deterministic_ties() {
             })
     };
     assert_eq!(run(1), run(4));
+}
+
+#[test]
+fn older_evidence_from_the_same_tick_cannot_replace_a_later_observation() {
+    let mut newer = report(1, 1, 1, false);
+    newer.observed_at_millis = Some(140);
+    let mut older = report(1, 1, 1, true);
+    older.observed_at_millis = Some(120);
+    let mut travel = Travel {
+        observations: vec![newer.clone()],
+        ..Travel::default()
+    };
+    travel.receive_reports(&[older.clone()]);
+    assert_eq!(travel.observations, vec![newer.clone()]);
+    travel.receive_reports(&[older, report(1, 2, 0, true)]);
+    assert_eq!(travel.observations[0], newer);
 }
 
 #[test]

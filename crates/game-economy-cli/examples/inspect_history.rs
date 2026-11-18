@@ -702,25 +702,25 @@ fn narrative(report: &Value, focus: Focus) -> String {
                         format!("Person {person} was born to people {mother} and {father}.")
                     }
                     (Some("birth"), [child, _, _]) => {
-                        format!("Their child, person {child}, was born.")
+                        format!("their child, person {child}, was born.")
                     }
-                    (Some("adulthood"), _) => "They reached adulthood.".to_owned(),
+                    (Some("adulthood"), _) => "they reached adulthood.".to_owned(),
                     (Some("partnership"), _) if other.is_some() => {
-                        format!("They formed a partnership with person {}.", other.unwrap())
+                        format!("they formed a partnership with person {}.", other.unwrap())
                     }
                     (Some("separation"), _) if other.is_some() => {
-                        format!("Their partnership with person {} ended.", other.unwrap())
+                        format!("their partnership with person {} ended.", other.unwrap())
                     }
                     (Some("conception"), _) if other.is_some() => {
-                        format!("They and person {} conceived a child.", other.unwrap())
+                        format!("they and person {} conceived a child.", other.unwrap())
                     }
                     (Some("pregnancy_loss"), _) => {
-                        "A pregnancy involving them ended in loss.".to_owned()
+                        "a pregnancy involving them ended in loss.".to_owned()
                     }
-                    (Some("death"), _) if !exact_death => "They died.".to_owned(),
+                    (Some("death"), _) if !exact_death => "they died.".to_owned(),
                     _ => continue,
                 };
-                writeln!(text, "At tick {tick}, {}\n", sentence).unwrap();
+                writeln!(text, "At tick {tick}, {sentence}\n").unwrap();
             }
             for event in incapacitations {
                 let Some(time) = event["at_millis"].as_u64() else {

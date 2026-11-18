@@ -33,8 +33,13 @@ Travel can specify `travel_unit_millis` for its route lengths and saved journey
 progress, so travel and arrival deadlines no longer have to use the physical
 quantum. A route closure can specify `unit_millis` to measure its start and
 end from the simulation epoch. Departures, food searches, and hauling then
-check whether it is open at the actual time of the attempt. Route reports
-still use boundary-based timestamps.
+check whether it is open at the actual time of the attempt. Route observations
+retain the time of the attempt through reporting and save/reload. When travel
+has an explicit unit, `food_search.retry_ticks` counts those units, and
+elapsed food search reviews and closed-route rechecks use the actual time.
+Legacy route reports and older saved review dates retain their original
+boundary-based interpretation until replaced. The interval player view shows
+the controlled person's remembered route reports and their dates.
 An optional `rules.starvation_rate` uses elapsed exposure after each person's
 hunger crosses the starvation threshold. Fractional damage is saved, and the
 interval coordinator stops at fatal deadlines before advancing work or travel

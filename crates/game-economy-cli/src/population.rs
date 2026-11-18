@@ -556,6 +556,7 @@ pub fn food_search(seed: u64, profiles: &[Profile]) -> Vec<game_economy::FoodSea
                     person,
                     enabled: game_genetics::random(seed, person, 4) % 100 < u64::from(rate),
                     next_review: 0,
+                    next_review_millis: None,
                     target: None,
                 }
             })

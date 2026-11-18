@@ -103,6 +103,8 @@ pub struct RouteObservation {
     pub destination: u64,
     pub open: bool,
     pub observed_at: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub observed_at_millis: Option<u128>,
     /// The individual's estimate; it may differ from the actual travel time.
     #[serde(default)]
     pub estimated_ticks: Option<u64>,
@@ -110,6 +112,12 @@ pub struct RouteObservation {
     pub witness: Option<u64>,
     #[serde(default)]
     pub learned_from: Option<u64>,
+}
+
+impl RouteObservation {
+    pub fn timestamp(&self) -> (u64, Option<u128>) {
+        (self.observed_at, self.observed_at_millis)
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -219,11 +227,47 @@ pub fn routes(travel: &Travel, destinations: &[u64]) -> HashMap<(u64, u64), (u64
 
 /// Find paths over only one person's bounded, dated route reports. A closed
 /// report can be rechecked after the person's normal review delay.
+#[derive(Clone, Copy)]
+pub struct RouteReview {
+    pub tick: u64,
+    /// Current simulated time and milliseconds per authored travel unit.
+    pub elapsed: Option<(u128, u64)>,
+    pub delay: u64,
+}
+
+impl RouteReview {
+    pub fn permits(self, report: &RouteObservation) -> bool {
+        report.open
+            || match self.elapsed.zip(report.observed_at_millis) {
+                Some(((now, unit), at)) => {
+                    now.saturating_sub(at) >= u128::from(self.delay) * u128::from(unit)
+                }
+                None => self.tick.saturating_sub(report.observed_at) >= self.delay,
+            }
+    }
+}
+
 pub fn known_paths(
     reports: &[&RouteObservation],
     source: u64,
     now: u64,
     retry_ticks: u64,
+) -> HashMap<u64, (u64, u64)> {
+    known_paths_at(
+        reports,
+        source,
+        RouteReview {
+            tick: now,
+            elapsed: None,
+            delay: retry_ticks,
+        },
+    )
+}
+
+pub fn known_paths_at(
+    reports: &[&RouteObservation],
+    source: u64,
+    review: RouteReview,
 ) -> HashMap<u64, (u64, u64)> {
     let mut best = HashMap::from([(source, (0u64, source))]);
     let mut queue = BinaryHeap::from([Reverse((0u64, source, source))]);
@@ -236,7 +280,7 @@ pub fn known_paths(
             .copied()
             .filter(|report| report.source == node)
         {
-            if !report.open && now.saturating_sub(report.observed_at) < retry_ticks {
+            if !review.permits(report) {
                 continue;
             }
             let Some(cost) = report
@@ -683,6 +727,7 @@ impl Travel {
                             .binary_search(&(source, request.destination))
                             .is_err(),
                         observed_at: tick,
+                        observed_at_millis: elapsed_millis,
                         estimated_ticks: estimates
                             .binary_search_by_key(
                                 &(request.person, source, request.destination),
@@ -755,7 +800,7 @@ impl Travel {
                 .par_iter_mut()
                 .zip(incoming.par_iter())
                 .for_each(|(old, new)| {
-                    if new.observed_at >= old.observed_at {
+                    if new.timestamp() >= old.timestamp() {
                         *old = new.clone();
                     }
                 });
@@ -770,15 +815,15 @@ impl Travel {
                 pair[0].person,
                 pair[0].source,
                 pair[0].destination,
-                pair[0].observed_at,
+                pair[0].timestamp(),
             ) > (
                 pair[1].person,
                 pair[1].source,
                 pair[1].destination,
-                pair[1].observed_at,
+                pair[1].timestamp(),
             )
         }) {
-            observations.par_sort_by_key(|o| (o.person, o.source, o.destination, o.observed_at));
+            observations.par_sort_by_key(|o| (o.person, o.source, o.destination, o.timestamp()));
         }
         observations = observations
             .par_chunk_by(|a, b| {
@@ -787,7 +832,7 @@ impl Travel {
             .map(|group| group.last().unwrap().clone())
             .collect();
         observations.par_sort_unstable_by_key(|o| {
-            (o.person, Reverse(o.observed_at), o.source, o.destination)
+            (o.person, Reverse(o.timestamp()), o.source, o.destination)
         });
         self.observations = observations
             .par_chunk_by(|a, b| a.person == b.person)

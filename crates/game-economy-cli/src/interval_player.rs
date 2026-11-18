@@ -44,6 +44,18 @@ fn command(host: &mut CoreHost, person: u64, words: &[&str]) -> Result<bool, Str
                     journey.destination, journey.remaining
                 );
             }
+            for report in view.route_reports {
+                let observed = report.observed_at_millis.map_or_else(
+                    || format!("tick {}", report.observed_at),
+                    |instant| format!("{instant} simulated ms"),
+                );
+                println!(
+                    "route {} to {} was reported {} at {observed}",
+                    report.source,
+                    report.destination,
+                    if report.open { "open" } else { "closed" }
+                );
+            }
             if let Some(job) = view.job {
                 println!(
                     "job={} recipe={} remaining={}",
