@@ -51,6 +51,9 @@ pub struct Sensitivity {
     pub affinity_encounter: Option<i32>,
     #[serde(default)]
     pub affinity_pressured_encounter: Option<i32>,
+    /// Signed trust responses to an actual meeting.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub meeting_trust: Option<MeetingTrust>,
     /// How this person weights directed affinity when seeking social meetings.
     #[serde(default)]
     pub social_affinity_weight: Option<i32>,
@@ -136,6 +139,9 @@ pub struct RelationshipCase {
     pub encounter: Option<i32>,
     #[serde(default)]
     pub pressured_encounter: Option<i32>,
+    /// Trust responses directed at this particular person.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub meeting_trust: Option<MeetingTrust>,
     /// Relationship-specific weight when considering this person for a meeting.
     #[serde(default)]
     pub social_affinity_weight: Option<i32>,
@@ -174,6 +180,13 @@ pub struct RelationshipCase {
     pub promise_obligation_gain: Option<u64>,
     #[serde(default)]
     pub obligation_relief: Option<u64>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MeetingTrust {
+    pub regular: Option<i32>,
+    pub pressured: Option<i32>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]

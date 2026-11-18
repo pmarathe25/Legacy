@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::sync::Arc;
 mod confinement;
+mod encounter_trust;
 mod harm;
 mod opposed_action;
 mod personal_change;
@@ -39,8 +40,8 @@ impl Clone for Opinions {
     }
 }
 pub use game_opinions_model::{
-    AffinityRules, ConfinementReaction, Confrontation, Event, ObligationDevelopment, Opinion,
-    OpposedActionReaction, RelationshipCase, ReportReception, Rules, Sensitivity,
+    AffinityRules, ConfinementReaction, Confrontation, Event, MeetingTrust, ObligationDevelopment,
+    Opinion, OpposedActionReaction, RelationshipCase, ReportReception, Rules, Sensitivity,
     SubjectiveReaction, TeachingReaction,
 };
 
@@ -386,6 +387,7 @@ impl Opinions {
                 affinity_harm_per_damage: None,
                 affinity_encounter: None,
                 affinity_pressured_encounter: None,
+                meeting_trust: None,
                 social_affinity_weight: None,
                 affinity_stock_use: None,
                 affinity_site_use: None,
@@ -717,7 +719,8 @@ impl Opinions {
             drop(social_phase);
             social_phase = game_diagnostics::span("opinions.social.trust_prepare");
         }
-        if (self.rules.encounter_gain == 0 || encounters.is_empty())
+        let meeting_changes = encounter_trust::prepare(self, encounters);
+        if meeting_changes.is_empty()
             && events
                 .par_iter()
                 .all(|event| !matches!(event.kind, EventKind::Fulfilled | EventKind::Defaulted))
@@ -830,14 +833,7 @@ impl Opinions {
                 (delta != 0).then_some((pair, delta))
             })
             .collect();
-        if self.rules.encounter_gain > 0 {
-            let gain = i128::from(self.rules.encounter_gain);
-            changes.par_extend(encounters.par_iter().flat_map_iter(|event| {
-                [((event.a, event.b), gain), ((event.b, event.a), gain)]
-                    .into_iter()
-                    .filter(|(pair, _)| !event.is_pressured(pair.0))
-            }));
-        }
+        changes.par_extend(meeting_changes);
         if changes.is_empty() {
             self.events.clear();
             return;

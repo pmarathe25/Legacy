@@ -1546,12 +1546,17 @@ maximum = 100
 initial = 0
 fulfilled_gain = 1
 default_loss = 2
-encounter_gain = 1
+encounter_gain = 0
 affinity = { limit = 10, encounter_change = 1, help_change = 2, harm_change_per_damage = -1 }
 
 [[opinions.sensitivities]]
 person = 1
 gratitude_gain = 1
+meeting_trust = { regular = 1, pressured = -2 }
+
+[[opinions.sensitivities]]
+person = 2
+meeting_trust = { regular = -1, pressured = 0 }
 
 [dynamics.personality]
 social_urgency_per_isolation = 1

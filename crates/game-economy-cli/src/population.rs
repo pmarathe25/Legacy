@@ -584,6 +584,8 @@ struct Sensitivity {
     affinity_harm_per_damage: Option<i32>,
     affinity_encounter: Option<i32>,
     affinity_pressured_encounter: Option<i32>,
+    #[serde(default)]
+    meeting_trust: Option<game_opinions::MeetingTrust>,
     social_affinity_weight: Option<i32>,
     affinity_stock_use: Option<i32>,
     affinity_site_use: Option<i32>,
@@ -622,6 +624,7 @@ pub fn sensitivities(profiles: &[Profile]) -> Vec<game_opinions::Sensitivity> {
                     affinity_harm_per_damage: rule.affinity_harm_per_damage,
                     affinity_encounter: rule.affinity_encounter,
                     affinity_pressured_encounter: rule.affinity_pressured_encounter,
+                    meeting_trust: rule.meeting_trust,
                     social_affinity_weight: rule.social_affinity_weight,
                     affinity_stock_use: rule.affinity_stock_use,
                     affinity_site_use: rule.affinity_site_use,

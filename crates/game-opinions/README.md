@@ -18,7 +18,14 @@ trust_promise_unfulfilled = 0
 relationship_cases = [{ target = 1, promise_unfulfilled_trust = 2 }]
 ```
 
-`encounter_gain` optionally increases each participant's directed trust after an encounter, except for a participant who responded under pressure. Agreement outcomes and encounters at the same boundary combine before trust is clamped. A report threshold reads the prior committed trust, so a newly earned change affects later encounters. See `content/scenarios/social_trust.toml`.
+Each participant can interpret a meeting through their own `meeting_trust`
+profile. The optional signed `regular` and `pressured` values can increase,
+decrease, or leave their directed trust unchanged. An entry in
+`relationship_cases` can override those values for a particular person.
+Unspecified ordinary responses fall back to `encounter_gain`, and unspecified
+pressured responses are neutral. Agreement outcomes and meetings in the same
+phase combine before trust is clamped. A report threshold reads the prior
+committed trust and sees the change in later encounters.
 
 `theft_loss` controls the default trust change when a present claimant witnesses unauthorized use or pickup. An absent claimant does not automatically learn of it. This is an individual's reaction to a claim being disregarded, not a universal criminal status.
 
