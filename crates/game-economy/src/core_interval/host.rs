@@ -90,6 +90,7 @@ pub struct CoreHistoryView<'a> {
     pub recipe_learning: &'a [game_economy_skills::recipe_knowledge::Learned],
     pub family_events: &'a [game_economy_family::FamilyEvent],
     pub animals: &'a [game_fauna::Animal],
+    pub animal_deaths: &'a [game_fauna::AnimalDeath],
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -1480,6 +1481,10 @@ impl CoreHost {
                 .fauna
                 .as_ref()
                 .map_or(&[], |owner| owner.animals.as_slice()),
+            animal_deaths: self
+                .fauna
+                .as_ref()
+                .map_or(&[], |owner| owner.recent_deaths.as_slice()),
         }
     }
 

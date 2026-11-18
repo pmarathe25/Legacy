@@ -1,6 +1,6 @@
 use game_fauna::{
-    Animal, AnimalOpinion, Climate, Exposure, Fauna, Feeding, MateDesire, Patch, Pregnancy,
-    SocialResponse, Species,
+    Animal, AnimalDeath, AnimalOpinion, Climate, DeathCause, Exposure, Fauna, Feeding, MateDesire,
+    Patch, Pregnancy, SocialResponse, Species,
 };
 use game_genetics::{Genome, Sex};
 use std::collections::HashSet;
@@ -63,7 +63,76 @@ fn initial() -> Fauna {
         animals: vec![animal(1, Sex::Female, 100), animal(2, Sex::Male, 900)],
         next_id: 3,
         last_tick: 0,
+        recent_deaths: vec![],
     }
+}
+
+#[test]
+fn wildlife_deaths_report_the_first_fatal_effect_once_across_lifecycle_paths() {
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut compact = initial();
+                compact.animals.push(animal(3, Sex::Male, 500));
+                compact.animals.push(animal(4, Sex::Female, 500));
+                compact.next_id = 5;
+                compact.animals[0].age = compact.species[0].lifespan - 1;
+                compact.animals[1].health = compact.species[0].starvation_damage;
+                compact.animals[1].hunger = compact.species[0].starvation_threshold;
+                compact.species[0].climate = Some(Climate {
+                    tolerance: 0,
+                    inherited_tolerance: 0,
+                    hardiness_locus: 0,
+                    damage_per_excess: 1,
+                });
+                let exposure = [Exposure {
+                    region: 1,
+                    severity: 10,
+                }];
+                let complete = compact
+                    .advance_with_hunts(&[], &[], &exposure, &[4], 7, 1)
+                    .unwrap();
+                let staged = compact
+                    .prepare_without_grazing(&[], &exposure, &[4], 7, 1)
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(staged.deaths(), [1, 2, 3, 4]);
+                compact.publish_quiet_validated(staged);
+                assert_eq!(compact, complete.fauna);
+                let receipts = compact.recent_deaths.clone();
+                assert_eq!(
+                    receipts,
+                    [
+                        DeathCause::OldAge,
+                        DeathCause::Starvation,
+                        DeathCause::Exposure,
+                        DeathCause::Hunted
+                    ]
+                    .into_iter()
+                    .enumerate()
+                    .map(|(index, cause)| AnimalDeath {
+                        animal: index as u64 + 1,
+                        tick: 1,
+                        cause
+                    })
+                    .collect::<Vec<_>>()
+                );
+                assert!(
+                    compact
+                        .validate(&HashSet::from([1]), &HashSet::from([1]), 1)
+                        .is_ok()
+                );
+                let next = compact.prepare_quiet(&exposure, 7, 2).unwrap().unwrap();
+                assert!(next.deaths().is_empty());
+                compact.publish_quiet_validated(next);
+                assert!(compact.recent_deaths.is_empty());
+                receipts
+            })
+    };
+    assert_eq!(run(1), run(4));
 }
 
 #[test]

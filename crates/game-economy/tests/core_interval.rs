@@ -7549,6 +7549,7 @@ fn gathering_depletes_resources_into_real_personal_custody() {
                     animals: vec![animal(1), animal(2)],
                     next_id: 3,
                     last_tick: 0,
+                    recent_deaths: vec![],
                 };
                 let mut with_animals = snapshot.clone();
                 with_animals.fauna = Some(fauna);
@@ -8525,6 +8526,7 @@ fn core_host_cultivation_benchmark() {
                 animals: (1..=count).map(animal).collect(),
                 next_id: count + 1,
                 last_tick: 0,
+                recent_deaths: vec![],
             }
         }),
         environment: exposure.then(|| game_environment::Environment {

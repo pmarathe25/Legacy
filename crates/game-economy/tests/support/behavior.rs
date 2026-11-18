@@ -1558,6 +1558,7 @@ fn autonomous_animal_care_uses_real_food_and_personal_motivation() {
     }
     initial.fauna = Some(Fauna {
         last_tick: 0,
+        recent_deaths: vec![],
         next_id: 2,
         species: vec![AnimalSpecies {
             id: 1,
@@ -2344,6 +2345,7 @@ fn hunting_fixture() -> State {
     };
     state.fauna = Some(Fauna {
         last_tick: 0,
+        recent_deaths: vec![],
         next_id: 3,
         species: vec![AnimalSpecies {
             id: 1,
@@ -36371,6 +36373,7 @@ fn concentrated_animal_care_benchmark() {
     }
     initial.fauna = Some(Fauna {
         last_tick: 0,
+        recent_deaths: vec![],
         next_id: 2,
         species: vec![AnimalSpecies {
             id: 1,
@@ -36608,6 +36611,7 @@ fn people_and_wildlife_share_a_finite_physical_resource_atomically() {
     });
     initial.fauna = Some(Fauna {
         last_tick: 0,
+        recent_deaths: vec![],
         next_id: 3,
         species: vec![AnimalSpecies {
             id: 1,
@@ -57357,6 +57361,7 @@ fn animal_products_workload(count: u64, concentrated_target: bool) -> State {
             .collect(),
         next_id: animal_count + 1,
         last_tick: 0,
+        recent_deaths: vec![],
     });
     state.animal_products = Some(AnimalProducts {
         rules: vec![AnimalProductRule {

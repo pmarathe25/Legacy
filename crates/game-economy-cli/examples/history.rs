@@ -202,6 +202,10 @@ fn run(
                 observation_batch.push(json!({"kind":"opinion_changes", "events":opinion_events}));
             }
             let history = host.history_view();
+            if !history.animal_deaths.is_empty() {
+                observation_batch
+                    .push(json!({"kind":"animal_deaths","events":history.animal_deaths}));
+            }
             let recipe_learning: Vec<_> = history
                 .recipe_learning
                 .iter()

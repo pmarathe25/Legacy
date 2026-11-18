@@ -25,3 +25,8 @@ Each eligible animal independently participates in local mating according to its
 expressed inherited mate desire and current hunger. Signed weights allow either
 factor to increase or reduce inclination. Conception then uses the separate
 species fertility chance. The same selection works in both lifecycle paths.
+
+New deaths record the actual fatal effect at the last wildlife boundary. The
+history runners stream those receipts before the next wildlife phase replaces
+them. A hunt, natural lifespan, starvation, or exposure can be the fatal effect
+according to the order in which the model applied them.

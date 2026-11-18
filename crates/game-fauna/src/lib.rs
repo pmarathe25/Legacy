@@ -1,8 +1,10 @@
 //! Independent animals, local grazing and inherited life histories.
 pub mod content;
 pub mod handling;
+mod mortality;
 pub mod restraint;
 use game_genetics::{Genome, Sex, inherit, random};
+pub use mortality::{AnimalDeath, DeathCause};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
@@ -171,6 +173,8 @@ pub struct Fauna {
     pub animals: Vec<Animal>,
     pub next_id: u64,
     pub last_tick: u64,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub recent_deaths: Vec<AnimalDeath>,
 }
 impl Clone for Fauna {
     fn clone(&self) -> Self {
@@ -179,6 +183,7 @@ impl Clone for Fauna {
             animals: self.animals.par_iter().cloned().collect(),
             next_id: self.next_id,
             last_tick: self.last_tick,
+            recent_deaths: self.recent_deaths.clone(),
         }
     }
 }
@@ -196,6 +201,7 @@ pub struct QuietDraft {
     tick: u64,
     updates: Vec<QuietAnimal>,
     deaths: Vec<u64>,
+    recent_deaths: Vec<AnimalDeath>,
     pregnancies: Vec<(usize, Pregnancy)>,
     births: Vec<Animal>,
     next_id: u64,
@@ -210,6 +216,7 @@ struct QuietAnimal {
     health: u32,
     hunger: u32,
     clear_pregnancy: bool,
+    death_cause: Option<DeathCause>,
 }
 
 impl QuietDraft {
@@ -563,6 +570,7 @@ impl Fauna {
                     health: a.health,
                     hunger: a.hunger,
                     clear_pregnancy: false,
+                    death_cause: None,
                 };
                 if a.health == 0 {
                     return Ok(next);
@@ -570,6 +578,7 @@ impl Fauna {
                 if hunted.binary_search(&a.id).is_ok() {
                     next.health = 0;
                     next.clear_pregnancy = true;
+                    next.death_cause = Some(DeathCause::Hunted);
                     return Ok(next);
                 }
                 let s = lookup(a.species).ok_or("unknown animal species")?;
@@ -601,31 +610,8 @@ impl Fauna {
                 let grazing_relief = (u128::from(food) * u128::from(s.relief_per_unit))
                     .min(u128::from(u32::MAX)) as u32;
                 next.hunger = next.hunger.saturating_sub(grazing_relief);
-                if next.age >= s.lifespan {
-                    next.health = 0;
-                } else if next.hunger >= s.starvation_threshold {
-                    next.health = next.health.saturating_sub(s.starvation_damage);
-                }
-                if let Some(climate) = &s.climate {
-                    let severity = exposure
-                        .binary_search_by_key(&a.region, |row| row.region)
-                        .ok()
-                        .map_or(0, |i| exposure[i].severity);
-                    let alleles = a
-                        .genome
-                        .alleles
-                        .get(climate.hardiness_locus)
-                        .ok_or("invalid climate hardiness locus")?;
-                    let mean = (u32::from(alleles[0]) + u32::from(alleles[1])) / 2;
-                    let inherited = (u64::from(mean) * u64::from(climate.inherited_tolerance)
-                        / 1000)
-                        .min(u64::from(u32::MAX)) as u32;
-                    let excess =
-                        severity.saturating_sub(climate.tolerance.saturating_add(inherited));
-                    next.health = next
-                        .health
-                        .saturating_sub(excess.saturating_mul(climate.damage_per_excess));
-                }
+                (next.health, next.death_cause) =
+                    mortality::stage_health(a, s, next.age, next.hunger, &exposure)?;
                 next.clear_pregnancy =
                     next.health == 0 || a.pregnancy.as_ref().is_some_and(|p| p.due <= tick);
                 Ok(next)
@@ -748,16 +734,22 @@ impl Fauna {
                 .collect::<Result<_, _>>()?;
             candidates.into_par_iter().flatten().collect()
         };
-        let deaths = self
-            .animals
+        let recent_deaths: Vec<_> = updates
             .par_iter()
-            .zip(updates.par_iter())
-            .filter_map(|(old, next)| (old.health > 0 && next.health == 0).then_some(old.id))
+            .filter_map(|next| {
+                next.death_cause.map(|cause| AnimalDeath {
+                    animal: next.id,
+                    tick,
+                    cause,
+                })
+            })
             .collect();
+        let deaths = recent_deaths.par_iter().map(|event| event.animal).collect();
         Ok(Some(QuietDraft {
             tick,
             updates,
             deaths,
+            recent_deaths,
             pregnancies,
             births,
             next_id,
@@ -842,6 +834,7 @@ impl Fauna {
         }
         self.next_id = draft.next_id;
         self.last_tick = draft.tick;
+        self.recent_deaths = draft.recent_deaths;
     }
     /// Validate a feeding's target; dietary response remains private to the animal.
     pub fn check_feeding(&self, feeding: Feeding) -> Result<u64, &'static str> {
@@ -868,10 +861,11 @@ impl Fauna {
         species.par_sort_unstable_by_key(|s| s.id);
         let mut ids: Vec<_> = self.animals.par_iter().map(|a| a.id).collect();
         ids.par_sort_unstable();
-        let mut pedigree: Vec<_> = if self
-            .animals
-            .par_iter()
-            .any(|a| a.parents.is_some() || a.pregnancy.is_some())
+        let mut pedigree: Vec<_> = if !self.recent_deaths.is_empty()
+            || self
+                .animals
+                .par_iter()
+                .any(|a| a.parents.is_some() || a.pregnancy.is_some())
         {
             self.animals.par_iter().collect()
         } else {
@@ -920,6 +914,13 @@ impl Fauna {
             || ids.first() == Some(&0)
             || ids.last().is_some_and(|id| *id >= self.next_id)
             || ids.par_windows(2).any(|p| p[0] == p[1])
+            || self
+                .recent_deaths
+                .par_windows(2)
+                .any(|pair| pair[0].animal >= pair[1].animal)
+            || self.recent_deaths.par_iter().any(|event| {
+                event.tick != now || parent(event.animal).is_none_or(|animal| animal.health != 0)
+            })
             || self.animals.par_iter().any(|a| {
                 let s = species
                     .binary_search_by_key(&a.species, |s| s.id)
@@ -1175,18 +1176,18 @@ impl Fauna {
             .par_chunk_by(|a, b| a == b)
             .map(|group| (group[0].0, group[0].1, group.len() as u64))
             .collect();
-        let mut animals: Vec<_> = self
+        let staged: Vec<_> = self
             .animals
             .par_iter()
             .map(|a| -> Result<_, &'static str> {
                 let mut next = a.clone();
                 if a.health == 0 {
-                    return Ok(next);
+                    return Ok((next, None));
                 }
                 if hunted.binary_search(&a.id).is_ok() {
                     next.health = 0;
                     next.pregnancy = None;
-                    return Ok(next);
+                    return Ok((next, Some(DeathCause::Hunted)));
                 }
                 if a.social_response.is_some() {
                     let start = meetings.partition_point(|row| row.0 < a.id);
@@ -1203,43 +1204,28 @@ impl Fauna {
                     (u128::from(food) * u128::from(s.relief_per_unit)).min(u128::from(u32::MAX))
                         as u32,
                 );
-                if next.age >= s.lifespan {
-                    next.health = 0;
-                } else if next.hunger >= s.starvation_threshold {
-                    next.health = next.health.saturating_sub(s.starvation_damage);
-                }
-                if let Some(climate) = &s.climate {
-                    let severity = exposure
-                        .binary_search_by_key(&a.region, |row| row.region)
-                        .ok()
-                        .map_or(0, |i| exposure[i].severity);
-                    let alleles = a
-                        .genome
-                        .alleles
-                        .get(climate.hardiness_locus)
-                        .ok_or("invalid climate hardiness locus")?;
-                    let mean = (u32::from(alleles[0]) + u32::from(alleles[1])) / 2;
-                    let inherited = (u64::from(mean) * u64::from(climate.inherited_tolerance)
-                        / 1000)
-                        .min(u64::from(u32::MAX)) as u32;
-                    let excess =
-                        severity.saturating_sub(climate.tolerance.saturating_add(inherited));
-                    next.health = next
-                        .health
-                        .saturating_sub(excess.saturating_mul(climate.damage_per_excess));
-                }
+                let (health, cause) =
+                    mortality::stage_health(a, s, next.age, next.hunger, &exposure)?;
+                next.health = health;
                 if next.health == 0 {
                     next.pregnancy = None;
                 }
-                Ok(next)
+                Ok((next, cause))
             })
             .collect::<Result<_, _>>()?;
-        let mut deaths: Vec<_> = animals
+        let mut recent_deaths: Vec<_> = staged
             .par_iter()
-            .zip(self.animals.par_iter())
-            .filter_map(|(next, old)| (old.health > 0 && next.health == 0).then_some(next.id))
+            .filter_map(|(animal, cause)| {
+                cause.map(|cause| AnimalDeath {
+                    animal: animal.id,
+                    tick,
+                    cause,
+                })
+            })
             .collect();
-        deaths.par_sort_unstable();
+        recent_deaths.par_sort_unstable_by_key(|event| event.animal);
+        let deaths = recent_deaths.par_iter().map(|event| event.animal).collect();
+        let mut animals: Vec<_> = staged.into_par_iter().map(|(animal, _)| animal).collect();
         if animals.par_windows(2).any(|pair| pair[0].id > pair[1].id) {
             animals.par_sort_unstable_by_key(|a| a.id);
         }
@@ -1359,6 +1345,7 @@ impl Fauna {
                 animals,
                 next_id,
                 last_tick: tick,
+                recent_deaths,
             },
             consumed,
             births: birth_ids,

@@ -107,6 +107,7 @@ impl Config {
             animals: self.animals,
             next_id: self.next_id,
             last_tick: self.last_tick,
+            recent_deaths: vec![],
         })
     }
 }

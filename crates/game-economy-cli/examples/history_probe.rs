@@ -85,6 +85,8 @@ fn run_steps(
     let mut choice_counts = BTreeMap::<String, u64>::new();
     let initial_view = host.history_view();
     let mut seen_family = (!initial_view.family_events.is_empty()).then_some(initial_view.tick);
+    let mut seen_animal_deaths =
+        (!initial_view.animal_deaths.is_empty()).then_some(initial_view.tick);
     let mut seen_language = (!initial_view.language_events.is_empty()).then_some(initial_view.tick);
     let mut seen_signal = (!initial_view.signal_events.is_empty()).then_some(initial_view.tick);
     let mut seen_recipe = (!initial_view.recipe_learning.is_empty()).then_some(initial_view.tick);
@@ -150,6 +152,14 @@ fn run_steps(
             *counts.entry(kind).or_default() += count as u64;
         }
         let view = host.history_view();
+        if !view.animal_deaths.is_empty() && seen_animal_deaths != Some(view.tick) {
+            *counts.entry("animal_deaths").or_default() += view.animal_deaths.len() as u64;
+            write_line(
+                &mut writer,
+                &json!({"kind":"animal_deaths","step":step,"events":view.animal_deaths}),
+            )?;
+            seen_animal_deaths = Some(view.tick);
+        }
         let recipe_count = view
             .recipe_learning
             .iter()

@@ -82,6 +82,7 @@ struct ObservationSink<'a> {
     focus: Focus,
     meetings: &'a mut BTreeMap<u64, u64>,
     meeting_count: &'a mut u64,
+    animal_deaths: &'a mut BTreeMap<String, u64>,
     focal_events: &'a mut Vec<Value>,
     focal_incapacitations: &'a mut Vec<Value>,
     focal_opinions: &'a mut Vec<Value>,
@@ -97,6 +98,19 @@ struct ObservationSink<'a> {
 impl ObservationSink<'_> {
     fn record(&mut self, events: &[Value], year: u64) -> Result<(), String> {
         for event in events {
+            if event["kind"] == "animal_deaths" {
+                for death in event["events"].as_array().into_iter().flatten() {
+                    if let Some(cause) = death["cause"].as_str() {
+                        *self.animal_deaths.entry(cause.to_owned()).or_default() += 1;
+                    }
+                    if let Focus::Animal(animal) = self.focus
+                        && death["animal"].as_u64() == Some(animal)
+                    {
+                        self.focal_events.push(death.clone());
+                    }
+                }
+                continue;
+            }
             if event["kind"] == "animal_population" {
                 if let Focus::Animal(animal) = self.focus {
                     let appeared = event["appeared"]
@@ -309,6 +323,7 @@ fn inspect(path: &Path, focus: Focus) -> Result<Value, String> {
     let mut samples = Vec::new();
     let mut meetings: BTreeMap<u64, u64> = BTreeMap::new();
     let mut meeting_count = 0u64;
+    let mut animal_deaths = BTreeMap::new();
     let mut focal_meetings = Vec::new();
     let mut focal_first = None;
     let mut focal_last_alive = None;
@@ -333,6 +348,7 @@ fn inspect(path: &Path, focus: Focus) -> Result<Value, String> {
                 focus,
                 meetings: &mut meetings,
                 meeting_count: &mut meeting_count,
+                animal_deaths: &mut animal_deaths,
                 focal_events: &mut focal_events,
                 focal_incapacitations: &mut focal_incapacitations,
                 focal_opinions: &mut focal_opinions,
@@ -609,7 +625,7 @@ fn inspect(path: &Path, focus: Focus) -> Result<Value, String> {
     let scope = json!({"source":path,"complete":complete,"first_year":first_year,"last_year":last_year,"annual_records":years,"metadata":metadata,"metadata_corrections":metadata_corrections});
     match focus {
         Focus::Summary => Ok(
-            json!({"scope":scope,"peak_people":{"year":peak_people.0,"count":peak_people.1},"peak_animals":{"year":peak_animals.0,"count":peak_animals.1},"first_zero_people":human_zero,"first_zero_animals":animal_zero,"animal_species_history":species_history.iter().map(|(id,(name,year,count,zero))|json!({"species":id,"name":name,"peak":{"year":year,"count":count},"first_zero":zero})).collect::<Vec<_>>(),"family_totals":totals,"recorded_meetings":meeting_count,"most_recorded_meetings":ranking.iter().map(|(person,count)|json!({"person":person,"count":count})).collect::<Vec<_>>(),"genome_samples":samples,"interpretation":"Meeting counts do not establish leadership; changes in allele means do not establish selection or causation."}),
+            json!({"scope":scope,"peak_people":{"year":peak_people.0,"count":peak_people.1},"peak_animals":{"year":peak_animals.0,"count":peak_animals.1},"first_zero_people":human_zero,"first_zero_animals":animal_zero,"animal_deaths_by_cause":animal_deaths,"animal_species_history":species_history.iter().map(|(id,(name,year,count,zero))|json!({"species":id,"name":name,"peak":{"year":year,"count":count},"first_zero":zero})).collect::<Vec<_>>(),"family_totals":totals,"recorded_meetings":meeting_count,"most_recorded_meetings":ranking.iter().map(|(person,count)|json!({"person":person,"count":count})).collect::<Vec<_>>(),"genome_samples":samples,"interpretation":"Meeting counts do not establish leadership; changes in allele means do not establish selection or causation."}),
         ),
         Focus::Person(person) => {
             if focal_first.is_none() {
@@ -654,6 +670,21 @@ fn narrative(report: &Value, focus: Focus) -> String {
                 (totals["births"].as_u64(), totals["deaths"].as_u64())
             {
                 writeln!(text, "The final family counters record {births} births and {deaths} deaths. The history contains {} observed meetings.\n", report["recorded_meetings"]).unwrap();
+            }
+            if let Some(causes) = report["animal_deaths_by_cause"]
+                .as_object()
+                .filter(|causes| !causes.is_empty())
+            {
+                let counts: Vec<_> = causes
+                    .iter()
+                    .map(|(cause, count)| format!("{count} from {}", death_cause(cause)))
+                    .collect();
+                writeln!(
+                    text,
+                    "Recorded animal deaths include {}.\n",
+                    counts.join(", ")
+                )
+                .unwrap();
             }
             for species in report["animal_species_history"]
                 .as_array()
@@ -759,6 +790,21 @@ fn narrative(report: &Value, focus: Focus) -> String {
         Focus::Animal(animal) => {
             writeln!(text, "# Animal {animal}\n").unwrap();
             observed_life(&mut text, report);
+            for death in report["recorded_population_events"]
+                .as_array()
+                .into_iter()
+                .flatten()
+            {
+                if let (Some(tick), Some(cause)) = (death["tick"].as_u64(), death["cause"].as_str())
+                {
+                    writeln!(
+                        text,
+                        "At tick {tick}, they died from {}.\n",
+                        death_cause(cause)
+                    )
+                    .unwrap();
+                }
+            }
             let state = &report["last_recorded_animal_state"];
             if let Some(species) = state["species"].as_u64() {
                 writeln!(
@@ -788,6 +834,14 @@ fn narrative(report: &Value, focus: Focus) -> String {
         .unwrap();
     }
     text
+}
+
+fn death_cause(cause: &str) -> &str {
+    match cause {
+        "old_age" => "old age",
+        "hunted" => "hunting",
+        other => other,
+    }
 }
 
 fn observed_life(text: &mut String, report: &Value) {
@@ -874,7 +928,7 @@ mod tests {
             {"kind":"incapacitations","at_millis":40_000_000_000u64,"people":[
                 {"person":1,"died":true,"natural_mortality":true},
                 {"person":2,"died":false,"natural_mortality":false}
-            ]}]}),
+                ]},{"kind":"animal_deaths","events":[{"animal":1,"tick":2,"cause":"starvation"}]}]}),
             json!({"kind":"complete","years":2}),
         ] {
             if row["kind"] == "initial" {
@@ -932,6 +986,7 @@ mod tests {
         let overview = narrative(&summary, Focus::Summary);
         assert!(overview.contains("Year 2 is the first snapshot with nobody still alive"));
         assert!(overview.contains("grazer peaked at 1 in year 0"));
+        assert!(overview.contains("1 from starvation"));
         assert_eq!(person["first_observed_year"], 0);
         assert_eq!(person["last_year_alive"], 1);
         assert_eq!(person["recorded_meetings"].as_array().unwrap().len(), 1);
@@ -976,13 +1031,16 @@ mod tests {
             2
         );
         let animal = inspect(&path, Focus::Animal(1)).unwrap();
+        assert!(
+            narrative(&animal, Focus::Animal(1)).contains("At tick 2, they died from starvation")
+        );
         assert_eq!(animal["last_year_alive"], 1);
         assert_eq!(
             animal["recorded_population_events"]
                 .as_array()
                 .unwrap()
                 .len(),
-            1
+            2
         );
         fs::remove_file(path).unwrap();
     }
