@@ -1375,6 +1375,7 @@ fn people_at_a_local_store_can_read_carried_pages() {
         policies: vec![],
         events: vec![],
         walking: Some(LocalWalking {
+            elapsed: None,
             preferences: vec![].into(),
             routes: vec![].into(),
             positions: vec![LocalPosition {
@@ -2521,6 +2522,7 @@ fn regional_animals_are_not_reachable_from_a_store_and_a_hold_ends_on_departure(
         goal_fetchers: vec![],
         events: vec![],
         walking: Some(LocalWalking {
+            elapsed: None,
             routes: vec![LocalWalkRoute {
                 region: 1,
                 from: LocalEndpoint::Stock,
@@ -4473,6 +4475,7 @@ fn concentrated_animal_defense_benchmark() {
             goal_fetchers: vec![],
             events: vec![],
             walking: Some(LocalWalking {
+                elapsed: None,
                 routes: vec![].into(),
                 preferences: vec![].into(),
                 positions: vec![],
@@ -5413,6 +5416,7 @@ fn benchmark_people_at_store(state: &mut State) {
         goal_fetchers: vec![],
         events: vec![],
         walking: Some(LocalWalking {
+            elapsed: None,
             routes: vec![].into(),
             preferences: vec![].into(),
             events: vec![],
@@ -5499,6 +5503,7 @@ fn local_walking_fixture() -> State {
     let source = LocalEndpoint::Store { id: 1 };
     let destination = LocalEndpoint::Store { id: 2 };
     state.local_transport.as_mut().unwrap().walking = Some(LocalWalking {
+        elapsed: None,
         preferences: vec![].into(),
         routes: vec![
             LocalWalkRoute {
@@ -8953,6 +8958,7 @@ fn local_walking_and_contended_pickup_benchmark() {
         .unwrap_or(1);
     let mut initial = concentrated_local_carrying(count);
     initial.local_transport.as_mut().unwrap().walking = Some(LocalWalking {
+        elapsed: None,
         preferences: vec![].into(),
         routes: vec![LocalWalkRoute {
             region: 1,
@@ -9204,6 +9210,7 @@ fn concentrated_goal_fetch_benchmark() {
             });
         }
         transport.walking = Some(LocalWalking {
+            elapsed: None,
             routes: vec![
                 LocalWalkRoute {
                     region: 1,
@@ -9237,6 +9244,7 @@ fn concentrated_goal_fetch_benchmark() {
     if at_store {
         assert!(std::env::var_os("LEGACY_CHAIN").is_none());
         initial.local_transport.as_mut().unwrap().walking = Some(LocalWalking {
+            elapsed: None,
             routes: if returning {
                 vec![LocalWalkRoute {
                     region: 1,
@@ -13172,6 +13180,7 @@ fn conflicting_claims_are_personal_and_observed_only_after_actual_use() {
                     goal_fetchers: vec![],
                     events: vec![],
                     walking: Some(LocalWalking {
+                        elapsed: None,
                         routes: vec![].into(),
                         preferences: vec![].into(),
                         events: vec![],
@@ -14554,6 +14563,7 @@ fn hauling_requests_require_a_nearby_carrier_at_the_same_endpoint() {
         goal_fetchers: vec![],
         events: vec![],
         walking: Some(LocalWalking {
+            elapsed: None,
             routes: vec![].into(),
             preferences: vec![].into(),
             positions: vec![],
@@ -15002,6 +15012,7 @@ fn autonomous_hauling_requests_benchmark() {
             goal_fetchers: vec![],
             events: vec![],
             walking: Some(LocalWalking {
+                elapsed: None,
                 routes: vec![].into(),
                 preferences: vec![].into(),
                 events: vec![],
@@ -15336,6 +15347,7 @@ fn expedition_invitation_requires_a_shared_endpoint() {
         goal_fetchers: vec![],
         events: vec![],
         walking: Some(LocalWalking {
+            elapsed: None,
             routes: vec![].into(),
             preferences: vec![].into(),
             events: vec![],
@@ -15801,6 +15813,7 @@ fn travelers_choose_a_known_store_for_missing_expedition_supplies() {
                     goal_fetchers: vec![],
                     events: vec![],
                     walking: Some(LocalWalking {
+                        elapsed: None,
                         routes: vec![
                             LocalWalkRoute {
                                 region: 1,
@@ -19908,6 +19921,7 @@ fn conversations_through_openings_respect_local_endpoints() {
         goal_fetchers: vec![],
         events: vec![],
         walking: Some(LocalWalking {
+            elapsed: None,
             routes: vec![].into(),
             preferences: vec![].into(),
             positions: (1..=4)
@@ -21561,6 +21575,7 @@ fn confinement_with_local_store() -> State {
         goal_fetchers: vec![],
         events: vec![],
         walking: Some(LocalWalking {
+            elapsed: None,
             routes: vec![].into(),
             preferences: vec![].into(),
             positions: vec![],
@@ -24065,6 +24080,7 @@ fn destination_acquisition_workload(count: u64, available: u64, visit_ticks: u64
     let local = state.local_transport.as_mut().unwrap();
     local.stores[0].region = 2;
     local.walking = Some(LocalWalking {
+        elapsed: None,
         routes: vec![
             LocalWalkRoute {
                 region: 2,
@@ -24301,6 +24317,7 @@ fn expedition_supplies_can_be_acquired_only_at_the_current_endpoint() {
     let mut initial = autonomous_acquisition_workload(4, 0);
     use_named_acquisition_store(&mut initial, 2);
     initial.local_transport.as_mut().unwrap().walking = Some(LocalWalking {
+        elapsed: None,
         routes: vec![LocalWalkRoute {
             region: 1,
             from: LocalEndpoint::Stock,
@@ -24387,6 +24404,7 @@ fn expedition_pickup_reserves_time_against_goal_fetching() {
         max_quantity: 1,
     }];
     transport.walking = Some(LocalWalking {
+        elapsed: None,
         routes: vec![].into(),
         preferences: vec![].into(),
         positions: vec![LocalPosition {
@@ -24446,6 +24464,7 @@ fn a_traveler_can_bring_acquired_supplies_to_the_regional_exit() {
     let mut initial = autonomous_acquisition_workload(1, 0);
     use_named_acquisition_store(&mut initial, 1);
     initial.local_transport.as_mut().unwrap().walking = Some(LocalWalking {
+        elapsed: None,
         routes: vec![LocalWalkRoute {
             region: 1,
             from: LocalEndpoint::Store { id: 1 },
@@ -24566,6 +24585,7 @@ fn a_traveler_may_return_with_supplies_due_to_personal_fear() {
     let mut initial = autonomous_acquisition_workload(1, 0);
     use_named_acquisition_store(&mut initial, 0);
     initial.local_transport.as_mut().unwrap().walking = Some(LocalWalking {
+        elapsed: None,
         routes: vec![LocalWalkRoute {
             region: 1,
             from: LocalEndpoint::Store { id: 1 },
@@ -24679,6 +24699,7 @@ fn concentrated_expedition_acquisition_benchmark() {
                 .known_store = Some(1);
         }
         initial.local_transport.as_mut().unwrap().walking = Some(LocalWalking {
+            elapsed: None,
             routes: vec![LocalWalkRoute {
                 region: 1,
                 from: LocalEndpoint::Stock,
@@ -24693,6 +24714,7 @@ fn concentrated_expedition_acquisition_benchmark() {
     }
     if at_store {
         initial.local_transport.as_mut().unwrap().walking = Some(LocalWalking {
+            elapsed: None,
             routes: if returning {
                 vec![LocalWalkRoute {
                     region: 1,
@@ -25057,6 +25079,7 @@ fn concentrated_claims_benchmark() {
             goal_fetchers: vec![],
             events: vec![],
             walking: Some(LocalWalking {
+                elapsed: None,
                 routes: vec![].into(),
                 preferences: vec![].into(),
                 events: vec![],
@@ -25716,6 +25739,7 @@ fn market_proposals_and_trades_require_a_shared_endpoint() {
         goal_fetchers: vec![],
         events: vec![],
         walking: Some(LocalWalking {
+            elapsed: None,
             routes: vec![].into(),
             preferences: vec![].into(),
             positions: vec![],
@@ -30965,6 +30989,7 @@ fn promise_conversations_and_delivery_require_a_shared_endpoint() {
         goal_fetchers: vec![],
         events: vec![],
         walking: Some(LocalWalking {
+            elapsed: None,
             routes: vec![].into(),
             preferences: vec![].into(),
             positions: vec![],
@@ -33845,6 +33870,7 @@ fn taking_world_benchmark() {
             goal_fetchers: vec![],
             events: vec![],
             walking: Some(LocalWalking {
+                elapsed: None,
                 routes: vec![].into(),
                 preferences: vec![].into(),
                 positions: (1..=count * 2)
@@ -34263,6 +34289,7 @@ fn concentrated_tactical_confrontation_benchmark() {
             goal_fetchers: vec![],
             events: vec![],
             walking: Some(LocalWalking {
+                elapsed: None,
                 routes: vec![].into(),
                 preferences: vec![].into(),
                 positions: (1..=count)
@@ -35062,6 +35089,7 @@ fn reinforcement_requires_access_to_the_fighters_local_endpoint() {
         goal_fetchers: vec![],
         events: vec![],
         walking: Some(LocalWalking {
+            elapsed: None,
             routes: vec![].into(),
             preferences: vec![].into(),
             positions: [1, 2]
@@ -35184,6 +35212,7 @@ fn independent_reinforcement_benchmark() {
             goal_fetchers: vec![],
             events: vec![],
             walking: Some(LocalWalking {
+                elapsed: None,
                 routes: vec![].into(),
                 preferences: vec![].into(),
                 positions: (1..=count * 3)
@@ -36229,6 +36258,7 @@ fn concentrated_named_food_benchmark() {
     let mut initial = named_food_workload(count, count / 2, stores);
     if visits {
         initial.local_transport.as_mut().unwrap().walking = Some(LocalWalking {
+            elapsed: None,
             routes: (1..=stores)
                 .map(|id| LocalWalkRoute {
                     region: 1,
@@ -38108,6 +38138,7 @@ fn cultivation_requests_follow_personal_choices_and_real_seed_receipts() {
         goal_fetchers: vec![],
         events: vec![],
         walking: Some(LocalWalking {
+            elapsed: None,
             routes: vec![].into(),
             preferences: vec![].into(),
             events: vec![],
@@ -38698,6 +38729,7 @@ fn field_claims_are_personal_and_follow_actual_cultivation() {
         goal_fetchers: vec![],
         events: vec![],
         walking: Some(LocalWalking {
+            elapsed: None,
             routes: vec![].into(),
             preferences: vec![].into(),
             events: vec![],
@@ -38884,6 +38916,7 @@ fn field_use_reactions_follow_personal_views_and_local_observation() {
         goal_fetchers: vec![],
         events: vec![],
         walking: Some(LocalWalking {
+            elapsed: None,
             routes: vec![].into(),
             preferences: vec![].into(),
             events: vec![],
@@ -39044,6 +39077,7 @@ fn cultivation_outcomes_change_only_witnesses_personal_affinity() {
         goal_fetchers: vec![],
         events: vec![],
         walking: Some(LocalWalking {
+            elapsed: None,
             routes: vec![].into(),
             preferences: vec![].into(),
             events: vec![],
@@ -39714,6 +39748,7 @@ fn witnessed_cultivation_can_motivate_a_separate_personal_offer() {
         goal_fetchers: vec![],
         events: vec![],
         walking: Some(LocalWalking {
+            elapsed: None,
             routes: vec![].into(),
             preferences: vec![].into(),
             events: vec![],
@@ -39861,6 +39896,7 @@ fn people_discover_local_cultivation_opportunities_and_helpers() {
         goal_fetchers: vec![],
         events: vec![],
         walking: Some(LocalWalking {
+            elapsed: None,
             routes: vec![].into(),
             preferences: vec![].into(),
             events: vec![],
@@ -40062,6 +40098,7 @@ fn autonomous_requesters_reconsider_locally_and_wait_before_retrying() {
         goal_fetchers: vec![],
         events: vec![],
         walking: Some(LocalWalking {
+            elapsed: None,
             routes: vec![].into(),
             preferences: vec![].into(),
             events: vec![],
@@ -40208,6 +40245,7 @@ fn a_request_can_be_withdrawn_without_binding_the_worker() {
         goal_fetchers: vec![],
         events: vec![],
         walking: Some(LocalWalking {
+            elapsed: None,
             routes: vec![].into(),
             preferences: vec![].into(),
             events: vec![],
@@ -41885,6 +41923,7 @@ fn requested_work_is_learned_only_by_a_present_observer() {
         goal_fetchers: vec![],
         events: vec![],
         walking: Some(LocalWalking {
+            elapsed: None,
             routes: vec![].into(),
             preferences: vec![].into(),
             events: vec![],
@@ -42044,6 +42083,7 @@ fn a_person_asks_for_help_with_a_goal_and_learns_from_observed_work() {
                     goal_fetchers: vec![],
                     events: vec![],
                     walking: Some(LocalWalking {
+                        elapsed: None,
                         routes: vec![].into(),
                         preferences: vec![].into(),
                         events: vec![],
@@ -51620,6 +51660,7 @@ fn a_remote_claimant_does_not_observe_site_use() {
         goal_fetchers: vec![],
         events: vec![],
         walking: Some(LocalWalking {
+            elapsed: None,
             routes: vec![].into(),
             preferences: vec![].into(),
             events: vec![],
@@ -56077,6 +56118,7 @@ fn tactical_site_attacks_require_the_sites_local_endpoint() {
         goal_fetchers: vec![],
         events: vec![],
         walking: Some(LocalWalking {
+            elapsed: None,
             routes: vec![].into(),
             preferences: vec![].into(),
             positions: vec![],
@@ -56528,6 +56570,7 @@ fn tactical_site_damage_benchmark() {
             goal_fetchers: vec![],
             events: vec![],
             walking: Some(LocalWalking {
+                elapsed: None,
                 routes: vec![].into(),
                 preferences: vec![].into(),
                 positions: if remote_site {

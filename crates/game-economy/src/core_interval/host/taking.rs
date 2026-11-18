@@ -41,7 +41,7 @@ impl CoreHost {
             locations: &locations,
             busy: &busy,
             blocked: occupied,
-            can_touch: &|_, _| true,
+            can_touch: &|a, b| self.same_local_endpoint(a, b),
             max_hunger: self.core.rules.max_work_hunger,
             manual: None,
             action_base: base,
@@ -72,6 +72,7 @@ impl CoreHost {
                 find(observer).zip(find(actor)).is_some_and(|(a, b)| {
                     a.health > 0
                         && b.health > 0
+                        && self.same_local_endpoint(a.id, b.id)
                         && locations
                             .region((a.id, a.region), (b.id, b.region))
                             .is_some()

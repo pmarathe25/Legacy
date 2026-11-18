@@ -224,6 +224,9 @@ impl CoreHost {
             .taking
             .as_ref()
             .map_or_else(Vec::new, |owner| owner.inquiry_meetings(tick));
+        let partition = |person| self.local_partition(person);
+        let contact = |a, b| self.same_local_endpoint(a, b);
+        let walking = self.walking().is_some();
         let mut next = opening.prepare(
             &self.core.people,
             &mut people,
@@ -234,10 +237,10 @@ impl CoreHost {
                 seed: self.core.seed,
                 tick,
                 travel: None,
-                partition: None,
+                partition: walking.then_some(&partition),
                 local: None,
-                contact: None,
-                speak: None,
+                contact: walking.then_some(&contact),
+                speak: walking.then_some(&contact),
                 opening: None,
                 missions: None,
                 inquiry_meetings: &inquiry_meetings,
@@ -573,7 +576,10 @@ impl CoreHost {
                 self.opinions.as_ref(),
                 game_economy_knowledge::ObservationAccess {
                     now: tick,
-                    not_at_stock: &busy,
+                    not_at_stock: self
+                        .block_away_from_stock(&busy)
+                        .as_deref()
+                        .unwrap_or(&busy),
                 },
             )?
         } else {

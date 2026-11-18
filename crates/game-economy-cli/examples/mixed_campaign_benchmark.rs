@@ -126,7 +126,7 @@ fn main() {
                 Some(LocalWalkPreference { meal_hunger: None, person: person.id, region, destination: LocalEndpoint::Store { id: region }, willing: true, pressured_by: None, pressure_threshold: None })
             }).collect::<Vec<_>>();
             let routes = regions.into_iter().map(|region| LocalWalkRoute { region, from: LocalEndpoint::Stock, to: LocalEndpoint::Store { id: region }, ticks: 2 }).collect::<Vec<_>>();
-            initial.local_transport = Some(LocalTransport { stores, policies: vec![], goal_fetchers: vec![], events: vec![], walking: Some(LocalWalking { routes: routes.into(), preferences: preferences.into(), positions: vec![], events: vec![] }) });
+            initial.local_transport = Some(LocalTransport { stores, policies: vec![], goal_fetchers: vec![], events: vec![], walking: Some(LocalWalking { elapsed: None, routes: routes.into(), preferences: preferences.into(), positions: vec![], events: vec![] }) });
         }
         if market_workload {
             use game_lots::{Container, Lot, Place};

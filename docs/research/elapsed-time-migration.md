@@ -40,6 +40,10 @@ elapsed food search reviews and closed-route rechecks use the actual time.
 Legacy route reports and older saved review dates retain their original
 boundary-based interpretation until replaced. The interval player view shows
 the controlled person's remembered route reports and their dates.
+`local_transport.walking.elapsed.unit_millis` gives within-region legs their
+own unit. Departure follows an individual's choice. A paused leg retains
+its remaining duration, and arrival changes physical reach at the exact
+elapsed deadline.
 An optional `rules.starvation_rate` uses elapsed exposure after each person's
 hunger crosses the starvation threshold. Fractional damage is saved, and the
 interval coordinator stops at fatal deadlines before advancing work or travel

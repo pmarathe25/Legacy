@@ -47,6 +47,7 @@ pub struct CorePlayerView {
     pub offset_millis: u64,
     pub person: Person,
     pub journey: Option<travel::Journey>,
+    pub local_location: Option<crate::LocalLocation>,
     pub route_reports: Vec<travel::RouteObservation>,
     pub possessions: Vec<game_lots::Lot>,
     pub nearby: Vec<CoreSeenPerson>,
@@ -100,6 +101,9 @@ impl CoreHost {
             .region
             .filter(|_| person.health > 0)
             .ok_or("the controlled person cannot start local work")?;
+        if !self.regional_stock_reachable(id, region) {
+            return Err("the work site is outside physical reach".into());
+        }
         if self
             .core
             .physical
@@ -230,6 +234,7 @@ impl CoreHost {
             .par_iter()
             .filter(|other| {
                 other.id != person.id
+                    && self.same_local_endpoint(person.id, other.id)
                     && locations
                         .region((person.id, person.region), (other.id, other.region))
                         .is_some()
@@ -342,6 +347,7 @@ impl CoreHost {
             offset_millis: self.core.elapsed_millis().ok_or("no physical interval")?,
             person: person.clone(),
             journey,
+            local_location: self.local_location(id),
             route_reports,
             possessions,
             nearby,

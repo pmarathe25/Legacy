@@ -101,7 +101,7 @@ impl CoreHost {
             max_health: self.core.rules.max_health,
             manual: None,
             locations: &locations,
-            walking: None,
+            walking: self.walking(),
         }
         .prepare(base)
         .map(Some)

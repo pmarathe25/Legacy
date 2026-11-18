@@ -3257,6 +3257,14 @@ impl Economy {
         {
             return Err("elapsed disease requires the interval host".into());
         }
+        if self
+            .local_transport
+            .as_ref()
+            .and_then(|owner| owner.walking.as_ref())
+            .is_some_and(|owner| owner.elapsed.is_some())
+        {
+            return Err("elapsed local walking requires the interval host".into());
+        }
         #[cfg(feature = "profile")]
         let mut profile_phase = game_diagnostics::span("economy.setup");
         let tick = self.tick().checked_add(1).ok_or("tick overflow")?;

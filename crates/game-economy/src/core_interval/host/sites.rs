@@ -66,6 +66,8 @@ impl CoreHost {
         if blocked.par_windows(2).any(|rows| rows[0] >= rows[1]) {
             return Err("invalid occupied people".into());
         }
+        let off_stock = self.block_away_from_stock(blocked);
+        let blocked = off_stock.as_deref().unwrap_or(blocked);
         let occupied = self.blocked_with_rest(blocked);
         let blocked = occupied.as_deref().unwrap_or(blocked);
         let Some(owner) = self.sites.as_ref() else {
@@ -153,6 +155,13 @@ impl CoreHost {
         max_hunger: u32,
         personal: bool,
     ) -> Result<Vec<(u64, bool)>, String> {
+        if self.walking().is_some()
+            && starts
+                .par_iter()
+                .any(|(start, _)| !self.regional_stock_reachable(start.worker, start.region))
+        {
+            return Err("a worker is outside physical reach of the work site".into());
+        }
         let skill_rates = self.skill_start_rates(starts)?;
         let starts = skill_rates.as_deref().unwrap_or(starts);
         if !personal && let Some(family) = &self.family {

@@ -23,6 +23,7 @@ mod hauling;
 mod hauling_requests;
 mod hunting;
 mod local_transport;
+mod local_walking;
 mod market;
 mod mechanics;
 mod medical;
@@ -1257,16 +1258,28 @@ impl CoreHost {
             owner.validate(&people, &goods, &view, core.travel.as_ref())?;
         }
         if let Some(owner) = &mut local_transport {
-            if owner.walking.is_some() || !owner.goal_fetchers.is_empty() {
-                return Err(
-                    "local walking and goal-directed carrying are not yet supported".into(),
-                );
+            if !owner.goal_fetchers.is_empty() {
+                return Err("goal-directed carrying is not yet supported".into());
             }
             owner.normalize();
             let people: HashSet<_> = core.people.par_iter().map(|p| p.id).collect();
             let goods: HashSet<_> = core.physical.goods().par_iter().map(|g| g.id).collect();
             let view = core.physical.view(core.physical.tick())?;
             owner.validate(&people, &goods, &view, core.physical.tick())?;
+            if let Some(walking) = &owner.walking {
+                if walking.elapsed.is_none() {
+                    return Err("local walking requires an elapsed walking unit".into());
+                }
+                let regions: HashSet<_> = view
+                    .containers
+                    .par_iter()
+                    .filter_map(|container| match container.place {
+                        game_lots::Place::Stock { region, .. } => Some(region),
+                        _ => None,
+                    })
+                    .collect();
+                walking.validate(&core.people, &owner.stores, &regions, core.physical.tick())?;
+            }
         }
         if let Some(owner) = &mut writing {
             if (!owner.authors.is_empty()
@@ -1595,6 +1608,7 @@ impl CoreHost {
             .and_then(|after| u64::try_from(after).ok());
         let dry_field = self.next_dry_field();
         let disease = self.next_disease_deadline();
+        let local_arrival = self.next_local_arrival();
         let first = [
             recovery,
             exposure,
@@ -1604,6 +1618,7 @@ impl CoreHost {
             conception,
             dry_field,
             disease,
+            local_arrival,
         ]
         .into_iter()
         .flatten()
@@ -1624,6 +1639,7 @@ impl CoreHost {
                     conception: conception == Some(after_millis),
                     dry_field: dry_field == Some(after_millis),
                     disease: disease == Some(after_millis),
+                    local_arrival: local_arrival == Some(after_millis),
                     recovery: recovery == Some(after_millis),
                     exposure: exposure == Some(after_millis),
                 };
@@ -1636,6 +1652,7 @@ impl CoreHost {
                 deadline.conception = conception == Some(after_millis);
                 deadline.dry_field = dry_field == Some(after_millis);
                 deadline.disease = disease == Some(after_millis);
+                deadline.local_arrival = local_arrival == Some(after_millis);
             }
         }
         Ok(deadline)
@@ -1663,6 +1680,8 @@ impl CoreHost {
     ) -> Result<Vec<travel::DepartureOutcome>, String> {
         let tick = self.core.physical.tick();
         let offset = self.core.elapsed_millis().ok_or("no physical interval")?;
+        let stock_blocked = self.block_away_from_stock(occupied);
+        let occupied = stock_blocked.as_deref().unwrap_or(occupied);
         let blocked = self.blocked_with_rest(occupied);
         let outcomes = self.core.depart(
             tick,
@@ -1670,6 +1689,13 @@ impl CoreHost {
             requests,
             blocked.as_deref().unwrap_or(occupied),
         )?;
+        if self.walking().is_some() {
+            let departed: Vec<_> = outcomes
+                .par_iter()
+                .filter_map(|outcome| outcome.departed.then_some(outcome.person))
+                .collect();
+            self.clear_local_positions(&departed);
+        }
         self.work_checked_revision = None;
         Ok(outcomes)
     }
@@ -1722,6 +1748,7 @@ impl CoreHost {
                 let source = person.region?;
                 (person.health > 0
                     && !person.controlled
+                    && self.regional_stock_reachable(person.id, source)
                     && routes.binary_search(&(source, choice.destination)).is_ok())
                 .then_some(travel::Departure {
                     person: choice.person,
@@ -1780,6 +1807,26 @@ impl CoreHost {
         &mut self,
         actions: &[game_lots::Transaction],
     ) -> Result<game_lot_runtime::PhysicalOutcomes, String> {
+        use game_lots::Place;
+        if self.walking().is_some()
+            && actions.par_iter().any(|action| {
+                action
+                    .movements
+                    .iter()
+                    .any(|movement| match (movement.from, movement.to) {
+                        (Place::Person(a), Some(Place::Person(b))) => {
+                            !self.same_local_endpoint(a, b)
+                        }
+                        (Place::Stock { region, .. }, Some(Place::Person(person)))
+                        | (Place::Person(person), Some(Place::Stock { region, .. })) => {
+                            !self.regional_stock_reachable(person, region)
+                        }
+                        _ => false,
+                    })
+            })
+        {
+            return Err("transfer source or recipient is outside physical reach".into());
+        }
         let tick = self.core.physical.tick();
         let offset = self.core.elapsed_millis().ok_or("no physical interval")?;
         self.core.transfer_goods(tick, offset, actions)
@@ -2083,6 +2130,8 @@ impl CoreHost {
         let Some(owner) = &self.autowork else {
             return Ok(Vec::new());
         };
+        let off_stock = self.block_away_from_stock(blocked);
+        let blocked = off_stock.as_deref().unwrap_or(blocked);
         let rest = self.blocked_with_rest(blocked);
         let mut busy = rest.as_deref().unwrap_or(blocked).to_vec();
         let tick = self.core.physical.tick();
@@ -2277,6 +2326,8 @@ impl CoreHost {
         if blocked.par_windows(2).any(|rows| rows[0] >= rows[1]) {
             return Err("invalid occupied people".into());
         }
+        let off_stock = self.block_away_from_stock(blocked);
+        let blocked = off_stock.as_deref().unwrap_or(blocked);
         let occupied = self.blocked_with_rest(blocked);
         let blocked = occupied.as_deref().unwrap_or(blocked);
         let underage = self.family.as_ref().map(game_economy_work::underage);
@@ -2467,6 +2518,8 @@ impl CoreHost {
             busy
         });
         let occupied = taking_busy.as_deref().unwrap_or(occupied);
+        let stock_occupied = self.block_away_from_stock(occupied);
+        let occupied = stock_occupied.as_deref().unwrap_or(occupied);
         let base = u64::try_from(actions.len())
             .map_err(|_| "care action overflow")?
             .checked_add(1)

@@ -50,6 +50,17 @@ impl<'a> Player<'a> {
         Ok(result.first().is_some_and(|outcome| outcome.departed))
     }
 
+    pub fn walk(
+        &mut self,
+        destination: game_economy::LocalEndpoint,
+    ) -> Result<game_economy::LocalWalkOutcome, String> {
+        self.host.walk_controlled(self.person, destination)
+    }
+
+    pub fn pause_walk(&mut self, paused: bool) -> Result<bool, String> {
+        self.host.pause_controlled_walk(self.person, paused)
+    }
+
     pub fn eat(&mut self, good: u32) -> Result<bool, String> {
         self.host.controlled_person(self.person)?;
         self.host.eat_controlled(self.person, good)

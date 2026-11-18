@@ -33,7 +33,7 @@ impl CoreHostSnapshot {
         if state
             .local_transport
             .as_ref()
-            .is_some_and(|owner| owner.walking.is_some() || !owner.goal_fetchers.is_empty())
+            .is_some_and(|owner| !owner.goal_fetchers.is_empty())
         {
             unsupported.push("local_transport");
         }

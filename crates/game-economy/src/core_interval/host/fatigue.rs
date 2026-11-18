@@ -7,6 +7,7 @@ pub(super) struct ElapsedProgress {
     pub incapacitations: Vec<scheduler::Incapacitation>,
     pub family_events: Vec<game_economy_family::FamilyEvent>,
     pub disease_events: Vec<game_disease::Event>,
+    pub local_arrivals: Vec<game_economy_local_transport::walking::Event>,
 }
 use game_economy_fatigue::TimedActivity;
 
@@ -197,6 +198,9 @@ impl CoreHost {
         if let Some(deadline) = disease {
             consumed = consumed.min(deadline);
         }
+        if let Some(deadline) = self.next_local_arrival() {
+            consumed = consumed.min(deadline);
+        }
         let (crop_rates, crop_limit) = self.plan_crop_segment(consumed)?;
         consumed = crop_limit;
         let elapsed_owner = self
@@ -243,6 +247,7 @@ impl CoreHost {
                     .map(|journey| journey.person)
                     .collect()
             });
+            traveling.par_extend(self.local_travelers());
             traveling.par_sort_unstable();
             let resting = owner.fatigue.resting();
             let people: std::collections::HashSet<_> = self
@@ -448,6 +453,7 @@ impl CoreHost {
             self.stage_fatal_assistance(&deaths, &durations, consumed)?;
         let paused_after_deaths = self.pause_incapacitated_rates(&deaths, &reductions, consumed)?;
         let renewal = self.stage_resource_renewal(consumed)?;
+        let local_progress = self.stage_local_progress(consumed);
         let (growth, batches) = self.stage_crop_growth(crop_rates, consumed)?;
         let moisture = self
             .irrigation
@@ -464,7 +470,9 @@ impl CoreHost {
                 delivery.as_ref().map(|delivery| delivery.physical()),
             )?;
             let mut family_events = Vec::new();
+            let mut local_arrivals = Vec::new();
             if advanced > 0 {
+                local_arrivals = self.publish_local_progress(local_progress);
                 self.publish_resource_renewal(renewal);
                 self.publish_crop_growth(growth);
                 if let Some(moisture) = moisture {
@@ -511,6 +519,7 @@ impl CoreHost {
                 incapacitations,
                 family_events,
                 disease_events,
+                local_arrivals,
             });
         };
         if consumed == 0 {
@@ -562,6 +571,7 @@ impl CoreHost {
                 })
                 .collect::<Result<Vec<_>, _>>()
         })?;
+        travel.par_extend(self.local_travelers().map(|person| (person, consumed)));
         travel.par_sort_unstable_by_key(|row| row.0);
         let resting = owner.fatigue.resting();
         let chunks: Vec<_> = self
@@ -651,6 +661,7 @@ impl CoreHost {
             delivery.as_ref().map(|delivery| delivery.physical()),
         )?;
         self.publish_resource_renewal(renewal);
+        let local_arrivals = self.publish_local_progress(local_progress);
         self.publish_crop_growth(growth);
         if let Some(moisture) = moisture {
             self.irrigation
@@ -702,6 +713,7 @@ impl CoreHost {
             incapacitations,
             family_events,
             disease_events,
+            local_arrivals,
         })
     }
 

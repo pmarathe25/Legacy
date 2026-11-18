@@ -901,6 +901,164 @@ fn chosen_wound_treatment_requires_real_supplies_and_can_be_declined() {
 }
 
 #[test]
+fn local_walking_changes_reach_at_the_elapsed_arrival_after_a_saved_pause() {
+    use game_economy::core_interval::{CoreHost, CoreRunEvent};
+    use game_economy::{LocalEndpoint, LocalLocation, LocalWalkOutcome};
+    use game_lots::{Movement, Place, Transaction};
+
+    let root = root();
+    let mut source =
+        std::fs::read_to_string(root.join("content/scenarios/economy-core-local-carry.toml"))
+            .unwrap()
+            .replacen("[[people]]", "[[people]]\ncontrolled = true", 1)
+            .replace(
+                "[local_transport]",
+                r#"
+[[people]]
+id = 2
+region = 1
+health = 100
+hunger = 0
+willing_to_work = false
+seek_meals = false
+
+[local_transport]"#,
+            );
+    source.push_str(
+        r#"
+[local_transport.walking.elapsed]
+unit_millis = 100
+
+[[local_transport.walking.routes]]
+region = 1
+from = { kind = "stock" }
+to = { kind = "store", id = 1 }
+ticks = 3
+
+[[local_transport.walking.positions]]
+person = 2
+location = { kind = "at", region = 1, endpoint = { kind = "store", id = 1 } }
+"#,
+    );
+    let path =
+        std::env::temp_dir().join(format!("legacy-local-elapsed-{}.toml", std::process::id()));
+    std::fs::write(&path, source).unwrap();
+    let loaded = game_economy_cli::core_scenario(&path, &root.join("content"));
+    std::fs::remove_file(path).unwrap();
+    let opening = loaded.unwrap().snapshot();
+    let grain = opening
+        .core
+        .physical
+        .goods
+        .iter()
+        .find(|good| good.name == "grain")
+        .unwrap()
+        .id;
+    let fetch = Transaction {
+        id: 1,
+        movements: vec![Movement {
+            id: 1,
+            batch: None,
+            item: None,
+            from: Place::Stock {
+                region: 1,
+                good: grain,
+            },
+            to: Some(Place::Person(1)),
+            good: grain,
+            quantity: 1,
+        }],
+        creations: Vec::new(),
+    };
+    let run = |quantum, workers| {
+        let mut state = opening.clone();
+        state.core.physical.tick_millis = quantum;
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut host = CoreHost::resume(state).unwrap();
+                let destination = LocalEndpoint::Store { id: 1 };
+                assert!(host.player_view(1).unwrap().nearby.is_empty());
+                assert_eq!(
+                    host.walk_controlled(1, destination).unwrap(),
+                    LocalWalkOutcome::Progressed
+                );
+                assert_eq!(host.advance_continuous(51, &[]).unwrap().failure, None);
+                assert!(host.pause_controlled_walk(1, true).unwrap());
+                let transient = host.snapshot();
+                assert!(host.transfer_goods(std::slice::from_ref(&fetch)).is_err());
+                assert_eq!(host.snapshot(), transient);
+                let mut host = CoreHost::resume(
+                    serde_json::from_str(&serde_json::to_string(&transient).unwrap()).unwrap(),
+                )
+                .unwrap();
+                assert_eq!(host.advance_continuous(181, &[]).unwrap().failure, None);
+                assert!(matches!(
+                    host.local_location(1),
+                    Some(LocalLocation::Walking { remaining: 249, .. })
+                ));
+                assert!(host.player_view(1).unwrap().nearby.is_empty());
+                assert!(host.pause_controlled_walk(1, false).unwrap());
+                if quantum == 1000 {
+                    let deadline = host.next_deadline(None).unwrap();
+                    assert!(deadline.local_arrival);
+                    assert_eq!(deadline.after_millis, 249);
+                }
+                assert_eq!(host.advance_continuous(248, &[]).unwrap().failure, None);
+                assert!(host.player_view(1).unwrap().nearby.is_empty());
+                let arrival = host.advance_continuous(1, &[]).unwrap();
+                assert_eq!(arrival.failure, None);
+                assert!(arrival.events.iter().any(|event| matches!(event,
+                CoreRunEvent::LocalWalking { at_millis: 481, events }
+                if events[0].person == 1 && events[0].outcome == LocalWalkOutcome::Arrived)));
+                assert_eq!(
+                    host.local_location(1),
+                    Some(LocalLocation::At {
+                        region: 1,
+                        endpoint: destination
+                    })
+                );
+                assert_eq!(host.player_view(1).unwrap().nearby[0].id, 2);
+            })
+    };
+    run(1000, 1);
+    run(180, 4);
+
+    let mut autonomous = opening;
+    autonomous.core.people[0].controlled = false;
+    autonomous.schedule.as_mut().unwrap().period_millis = 100;
+    let mut host = CoreHost::resume(autonomous).unwrap();
+    let opening = host.advance_continuous(399, &[]).unwrap();
+    assert_eq!(opening.failure, None);
+    assert!(matches!(
+        host.local_location(1),
+        Some(LocalLocation::Walking { remaining: 1, .. })
+    ));
+    let carrying = host.advance_continuous(1, &[]).unwrap();
+    assert_eq!(carrying.failure, None);
+    let arrived = carrying.events.iter().position(|event| matches!(event,
+        CoreRunEvent::LocalWalking { at_millis: 400, events } if events[0].outcome == LocalWalkOutcome::Arrived
+    )).unwrap();
+    assert!(
+        carrying.events[arrived + 1..]
+            .iter()
+            .any(|event| matches!(event, CoreRunEvent::LocalCarries(events) if !events.is_empty()))
+    );
+    let state = host.snapshot();
+    let store = state
+        .core
+        .physical
+        .custody
+        .containers
+        .iter()
+        .find(|row| row.place == Place::Inventory(1))
+        .unwrap();
+    assert_eq!(store.used, 2);
+}
+
+#[test]
 fn people_can_choose_to_eat_at_stock_with_full_cargo_and_compete_for_one_portion() {
     use game_economy::core_interval::{CoreChoiceOutcome, CoreHost, CoreRunEvent};
     use game_lots::Place;
@@ -940,14 +1098,15 @@ preferences = [{ domain = 7, enabled = true, bias = 0, weight = 1000 }]
     let loaded = game_economy_cli::core_scenario(&path, &root.join("content"));
     std::fs::remove_file(path).unwrap();
     let opening = loaded.unwrap().snapshot();
-    let good = opening
+    let bread = opening
         .core
         .physical
         .goods
         .iter()
         .find(|good| good.name == "bread")
-        .unwrap()
-        .id;
+        .unwrap();
+    let good = bread.id;
+    let relief = bread.food.as_ref().unwrap().hunger_relief;
     let run = |workers: usize, enabled: bool| {
         let mut state = opening.clone();
         state.schedule.as_mut().unwrap().on_site_meals = enabled;
@@ -1012,7 +1171,10 @@ preferences = [{ domain = 7, enabled = true, bias = 0, weight = 1000 }]
                             .count(),
                         1
                     );
-                    assert_eq!(final_state.core.people[(meals[0].0 - 1) as usize].hunger, 0);
+                    assert_eq!(
+                        final_state.core.people[(meals[0].0 - 1) as usize].hunger,
+                        75 - relief
+                    );
                 } else {
                     assert_eq!(stock.used, 4);
                     assert!(meals.is_empty());

@@ -15,7 +15,7 @@ fn command(host: &mut CoreHost, person: u64, words: &[&str]) -> Result<bool, Str
     match words {
         [] => {}
         ["help"] => println!(
-            "look | wait MILLISECONDS | move REGION | eat GOOD | treat GOOD | work RECIPE UNITS | stop JOB | stop-assist | rest on|off | word place|person|object ID SOUNDS | form SOUNDS MARKS | inscribe SOUNDS | read PAGE | recall PAGE | save PATH | load PATH | quit (SOUNDS and MARKS are comma-separated numbers)"
+            "look | wait MILLISECONDS | move REGION | walk stock|store ID | pause-walk | resume-walk | eat GOOD | treat GOOD | work RECIPE UNITS | stop JOB | stop-assist | rest on|off | word place|person|object ID SOUNDS | form SOUNDS MARKS | inscribe SOUNDS | read PAGE | recall PAGE | save PATH | load PATH | quit (SOUNDS and MARKS are comma-separated numbers)"
         ),
         ["quit"] | ["exit"] => return Ok(false),
         ["look"] => {
@@ -43,6 +43,9 @@ fn command(host: &mut CoreHost, person: u64, words: &[&str]) -> Result<bool, Str
                     "travel_destination={} remaining={}",
                     journey.destination, journey.remaining
                 );
+            }
+            if let Some(location) = view.local_location {
+                println!("local_location={location:?}");
             }
             for report in view.route_reports {
                 let observed = report.observed_at_millis.map_or_else(
@@ -97,6 +100,25 @@ fn command(host: &mut CoreHost, person: u64, words: &[&str]) -> Result<bool, Str
         ["move", region] => {
             let region = region.parse::<u64>().map_err(|_| "invalid region")?;
             println!("departed={}", Player::new(host, person)?.depart(region)?);
+        }
+        ["walk", "stock"] => {
+            println!(
+                "walk={:?}",
+                Player::new(host, person)?.walk(game_economy::LocalEndpoint::Stock)?
+            );
+        }
+        ["walk", "store", store] => {
+            let id = store.parse::<u64>().map_err(|_| "invalid store")?;
+            println!(
+                "walk={:?}",
+                Player::new(host, person)?.walk(game_economy::LocalEndpoint::Store { id })?
+            );
+        }
+        ["pause-walk"] | ["resume-walk"] => {
+            println!(
+                "walk_changed={}",
+                Player::new(host, person)?.pause_walk(words[0] == "pause-walk")?
+            );
         }
         ["eat", good] => {
             let good = good.parse::<u32>().map_err(|_| "invalid good")?;

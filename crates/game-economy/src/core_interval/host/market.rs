@@ -81,6 +81,7 @@ impl CoreHost {
                         || b.health == 0
                         || a.region.is_none()
                         || a.region != b.region
+                        || !self.same_local_endpoint(a.id, b.id)
                 }
                 _ => true,
             }
@@ -153,6 +154,7 @@ impl CoreHost {
         let view = self.core.physical.view(tick)?;
         let cargo =
             game_lot_projection::cargo_for_choices(&view, self.core.rules.carrying_capacity)?;
+        let together = |a, b| self.same_local_endpoint(a, b);
         let context = game_economy_exchange::Context {
             market: Some(owner),
             view: &view,
@@ -162,7 +164,7 @@ impl CoreHost {
             goods: self.core.physical.goods(),
             opinions: self.opinions.as_ref(),
             endpoint: None,
-            together: None,
+            together: self.walking().is_some().then_some(&together),
         };
         let Some(plan) = context.trade(&mut busy, 1)? else {
             return Ok(CoreMarketResults::default());
@@ -260,6 +262,17 @@ impl CoreHost {
         let view = self.core.physical.view(tick)?;
         let cargo =
             game_lot_projection::cargo_for_choices(&view, self.core.rules.carrying_capacity)?;
+        let endpoint = |person, region| match self.walking()?.location(person, region) {
+            crate::LocalLocation::At {
+                endpoint: crate::LocalEndpoint::Stock,
+                ..
+            } => Some(None),
+            crate::LocalLocation::At {
+                endpoint: crate::LocalEndpoint::Store { id },
+                ..
+            } => Some(Some(id)),
+            _ => None,
+        };
         let context = game_economy_exchange::Context {
             market: Some(owner),
             view: &view,
@@ -268,7 +281,7 @@ impl CoreHost {
             people: &people,
             goods: self.core.physical.goods(),
             opinions: self.opinions.as_ref(),
-            endpoint: None,
+            endpoint: self.walking().is_some().then_some(&endpoint),
             together: None,
         };
         let Some(draft) = context.proposals(&mut busy)? else {

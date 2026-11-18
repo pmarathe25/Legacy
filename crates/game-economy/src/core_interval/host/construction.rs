@@ -40,6 +40,8 @@ impl CoreHost {
         {
             return Err("publish pending interval events before construction".into());
         }
+        let off_stock = self.block_away_from_stock(blocked);
+        let blocked = off_stock.as_deref().unwrap_or(blocked);
         let rest = self.blocked_with_rest(blocked);
         let mut busy = rest.as_deref().unwrap_or(blocked).to_vec();
         busy.par_extend(

@@ -60,7 +60,7 @@ impl CoreHost {
             busy: &busy,
             max_hunger,
             manual: None,
-            walking: None,
+            walking: owner.walking.as_ref(),
         };
         let plan = context.prepare(1)?;
         if plan.actions.is_empty() {

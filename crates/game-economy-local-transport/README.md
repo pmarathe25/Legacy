@@ -1,5 +1,13 @@
 # Local stores and carrying
 
+Interval scenarios can set `local_transport.walking.elapsed.unit_millis`.
+The authored duration of each route uses that elapsed unit. People begin or
+resume a chosen leg, can stop in place, and reach the next endpoint when the
+leg is complete. Between endpoints they retain their cargo. The remaining
+duration and paused state survive saving. Local carrying checks the endpoint
+the person has reached. The interval player can use `walk stock`,
+`walk store ID`, `pause-walk`, and `resume-walk`.
+
 Distinct named stores have their own capacity and dated physical custody. Individuals can choose to pick up goods and deposit them at another store or regional stock on separate boundaries. The actor retains custody between actions and may stop, while physical transactions resolve competing uses and preserve expiry. Fear or felt obligation may independently motivate a carrier; no organization or agreement compels them.
 
 A policy can use `{ kind = "person" }` as its destination to express an

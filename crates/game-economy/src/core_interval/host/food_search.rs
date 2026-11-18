@@ -54,6 +54,8 @@ impl CoreHost {
         {
             return Err("publish pending interval events before food acquisition".into());
         }
+        let off_stock = self.block_away_from_stock(occupied);
+        let occupied = off_stock.as_deref().unwrap_or(occupied);
         let extra = self.blocked_with_rest(occupied);
         let occupied = extra.as_deref().unwrap_or(occupied);
         let mut busy = occupied.to_vec();
@@ -191,6 +193,8 @@ impl CoreHost {
             .travel
             .as_ref()
             .ok_or("food search needs travel")?;
+        let off_stock = self.block_away_from_stock(occupied);
+        let occupied = off_stock.as_deref().unwrap_or(occupied);
         let extra = self.blocked_with_rest(occupied);
         let occupied = extra.as_deref().unwrap_or(occupied);
         let mut busy = occupied.to_vec();
@@ -285,6 +289,13 @@ impl CoreHost {
         self.knowledge = Some(knowledge);
         self.core.travel = Some(next_travel);
         self.core.people = people;
+        if self.walking().is_some() {
+            let departed: Vec<_> = outcomes
+                .par_iter()
+                .filter_map(|outcome| outcome.departed.then_some(outcome.person))
+                .collect();
+            self.clear_local_positions(&departed);
+        }
         self.core.generation = generation;
         self.work_checked_revision = None;
         Ok(outcomes)

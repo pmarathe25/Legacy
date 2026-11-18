@@ -6,6 +6,9 @@ use game_opinions::Opinions;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::{borrow::Cow, collections::HashSet, sync::Arc};
+#[path = "elapsed_walking.rs"]
+mod elapsed;
+pub use elapsed::{Clock, Progress};
 
 /// A directed, data-defined walking time in simulation boundaries.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -33,7 +36,7 @@ pub enum Location {
     },
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Position {
     pub person: u64,
@@ -87,6 +90,8 @@ pub struct Event {
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Walking {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub elapsed: Option<Clock>,
     pub routes: Arc<Vec<Route>>,
     #[serde(default)]
     pub preferences: Arc<Vec<Preference>>,
@@ -98,9 +103,10 @@ pub struct Walking {
 impl Clone for Walking {
     fn clone(&self) -> Self {
         Self {
+            elapsed: self.elapsed.clone(),
             routes: self.routes.clone(),
             preferences: self.preferences.clone(),
-            positions: self.positions.par_iter().cloned().collect(),
+            positions: self.positions.par_iter().copied().collect(),
             events: self.events.par_iter().cloned().collect(),
         }
     }
@@ -110,6 +116,9 @@ impl Walking {
         Arc::make_mut(&mut self.routes).par_sort_unstable_by_key(|r| (r.region, r.from, r.to));
         Arc::make_mut(&mut self.preferences).par_sort_unstable_by_key(|p| p.person);
         self.positions.par_sort_unstable_by_key(|p| p.person);
+        if let Some(clock) = &mut self.elapsed {
+            clock.paused.par_sort_unstable();
+        }
     }
 
     pub fn validate(
@@ -127,7 +136,18 @@ impl Walking {
                 .ok()
                 .is_some_and(|i| stores[i].region == region),
         };
-        if self
+        if self.elapsed.as_ref().is_some_and(|clock| {
+            clock.unit_millis == 0
+                || clock.paused.par_windows(2).any(|pair| pair[0] >= pair[1])
+                || clock.paused.par_iter().any(|id| {
+                    self.positions
+                        .binary_search_by_key(id, |position| position.person)
+                        .ok()
+                        .is_none_or(|index| {
+                            !matches!(self.positions[index].location, Location::Walking { .. })
+                        })
+                })
+        }) || self
             .routes
             .par_windows(2)
             .any(|p| (p[0].region, p[0].from, p[0].to) >= (p[1].region, p[1].from, p[1].to))
@@ -136,6 +156,10 @@ impl Walking {
                     || r.ticks == 0
                     || !endpoint(r.region, r.from)
                     || !endpoint(r.region, r.to)
+                    || self
+                        .elapsed
+                        .as_ref()
+                        .is_some_and(|clock| r.ticks.checked_mul(clock.unit_millis).is_none())
             })
             || self
                 .preferences
@@ -171,9 +195,14 @@ impl Walking {
                             to,
                             remaining,
                             ..
-                        } => self
-                            .route(region, from, to)
-                            .is_none_or(|r| remaining == 0 || remaining >= r.ticks),
+                        } => self.route(region, from, to).is_none_or(|r| {
+                            remaining == 0
+                                || self.elapsed.as_ref().map_or(remaining >= r.ticks, |clock| {
+                                    r.ticks
+                                        .checked_mul(clock.unit_millis)
+                                        .is_none_or(|duration| remaining > duration)
+                                })
+                        }),
                     }
             })
             || self
@@ -293,6 +322,20 @@ impl Walking {
                         Location::At { region, endpoint } => {
                             match self.route(region, endpoint, request.destination) {
                                 None => (current, Outcome::NoRoute),
+                                Some(route) if self.elapsed.is_some() => (
+                                    Location::Walking {
+                                        region,
+                                        from: endpoint,
+                                        to: route.to,
+                                        remaining: route.ticks
+                                            * self
+                                                .elapsed
+                                                .as_ref()
+                                                .expect("elapsed walk")
+                                                .unit_millis,
+                                    },
+                                    Outcome::Progressed,
+                                ),
                                 Some(route) if route.ticks == 1 => (
                                     Location::At {
                                         region,
@@ -317,7 +360,9 @@ impl Walking {
                             to,
                             remaining,
                         } if to == request.destination => {
-                            if remaining == 1 {
+                            if self.elapsed.is_some() {
+                                (current, Outcome::Progressed)
+                            } else if remaining == 1 {
                                 (
                                     Location::At {
                                         region,
@@ -375,7 +420,7 @@ impl Walking {
                             .get(at)
                             .is_none_or(|request| request.person != position.person)
                     })
-                    .cloned()
+                    .copied()
             }));
         }
         if positions
@@ -384,7 +429,22 @@ impl Walking {
         {
             positions.par_sort_unstable_by_key(|p| p.person);
         }
+        let mut elapsed = self.elapsed.clone();
+        if let Some(clock) = &mut elapsed {
+            clock.paused = clock
+                .paused
+                .par_iter()
+                .copied()
+                .filter(|person| {
+                    events
+                        .binary_search_by_key(person, |event: &Event| event.person)
+                        .ok()
+                        .is_none_or(|index| events[index].outcome != Outcome::Progressed)
+                })
+                .collect();
+        }
         Ok(Walking {
+            elapsed,
             routes: self.routes.clone(),
             preferences: self.preferences.clone(),
             positions,
@@ -598,6 +658,7 @@ mod tests {
     }
     fn model() -> Walking {
         Walking {
+            elapsed: None,
             preferences: vec![].into(),
             routes: vec![Route {
                 region: 1,
@@ -659,6 +720,48 @@ mod tests {
                 })
         };
         assert_eq!(run(1), run(4));
+    }
+
+    #[test]
+    fn a_chosen_elapsed_walk_pauses_in_place_and_resumes_after_loading() {
+        let mut opening = model();
+        opening.elapsed = Some(Clock {
+            unit_millis: 100,
+            paused: Vec::new(),
+        });
+        let destination = Endpoint::Store { id: 7 };
+        let people = people(1);
+        let mut walk = opening
+            .prepare(
+                &people,
+                &[Request {
+                    person: 1,
+                    region: 1,
+                    destination,
+                }],
+                1,
+            )
+            .unwrap();
+        assert_eq!(walk.events[0].outcome, Outcome::Progressed);
+        let duration = walk.next_arrival(|_| true).unwrap();
+        assert!(duration > 25);
+        let traveled = walk.stage_elapsed(|_| true, 25, 1).unwrap();
+        assert!(traveled.arrivals.is_empty());
+        walk.positions = traveled.positions;
+        assert!(!walk.present(1, 1, Endpoint::Stock));
+        assert!(!walk.present(1, 1, destination));
+        assert!(walk.pause(1, 1, true));
+        assert!(walk.next_arrival(|_| true).is_none());
+        assert!(walk.stage_elapsed(|_| true, duration, 2).is_none());
+        let mut walk: Walking =
+            serde_json::from_str(&serde_json::to_string(&walk).unwrap()).unwrap();
+        assert!(walk.pause(1, 1, false));
+        assert_eq!(walk.next_arrival(|_| true), Some(duration - 25));
+        assert!(walk.stage_elapsed(|_| false, duration, 3).is_none());
+        let arrived = walk.stage_elapsed(|_| true, duration - 25, 3).unwrap();
+        assert_eq!(arrived.arrivals[0].outcome, Outcome::Arrived);
+        walk.positions = arrived.positions;
+        assert!(walk.present(1, 1, destination));
     }
 
     #[test]

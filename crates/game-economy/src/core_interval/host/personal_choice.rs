@@ -822,6 +822,8 @@ impl CoreHost {
             None
         };
         let busy = self.choice_busy(blocked);
+        let stock_busy = self.block_away_from_stock(&busy);
+        let regional = stock_busy.as_deref().unwrap_or(&busy);
         let gathering: Vec<_> = if domain.is_none_or(|domain| domain == GATHERING) {
             self.gathering
                 .as_ref()
@@ -831,7 +833,7 @@ impl CoreHost {
                         owner,
                         people: &self.core.people,
                         opinions: self.opinions.as_ref(),
-                        busy: &busy,
+                        busy: regional,
                         goods: self.core.physical.goods(),
                         view: view.as_ref().expect("gathering view"),
                         tick_millis: self.core.physical.tick_millis(),
@@ -1029,7 +1031,7 @@ impl CoreHost {
                     busy: &busy,
                     max_hunger: u32::MAX,
                     manual: None,
-                    walking: None,
+                    walking: owner.walking.as_ref(),
                 }
                 .direct_opportunities();
                 let rows: Vec<_> = opportunities
@@ -1461,7 +1463,7 @@ impl CoreHost {
                         &self.core.people,
                         self.core.physical.goods(),
                         view.as_ref().expect("on-site meal view"),
-                        &busy,
+                        regional,
                         |person, region, good| {
                             claims
                                 .as_ref()
@@ -1590,7 +1592,7 @@ impl CoreHost {
                 &self.core.people,
                 self.core.physical.goods(),
                 view.as_ref().expect("food pickup view"),
-                &busy,
+                regional,
                 |person, region, good| {
                     claims
                         .as_ref()

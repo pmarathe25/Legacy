@@ -138,7 +138,7 @@ impl CoreHost {
                 relationships,
                 opinions: self.opinions.as_ref(),
                 locations: &locations,
-                walking: None,
+                walking: self.walking(),
                 communication: &communication,
                 seed: self.core.seed,
                 tick,
@@ -180,7 +180,7 @@ impl CoreHost {
             tick,
             seed: self.core.seed,
             locations: &locations,
-            walking: None,
+            walking: self.walking(),
         }
         .prepare(base)?;
         actors.par_extend(plan.actors.par_iter().copied());

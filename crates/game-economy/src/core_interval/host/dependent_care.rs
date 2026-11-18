@@ -116,8 +116,15 @@ impl CoreHost {
             claims: claims.as_ref(),
             busy: &busy,
             access: game_economy_work::care::Access {
-                contact: &|_, _| true,
-                local_stock: &|_| true,
+                contact: &|a, b| self.same_local_endpoint(a, b),
+                local_stock: &|person| {
+                    self.core
+                        .people
+                        .binary_search_by_key(&person, |row| row.id)
+                        .ok()
+                        .and_then(|slot| self.core.people[slot].region)
+                        .is_some_and(|region| self.regional_stock_reachable(person, region))
+                },
             },
             eating: &[],
             seed: self.core.seed,

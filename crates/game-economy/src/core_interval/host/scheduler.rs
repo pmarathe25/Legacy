@@ -667,6 +667,10 @@ pub enum CoreRunEvent {
     WrittenPages(Vec<u64>),
     Construction(Vec<game_economy_building::Event>),
     LocalCarries(Vec<game_economy_local_transport::Event>),
+    LocalWalking {
+        at_millis: u128,
+        events: Vec<game_economy_local_transport::walking::Event>,
+    },
     PersonalChoices(Vec<CoreChoiceEvent>),
     MechanicalExperiments(Vec<game_mechanics::Observation>),
     MechanicalLoads(Vec<MechanicalLoadResult>),
@@ -3101,6 +3105,13 @@ impl CoreHost {
                         busy.extend(meal_people);
                         busy.par_sort_unstable();
                         busy.dedup();
+                        let walking = attempt!('run, self.walk_autonomously(&busy));
+                        if !walking.is_empty() {
+                            run.events.push(CoreRunEvent::LocalWalking {
+                                at_millis: self.core.simulated_millis(),
+                                events: walking,
+                            });
+                        }
                         let departures = attempt!('run, self.depart_autonomously(&busy));
                         if !departures.is_empty() {
                             run.events.push(CoreRunEvent::Departures(departures));
@@ -3144,6 +3155,12 @@ impl CoreHost {
             if !elapsed.disease_events.is_empty() {
                 run.events
                     .push(CoreRunEvent::Disease(elapsed.disease_events));
+            }
+            if !elapsed.local_arrivals.is_empty() {
+                run.events.push(CoreRunEvent::LocalWalking {
+                    at_millis: self.core.simulated_millis(),
+                    events: elapsed.local_arrivals,
+                });
             }
         }
         run.elapsed_millis = self.core.elapsed_millis().expect("active interval") - start;
