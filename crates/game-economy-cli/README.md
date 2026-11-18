@@ -324,6 +324,11 @@ Inspect a saved NDJSON history without loading the whole file at once:
 - `cargo run -p game-economy-cli --example inspect_history -- person runs/history/pilot-300-seed-1701/pilot-300.ndjson 75`
 - `cargo run -p game-economy-cli --example inspect_history -- animal runs/history/pilot-300-seed-1701/pilot-300.ndjson 37`
 
+Append `--narrative` to produce Markdown prose from the same records. A person's
+account includes recorded family milestones, exact elapsed incapacitation times
+where present, and examples of observed mechanical experiments. The world
+account reports population peaks and the first snapshots with no living members.
+
 The inspector reports observed population changes, sample genome means by species, intermediate animal population events, selected family events, and recorded meetings. Meeting counts do not establish leadership, and changes in genome averages do not establish selection or causation. It preserves the run metadata and indicates whether a completion record was present.
 
 An initial controlled-person interface for the interval host is available with

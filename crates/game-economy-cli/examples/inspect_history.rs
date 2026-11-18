@@ -630,11 +630,185 @@ fn inspect(path: &Path, focus: Focus) -> Result<Value, String> {
     }
 }
 
+fn narrative(report: &Value, focus: Focus) -> String {
+    use std::fmt::Write;
+
+    let scope = &report["scope"];
+    let count = |field: &str| report[field].as_array().map_or(0, Vec::len);
+    let mut text = String::new();
+    match focus {
+        Focus::Summary => {
+            text.push_str("# World history\n\n");
+            let people = &report["peak_people"];
+            let animals = &report["peak_animals"];
+            writeln!(text, "The largest recorded human population was {} in year {}. The largest recorded animal population was {} in year {}.\n", people["count"], people["year"], animals["count"], animals["year"]).unwrap();
+            if let Some(year) = report["first_zero_people"].as_u64() {
+                writeln!(
+                    text,
+                    "Year {year} is the first snapshot with nobody still alive.\n"
+                )
+                .unwrap();
+            }
+            let totals = &report["family_totals"];
+            if let (Some(births), Some(deaths)) =
+                (totals["births"].as_u64(), totals["deaths"].as_u64())
+            {
+                writeln!(text, "The final family counters record {births} births and {deaths} deaths. The history contains {} observed meetings.\n", report["recorded_meetings"]).unwrap();
+            }
+            for species in report["animal_species_history"]
+                .as_array()
+                .into_iter()
+                .flatten()
+            {
+                let name = species["name"].as_str().unwrap_or("Unnamed species");
+                write!(
+                    text,
+                    "{name} peaked at {} in year {}.",
+                    species["peak"]["count"], species["peak"]["year"]
+                )
+                .unwrap();
+                if let Some(year) = species["first_zero"].as_u64() {
+                    write!(
+                        text,
+                        " Its first recorded year without a living animal was {year}."
+                    )
+                    .unwrap();
+                }
+                text.push_str("\n\n");
+            }
+        }
+        Focus::Person(person) => {
+            writeln!(text, "# Person {person}\n").unwrap();
+            observed_life(&mut text, report);
+            let incapacitations = report["incapacitations"]
+                .as_array()
+                .map_or(&[][..], Vec::as_slice);
+            let exact_death = incapacitations
+                .iter()
+                .any(|event| event["died"].as_bool() == Some(true));
+            for event in report["family_events"].as_array().into_iter().flatten() {
+                let Some(tick) = event["tick"].as_u64() else {
+                    continue;
+                };
+                let related: Vec<_> = event["people"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(Value::as_u64)
+                    .collect();
+                let other = related.iter().copied().find(|id| *id != person);
+                let sentence = match (event["kind"].as_str(), related.as_slice()) {
+                    (Some("birth"), [child, mother, father]) if *child == person => {
+                        format!("Person {person} was born to people {mother} and {father}.")
+                    }
+                    (Some("birth"), [child, _, _]) => {
+                        format!("Their child, person {child}, was born.")
+                    }
+                    (Some("adulthood"), _) => "They reached adulthood.".to_owned(),
+                    (Some("partnership"), _) if other.is_some() => {
+                        format!("They formed a partnership with person {}.", other.unwrap())
+                    }
+                    (Some("separation"), _) if other.is_some() => {
+                        format!("Their partnership with person {} ended.", other.unwrap())
+                    }
+                    (Some("conception"), _) if other.is_some() => {
+                        format!("They and person {} conceived a child.", other.unwrap())
+                    }
+                    (Some("pregnancy_loss"), _) => {
+                        "A pregnancy involving them ended in loss.".to_owned()
+                    }
+                    (Some("death"), _) if !exact_death => "They died.".to_owned(),
+                    _ => continue,
+                };
+                writeln!(text, "At tick {tick}, {}\n", sentence).unwrap();
+            }
+            for event in incapacitations {
+                let Some(time) = event["at_millis"].as_u64() else {
+                    continue;
+                };
+                let day = time / 86_400_000;
+                let hour = time / 3_600_000 % 24;
+                let minute = time / 60_000 % 60;
+                let second = time / 1000 % 60;
+                let millis = time % 1000;
+                let result = match (
+                    event["died"].as_bool(),
+                    event["natural_mortality"].as_bool(),
+                ) {
+                    (Some(true), Some(true)) => "died of natural causes",
+                    (Some(true), _) => "died",
+                    _ => "became incapacitated",
+                };
+                writeln!(text, "At {hour:02}:{minute:02}:{second:02}.{millis:03} on simulated day {day}, they {result}.\n").unwrap();
+            }
+            writeln!(text, "The recorded activity includes {} meetings, {} spoken exchanges, {} instances of recipe learning or teaching, and {} mechanical experiments involving them.\n",
+                count("recorded_meetings"), count("language_events"), count("recipe_learning"), count("mechanical_experiments")).unwrap();
+            for experiment in report["mechanical_experiments"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .take(5)
+            {
+                if let (Some(tick), Some(outcome)) =
+                    (experiment["tick"].as_u64(), experiment["outcome"].as_str())
+                {
+                    writeln!(text, "At tick {tick}, a mechanical experiment involving them recorded the outcome `{outcome}`.\n").unwrap();
+                }
+            }
+        }
+        Focus::Animal(animal) => {
+            writeln!(text, "# Animal {animal}\n").unwrap();
+            observed_life(&mut text, report);
+            let state = &report["last_recorded_animal_state"];
+            if let Some(species) = state["species"].as_u64() {
+                writeln!(
+                    text,
+                    "The last recorded state assigns them to species {species}.\n"
+                )
+                .unwrap();
+            }
+            if let Some(parents) = state["parents"]
+                .as_array()
+                .filter(|parents| parents.len() == 2)
+            {
+                writeln!(
+                    text,
+                    "Their recorded parents are animals {} and {}.\n",
+                    parents[0], parents[1]
+                )
+                .unwrap();
+            }
+        }
+    }
+    if let (Some(first), Some(last)) = (scope["first_year"].as_u64(), scope["last_year"].as_u64()) {
+        writeln!(
+            text,
+            "This account covers recorded years {first} through {last}."
+        )
+        .unwrap();
+    }
+    text
+}
+
+fn observed_life(text: &mut String, report: &Value) {
+    use std::fmt::Write;
+    if let Some(first) = report["first_observed_year"].as_u64() {
+        writeln!(text, "They first appear in the year {first} snapshot.\n").unwrap();
+    }
+    if let Some(last) = report["last_year_alive"].as_u64() {
+        writeln!(
+            text,
+            "The last snapshot that records them alive is from year {last}.\n"
+        )
+        .unwrap();
+    }
+}
+
 fn main() -> Result<(), String> {
     let mut args = std::env::args_os().skip(1);
-    let command = args
-        .next()
-        .ok_or("usage: inspect_history summary FILE | person FILE ID | animal FILE ID")?;
+    let command = args.next().ok_or(
+        "usage: inspect_history (summary FILE | person FILE ID | animal FILE ID) [--narrative]",
+    )?;
     let path = args.next().ok_or("missing history file")?;
     let focus = match command.to_str() {
         Some("summary") => Focus::Summary,
@@ -654,14 +828,20 @@ fn main() -> Result<(), String> {
         ),
         _ => return Err("unknown history inspection command".into()),
     };
-    if args.next().is_some() {
-        return Err("unexpected argument".into());
-    }
+    let narrative_requested = match args.next() {
+        None => false,
+        Some(flag) if flag == "--narrative" && args.next().is_none() => true,
+        Some(_) => return Err("unexpected argument".into()),
+    };
     let output = inspect(Path::new(&path), focus)?;
-    println!(
-        "{}",
-        serde_json::to_string_pretty(&output).map_err(|e| e.to_string())?
-    );
+    if narrative_requested {
+        print!("{}", narrative(&output, focus));
+    } else {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&output).map_err(|e| e.to_string())?
+        );
+    }
     Ok(())
 }
 
@@ -744,6 +924,14 @@ mod tests {
             0
         );
         let person = inspect(&path, Focus::Person(1)).unwrap();
+        let life = narrative(&person, Focus::Person(1));
+        assert!(life.contains("formed a partnership with person 2"));
+        assert!(life.contains("died of natural causes"));
+        assert!(life.contains("recorded the outcome `moved`"));
+        assert!(!life.contains("became incapacitated"));
+        let overview = narrative(&summary, Focus::Summary);
+        assert!(overview.contains("Year 2 is the first snapshot with nobody still alive"));
+        assert!(overview.contains("grazer peaked at 1 in year 0"));
         assert_eq!(person["first_observed_year"], 0);
         assert_eq!(person["last_year_alive"], 1);
         assert_eq!(person["recorded_meetings"].as_array().unwrap().len(), 1);
