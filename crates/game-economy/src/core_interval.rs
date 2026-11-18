@@ -532,7 +532,13 @@ impl CoreInterval {
         busy.par_sort_unstable();
         busy.dedup();
         let travel = self.travel.as_ref().ok_or("travel is disabled")?;
-        let (travel, people, outcomes) = travel.attempt(&self.people, requests, &busy, tick)?;
+        let (travel, people, outcomes) = travel.attempt_at(
+            &self.people,
+            requests,
+            &busy,
+            tick,
+            Some(self.simulated_millis()),
+        )?;
         self.travel = Some(travel);
         self.people = people;
         self.generation = generation;

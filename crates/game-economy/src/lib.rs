@@ -3199,6 +3199,21 @@ impl Economy {
         {
             return Err("elapsed physiology requires the interval host".into());
         }
+        if self
+            .environment
+            .as_ref()
+            .is_some_and(|owner| owner.season_unit_millis.is_some())
+        {
+            return Err("elapsed seasons require the interval host".into());
+        }
+        if self.travel.as_ref().is_some_and(|owner| {
+            owner
+                .closures
+                .par_iter()
+                .any(|closure| closure.unit_millis.is_some())
+        }) {
+            return Err("elapsed route closures require the interval host".into());
+        }
         #[cfg(feature = "profile")]
         let mut profile_phase = game_diagnostics::span("economy.setup");
         let tick = self.tick().checked_add(1).ok_or("tick overflow")?;
@@ -8470,6 +8485,7 @@ impl Economy {
                     self.gathering.as_ref().expect("gathering owner"),
                     physical.events(),
                     self.environment.as_ref().and_then(|env| env.season(tick)),
+                    None,
                 )
             })
             .transpose()?;
@@ -8918,6 +8934,7 @@ impl Economy {
             self.travel.as_ref(),
             &mut person.people,
             tick,
+            None,
         );
         recovery::apply(
             self.recovery.as_ref(),

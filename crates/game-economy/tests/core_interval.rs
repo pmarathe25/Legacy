@@ -1508,6 +1508,53 @@ fn elapsed_exhaustion_and_starvation_jointly_incapacitate_a_worker() {
 }
 
 #[test]
+fn immortal_worker_can_resume_selected_work_after_elapsed_exhaustion() {
+    let mut core = fixture();
+    core.travel = None;
+    core.people[1].region = Some(1);
+    core.people.iter_mut().for_each(|person| person.health = 1);
+    core.rules.max_health = 1;
+    core.people[0].hunger = 0;
+    core.people[0].immortal = Some(game_economy_person::Immortal {
+        recovery_per_tick: 0,
+        recovery_rate: Some(game_economy_person::RecoveryRate {
+            units: 4,
+            per_millis: 1000,
+        }),
+        recovery_remainder: 0,
+    });
+    core.nutrition = None;
+    core.pending_food.clear();
+    core.rules.hunger_per_tick = 0;
+    core.rules.starvation_damage = 0;
+    let mut fatigue = timed_fatigue();
+    fatigue.rate_period_millis = Some(1000);
+    fatigue.elapsed_damage_remainders = Some(vec![]);
+    fatigue.fatigue.rules.exhaustion_damage = 4;
+    fatigue.fatigue.people = vec![game_economy_fatigue::FatiguePerson {
+        id: 1,
+        fatigue: 9,
+        resting: false,
+    }];
+    let snapshot: CoreHostSnapshot =
+        serde_json::from_value(serde_json::json!({"core": core, "fatigue": fatigue})).unwrap();
+    let mut host = CoreHost::begin(snapshot, &[(1, 1)]).unwrap();
+    assert_eq!(host.progress(1000).unwrap(), 499);
+    let state = host.snapshot();
+    assert_eq!(state.core.people[0].health, 0);
+    assert_eq!(state.paused_work_rates, vec![(1, 1)]);
+    host = CoreHost::resume(serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap())
+        .unwrap();
+    assert_eq!(host.progress(501).unwrap(), 250);
+    assert_eq!(host.snapshot().core.people[0].health, 1);
+    assert_eq!(host.progress(100).unwrap(), 100);
+    assert_eq!(
+        host.snapshot().core.physical.work[0].progress_remainder,
+        599
+    );
+}
+
+#[test]
 fn elapsed_fatigue_matches_across_physical_boundaries_and_resume() {
     fn run(quantum: u64, workers: usize) -> game_economy_fatigue::TimedFatigue {
         rayon::ThreadPoolBuilder::new()
@@ -2596,6 +2643,43 @@ fn core_host_departure_benchmark() {
 }
 
 #[test]
+fn elapsed_route_closure_reopens_inside_a_physical_interval_after_resume() {
+    use game_economy_person::travel::{Closure, Departure};
+
+    fn run(quantum: u64, steps: &[u64]) {
+        let mut state = fixture();
+        state.physical.tick_millis = quantum;
+        state.people[1].region = Some(1);
+        let travel = state.travel.as_mut().unwrap();
+        travel.journeys.clear();
+        travel.closures.push(Closure {
+            source: 1,
+            destination: 2,
+            start: 0,
+            end: 2,
+            unit_millis: Some(61),
+        });
+        let mut core = CoreInterval::begin(state, &[]).unwrap();
+        let requests = [Departure {
+            person: 2,
+            destination: 2,
+        }];
+        for &step in steps {
+            assert_eq!(core.progress(step).unwrap(), step);
+        }
+        assert!(!core.depart(0, 121, &requests, &[]).unwrap()[0].departed);
+        let saved = serde_json::to_string(&core.snapshot()).unwrap();
+        let mut core = CoreInterval::resume(serde_json::from_str(&saved).unwrap()).unwrap();
+        assert_eq!(core.progress(1).unwrap(), 1);
+        assert!(core.depart(0, 122, &requests, &[]).unwrap()[0].departed);
+        assert!(core.snapshot().travel.unwrap().observations[0].open);
+    }
+
+    run(1000, &[121]);
+    run(250, &[7, 13, 101]);
+}
+
+#[test]
 fn closed_route_is_observed_without_moving_or_consuming_time() {
     let mut initial = fixture();
     initial.people[1].region = Some(1);
@@ -2606,6 +2690,7 @@ fn closed_route_is_observed_without_moving_or_consuming_time() {
         destination: 2,
         start: 0,
         end: 1,
+        unit_millis: None,
     });
     let snapshot = CoreHostSnapshot {
         work_capabilities: None,
@@ -6470,6 +6555,7 @@ fn boundary_cultivation_uses_real_seeds_grows_and_harvests_after_reload() {
                     harvest_allowed: harvest,
                 };
                 seasonal.environment = Some(game_environment::Environment {
+                    season_unit_millis: None,
                     regions: vec![],
                     seasons: vec![
                         season("winter", false, false, false),
@@ -6501,6 +6587,7 @@ fn boundary_cultivation_uses_real_seeds_grows_and_harvests_after_reload() {
                 exposure.core.people.truncate(2);
                 exposure.agriculture = None;
                 exposure.environment = Some(game_environment::Environment {
+                    season_unit_millis: None,
                     regions: vec![game_environment::Hazard {
                         region: 1,
                         damage: 2,
@@ -7820,6 +7907,7 @@ fn core_host_cultivation_benchmark() {
             }
         }),
         environment: exposure.then(|| game_environment::Environment {
+            season_unit_millis: None,
             regions: vec![game_environment::Hazard {
                 region: 1,
                 damage: 2,

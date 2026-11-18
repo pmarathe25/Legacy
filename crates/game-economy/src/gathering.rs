@@ -461,6 +461,7 @@ impl Plan {
         owner: &Gathering,
         events: &Events,
         season: Option<&crate::Season>,
+        food_growth_exposure: Option<u128>,
     ) -> Result<Gathering, String> {
         let mut decisions: Vec<_> = events.physical_actions.par_iter().collect();
         if decisions.par_windows(2).any(|w| w[0].id > w[1].id) {
@@ -496,11 +497,16 @@ impl Plan {
                     1000
                 };
                 if let Some(rate) = node.renewal_rate {
-                    let (available, remainder) = elapsed_renewal(
+                    let exposure = if node.seasonal {
+                        food_growth_exposure
+                            .unwrap_or(u128::from(self.elapsed_millis) * u128::from(factor))
+                    } else {
+                        u128::from(self.elapsed_millis) * 1000
+                    };
+                    let (available, remainder) = integrate_renewal(
                         rate,
                         node.renewal_remainder,
-                        self.elapsed_millis,
-                        factor,
+                        exposure,
                         after_gathering,
                         node.capacity,
                     )?;
@@ -527,11 +533,10 @@ impl Plan {
     }
 }
 
-fn elapsed_renewal(
+fn integrate_renewal(
     rate: RenewalRate,
     remainder: u64,
-    elapsed_millis: u64,
-    factor: u32,
+    per_thousand_millis: u128,
     available: u64,
     capacity: u64,
 ) -> Result<(u64, u64), String> {
@@ -543,11 +548,11 @@ fn elapsed_renewal(
     if remainder >= denominator || available > capacity {
         return Err("invalid renewal state".into());
     }
+    // A numerator larger than u128 already exceeds any u64 capacity times
+    // any supported denominator, so clamping it here still fills the node.
     let numerator = u128::from(rate.units)
-        .checked_mul(u128::from(elapsed_millis))
-        .and_then(|value| value.checked_mul(u128::from(factor)))
-        .and_then(|value| value.checked_add(u128::from(remainder)))
-        .ok_or("renewal overflow")?;
+        .saturating_mul(per_thousand_millis)
+        .saturating_add(u128::from(remainder));
     let quantity = numerator / u128::from(denominator);
     let room = u128::from(capacity - available);
     if quantity >= room {
@@ -572,6 +577,23 @@ fn renewal(rate: u64, factor: u32, tick: u64) -> u64 {
 #[cfg(test)]
 mod elapsed_tests {
     use super::*;
+
+    fn elapsed_renewal(
+        rate: RenewalRate,
+        remainder: u64,
+        millis: u64,
+        factor: u32,
+        available: u64,
+        capacity: u64,
+    ) -> Result<(u64, u64), String> {
+        integrate_renewal(
+            rate,
+            remainder,
+            u128::from(millis) * u128::from(factor),
+            available,
+            capacity,
+        )
+    }
 
     #[test]
     fn renewal_preserves_fraction_across_arbitrary_partitions_and_saturation() {

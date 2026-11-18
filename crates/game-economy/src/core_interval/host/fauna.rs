@@ -28,10 +28,7 @@ impl CoreHost {
                 available: node.available,
             })
             .collect();
-        let season = self
-            .environment
-            .as_ref()
-            .and_then(|owner| owner.season(tick));
+        let season = self.settlement_season(tick);
         let exposure: Vec<_> = self
             .environment
             .as_ref()

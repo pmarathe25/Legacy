@@ -1553,7 +1553,7 @@ good = "barley"
 seasonal = true
 available = 3000
 capacity = 4000
-regrowth = 48
+renewal_rate = { units = 48, per_millis = 3600000 }
 yield_per_action = 20
 
 [[gathering.nodes]]
@@ -1563,7 +1563,7 @@ good = "barley"
 seasonal = true
 available = 900
 capacity = 1200
-regrowth = 48
+renewal_rate = { units = 48, per_millis = 3600000 }
 yield_per_action = 20
 
 
@@ -1574,7 +1574,7 @@ good = "wild-berries"
 seasonal = true
 available = 900
 capacity = 1200
-regrowth = 48
+renewal_rate = { units = 48, per_millis = 3600000 }
 yield_per_action = 20
 
 [[gathering.nodes]]
@@ -1584,7 +1584,7 @@ good = "wild-berries"
 seasonal = true
 available = 900
 capacity = 1200
-regrowth = 48
+renewal_rate = { units = 48, per_millis = 3600000 }
 yield_per_action = 20
 
 [[gathering.nodes]]
@@ -1864,6 +1864,7 @@ max_records = 4
 minds = []
 
 [environment]
+season_unit_millis = 3600000
 [[environment.regions]]
 region = 1
 damage = 1

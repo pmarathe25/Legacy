@@ -590,6 +590,8 @@ struct HaulingPolicyConfig {
 struct EnvironmentConfig {
     regions: Vec<HazardConfig>,
     #[serde(default)]
+    season_unit_millis: Option<u64>,
+    #[serde(default)]
     seasons: Vec<game_economy::Season>,
 }
 #[derive(Deserialize)]
@@ -637,6 +639,7 @@ fn resolve_environment(
         .collect::<Result<Vec<_>, String>>()?;
     Ok(game_economy::Environment {
         regions,
+        season_unit_millis: config.season_unit_millis,
         seasons: config.seasons,
     })
 }
@@ -1473,6 +1476,22 @@ fn scenario_with_options_inner(
         // The legacy loader constructs an Economy as a content bridge; the
         // explicit elapsed-time rule is attached only to the interval host.
         scenario.rules.hunger_rate = None;
+    }
+    if !interval_features
+        && scenario
+            .route_closures
+            .iter()
+            .any(|closure| closure.unit_millis.is_some())
+    {
+        return Err("elapsed route closures require the interval simulation host".into());
+    }
+    if !interval_features
+        && scenario
+            .environment
+            .as_ref()
+            .is_some_and(|owner| owner.season_unit_millis.is_some())
+    {
+        return Err("elapsed seasons require the interval simulation host".into());
     }
     if (scenario.language.is_some() || !scenario.language_topic_profiles.is_empty())
         && !interval_features

@@ -286,11 +286,15 @@ impl CoreHost {
         let durations = self.assist_durations(consumed)?;
         let (reductions, staged_shared) =
             self.stage_fatal_assistance(&deaths, &durations, consumed)?;
+        let paused_after_deaths = self.pause_incapacitated_rates(&deaths, &reductions, consumed)?;
         let Some(owner) = &self.fatigue else {
             let credits = self.plan_skill_practice(consumed);
             let advanced = self.core.progress_adjusting(consumed, &reductions, &[])?;
             if advanced > 0 {
                 self.pending_vital_deaths = pending;
+                if let Some(paused) = paused_after_deaths {
+                    self.paused_work_rates = paused;
+                }
                 if !deaths.is_empty() || recovery_due {
                     self.work_checked_revision = None;
                 }
@@ -446,6 +450,9 @@ impl CoreHost {
                 .set_elapsed_owner(draft.state);
         }
         self.pending_vital_deaths = pending;
+        if let Some(paused) = paused_after_deaths {
+            self.paused_work_rates = paused;
+        }
         if !deaths.is_empty() || recovery_due || has_injuries {
             self.work_checked_revision = None;
         }
@@ -457,6 +464,75 @@ impl CoreHost {
         }
         self.remember_skill_practice(skill_practice);
         Ok(advanced)
+    }
+
+    /// Remember the chosen rate of unfinished jobs while their lead is unable
+    /// to work, excluding assistance that ended with the incapacitation.
+    fn pause_incapacitated_rates(
+        &self,
+        deaths: &[u64],
+        reductions: &[(u64, u64)],
+        consumed: u64,
+    ) -> Result<Option<Vec<(u64, u64)>>, String> {
+        if deaths.is_empty() {
+            return Ok(None);
+        }
+        let interval = self
+            .core
+            .physical
+            .work_interval()
+            .ok_or("no physical interval")?;
+        let added: Vec<_> = interval
+            .rates
+            .par_iter()
+            .map(|&(job, rate)| {
+                let index = self
+                    .core
+                    .physical
+                    .work()
+                    .binary_search_by_key(&job, |row| row.job.id)
+                    .map_err(|_| "missing activity job")?;
+                let work = &self.core.physical.work()[index];
+                if deaths.binary_search(&work.job.worker).is_err()
+                    || self
+                        .core
+                        .people
+                        .binary_search_by_key(&work.job.worker, |person| person.id)
+                        .ok()
+                        .is_none_or(|index| self.core.people[index].immortal.is_none())
+                    || work
+                        .completion_after(rate, self.core.physical.work_rate_period_millis())
+                        .map_err(str::to_owned)?
+                        .is_some_and(|after| after <= u128::from(consumed))
+                {
+                    return Ok(None);
+                }
+                let reduction = reductions
+                    .binary_search_by_key(&job, |row| row.0)
+                    .ok()
+                    .map_or(0, |index| reductions[index].1);
+                let rate = rate
+                    .checked_sub(reduction)
+                    .ok_or("invalid fatal work reduction")?;
+                if rate == 0 {
+                    return Err("invalid paused work rate".to_string());
+                }
+                Ok(Some((job, rate)))
+            })
+            .collect::<Result<Vec<_>, String>>()?
+            .into_par_iter()
+            .flatten()
+            .collect();
+        if added.is_empty() {
+            return Ok(None);
+        }
+        let mut paused = self.paused_work_rates.clone();
+        paused.extend(added);
+        paused.par_sort_unstable_by_key(|row| row.0);
+        if paused.par_windows(2).any(|rows| rows[0].0 == rows[1].0) {
+            return Err("duplicate paused work rate".into());
+        }
+        Ok(Some(paused))
     }
 }
 

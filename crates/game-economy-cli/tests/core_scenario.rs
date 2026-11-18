@@ -3717,6 +3717,59 @@ fn clonal_seed_offspring_mutate_once_and_survive_failed_harvests() {
 }
 
 #[test]
+fn cultivation_opportunities_use_absolute_season_time() {
+    use game_economy::core_interval::CoreHost;
+
+    fn run(quantum: u64, steps: &[u64]) {
+        let root = root();
+        let mut state = game_economy_cli::core_scenario(
+            &root.join("content/scenarios/economy-core-seasonal-seeds.toml"),
+            &root.join("content"),
+        )
+        .unwrap()
+        .snapshot();
+        state.schedule = None;
+        state.core.physical.tick_millis = quantum;
+        let environment = state.environment.as_mut().unwrap();
+        environment.season_unit_millis = Some(100);
+        let warm = &mut environment.seasons[0];
+        warm.duration = 1;
+        let mut cold = warm.clone();
+        cold.name = "cold".into();
+        cold.duration = 2;
+        cold.planting_allowed = false;
+        environment.seasons.push(cold);
+        let mut host = CoreHost::resume(state).unwrap();
+        assert_eq!(
+            host.preview_cultivation_opportunities(&[1], &[])
+                .unwrap()
+                .len(),
+            1
+        );
+        for &step in steps {
+            assert_eq!(host.progress(step).unwrap(), step);
+        }
+        let saved = serde_json::to_string(&host.snapshot()).unwrap();
+        let mut host = CoreHost::resume(serde_json::from_str(&saved).unwrap()).unwrap();
+        assert!(
+            host.preview_cultivation_opportunities(&[1], &[])
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(host.progress(200).unwrap(), 200);
+        assert_eq!(
+            host.preview_cultivation_opportunities(&[1], &[])
+                .unwrap()
+                .len(),
+            1
+        );
+    }
+
+    run(1000, &[100]);
+    run(500, &[16, 23, 61]);
+}
+
+#[test]
 fn seasonal_conditions_change_growth_of_actual_planted_genotypes() {
     use game_economy::core_interval::CoreHost;
     fn run(workers: usize, batch: u64, enabled: bool) -> serde_json::Value {
@@ -4596,7 +4649,7 @@ fn food_pickups_are_personal_choices_with_shared_stock_and_claim_consequences() 
 #[test]
 fn elapsed_resource_renewal_survives_subdivision_and_resume() {
     use game_economy::core_interval::CoreHost;
-    fn run(quantum: u64, chunk: u64, workers: usize) -> game_economy::ResourceNode {
+    fn run(quantum: u64, chunk: u64, workers: usize, seasonal: bool) -> game_economy::ResourceNode {
         rayon::ThreadPoolBuilder::new()
             .num_threads(workers)
             .build()
@@ -4611,6 +4664,16 @@ fn elapsed_resource_renewal_survives_subdivision_and_resume() {
                 let mut state = host.snapshot();
                 state.core.physical.tick_millis = quantum;
                 state.core.rules.starvation_damage = 0;
+                if seasonal {
+                    state.environment = Some(serde_json::from_value(serde_json::json!({
+                        "regions": [],
+                        "season_unit_millis": 600_000,
+                        "seasons": [
+                            {"name": "warm", "duration": 1, "food_growth_per_thousand": 1000, "exposure_per_thousand": 1000},
+                            {"name": "cold", "duration": 1, "food_growth_per_thousand": 0, "exposure_per_thousand": 1000}
+                        ]
+                    })).unwrap());
+                }
                 let grain = state
                     .core
                     .physical
@@ -4634,7 +4697,7 @@ fn elapsed_resource_renewal_survives_subdivision_and_resume() {
                             per_millis: 3_600_000,
                         }),
                         renewal_remainder: 0,
-                        seasonal: false,
+                        seasonal,
                         yield_per_action: 1,
                     }],
                     policies: vec![],
@@ -4671,11 +4734,15 @@ fn elapsed_resource_renewal_survives_subdivision_and_resume() {
                 host.snapshot().gathering.unwrap().nodes.remove(0)
             })
     }
-    let whole = run(3_600_000, 3_600_000, 1);
+    let whole = run(3_600_000, 3_600_000, 1, false);
     assert_eq!(whole.available, 3);
     assert_eq!(whole.renewal_remainder, 0);
-    assert_eq!(run(60_000, 17_000, 1), whole);
-    assert_eq!(run(60_000, 31_000, 4), whole);
+    assert_eq!(run(60_000, 17_000, 1, false), whole);
+    assert_eq!(run(60_000, 31_000, 4, false), whole);
+    let seasonal = run(3_600_000, 3_600_000, 1, true);
+    assert_eq!(seasonal.available, 1);
+    assert_eq!(seasonal.renewal_remainder, 1_800_000_000);
+    assert_eq!(run(60_000, 31_000, 4, true), seasonal);
 }
 
 #[test]

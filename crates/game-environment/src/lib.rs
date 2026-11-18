@@ -5,6 +5,9 @@ use std::collections::HashSet;
 #[serde(deny_unknown_fields)]
 pub struct Environment {
     pub regions: Vec<Hazard>,
+    /// Milliseconds represented by one calendar duration unit. Absent in legacy saves.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub season_unit_millis: Option<u64>,
     /// Repeating calendar; an empty list retains constant conditions.
     #[serde(default)]
     pub seasons: Vec<Season>,
@@ -39,6 +42,9 @@ pub struct Hazard {
 }
 impl Environment {
     pub fn validate(&self, regions: &HashSet<u64>) -> Result<(), String> {
+        if self.season_unit_millis == Some(0) {
+            return Err("season duration unit must be positive".into());
+        }
         let mut seen = HashSet::new();
         let mut names = HashSet::new();
         let mut duration = 0u64;
@@ -66,6 +72,47 @@ impl Environment {
     }
     /// Tick one is the first tick of the first season; tick zero shares its name.
     pub fn season(&self, tick: u64) -> Option<&Season> {
+        self.season_at_unit(u128::from(tick.saturating_sub(1)))
+    }
+
+    /// Select conditions at an absolute simulated instant using the authored
+    /// calendar. A season owns its opening instant and ends at the next opening.
+    pub fn season_at(&self, millis: u128, legacy_tick: u64) -> Option<&Season> {
+        match self.season_unit_millis {
+            Some(unit) if unit > 0 => self.season_at_unit(millis / u128::from(unit)),
+            Some(_) => None,
+            None => self.season(legacy_tick),
+        }
+    }
+
+    /// Integral of the seasonal growth multiplier, in per-thousand milliseconds.
+    /// Complete cycles are counted analytically even for a very long advance.
+    pub fn food_growth_exposure(&self, opening_millis: u128, elapsed_millis: u64) -> Option<u128> {
+        let unit = u128::from(self.season_unit_millis.filter(|unit| *unit > 0)?);
+        let duration = self
+            .seasons
+            .iter()
+            .try_fold(0u64, |sum, season| sum.checked_add(season.duration))?;
+        let cycle = u128::from(duration) * unit;
+        if cycle == 0 {
+            return Some(u128::from(elapsed_millis) * 1000);
+        }
+        let closing_millis = opening_millis.checked_add(u128::from(elapsed_millis))?;
+        let mut start = 0;
+        let mut exposure = 0;
+        for season in &self.seasons {
+            let length = u128::from(season.duration) * unit;
+            let time_in_season = |instant: u128| {
+                instant / cycle * length + (instant % cycle).saturating_sub(start).min(length)
+            };
+            exposure += (time_in_season(closing_millis) - time_in_season(opening_millis))
+                * u128::from(season.food_growth_per_thousand);
+            start += length;
+        }
+        Some(exposure)
+    }
+
+    fn season_at_unit(&self, elapsed: u128) -> Option<&Season> {
         let duration = self
             .seasons
             .iter()
@@ -73,7 +120,7 @@ impl Environment {
         if duration == 0 {
             return None;
         }
-        let mut offset = tick.saturating_sub(1) % duration;
+        let mut offset = (elapsed % u128::from(duration)) as u64;
         self.seasons.iter().find(|season| {
             if offset < season.duration {
                 true

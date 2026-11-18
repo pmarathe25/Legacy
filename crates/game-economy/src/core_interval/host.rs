@@ -2480,6 +2480,7 @@ impl CoreHost {
                 self.core.travel.as_ref(),
                 &mut draft.people.people,
                 tick,
+                Some(self.core.simulated_millis().saturating_sub(1)),
             );
         }
         if let Some(rules) = self
@@ -2789,9 +2790,12 @@ impl CoreHost {
                 plan.publish(
                     self.gathering.as_ref().expect("gathering owner"),
                     draft.events(),
-                    self.environment
-                        .as_ref()
-                        .and_then(|owner| owner.season(draft.events().tick)),
+                    self.settlement_season(draft.events().tick),
+                    self.environment.as_ref().and_then(|environment| {
+                        let duration = self.core.physical.tick_millis();
+                        let start = self.core.simulated_millis() - u128::from(duration);
+                        environment.food_growth_exposure(start, duration)
+                    }),
                 )
             })
             .transpose()?;

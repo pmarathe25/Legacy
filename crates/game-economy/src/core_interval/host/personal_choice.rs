@@ -888,9 +888,7 @@ impl CoreHost {
                     &self.core.people,
                     &eligible,
                     &busy,
-                    self.environment
-                        .as_ref()
-                        .and_then(|environment| environment.season(tick)),
+                    self.current_season(tick),
                     self.core.seed,
                     round,
                 )

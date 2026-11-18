@@ -44,6 +44,7 @@ pub fn apply(
     travel: Option<&Travel>,
     people: &mut [Person],
     tick: u64,
+    elapsed: Option<u128>,
 ) {
     let Some(environment) = environment else {
         return;
@@ -82,7 +83,10 @@ pub fn apply(
             (h.region, (h, first, last, capacity))
         })
         .collect();
-    let season = environment.season(tick);
+    let season = elapsed.map_or_else(
+        || environment.season(tick),
+        |millis| environment.season_at(millis, tick),
+    );
     people.par_iter_mut().for_each(|person| {
         if person.health == 0 {
             return;

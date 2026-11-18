@@ -248,8 +248,13 @@ impl CoreHost {
             .generation
             .checked_add(1)
             .ok_or("core revision overflow")?;
-        let (next_travel, people, outcomes) =
-            travel.attempt(&self.core.people, &plan.departures, &busy, tick)?;
+        let (next_travel, people, outcomes) = travel.attempt_at(
+            &self.core.people,
+            &plan.departures,
+            &busy,
+            tick,
+            Some(self.core.simulated_millis()),
+        )?;
         if !plan.memory_uses.is_empty() {
             let mut departed: Vec<_> = outcomes
                 .par_iter()

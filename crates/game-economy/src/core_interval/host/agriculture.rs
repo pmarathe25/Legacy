@@ -3,6 +3,19 @@ use super::*;
 type CultivationClaims = Option<(game_economy_claims::Claims, Option<game_opinions::Opinions>)>;
 
 impl CoreHost {
+    pub(super) fn current_season(&self, legacy_tick: u64) -> Option<&game_environment::Season> {
+        self.environment
+            .as_ref()
+            .and_then(|owner| owner.season_at(self.core.simulated_millis(), legacy_tick))
+    }
+
+    /// Boundary owners observe the conditions immediately before settlement.
+    pub(super) fn settlement_season(&self, legacy_tick: u64) -> Option<&game_environment::Season> {
+        self.environment.as_ref().and_then(|owner| {
+            owner.season_at(self.core.simulated_millis().saturating_sub(1), legacy_tick)
+        })
+    }
+
     /// Inspect bounded local farming opportunities without selecting or executing them.
     pub fn preview_cultivation_opportunities(
         &self,
@@ -37,9 +50,7 @@ impl CoreHost {
             &self.core.people,
             people,
             &busy,
-            self.environment
-                .as_ref()
-                .and_then(|environment| environment.season(tick)),
+            self.current_season(tick),
             self.core.seed,
             round,
         )
@@ -353,10 +364,7 @@ impl CoreHost {
             manual_response: None,
             manual_withdrawal: None,
             reserved_field: None,
-            season: self
-                .environment
-                .as_ref()
-                .and_then(|environment| environment.season(tick)),
+            season: self.settlement_season(tick),
         };
         let selected = self
             .schedule

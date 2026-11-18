@@ -88,6 +88,10 @@ pub struct Closure {
     pub destination: u64,
     pub start: u64,
     pub end: u64,
+    /// Milliseconds represented by one unit of start and end, measured from
+    /// the simulation epoch. Absent in a legacy boundary-based closure.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unit_millis: Option<u64>,
 }
 
 /// The outcome observed by an individual who actually tried a local route.
@@ -392,11 +396,22 @@ impl Travel {
 
     /// Build the current physical admission index without updating anyone's beliefs.
     pub fn closed_routes(&self, tick: u64) -> Vec<(u64, u64)> {
+        self.closed_routes_at(tick, None)
+    }
+
+    fn closed_routes_at(&self, tick: u64, elapsed_millis: Option<u128>) -> Vec<(u64, u64)> {
         let mut closed: Vec<_> = self
             .closures
             .par_iter()
-            .filter(|closure| closure.start <= tick && tick < closure.end)
-            .map(|closure| (closure.source, closure.destination))
+            .filter_map(|closure| {
+                let instant = match closure.unit_millis {
+                    Some(unit) => elapsed_millis?.checked_div(u128::from(unit))?,
+                    None => u128::from(tick),
+                };
+                let closed =
+                    u128::from(closure.start) <= instant && instant < u128::from(closure.end);
+                closed.then_some((closure.source, closure.destination))
+            })
             .collect();
         closed.par_sort_unstable();
         closed.dedup();
@@ -468,6 +483,7 @@ impl Travel {
                 && !(1..=64).contains(&self.observation_limit))
             || self.closures.par_iter().any(|c| {
                 c.start >= c.end
+                    || c.unit_millis == Some(0)
                     || routes
                         .binary_search_by_key(&(c.source, c.destination), |r| {
                             (r.source, r.destination)
@@ -589,6 +605,25 @@ impl Travel {
         working: &[u64],
         tick: u64,
     ) -> Result<(Self, Vec<Person>, Vec<DepartureOutcome>), String> {
+        self.attempt_at(people, requests, working, tick, None)
+    }
+
+    pub fn attempt_at(
+        &self,
+        people: &[Person],
+        requests: &[Departure],
+        working: &[u64],
+        tick: u64,
+        elapsed_millis: Option<u128>,
+    ) -> Result<(Self, Vec<Person>, Vec<DepartureOutcome>), String> {
+        if elapsed_millis.is_none()
+            && self
+                .closures
+                .par_iter()
+                .any(|closure| closure.unit_millis.is_some())
+        {
+            return Err("elapsed route closures require the interval host".into());
+        }
         let journeys = self.plan_departures(people, requests, working)?;
         if self.closures.is_empty() && !self.personal_routing {
             let (all_travel, all_people) = self.publish_departures(people, journeys);
@@ -604,7 +639,7 @@ impl Travel {
                     .collect(),
             ));
         }
-        let closed = self.closed_routes(tick);
+        let closed = self.closed_routes_at(tick, elapsed_millis);
         // A route attempt reveals whether passage is currently possible, not
         // the true duration of a journey the person has not yet completed.
         let mut estimates: Vec<_> = self

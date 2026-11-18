@@ -29,8 +29,10 @@ work rates, fractional progress, and completion deadlines independent of the
 physical quantum. Its absence retains the legacy per-boundary interpretation.
 Travel can specify `travel_unit_millis` for its route lengths and saved journey
 progress, so travel and arrival deadlines no longer have to use the physical
-quantum. Route closures and reports still use boundary-based timestamps and
-must be migrated before routing as a whole is independent of boundaries.
+quantum. A route closure can specify `unit_millis` to measure its start and
+end from the simulation epoch. Departures, food searches, and hauling then
+check whether it is open at the actual time of the attempt. Route reports
+still use boundary-based timestamps.
 An optional `rules.starvation_rate` uses elapsed exposure after each person's
 hunger crosses the starvation threshold. Fractional damage is saved, and the
 interval coordinator stops at fatal deadlines before advancing work or travel
@@ -50,10 +52,14 @@ workers compare it with a continuation preference. A scenario can also set
 schedule exhaustion damage at elapsed deadlines. The integrated history
 scenario selects this mode. Older interval saves retain boundary settlement,
 and the legacy whole-boundary runner still applies automatic rest thresholds.
-Renewal is still settled at a physical boundary, alongside gathering, using
-the season selected for that boundary. Changing boundaries can therefore
-change the ordering of gathering and renewal or cross a season transition;
-the explicit rate alone does not make those interactions subdivision-invariant.
+An environment can set `season_unit_millis` to give the authored calendar
+durations a stable elapsed unit. Decisions observe the season at their actual
+instant, including transitions inside a physical interval. Seasonal renewal
+integrates the growth multiplier across the entire interval and retains
+fractions across boundaries. Renewal still settles alongside gathering and
+grazing, so contention can depend on settlement ordering. Crop growth,
+regional exposure, and grazing currently sample conditions at the end of
+the elapsed interval.
 Older saves without these explicit rates retain their original quantum-based
 semantics. Interval snapshots also
 retain absolute milliseconds at the current boundary; an older snapshot

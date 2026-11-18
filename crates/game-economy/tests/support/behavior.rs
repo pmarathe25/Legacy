@@ -2135,6 +2135,7 @@ fn seasonal_patch_renewal_preserves_fractional_rates_and_save_continuity() {
         ],
     });
     state.environment = Some(Environment {
+        season_unit_millis: None,
         regions: vec![],
         seasons: vec![
             Season {
@@ -2229,6 +2230,7 @@ fn animals_graze_only_the_actual_seasonal_renewal() {
         }],
     });
     state.environment = Some(Environment {
+        season_unit_millis: None,
         regions: vec![],
         seasons: vec![Season {
             name: "slow".into(),
@@ -9404,6 +9406,7 @@ fn regional_exposure_rotates_finite_shelter_and_survives_reload() {
         person.seek_meals = false;
     }
     initial.environment = Some(Environment {
+        season_unit_millis: None,
         regions: vec![Hazard {
             region: 1,
             damage: 10,
@@ -9466,6 +9469,7 @@ fn shelter_capacity_follows_physical_stock_at_each_boundary() {
         p.seek_meals = false;
     }
     initial.environment = Some(Environment {
+        season_unit_millis: None,
         regions: vec![Hazard {
             region: 1,
             damage: 10,
@@ -9547,6 +9551,7 @@ fn seasons_gate_planting_and_grow_crops_at_authored_rate() {
         harvest_allowed: true,
     };
     initial.environment = Some(Environment {
+        season_unit_millis: None,
         regions: vec![],
         seasons: vec![season("cold", 1, false, 0), season("warm", 8, true, 500)],
     });
@@ -9605,6 +9610,7 @@ fn route_closures_are_local_observations_and_do_not_cancel_other_travelers() {
             destination: 2,
             start: 1,
             end: 2,
+            unit_millis: None,
         }],
         ..Travel::default()
     });
@@ -9758,6 +9764,7 @@ fn route_closure_batch_benchmark() {
                     destination: person + 1,
                     start: 0,
                     end: 2,
+                    unit_millis: None,
                 })
                 .collect()
         } else {
@@ -9766,6 +9773,7 @@ fn route_closure_batch_benchmark() {
                 destination: 2,
                 start: 0,
                 end: 2,
+                unit_millis: None,
             }]
         },
         ..Travel::default()
@@ -9858,6 +9866,7 @@ fn travelers_are_exposed_even_when_shelter_is_available() {
         journeys: vec![],
     });
     initial.environment = Some(Environment {
+        season_unit_millis: None,
         regions: vec![Hazard {
             region: 1,
             damage: 10,
@@ -9943,6 +9952,7 @@ fn exposure_death_updates_actual_family_and_lineage() {
     initial.pending_food.clear();
     initial.people[2].health = 1;
     initial.environment = Some(Environment {
+        season_unit_millis: None,
         regions: vec![Hazard {
             region: 1,
             damage: 1,
@@ -13940,6 +13950,7 @@ fn a_blocked_expedition_does_not_stop_an_unrelated_expedition() {
             destination: 2,
             start: 0,
             end: 5,
+            unit_millis: None,
         }],
         ..Travel::default()
     });
@@ -29610,6 +29621,7 @@ fn autonomous_route_sharing_respects_personal_motives_and_listener_reception() {
         destination: 2,
         start: 0,
         end: 3,
+        unit_millis: None,
     });
     travel.observations.push(RouteObservation {
         person: 1,
@@ -29759,6 +29771,7 @@ fn a_route_lie_requires_contact_and_is_filtered_by_the_listeners_own_reception()
         destination: 2,
         start: 0,
         end: 3,
+        unit_millis: None,
     });
     travel.observations.push(RouteObservation {
         person: 1,
@@ -29903,6 +29916,7 @@ fn personal_route_reports_select_different_paths_without_revealing_unknown_route
         destination: 2,
         start: 1,
         end: 3,
+        unit_millis: None,
     });
     let report = |person, source, destination, open| RouteObservation {
         person,
@@ -30088,6 +30102,7 @@ fn food_search_retries_a_closed_route_after_its_personal_cooldown() {
             destination: 2,
             start: 1,
             end: 3,
+            unit_millis: None,
         });
     let run = |workers| {
         rayon::ThreadPoolBuilder::new()
@@ -37753,6 +37768,7 @@ fn concentrated_exposure_benchmark() {
         .unwrap_or(100_000u64);
     let mut initial = concentrated(count);
     initial.environment = Some(Environment {
+        season_unit_millis: None,
         regions: vec![Hazard {
             region: 1,
             damage: 1,
