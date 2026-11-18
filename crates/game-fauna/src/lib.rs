@@ -25,6 +25,8 @@ pub struct Species {
     pub lifespan: u64,
     pub gestation: u64,
     pub conception_one_in: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mate_desire: Option<MateDesire>,
     pub breeding_max_hunger: u32,
     pub newborn_health: u32,
     #[serde(default)]
@@ -43,6 +45,30 @@ pub struct Species {
     pub newborn_handling_response: Option<handling::Response>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub newborn_restraint_response: Option<restraint::Response>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MateDesire {
+    /// Baseline inclination per thousand at a neutral genotype and zero hunger.
+    pub base: u16,
+    pub genetic_weight: i32,
+    pub hunger_weight: i32,
+}
+
+impl Species {
+    fn seeks_mate(&self, animal: &Animal, age: u64, hunger: u32, seed: u64, tick: u64) -> bool {
+        age >= self.adult_age
+            && age < self.fertile_until
+            && hunger <= self.breeding_max_hunger
+            && self.mate_desire.is_none_or(|desire| {
+                let expression = i128::from(animal.genome.expressed_mate_desire()) - 500;
+                let score = i128::from(desire.base)
+                    + expression * i128::from(desire.genetic_weight) / 500
+                    + i128::from(hunger) * i128::from(desire.hunger_weight);
+                random(seed ^ 0x646573697265, animal.id, tick) % 1000 < score.clamp(0, 1000) as u64
+            })
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -656,9 +682,7 @@ impl Fauna {
                 && a.genome.sex == Sex::Female
                 && a.pregnancy.is_none()
                 && lookup(a.species).is_some_and(|s| {
-                    next.age >= s.adult_age
-                        && next.age < s.fertile_until
-                        && next.hunger <= s.breeding_max_hunger
+                    s.seeks_mate(a, next.age, next.hunger, seed, tick)
                         && random(seed ^ 0x6272656564, a.id, tick)
                             .is_multiple_of(s.conception_one_in)
                 })
@@ -675,11 +699,8 @@ impl Fauna {
                 .filter_map(|(a, next)| {
                     (next.health > 0
                         && a.genome.sex == Sex::Male
-                        && lookup(a.species).is_some_and(|s| {
-                            next.age >= s.adult_age
-                                && next.age < s.fertile_until
-                                && next.hunger <= s.breeding_max_hunger
-                        }))
+                        && lookup(a.species)
+                            .is_some_and(|s| s.seeks_mate(a, next.age, next.hunger, seed, tick)))
                     .then_some(a)
                 })
                 .collect()
@@ -879,6 +900,7 @@ impl Fauna {
                     || s.lifespan <= s.fertile_until
                     || s.gestation == 0
                     || s.conception_one_in == 0
+                    || s.mate_desire.is_some_and(|desire| desire.base > 1000)
                     || s.newborn_health == 0
                     || s.newborn_health > s.max_health
                     || s.mutation_per_million > 1_000_000
@@ -1276,9 +1298,7 @@ impl Fauna {
                 && a.pregnancy.is_none()
                 && mothers.binary_search(&a.id).is_err()
                 && lookup(a.species).is_some_and(|s| {
-                    a.age >= s.adult_age
-                        && a.age < s.fertile_until
-                        && a.hunger <= s.breeding_max_hunger
+                    s.seeks_mate(a, a.age, a.hunger, seed, tick)
                         && random(seed ^ 0x6272656564, a.id, tick)
                             .is_multiple_of(s.conception_one_in)
                 })
@@ -1288,11 +1308,7 @@ impl Fauna {
                 .par_iter()
                 .filter(|a| a.health > 0 && a.genome.sex == Sex::Male)
                 .filter(|a| {
-                    lookup(a.species).is_some_and(|s| {
-                        a.age >= s.adult_age
-                            && a.age < s.fertile_until
-                            && a.hunger <= s.breeding_max_hunger
-                    })
+                    lookup(a.species).is_some_and(|s| s.seeks_mate(a, a.age, a.hunger, seed, tick))
                 })
                 .map(|a| (a.region, a.species, a.id, a.genome.clone()))
                 .collect()
@@ -1311,9 +1327,7 @@ impl Fauna {
                         || a.genome.sex != Sex::Female
                         || a.pregnancy.is_some()
                         || mothers.binary_search(&a.id).is_ok()
-                        || a.age < s.adult_age
-                        || a.age >= s.fertile_until
-                        || a.hunger > s.breeding_max_hunger
+                        || !s.seeks_mate(a, a.age, a.hunger, seed, tick)
                         || !random(seed ^ 0x6272656564, a.id, tick)
                             .is_multiple_of(s.conception_one_in)
                     {

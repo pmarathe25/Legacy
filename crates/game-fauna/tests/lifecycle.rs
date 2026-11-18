@@ -1,6 +1,6 @@
 use game_fauna::{
-    Animal, AnimalOpinion, Climate, Exposure, Fauna, Feeding, Patch, Pregnancy, SocialResponse,
-    Species,
+    Animal, AnimalOpinion, Climate, Exposure, Fauna, Feeding, MateDesire, Patch, Pregnancy,
+    SocialResponse, Species,
 };
 use game_genetics::{Genome, Sex};
 use std::collections::HashSet;
@@ -28,6 +28,7 @@ fn species() -> Species {
         lifespan: 30,
         gestation: 1,
         conception_one_in: 1,
+        mate_desire: None,
         breeding_max_hunger: 5,
         newborn_health: 8,
         mutation_per_million: 0,
@@ -63,6 +64,49 @@ fn initial() -> Fauna {
         next_id: 3,
         last_tick: 0,
     }
+}
+
+#[test]
+fn inherited_desire_controls_each_animals_participation_and_passes_to_offspring() {
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut compact = initial();
+                compact.animals.push(animal(3, Sex::Male, 700));
+                compact.animals.push(animal(4, Sex::Female, 100));
+                compact.next_id = 5;
+                compact.species[0].mate_desire = Some(MateDesire {
+                    base: 500,
+                    genetic_weight: 500,
+                    hunger_weight: 0,
+                });
+                for (animal, inclination) in compact.animals.iter_mut().zip([1000, 0, 1000, 0]) {
+                    animal.genome.mate_desire = [inclination; 2];
+                }
+                let mut complete = compact.clone();
+                for tick in 1..=2 {
+                    let draft = compact.prepare_quiet(&[], 7, tick).unwrap().unwrap();
+                    compact.publish_quiet_validated(draft);
+                    complete = complete
+                        .advance_with_hunts(&[], &[], &[], &[], 7, tick)
+                        .unwrap()
+                        .fauna;
+                    assert_eq!(compact, complete);
+                    if tick == 1 {
+                        assert_eq!(compact.animals[0].pregnancy.as_ref().unwrap().father, 3);
+                        assert!(compact.animals[3].pregnancy.is_none());
+                    }
+                }
+                let child = &compact.animals[4];
+                assert_eq!(child.parents, Some([1, 3]));
+                assert_eq!(child.genome.mate_desire, [1000, 1000]);
+                compact
+            })
+    };
+    assert_eq!(run(1), run(4));
 }
 
 #[test]

@@ -39,6 +39,7 @@ fn fixture(count: u64, shared: bool) -> (Vec<Person>, Fauna, Restraints) {
             lifespan: 20,
             gestation: 2,
             conception_one_in: 100,
+            mate_desire: None,
             breeding_max_hunger: 10,
             newborn_health: 10,
             mutation_per_million: 0,

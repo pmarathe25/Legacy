@@ -966,6 +966,7 @@ fertile_until = 157680
 lifespan = 262800
 gestation = 2920
 conception_one_in = 52560
+mate_desire = { base = 900, genetic_weight = 300, hunger_weight = -1 }
 breeding_max_hunger = 60
 newborn_health = 100
 mutation_per_million = 10000
@@ -986,6 +987,7 @@ fertile_until = 131400
 lifespan = 219000
 gestation = 2920
 conception_one_in = 35040
+mate_desire = { base = 900, genetic_weight = 350, hunger_weight = -1 }
 breeding_max_hunger = 60
 newborn_health = 100
 mutation_per_million = 10000

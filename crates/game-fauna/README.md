@@ -19,3 +19,9 @@ An animal may have an individual `social_response` with a signed `feed_affinity`
 An animal may also define its own `handling_response`: `willing`, optional `affinity_at_least` and `affinity_at_most`, and signed `on_accept` and `on_refuse` reactions. A response can become more or less likely after experiences; it does not assign an owner, caregiver, or permanent obedience. Handling updates the animal's bounded private opinions only when its own `social_response` provides memory capacity. An animal without a configured handling response refuses.
 
 An optional `restraint_response` separately describes willingness to yield, resistance, escape effort, and signed personal reactions to capture or release. An animal may resist handling yet yield to restraint, or the reverse. A restrained animal remains alive, continues ordinary biology and can graze locally. A person's departure releases the physical hold and leaves the animal at its actual location.
+
+A species can set `mate_desire` with `base`, `genetic_weight`, and `hunger_weight`.
+Each eligible animal independently participates in local mating according to its
+expressed inherited mate desire and current hunger. Signed weights allow either
+factor to increase or reduce inclination. Conception then uses the separate
+species fertility chance. The same selection works in both lifecycle paths.
