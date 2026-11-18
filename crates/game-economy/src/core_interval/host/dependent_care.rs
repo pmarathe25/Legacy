@@ -88,6 +88,12 @@ impl CoreHost {
         let mut busy = rest.as_deref().unwrap_or(occupied).to_vec();
         busy.par_extend(
             self.core
+                .people
+                .par_iter()
+                .filter_map(|person| person.controlled.then_some(person.id)),
+        );
+        busy.par_extend(
+            self.core
                 .physical
                 .work()
                 .par_iter()

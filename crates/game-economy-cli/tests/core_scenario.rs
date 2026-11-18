@@ -901,6 +901,147 @@ fn chosen_wound_treatment_requires_real_supplies_and_can_be_declined() {
 }
 
 #[test]
+fn an_unrelated_caregiver_can_act_from_fear_and_disregard_a_food_claim() {
+    use game_economy::core_interval::CoreHost;
+    use game_lots::Place;
+
+    let root = root();
+    let source = std::fs::read_to_string(root.join("content/scenarios/economy-core-exchange.toml"))
+        .unwrap()
+        .replace("\r\n", "\n");
+    let mut source = source
+        .split_once("[gathering]")
+        .unwrap()
+        .0
+        .replace(
+            "stock = { grain = 100, bread = 20 }",
+            "stock = { bread = 20 }",
+        )
+        .replace("next_id = 3", "next_id = 5")
+        .replace(
+            "[family]",
+            r#"
+[[people]]
+id = 3
+region = 1
+health = 100
+hunger = 25
+willing_to_work = false
+seek_meals = false
+
+[[people]]
+id = 4
+region = 1
+health = 100
+hunger = 5
+willing_to_work = false
+seek_meals = false
+
+[family]"#,
+        )
+        .replace(
+            "pregnancy = { father = 1, due = 1 }",
+            r#"
+[[family.members]]
+id = 3
+age = 18
+genome = { sex = "Male", alleles = [[200,200], [200,200], [200,200], [200,200]] }
+
+[[family.members]]
+id = 4
+age = 1
+parents = [2, 1]
+genome = { sex = "Male", alleles = [[200,200], [200,200], [200,200], [200,200]] }"#,
+        )
+        .replace(
+            "policies = [{ person = 2, willing = true }]",
+            r#"policies = []
+preferences = [{ person = 3, child = 4, value = -2, fear_weight = 1, disregard_claims = true }]"#,
+        );
+    source.push_str(
+        r#"
+[opinions.rules]
+minimum = -100
+maximum = 100
+initial = 0
+fulfilled_gain = 1
+default_loss = 2
+
+[[opinions.records]]
+observer = 3
+target = 4
+trust = 0
+fear = 3
+"#,
+    );
+    let path =
+        std::env::temp_dir().join(format!("legacy-directed-care-{}.toml", std::process::id()));
+    std::fs::write(&path, source).unwrap();
+    let loaded = game_economy_cli::core_scenario(&path, &root.join("content"));
+    std::fs::remove_file(path).unwrap();
+    let mut opening = loaded.unwrap().snapshot();
+    let bread = opening
+        .core
+        .physical
+        .goods
+        .iter()
+        .find(|good| good.name == "bread")
+        .unwrap();
+    let portion = bread.food.as_ref().unwrap().portion;
+    let stock = Place::Stock {
+        region: 1,
+        good: bread.id,
+    };
+    opening.claims = Some(
+        serde_json::from_value(serde_json::json!({
+            "claims":[{"person":1,"region":1,"good":bread.id}]
+        }))
+        .unwrap(),
+    );
+    let run = |fear, disregard_claims, workers| {
+        let mut state = opening.clone();
+        state.opinions.as_mut().unwrap().records[0].fear = fear;
+        state.dependent_care.as_mut().unwrap().preferences[0].disregard_claims = disregard_claims;
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut host = CoreHost::resume(state).unwrap();
+                let mut remaining = 3_600_000;
+                for step in [123, 85_601, 3_514_276] {
+                    assert_eq!(host.advance_continuous(step, &[]).unwrap().failure, None);
+                    remaining -= step;
+                }
+                assert_eq!(remaining, 0);
+                let saved = host.snapshot();
+                let child = saved.core.people.iter().find(|row| row.id == 4).unwrap();
+                let care = saved.dependent_care.as_ref().unwrap();
+                assert_eq!(care.events.len(), 1);
+                assert_eq!(care.events[0].child, 4);
+                let stock = saved
+                    .core
+                    .physical
+                    .custody
+                    .containers
+                    .iter()
+                    .find(|row| row.place == stock)
+                    .unwrap();
+                let restored = CoreHost::resume(
+                    serde_json::from_str(&serde_json::to_string(&saved).unwrap()).unwrap(),
+                )
+                .unwrap();
+                assert_eq!(restored.snapshot(), saved);
+                (care.events[0].caregiver, stock.used, child.health)
+            })
+    };
+    assert_eq!(run(3, true, 1), (Some(3), 20 - portion, 100));
+    assert_eq!(run(3, true, 1), run(3, true, 4));
+    assert_eq!(run(3, false, 4), (Some(3), 20, 100));
+    assert_eq!(run(0, true, 4), (None, 20, 99));
+}
+
+#[test]
 fn autonomous_wound_care_follows_personal_choice_and_felt_pressure() {
     use game_economy::core_interval::{CoreChoiceOutcome, CoreHost, CoreRunEvent, DecisionPhase};
     use game_lots::{Container, Lot, Place};

@@ -1,6 +1,6 @@
 //! Individual dependent care and physical meal delivery.
 pub use game_dependent_care::DependentCare;
-use game_dependent_care::FamilyView;
+use game_dependent_care::{FamilyView, Feelings};
 use game_economy_person::{
     Person, Rules,
     travel::{Colocation, Travel},
@@ -106,19 +106,23 @@ impl Context<'_> {
                 )
                 .is_some()
         };
-        let pressure = |parent, child| {
-            opinions.as_ref().map_or(0, |index| {
-                let (fear, obligation) = index.feelings(parent, child);
-                fear.saturating_add(obligation)
+        let feelings = |person, child| {
+            opinions.as_ref().map_or_else(Feelings::default, |index| {
+                let (fear, obligation) = index.feelings(person, child);
+                Feelings {
+                    affinity: index.affinity(person, child),
+                    fear,
+                    obligation,
+                }
             })
         };
-        let draft = self.care.prepare(
+        let draft = self.care.prepare_with_preferences(
             &family,
             self.family.rules.adult_age,
             self.people,
             self.busy,
             (self.seed, self.tick),
-            (colocated, pressure),
+            (colocated, feelings),
         );
         let edible: HashMap<_, _> = self
             .goods
@@ -142,7 +146,7 @@ impl Context<'_> {
             .events
             .par_iter()
             .filter_map(|event| {
-                let parent = event.caregiver?;
+                let caregiver = event.caregiver?;
                 let child = self
                     .people
                     .binary_search_by_key(&event.child, |row| row.0)
@@ -162,18 +166,18 @@ impl Context<'_> {
                     .care
                     .rules
                     .feed_from_cargo
-                    .then(|| self.view.container(Place::Person(parent)))
+                    .then(|| self.view.container(Place::Person(caregiver)))
                     .flatten()
                     .and_then(|holder| {
                         holder.goods.iter().find_map(|item| {
                             edible
                                 .get(&item.good)
                                 .filter(|&&portion| item.quantity >= portion && fits(portion))
-                                .map(|&portion| (Place::Person(parent), item.good, portion))
+                                .map(|&portion| (Place::Person(caregiver), item.good, portion))
                         })
                     });
                 let local = || {
-                    if !(self.access.local_stock)(parent) {
+                    if !(self.access.local_stock)(caregiver) {
                         return None;
                     }
                     let region = child.1?;
@@ -183,9 +187,10 @@ impl Context<'_> {
                         .iter()
                         .find(|row| {
                             fits(row.2)
-                                && self
-                                    .claims
-                                    .is_none_or(|index| index.allows(parent, region, row.1))
+                                && (draft.disregards_claims(child.0)
+                                    || self
+                                        .claims
+                                        .is_none_or(|index| index.allows(caregiver, region, row.1)))
                         })
                         .map(|row| {
                             (
@@ -200,7 +205,7 @@ impl Context<'_> {
                 };
                 let (from, good, quantity) =
                     carried.or_else(|| self.care.rules.fetch_local_food.then(local).flatten())?;
-                Some((child.0, parent, from, good, quantity))
+                Some((child.0, caregiver, from, good, quantity))
             })
             .collect();
         let count = u64::try_from(choices.len()).map_err(|_| "care action overflow")?;

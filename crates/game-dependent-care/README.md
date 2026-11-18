@@ -4,6 +4,16 @@
 
 Available local parents may spend an action caring for young children according to their own preferences and feelings. Sharded arbitration assigns at most one child per parent per tick; children try either parent and rotating deterministic priorities distribute contention over time. Unattended local children suffer data-defined neglect damage. Parents and children can also share care while traveling on the same journey. The owner exposes events and actor reservations; the fused host applies effects only after the full tick validates.
 
+`[[care.preferences]]` lets a person decide whether to care for a specific
+child they can reach, including an unrelated child. A positive `value` can
+motivate a visit. Optional signed weights for `affinity`, `fear`, `obligation`,
+and `hunger` change the person's appraisal. A person with directed preferences
+chooses their highest positive eligible visit or spends their time elsewhere.
+If multiple people offer to visit the same child, an independently seeded
+ordering chooses one. A caregiver can set `disregard_claims = true` for that
+child when they are willing to take claimed food. They still need physical
+access, available food, and space to deliver it.
+
 The economy host uses a validated, read-only family view for care, borrowing already ordered family rows and indexing unordered rows. It does not rebuild lifecycle columns or ancestry just to select caregivers. The full family store remains usable as a care input.
 
 Run `cargo run --release -p game-dependent-care --example benchmark -- 1 100000 spread 4`, varying worker count and using `hot` to concentrate demand on two parents. Import is outside the timed interval.

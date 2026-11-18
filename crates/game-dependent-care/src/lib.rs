@@ -1,7 +1,9 @@
-//! Parent-owned attention for dependent children, resolved without shared mutation.
+//! Personal attention for dependent children, resolved without shared mutation.
 mod inheritance;
+mod preferences;
 mod view;
 use game_production_model::{PersonSnapshot, person_index};
+pub use preferences::{Feelings, Preference};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
@@ -49,6 +51,8 @@ pub struct DependentCare {
     #[serde(default)]
     pub inherit_births: bool,
     pub policies: Vec<Policy>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub preferences: Vec<Preference>,
     #[serde(default)]
     pub events: Vec<Event>,
 }
@@ -62,6 +66,12 @@ struct Child {
 pub struct Draft {
     pub events: Vec<Event>,
     pub actors: Vec<u64>,
+    disregard_claims: Vec<u64>,
+}
+impl Draft {
+    pub fn disregards_claims(&self, child: u64) -> bool {
+        self.disregard_claims.binary_search(&child).is_ok()
+    }
 }
 impl DependentCare {
     pub fn inherit_preferences(&mut self, births: &[(u64, [u64; 2], usize)]) {
@@ -82,8 +92,18 @@ impl DependentCare {
         }
         let mut ids: Vec<_> = self.policies.par_iter().map(|p| p.person).collect();
         ids.par_sort_unstable();
+        let mut pairs: Vec<_> = self
+            .preferences
+            .par_iter()
+            .map(|row| (row.person, row.child))
+            .collect();
+        pairs.par_sort_unstable();
         if ids.par_windows(2).any(|pair| pair[0] == pair[1])
             || ids.par_iter().any(|id| !people.contains(id))
+            || pairs.par_windows(2).any(|pair| pair[0] == pair[1])
+            || pairs.par_iter().any(|(person, child)| {
+                person == child || !people.contains(person) || !people.contains(child)
+            })
             || self.events.par_iter().any(|event| {
                 event.tick > tick
                     || !people.contains(&event.child)
@@ -96,7 +116,7 @@ impl DependentCare {
         }
         Ok(())
     }
-    /// Reserve at most one child per motivated parent, using two deterministic proposal rounds.
+    /// Evaluate visits with legacy pressure inputs.
     pub fn prepare(
         &self,
         family: &impl CareFamily,
@@ -110,7 +130,35 @@ impl DependentCare {
         ),
     ) -> Draft {
         let (colocated, pressure) = context;
+        self.prepare_with_preferences(
+            family,
+            adult_age,
+            people,
+            busy,
+            clock,
+            (colocated, |person, child| Feelings {
+                fear: pressure(person, child),
+                ..Feelings::default()
+            }),
+        )
+    }
+
+    /// Reserve at most one child per motivated caregiver.
+    pub fn prepare_with_preferences(
+        &self,
+        family: &impl CareFamily,
+        adult_age: u64,
+        people: &[PersonSnapshot],
+        busy: &[u64],
+        clock: (u64, u64),
+        context: (
+            impl Fn(usize, usize) -> bool + Sync,
+            impl Fn(u64, u64) -> Feelings + Sync,
+        ),
+    ) -> Draft {
+        let (colocated, feelings) = context;
         let (seed, tick) = clock;
+        let directed: HashSet<_> = self.preferences.par_iter().map(|row| row.person).collect();
         let mut willing: Vec<_> = self
             .policies
             .par_iter()
@@ -131,7 +179,7 @@ impl DependentCare {
         if busy.par_windows(2).any(|pair| pair[0] > pair[1]) {
             busy.par_sort_unstable();
         }
-        let children: Vec<_> = (0..family.len())
+        let mut children: Vec<_> = (0..family.len())
             .into_par_iter()
             .filter_map(|slot| {
                 let child = family.member(slot);
@@ -149,6 +197,9 @@ impl DependentCare {
                 }
                 let mut candidates = [None, None];
                 for (i, &parent) in child.parents[..child.parent_count].iter().enumerate() {
+                    if directed.contains(&parent) {
+                        continue;
+                    }
                     let Some(p) = person_index(people, parent) else {
                         continue;
                     };
@@ -163,10 +214,10 @@ impl DependentCare {
                         && (dense_willing.map_or_else(
                             || willing.binary_search(&parent).is_ok(),
                             |first| parent >= first && parent - first < willing.len() as u64,
-                        ) || self
-                            .rules
-                            .pressure_threshold
-                            .is_some_and(|threshold| pressure(parent, child.id) >= threshold))
+                        ) || self.rules.pressure_threshold.is_some_and(|threshold| {
+                            let feelings = feelings(parent, child.id);
+                            feelings.fear.saturating_add(feelings.obligation) >= threshold
+                        }))
                         && busy.binary_search(&parent).is_err()
                     {
                         candidates[i] = Some(p);
@@ -184,7 +235,8 @@ impl DependentCare {
             })
             .collect();
         // Ordered, unique parent slots need no shared arbitration at all.
-        if children.par_iter().all(|child| child.first.is_some())
+        if self.preferences.is_empty()
+            && children.par_iter().all(|child| child.first.is_some())
             && children
                 .par_windows(2)
                 .all(|pair| pair[0].first < pair[1].first)
@@ -201,7 +253,38 @@ impl DependentCare {
                 .par_iter()
                 .map(|child| people[child.first.unwrap()].0)
                 .collect();
-            return Draft { events, actors };
+            return Draft {
+                events,
+                actors,
+                disregard_claims: Vec::new(),
+            };
+        }
+        let assignments = if self.preferences.is_empty() {
+            Vec::new()
+        } else {
+            preferences::assignments(
+                &self.preferences,
+                &children,
+                people,
+                &busy,
+                clock,
+                &colocated,
+                &feelings,
+            )
+        };
+        let directed_for = |child| {
+            assignments
+                .binary_search_by_key(&child, |row| row.child)
+                .ok()
+                .map(|index| assignments[index].caregiver)
+        };
+        if !assignments.is_empty() {
+            children.par_iter_mut().for_each(|child| {
+                if directed_for(child.id).is_some() {
+                    child.first = None;
+                    child.second = None;
+                }
+            });
         }
         let first = minima(&children, people.len(), |child| child.first);
         let accepted: Vec<_> = children
@@ -226,7 +309,7 @@ impl DependentCare {
             .par_iter()
             .zip(accepted.par_iter())
             .map(|(child, &parent)| {
-                parent.or_else(|| {
+                directed_for(child.id).or(parent).or_else(|| {
                     child.second.filter(|&p| {
                         second
                             .as_ref()
@@ -252,7 +335,15 @@ impl DependentCare {
         if actors.par_windows(2).any(|pair| pair[0] > pair[1]) {
             actors.par_sort_unstable();
         }
-        Draft { events, actors }
+        let disregard_claims = assignments
+            .into_par_iter()
+            .filter_map(|row| row.disregard_claims.then_some(row.child))
+            .collect();
+        Draft {
+            events,
+            actors,
+            disregard_claims,
+        }
     }
 }
 type Rank = (u64, u64);
@@ -467,6 +558,7 @@ mod tests {
                 fetch_local_food: false,
                 pressure_threshold: None,
             },
+            preferences: vec![],
             policies: vec![
                 Policy {
                     person: 1,
@@ -580,6 +672,7 @@ mod tests {
                 fetch_local_food: false,
                 pressure_threshold: None,
             },
+            preferences: vec![],
             policies: vec![Policy {
                 person: 1,
                 willing: true,

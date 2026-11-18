@@ -57,6 +57,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .collect();
     let care = DependentCare {
         inherit_births: false,
+        preferences: vec![],
         rules: Rules {
             dependent_until: 5,
             max_caregiver_hunger: 10,
