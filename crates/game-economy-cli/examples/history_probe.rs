@@ -205,6 +205,10 @@ fn run_steps(
                     }
                     ("personal_choices", rows.len())
                 }
+                CoreRunEvent::MechanicalAssemblies(rows) => (
+                    "mechanical_assemblies",
+                    rows.iter().filter(|row| row.accepted).count(),
+                ),
                 CoreRunEvent::MechanicalExperiments(rows) => ("experiments", rows.len()),
                 CoreRunEvent::Repairs(rows) => ("site_repairs", rows.len()),
                 CoreRunEvent::ToolRepairs(rows) => ("tool_repairs", rows.len()),

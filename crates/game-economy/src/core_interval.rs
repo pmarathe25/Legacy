@@ -41,12 +41,13 @@ pub use host::{
     CoreSites, CoreSkillCredit, CoreSkills, CoreSocial, CoreSocialResults, CoreStepper,
     CoreToolRepairResults, CoreTreatmentResults, CoreWorkIntent, CoreWritingPracticeResults,
     CoreWritingResults, DecisionPhase, Incapacitation, MechanicalCapability,
-    MechanicalCommunication, MechanicalExploration, MechanicalLoadMaterial, MechanicalLoadOutcome,
-    MechanicalLoadPolicy, MechanicalLoadRequest, MechanicalLoadResult, MechanicalMaterial,
-    MechanicalMemory, MechanicalPolicy, MechanicalReactions, MechanicalTestimony,
-    MechanicalTrialChange, MechanicalWatchPolicy, MechanicalWitnessRequest, PersonalAttackPolicy,
-    PersonalDefensePolicy, PersonalHarm, PersonalStrikeReaction, StrikeCapability, StrikeFeeling,
-    StrikeInterpretation, WitnessedMechanicalResult, WoundCarePolicy, WoundTreatment,
+    MechanicalCommunication, MechanicalDesignInput, MechanicalDesignPreferences,
+    MechanicalExploration, MechanicalLoadMaterial, MechanicalLoadOutcome, MechanicalLoadPolicy,
+    MechanicalLoadRequest, MechanicalLoadResult, MechanicalMaterial, MechanicalMemory,
+    MechanicalPolicy, MechanicalReactions, MechanicalTestimony, MechanicalTrialChange,
+    MechanicalWatchPolicy, MechanicalWitnessRequest, PersonalAttackPolicy, PersonalDefensePolicy,
+    PersonalHarm, PersonalStrikeReaction, StrikeCapability, StrikeFeeling, StrikeInterpretation,
+    WitnessedMechanicalResult, WoundCarePolicy, WoundTreatment,
 };
 pub use host::{CoreCampaignView, CorePastLifeView};
 pub use host::{CoreCareVisit, CoreExpeditionOffer};

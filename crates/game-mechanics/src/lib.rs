@@ -30,7 +30,7 @@ pub struct Catalog {
 pub struct Part {
     pub id: u64,
     pub component: u32,
-    /// The input comes from this earlier part, or from the experiment's source.
+    /// The input comes from this connected part, or from the experiment's source.
     pub parent: Option<u64>,
     /// Fraction of the parent's output force directed to this branch.
     pub share_per_mille: u16,
@@ -101,6 +101,7 @@ pub struct Observation {
 
 pub struct World {
     state: Snapshot,
+    topology: Vec<Topology>,
     instance: u64,
 }
 
@@ -136,6 +137,7 @@ pub struct AssemblyDraft {
     tick: u64,
     apparatus: Vec<Apparatus>,
     outcomes: Vec<AssemblyOutcome>,
+    topology: Vec<Topology>,
 }
 
 impl AssemblyDraft {
@@ -156,7 +158,16 @@ fn random(mut value: u64) -> u64 {
     value ^ (value >> 31)
 }
 
-fn validate_apparatus(machine: &Apparatus, catalog: &Catalog) -> Result<(), String> {
+#[derive(Clone, Copy)]
+struct SolveNode {
+    part: usize,
+    parent: Option<usize>,
+    component: usize,
+}
+
+type Topology = Arc<[SolveNode]>;
+
+fn prepare_topology(machine: &Apparatus, catalog: &Catalog) -> Result<Topology, String> {
     if machine.id == 0
         || machine.parts.is_empty()
         || machine.parts.len() > 1024
@@ -167,43 +178,67 @@ fn validate_apparatus(machine: &Apparatus, catalog: &Catalog) -> Result<(), Stri
     {
         return Err("invalid apparatus parts".into());
     }
-    let mut roots = 0;
-    let mut shares = HashMap::<u64, u32>::new();
-    for part in machine.parts.iter() {
-        if part.id == 0
-            || catalog
-                .components
-                .binary_search_by_key(&part.component, |row| row.id)
-                .is_err()
-            || !(1..=1000).contains(&part.share_per_mille)
-        {
+    let mut root = None;
+    let mut shares = SmallVec::<[u16; 8]>::from_elem(0, machine.parts.len());
+    let mut nodes = SmallVec::<[SolveNode; 8]>::new();
+    for (index, part) in machine.parts.iter().enumerate() {
+        if part.id == 0 || !(1..=1000).contains(&part.share_per_mille) {
             return Err("invalid physical part".into());
         }
-        if let Some(parent) = part.parent {
-            if parent >= part.id
-                || machine
-                    .parts
-                    .binary_search_by_key(&parent, |row| row.id)
-                    .is_err()
-            {
-                return Err("apparatus must be acyclic and connected".into());
-            }
-            let total = shares.entry(parent).or_default();
-            *total += u32::from(part.share_per_mille);
-            if *total > 1000 {
+        let component = catalog
+            .components
+            .binary_search_by_key(&part.component, |row| row.id)
+            .map_err(|_| "unknown physical component")?;
+        let parent = if let Some(parent) = part.parent {
+            let parent = machine
+                .parts
+                .binary_search_by_key(&parent, |row| row.id)
+                .map_err(|_| "apparatus must be acyclic and connected")?;
+            shares[parent] += part.share_per_mille;
+            if shares[parent] > 1000 {
                 return Err("branches exceed their input force".into());
             }
+            Some(parent)
         } else {
-            roots += 1;
             if part.share_per_mille != 1000 {
                 return Err("root must receive the full source".into());
             }
+            if root.replace(index).is_some() {
+                return Err("apparatus requires one source".into());
+            }
+            None
+        };
+        nodes.push(SolveNode {
+            part: index,
+            parent,
+            component,
+        });
+    }
+    let root = root.ok_or("apparatus requires one source")?;
+    if nodes
+        .iter()
+        .all(|node| node.parent.is_none_or(|parent| parent < node.part))
+    {
+        return Ok(Arc::from(nodes.as_slice()));
+    }
+    let mut children = SmallVec::<[SmallVec<[usize; 2]>; 8]>::with_capacity(nodes.len());
+    children.resize_with(nodes.len(), SmallVec::new);
+    for node in &nodes {
+        if let Some(parent) = node.parent {
+            children[parent].push(node.part);
         }
     }
-    if roots != 1 {
-        return Err("apparatus requires one source".into());
+    let mut ordered = SmallVec::<[SolveNode; 8]>::new();
+    ordered.push(nodes[root]);
+    let mut cursor = 0;
+    while let Some(node) = ordered.get(cursor).copied() {
+        ordered.extend(children[node.part].iter().map(|&child| nodes[child]));
+        cursor += 1;
     }
-    Ok(())
+    if ordered.len() != nodes.len() {
+        return Err("apparatus must be acyclic and connected".into());
+    }
+    Ok(Arc::from(ordered.as_slice()))
 }
 
 impl World {
@@ -226,61 +261,30 @@ impl World {
         {
             return Err("invalid mechanics catalog or apparatus order".into());
         }
-        let mut part_ids = HashSet::new();
-        for machine in &state.apparatus {
-            if machine.id == 0
-                || machine.parts.is_empty()
-                || machine.parts.len() > 1024
-                || machine
-                    .parts
-                    .windows(2)
-                    .any(|rows| rows[0].id >= rows[1].id)
-            {
-                return Err("invalid apparatus parts".into());
-            }
-            let mut roots = 0;
-            let mut shares = HashMap::<u64, u32>::new();
-            for part in machine.parts.iter() {
-                if part.id == 0
-                    || !part_ids.insert(part.id)
-                    || catalog
-                        .binary_search_by_key(&part.component, |row| row.id)
-                        .is_err()
-                    || !(1..=1000).contains(&part.share_per_mille)
-                {
-                    return Err("invalid or duplicated physical part".into());
-                }
-                if let Some(parent) = part.parent {
-                    if parent >= part.id
-                        || machine
-                            .parts
-                            .binary_search_by_key(&parent, |row| row.id)
-                            .is_err()
-                    {
-                        return Err("apparatus must be acyclic and connected".into());
-                    }
-                    let total = shares.entry(parent).or_default();
-                    *total += u32::from(part.share_per_mille);
-                    if *total > 1000 {
-                        return Err("branches exceed their input force".into());
-                    }
-                } else {
-                    roots += 1;
-                    if part.share_per_mille != 1000 {
-                        return Err("root must receive the full source".into());
-                    }
-                }
-            }
-            if roots != 1 {
-                return Err("apparatus requires one source".into());
-            }
+        let topology: Vec<_> = state
+            .apparatus
+            .par_iter()
+            .map(|machine| prepare_topology(machine, &state.catalog))
+            .collect::<Result<_, _>>()?;
+        let mut part_ids: Vec<_> = state
+            .apparatus
+            .par_iter()
+            .flat_map_iter(|machine| machine.parts.iter().map(|part| part.id))
+            .collect();
+        part_ids.par_sort_unstable();
+        if part_ids.par_windows(2).any(|pair| pair[0] == pair[1]) {
+            return Err("duplicated physical part".into());
         }
         let instance = NEXT_WORLD
             .try_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
                 value.checked_add(1)
             })
             .map_err(|_| "mechanics instance overflow")?;
-        Ok(Self { state, instance })
+        Ok(Self {
+            state,
+            topology,
+            instance,
+        })
     }
 
     pub fn snapshot(&self) -> Snapshot {
@@ -289,6 +293,17 @@ impl World {
 
     pub fn apparatus(&self) -> &[Apparatus] {
         &self.state.apparatus
+    }
+
+    /// A stable terminal component for a default experiment.
+    pub fn terminal_part(&self, apparatus: u64) -> Option<u64> {
+        let index = self
+            .state
+            .apparatus
+            .binary_search_by_key(&apparatus, |row| row.id)
+            .ok()?;
+        let part = self.topology[index].last()?.part;
+        Some(self.state.apparatus[index].parts[part].id)
     }
 
     /// Stage chosen designs independently. Competing proposals must win every
@@ -310,9 +325,10 @@ impl World {
         if actors.first() == Some(&0) || actors.par_windows(2).any(|row| row[0] == row[1]) {
             return Err("invalid or overlapping assembly actors".into());
         }
-        requests
+        let prepared: Vec<_> = requests
             .par_iter()
-            .try_for_each(|request| validate_apparatus(&request.apparatus, &self.state.catalog))?;
+            .map(|request| prepare_topology(&request.apparatus, &self.state.catalog))
+            .collect::<Result<_, _>>()?;
         let used: HashSet<_> = self
             .state
             .apparatus
@@ -389,14 +405,22 @@ impl World {
             .filter(|row| row.accepted)
             .map(|row| row.actor)
             .collect();
-        let mut apparatus = self.state.apparatus.clone();
-        apparatus.par_extend(
+        let mut machines: Vec<_> = self
+            .state
+            .apparatus
+            .par_iter()
+            .cloned()
+            .zip(self.topology.par_iter().cloned())
+            .collect();
+        machines.par_extend(
             requests
                 .par_iter()
-                .filter(|row| accepted.contains(&row.actor))
-                .map(|row| row.apparatus.clone()),
+                .zip(prepared.into_par_iter())
+                .filter(|(request, _)| accepted.contains(&request.actor))
+                .map(|(request, topology)| (request.apparatus.clone(), topology)),
         );
-        apparatus.par_sort_unstable_by_key(|row| row.id);
+        machines.par_sort_unstable_by_key(|(machine, _)| machine.id);
+        let (apparatus, topology) = machines.into_par_iter().unzip();
         outcomes.par_sort_unstable_by_key(|row| row.actor);
         Ok(AssemblyDraft {
             instance: self.instance,
@@ -404,6 +428,7 @@ impl World {
             tick,
             apparatus,
             outcomes,
+            topology,
         })
     }
 
@@ -426,6 +451,7 @@ impl World {
             .checked_add(1)
             .ok_or("mechanics revision overflow")?;
         let prior = std::mem::replace(&mut self.state.apparatus, draft.apparatus);
+        self.topology = draft.topology;
         self.state.last_tick = Some(draft.tick);
         self.state.revision = revision;
         prior.into_par_iter().for_each(drop);
@@ -529,7 +555,15 @@ impl World {
                         .ok()
                 };
                 let observation = winner
-                    .map(|index| evaluate(&mut machine, &self.state.catalog, tick, winners[index]))
+                    .map(|index| {
+                        evaluate(
+                            &mut machine,
+                            &self.topology[position],
+                            &self.state.catalog,
+                            tick,
+                            winners[index],
+                        )
+                    })
                     .transpose()?;
                 Ok((machine, observation))
             })
@@ -620,19 +654,22 @@ struct Reading {
 
 fn evaluate(
     machine: &mut Apparatus,
+    topology: &[SolveNode],
     catalog: &Catalog,
     tick: u64,
     request: Experiment,
 ) -> Result<Observation, String> {
-    let mut readings = SmallVec::<[Reading; 8]>::with_capacity(machine.parts.len());
+    let blocked = Reading {
+        force: 0,
+        distance: 0,
+        blocked: true,
+    };
+    let mut readings = SmallVec::<[Reading; 8]>::from_elem(blocked, machine.parts.len());
     let mut broken_parts = Vec::new();
-    for index in 0..machine.parts.len() {
+    for node in topology {
+        let index = node.part;
         let part = &machine.parts[index];
-        let input = if let Some(parent) = part.parent {
-            let parent_index = machine
-                .parts
-                .binary_search_by_key(&parent, |row| row.id)
-                .expect("validated parent");
+        let input = if let Some(parent_index) = node.parent {
             let parent = readings[parent_index];
             Reading {
                 force: ((u128::from(parent.force) * u128::from(part.share_per_mille)) / 1000)
@@ -647,10 +684,7 @@ fn evaluate(
                 blocked: false,
             }
         };
-        let component = &catalog.components[catalog
-            .components
-            .binary_search_by_key(&part.component, |row| row.id)
-            .expect("validated component")];
+        let component = &catalog.components[node.component];
         let failed = input.blocked || part.broken || input.force > component.max_input_force;
         if !input.blocked && !part.broken && input.force > component.max_input_force {
             let id = part.id;
@@ -658,11 +692,6 @@ fn evaluate(
             broken_parts.push(id);
         }
         if failed {
-            readings.push(Reading {
-                force: 0,
-                distance: 0,
-                blocked: true,
-            });
             continue;
         }
         let distance = u64::try_from(
@@ -683,12 +712,13 @@ fn evaluate(
         } else {
             raw_force.min(work / u128::from(distance))
         };
-        readings.push(Reading {
+        readings[index] = Reading {
             force: force.min(u128::from(u64::MAX)) as u64,
             distance,
             blocked: false,
-        });
+        };
     }
+    broken_parts.sort_unstable();
     let target = readings[machine
         .parts
         .binary_search_by_key(&request.output_part, |row| row.id)

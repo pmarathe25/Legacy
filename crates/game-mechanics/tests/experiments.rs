@@ -433,3 +433,24 @@ fn concentrated_apparatus_benchmark() {
         );
     }
 }
+
+#[test]
+fn component_identity_can_be_reordered_without_changing_physics() {
+    let mut opening = world(1).snapshot();
+    let unchanged = World::compile(opening.clone()).unwrap();
+    let solved = unchanged.prepare(1, 7, &[request(1, 1, 2)]).unwrap();
+    let parts = std::sync::Arc::make_mut(&mut opening.apparatus[0].parts);
+    for part in parts.iter_mut() {
+        part.id = 24 - part.id;
+        part.parent = part.parent.map(|parent| 24 - parent);
+    }
+    parts.sort_unstable_by_key(|part| part.id);
+    let reversed = World::compile(opening.clone()).unwrap();
+    assert_ne!(reversed.terminal_part(1), Some(13));
+    let output = reversed.prepare(1, 7, &[request(1, 1, 2)]).unwrap();
+    assert_eq!(solved.observations(), output.observations());
+    let disconnected = std::sync::Arc::make_mut(&mut opening.apparatus[0].parts);
+    disconnected[0].parent = Some(12);
+    disconnected[1].parent = Some(11);
+    assert!(World::compile(opening).is_err());
+}

@@ -76,11 +76,12 @@ pub use hauling::CoreHaulingResults;
 pub use local_transport::CoreLocalTransportResults;
 pub use market::CoreMarketResults;
 pub use mechanics::{
-    CoreMechanics, MechanicalCapability, MechanicalCommunication, MechanicalExploration,
-    MechanicalLoadMaterial, MechanicalLoadOutcome, MechanicalLoadPolicy, MechanicalLoadRequest,
-    MechanicalLoadResult, MechanicalMaterial, MechanicalMemory, MechanicalPolicy,
-    MechanicalReactions, MechanicalTestimony, MechanicalTrialChange, MechanicalWatchPolicy,
-    MechanicalWitnessRequest, WitnessedMechanicalResult,
+    CoreMechanics, MechanicalCapability, MechanicalCommunication, MechanicalDesignInput,
+    MechanicalDesignPreferences, MechanicalExploration, MechanicalLoadMaterial,
+    MechanicalLoadOutcome, MechanicalLoadPolicy, MechanicalLoadRequest, MechanicalLoadResult,
+    MechanicalMaterial, MechanicalMemory, MechanicalPolicy, MechanicalReactions,
+    MechanicalTestimony, MechanicalTrialChange, MechanicalWatchPolicy, MechanicalWitnessRequest,
+    WitnessedMechanicalResult,
 };
 pub use offers::CoreSocialResults;
 pub use past_lives::CorePastLifeView;

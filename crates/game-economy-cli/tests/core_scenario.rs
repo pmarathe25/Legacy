@@ -11333,3 +11333,104 @@ fn authored_hauling_request_leaves_the_carrier_free_to_choose() {
     }
     assert_eq!(run(1), run(6));
 }
+
+#[test]
+fn designers_choose_different_apparatus_shapes_from_comparable_parts() {
+    use game_economy::core_interval::{CoreHost, CoreRunEvent};
+
+    let root = root();
+    let scenario = root.join("content/scenarios/economy-core-personal-design.toml");
+    let source = std::fs::read_to_string(scenario).unwrap();
+    let source = source
+        .replace(
+            "{ id = 1002, good = \"tool\" }]",
+            "{ id = 1002, good = \"tool\" }, { id = 1003, good = \"timber\" }]",
+        )
+        .replace(
+            "[mechanics]",
+            r#"
+[[people]]
+id = 2
+region = 1
+health = 100
+hunger = 0
+willing_to_work = false
+seek_meals = false
+items = [{ id = 2001, good = "timber" }, { id = 2002, good = "tool" }, { id = 2003, good = "timber" }]
+
+[mechanics]"#,
+        )
+        .replace(
+            "[[personal_choices]]",
+            r#"
+[[mechanics.memories]]
+person = 2
+capacity = 4
+design = { inputs = [{ component = 2, value = 6 }], extra_part_value = -4 }
+
+[[personal_choices]]"#,
+        )
+        .replace(
+            "reactions = { moved = 2, stalled = -3, broken = -4 }",
+            "design = { inputs = [{ component = 1, value = 6 }], extra_part_value = 4 }",
+        );
+    let source = format!(
+        "{source}{}{}",
+        "\n",
+        r#"
+[[personal_choices]]
+id = 2
+idle = 0
+preferences = [{ domain = 13, enabled = true, bias = 10 }]
+"#
+    );
+    let path =
+        std::env::temp_dir().join(format!("legacy-design-shapes-{}.toml", std::process::id()));
+    std::fs::write(&path, source).unwrap();
+    let opening = game_economy_cli::core_scenario(&path, &root.join("content"));
+    std::fs::remove_file(path).unwrap();
+    let opening = opening.unwrap().snapshot();
+
+    let simulate = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut host = CoreHost::resume(opening.clone()).unwrap();
+                let candidates = host.preview_mechanical_designs(&[1, 2], &[]).unwrap();
+                assert_eq!(candidates.len(), 18);
+                let choices: Vec<_> = host
+                    .preview_personal_choices(&[])
+                    .unwrap()
+                    .0
+                    .into_iter()
+                    .map(|choice| {
+                        let design = choice.assembly.unwrap();
+                        let input = design
+                            .apparatus
+                            .parts
+                            .iter()
+                            .find(|part| part.parent.is_none())
+                            .unwrap();
+                        (design.actor, input.component, design.apparatus.parts.len())
+                    })
+                    .collect();
+                assert_eq!(choices, [(1, 1, 3), (2, 2, 2)]);
+                let run = host.advance_continuous(1, &[]).unwrap();
+                assert_eq!(run.failure, None);
+                assert!(run.events.iter().any(|event| matches!(
+                    event, CoreRunEvent::MechanicalAssemblies(rows)
+                    if rows.len() == 2 && rows.iter().all(|row| row.accepted)
+                )));
+                let committed = host.snapshot();
+                let restored = CoreHost::resume(
+                    serde_json::from_str(&serde_json::to_string(&committed).unwrap()).unwrap(),
+                )
+                .unwrap();
+                assert_eq!(restored.snapshot(), committed);
+                committed
+            })
+    };
+    assert_eq!(simulate(1), simulate(4));
+}
