@@ -122,6 +122,7 @@ fn observation(event: &CoreRunEvent, current_tick: &mut u64) -> Option<Value> {
         CoreRunEvent::MechanicalExperiments(rows) if !rows.is_empty() => Some(json!({"kind":"mechanical_experiments","events":rows})),
         CoreRunEvent::HaulingRequests(rows) if !rows.is_empty() => Some(json!({"kind":"hauling_requests","people":rows})),
         CoreRunEvent::HaulingTransfers(rows) if !rows.is_empty() => Some(json!({"kind":"hauling_transfers","outcomes":rows})),
+        CoreRunEvent::ReadPages(rows) if !rows.is_empty() => Some(json!({"kind":"read_pages","items":rows})),
         CoreRunEvent::WrittenPages(rows) if !rows.is_empty() => Some(json!({"kind":"written_pages","items":rows})),
         CoreRunEvent::Boundary(row) => {
             *current_tick = row.tick;

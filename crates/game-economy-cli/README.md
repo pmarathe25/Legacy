@@ -43,6 +43,14 @@ duration in milliseconds to request a different elapsed step. Use
 inspect the world. `help` lists the other available observations. Both
 modes use the same elapsed checkpoints for `save PATH` and `load PATH`.
 
+### Choosing to read
+
+A personal choice profile can declare domain 25 to compare reading with
+other available activities. The item ID is the action key for an individual
+page. A person can read a text they actually hold and understand. An
+`auto_read` literacy setting provides a standing inclination for people
+without that personal choice domain.
+
 ## Record a history
 
 Histories record authored aid and work proposals, individual responses, and

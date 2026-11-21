@@ -465,18 +465,57 @@ impl Writing {
         self.literacy = Arc::new(literacy);
     }
 
-    /// Independent people choose a held, unread page; no other person's knowledge is inspected.
-    pub fn auto_reads(
+    pub(super) fn can_choose_read(
+        &self,
+        actor: &crate::Person,
+        page: &Page,
+        busy: &[u64],
+        automatic: bool,
+    ) -> bool {
+        if actor.controlled
+            || actor.health == 0
+            || actor.region.is_none()
+            || busy.binary_search(&actor.id).is_ok()
+            || self.reads.binary_search(&(actor.id, page.item)).is_ok()
+        {
+            return false;
+        }
+        let key = (actor.id, page.script);
+        let direct = self
+            .literacy
+            .first()
+            .and_then(|row| actor.id.checked_sub(row.person))
+            .and_then(|offset| usize::try_from(offset).ok())
+            .filter(|&index| {
+                self.literacy
+                    .get(index)
+                    .is_some_and(|row| (row.person, row.script) == key)
+            });
+        direct
+            .or_else(|| {
+                self.literacy
+                    .binary_search_by_key(&key, |row| (row.person, row.script))
+                    .ok()
+            })
+            .is_some_and(|index| {
+                let policy = &self.literacy[index];
+                policy.read && (!automatic || policy.auto_read)
+            })
+    }
+
+    pub(super) fn read_opportunities(
         &self,
         people: &[crate::Person],
         busy: &[u64],
         physical: &game_lot_runtime::Runtime,
+        automatic: bool,
+        consider: impl Fn(u64) -> bool + Sync,
     ) -> Vec<(u64, u64)> {
         if self.pages.is_empty()
             || !self
                 .literacy
                 .par_iter()
-                .any(|row| row.read && row.auto_read)
+                .any(|row| row.read && (!automatic || row.auto_read))
         {
             return Vec::new();
         }
@@ -487,35 +526,26 @@ impl Writing {
                 let game_lots::Place::Person(person) = physical.item_place(page.item)? else {
                     return None;
                 };
+                if !consider(person) {
+                    return None;
+                }
                 let actor = &people[ordered_index(people, person, |row| row.id)?];
-                let key = (person, page.script);
-                let direct = self
-                    .literacy
-                    .first()
-                    .and_then(|row| person.checked_sub(row.person))
-                    .and_then(|offset| usize::try_from(offset).ok())
-                    .filter(|&i| {
-                        self.literacy
-                            .get(i)
-                            .is_some_and(|row| (row.person, row.script) == key)
-                    });
-                let policy = &self.literacy[direct.or_else(|| {
-                    self.literacy
-                        .binary_search_by_key(&key, |row| (row.person, row.script))
-                        .ok()
-                })?];
-                (!actor.controlled
-                    && actor.health > 0
-                    && actor.region.is_some()
-                    && policy.read
-                    && policy.auto_read
-                    && busy.binary_search(&person).is_err()
-                    && self.reads.binary_search(&(person, page.item)).is_err())
-                .then_some((person, page.item))
+                self.can_choose_read(actor, page, busy, automatic)
+                    .then_some((person, page.item))
             })
             .collect();
         candidates.par_sort_unstable();
         candidates
+    }
+
+    /// Independent people choose a held, unread page; no other person's knowledge is inspected.
+    pub fn auto_reads(
+        &self,
+        people: &[crate::Person],
+        busy: &[u64],
+        physical: &game_lot_runtime::Runtime,
+    ) -> Vec<(u64, u64)> {
+        self.read_opportunities(people, busy, physical, true, |_| true)
             .par_chunk_by(|a, b| a.0 == b.0)
             .map(|group| group[0])
             .collect()

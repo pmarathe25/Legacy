@@ -11434,3 +11434,90 @@ preferences = [{ domain = 13, enabled = true, bias = 10 }]
     };
     assert_eq!(simulate(1), simulate(4));
 }
+
+#[test]
+fn people_can_choose_a_particular_page_or_spend_the_round_building() {
+    use game_economy::core_interval::{CoreChoiceOutcome, CoreHost, CoreRunEvent};
+
+    let root = root();
+    let source = std::fs::read_to_string(
+        root.join("content/scenarios/economy-core-personal-design.toml"),
+    )
+    .unwrap()
+    .replace(
+        "{ id = 1002, good = \"tool\" }]",
+        "{ id = 1002, good = \"tool\" }, { id = 1003, good = \"written-page\" }, { id = 1004, good = \"written-page\" }]",
+    )
+    .replace(
+        "{ domain = 13, enabled = true, bias = 10 }]",
+        "{ domain = 13, enabled = true, bias = 10 }, { domain = 25, enabled = true, bias = 20 }]",
+    );
+    let source = format!(
+        "{source}\n{}",
+        r#"
+actions = [{ key = { domain = 25, action = 1004 }, enabled = true, bias = 1 }]
+
+[writing]
+paper = "paper"
+ink = "ink"
+page = "written-page"
+paper_quantity = 1
+ink_quantity = 1
+next_item = 1005
+literacy = [{ person = 1, script = 1, read = true }]
+
+[[writing.pages]]
+item = 1003
+author = 1
+script = 1
+written_at = 0
+text = "First."
+
+[[writing.pages]]
+item = 1004
+author = 1
+script = 1
+written_at = 0
+text = "Second."
+"#
+    );
+    let path = std::env::temp_dir().join(format!("legacy-read-choice-{}.toml", std::process::id()));
+    std::fs::write(&path, source).unwrap();
+    let opening = game_economy_cli::core_scenario(&path, &root.join("content"));
+    std::fs::remove_file(path).unwrap();
+    let snapshot = opening.unwrap().snapshot();
+
+    let simulate = |workers, choose_read: bool| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut state = snapshot.clone();
+                if !choose_read {
+                    std::sync::Arc::make_mut(
+                        state.schedule.as_mut().unwrap().personal_choices.as_mut().unwrap(),
+                    )[0].preferences.iter_mut().find(|row| row.domain == 25).unwrap().enabled = false;
+                }
+                let mut host = CoreHost::resume(state).unwrap();
+                let run = host.advance_continuous(1, &[]).unwrap();
+                assert_eq!(run.failure, None);
+                assert!(run.events.iter().any(|event| matches!(
+                    event, CoreRunEvent::PersonalChoices(rows)
+                    if rows.iter().any(|row| row.outcome == CoreChoiceOutcome::Accepted
+                        && row.key.is_some_and(|key| key.domain == if choose_read { 25 } else { 13 }))
+                )));
+                let state = host.snapshot();
+                assert_eq!(state.writing.as_ref().unwrap().reads.as_slice(), if choose_read { &[(1, 1004)][..] } else { &[] });
+                assert_eq!(
+                    state.mechanics.as_ref().unwrap().world.apparatus.len(),
+                    usize::from(!choose_read),
+                );
+                CoreHost::resume(
+                    serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap()
+                ).unwrap().snapshot()
+            })
+    };
+    assert_eq!(simulate(1, true), simulate(4, true));
+    assert_eq!(simulate(1, false), simulate(4, false));
+}

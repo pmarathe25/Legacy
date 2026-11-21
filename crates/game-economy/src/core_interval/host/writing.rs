@@ -279,9 +279,52 @@ impl CoreHost {
         let tick = self.writing_tick()?;
         let busy = self.writing_busy(blocked);
         let reads = owner.auto_reads(&self.core.people, &busy, &self.core.physical);
+        self.publish_read_texts(reads, tick)
+    }
+
+    /// Revalidate chosen pages against current possession and capability.
+    pub(super) fn read_selected_texts(
+        &mut self,
+        requests: &[(u64, u64)],
+        blocked: &[u64],
+    ) -> Result<CoreWritingResults, String> {
+        let Some(owner) = &self.writing else {
+            return Ok(CoreWritingResults::default());
+        };
+        if requests.is_empty() {
+            return Ok(CoreWritingResults::default());
+        }
+        let tick = self.writing_tick()?;
+        let busy = self.writing_busy(blocked);
+        let reads: Vec<_> = requests
+            .par_iter()
+            .copied()
+            .filter(|&(person, item)| {
+                self.core.physical.item_place(item) == Some(game_lots::Place::Person(person))
+                    && self
+                        .core
+                        .people
+                        .binary_search_by_key(&person, |row| row.id)
+                        .ok()
+                        .map(|index| &self.core.people[index])
+                        .zip(owner.page(item))
+                        .is_some_and(|(actor, page)| {
+                            owner.can_choose_read(actor, page, &busy, false)
+                        })
+            })
+            .collect();
+        self.publish_read_texts(reads, tick)
+    }
+
+    fn publish_read_texts(
+        &mut self,
+        reads: Vec<(u64, u64)>,
+        tick: u64,
+    ) -> Result<CoreWritingResults, String> {
         if reads.is_empty() {
             return Ok(CoreWritingResults::default());
         }
+        let owner = self.writing.as_ref().expect("reads require writing");
         let actors = reads.par_iter().map(|row| row.0).collect();
         let items = reads.par_iter().map(|row| row.1).collect();
         let mut next = owner.clone();
