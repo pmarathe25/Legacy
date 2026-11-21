@@ -12,6 +12,36 @@ to track rates, deadlines, and behavior under different advance sizes. The
 [autonomy notes](../../docs/research/autonomy-followups.md) record earlier reviews. Use the
 [implementation plan](../../docs/plan.md) for confirmed design intent.
 
+## Verified restoration checkpoints
+
+- Personal meetings, language, signals, written explanations, and recipe
+  lessons can share an elapsed encounter opportunity. History records the
+  actual times. Irregular advances, save/reload, and different settlement
+  intervals and worker counts are covered by composed tests.
+- Physical storage projects shelf life from the local ambient calendar or a
+  holder's explicit temperature. Exact age survives movement and season
+  changes. Preparations can mature in custody and stock can spoil before a
+  same-time use. Personal construction and selection of storage conditions
+  remain open.
+- Mechanical designs use actual identified parts. Each character can rank
+  alternative input components or a branched design. The mechanical owner
+  computes force and travel in physical connection order and records which
+  parts break. Broader shared reach, parts selection, and learning remain open.
+- Wildlife selects local mates through personal attraction and inherited
+  desire. An authored inherited flexibility can give different animals
+  different selectivity within one species. The earlier elapsed history lost
+  its grazer population after hunting removed six founders and none of the
+  remaining local pairings met both animals' thresholds.
+- Conditional aid and work practices arise through individual proposals and
+  responses. History preserves attributed proposals, claimed readiness,
+  beliefs, and outward adoption with or without approval. More types of
+  personal cooperation and a shared elapsed review cadence remain open.
+- The 5,100-person benchmarks give identical ordered receipts across worker
+  counts. A focused observation comparison showed that one hour requested in
+  minutes staged 306,000 rows per physiology owner under every read mode.
+  An hourly request staged 5,100 with the same results. Reducing such dense
+  work is an open performance task.
+
 ## Working constraints
 
 - Restore missing high-level features through the elapsed host and its normal
@@ -58,14 +88,13 @@ performance characteristics. Crate count is a diagnostic, not a target.
 Keep the [feature ownership index](../../docs/design/feature-ownership.md) current as
 boundaries change.
 
-The larger simplification is one execution path. The elapsed host now handles
-individual expedition invitations and sourcing, collapsing structures, local
-tactical reinforcement, guardian bodies, past-life memories, and unattended
-succession. Finish the remaining campaign abilities, coordinated expeditions,
-larger formations, and the
-[other paths rejected by the interval loader](../../crates/game-economy/src/core_interval/host/scenario.rs)
-in the elapsed host. Include authoring, normal CLI and player access, history,
-and saved state in each feature. The removed runner can be inspected in Git.
+One execution path handles elapsed simulation, player actions, and history.
+The host now handles personal expedition invitations, independently revisable
+departure plans, sourcing, collapsing structures, local tactical reinforcement,
+guardian bodies, past-life memories and practiced work rates, and unattended
+succession. Coordinated journeys and larger formations remain open. Exercise
+them through normal authoring, the player interface, history, and saved state.
+The removed runner remains available in Git history.
 
 The interval host now loads site demolition, recovery, and construction for a
 person's active recipe goal. Follow up on procuring missing construction kits
