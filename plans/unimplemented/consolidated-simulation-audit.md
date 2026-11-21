@@ -156,7 +156,9 @@ One execution path handles elapsed simulation, player actions, and history.
 The host now handles personal expedition invitations, independently revisable
 departure plans, sourcing, collapsing structures, local tactical reinforcement,
 guardian bodies, past-life memories and practiced work rates, and unattended
-succession. Coordinated journeys and larger formations remain open. Exercise
+succession. Travelers can choose to wait for companions before their first
+leg or depart at their own deadline. Larger formations, coordination on
+later legs, and sharing appointments through invitations remain open. Exercise
 them through normal authoring, the player interface, history, and saved state.
 The removed runner remains available in Git history.
 

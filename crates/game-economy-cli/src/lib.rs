@@ -24,6 +24,15 @@ struct ScenarioExpeditionDeparture {
     after_millis: u64,
 }
 
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ScenarioExpeditionRendezvous {
+    person: u64,
+    group: u64,
+    minimum_companions: u32,
+    wait_millis: u64,
+}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Scenario {
@@ -69,6 +78,9 @@ struct Scenario {
     on_site_meals: bool,
     #[serde(default)]
     expedition_departures: Vec<ScenarioExpeditionDeparture>,
+    expedition_visit_unit_millis: Option<u64>,
+    #[serde(default)]
+    expedition_rendezvous: Vec<ScenarioExpeditionRendezvous>,
     stock_capacity: u64,
     food_relief_divisor: u32,
     rules: Rules,
@@ -1146,6 +1158,8 @@ pub fn core_scenario_with_options(
     let mut expedition_invitation_initiatives =
         std::mem::take(&mut authored.expedition_invitation_initiatives);
     let departures = std::mem::take(&mut authored.expedition_departures);
+    let expedition_visit_unit_millis = authored.expedition_visit_unit_millis;
+    let rendezvous = std::mem::take(&mut authored.expedition_rendezvous);
     let on_site_meals = authored.on_site_meals;
     let fatigue_rate_period_millis = authored.fatigue_rate_period_millis;
     let elapsed_fatigue = authored.elapsed_fatigue;
@@ -1157,7 +1171,9 @@ pub fn core_scenario_with_options(
     let birth_choices = authored.birth_choices.take();
     let meal_preferences = std::mem::take(&mut authored.meal_preferences);
     let scenario = build_scenario(authored, content, seed, population_path)?;
-    let mut snapshot = game_economy::core_interval::CoreHostSnapshot::from_scenario(scenario)?;
+    let mut snapshot = game_economy::core_interval::CoreHostSnapshot::from_scenario_with_expedition_visit_unit(
+        scenario, expedition_visit_unit_millis,
+    )?;
     snapshot.pastimes = pastimes.map(|config| config.compile(content, &snapshot.core.physical.goods)).transpose()?;
     let mut personal_conflict = personal_conflict
         .map(|mut authored| {
@@ -1275,6 +1291,21 @@ pub fn core_scenario_with_options(
             }
             let event =
                 owner.schedule_departure(row.person, Some(u128::from(row.after_millis)), 0)?;
+            owner.pending_events.push(event);
+        }
+    }
+    if !rendezvous.is_empty() {
+        let owner = snapshot.expeditions.as_mut().ok_or("rendezvous requires expeditions")?;
+        let mut travelers = HashSet::new();
+        for row in rendezvous {
+            if !travelers.insert(row.person) {
+                return Err("duplicate departure rendezvous".into());
+            }
+            let event = owner.set_rendezvous(row.person, Some(game_economy::core_interval::ExpeditionRendezvous {
+                group: row.group,
+                minimum_companions: row.minimum_companions,
+                wait_until_millis: u128::from(row.wait_millis),
+            }), 0)?;
             owner.pending_events.push(event);
         }
     }

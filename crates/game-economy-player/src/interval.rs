@@ -212,6 +212,13 @@ impl<'a> Player<'a> {
         self.host.continue_controlled_expedition(self.person)
     }
 
+    pub fn set_expedition_rendezvous(
+        &mut self,
+        choice: Option<(u64, u32, u64)>,
+    ) -> Result<game_economy::core_interval::ExpeditionEvent, String> {
+        self.host.set_controlled_rendezvous(self.person, choice)
+    }
+
     pub fn return_from_expedition(
         &mut self,
     ) -> Result<Vec<game_economy::core_interval::ExpeditionEvent>, String> {

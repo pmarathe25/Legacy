@@ -529,6 +529,8 @@ fn classify(kind: &str, row: &Value) -> Option<Receipt> {
         },
         ("expeditions", "reached_destination") => "expedition arrivals",
         ("expeditions", "departure_scheduled") => "expedition departure plans revised",
+        ("expeditions", "rendezvous_changed") => "individual expedition rendezvous plans revised",
+        ("expeditions", "companions_departed") => "expedition participants who departed together",
         ("expeditions", "supplies_acquired") => "expedition supplies acquired",
         ("expeditions", "invitation") => match kind_value["invitation"]["response"].as_str() {
             None => "expedition invitations without an immediate reply",

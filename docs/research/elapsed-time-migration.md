@@ -44,6 +44,11 @@ the controlled person's remembered route reports and their dates.
 own unit. Departure follows an individual's choice. A paused leg retains
 its remaining duration, and arrival changes physical reach at the exact
 elapsed deadline.
+Authored expeditions can set `expedition_visit_unit_millis` to interpret
+their saved visit durations independently of the physical quantum. An
+optional personal rendezvous waits for companions on the same first leg
+until the individual's elapsed timeout. The route is attempted on a decision
+review. Each itinerary stays independent after departure.
 An optional `rules.starvation_rate` uses elapsed exposure after each person's
 hunger crosses the starvation threshold. Fractional damage is saved, and the
 interval coordinator stops at fatal deadlines before advancing work or travel

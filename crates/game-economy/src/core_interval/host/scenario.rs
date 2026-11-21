@@ -3,7 +3,18 @@ use super::*;
 
 impl CoreHostSnapshot {
     /// Convert a fresh scenario while refusing to discard owners the host does not run.
-    pub fn from_scenario(mut state: crate::State) -> Result<Self, String> {
+    pub fn from_scenario(state: crate::State) -> Result<Self, String> {
+        Self::from_scenario_with_expedition_visit_unit(state, None)
+    }
+
+    /// Use a declared visit duration unit when converting authored objectives.
+    pub fn from_scenario_with_expedition_visit_unit(
+        mut state: crate::State,
+        visit_unit_millis: Option<u64>,
+    ) -> Result<Self, String> {
+        if visit_unit_millis.is_some_and(|unit| unit == 0 || state.missions.is_none()) {
+            return Err("a positive expedition visit unit requires missions".into());
+        }
         if state.physical.custody.tick != 0
             || state.physical.work_interval.is_some()
             || !state.physical.work.is_empty()
@@ -48,7 +59,7 @@ impl CoreHostSnapshot {
             .map(|owner| {
                 game_economy_expeditions::elapsed::Expeditions::from_fresh(
                     owner,
-                    state.physical.tick_millis,
+                    visit_unit_millis.unwrap_or(state.physical.tick_millis),
                 )
             })
             .transpose()?;

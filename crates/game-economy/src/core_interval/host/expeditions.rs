@@ -3,6 +3,7 @@ use super::*;
 use game_economy_expeditions::{
     Objective,
     elapsed::{Delivery, Event, Itinerary, Plan, TravelContext},
+    rendezvous::Rendezvous,
 };
 use game_lots::Place;
 
@@ -35,9 +36,19 @@ impl CoreHost {
             return Ok((Vec::new(), Vec::new()));
         }
         let now = self.core.simulated_millis();
-        let busy = self.local_walk_exclusions(blocked);
+        let mut busy = self.local_walk_exclusions(blocked);
+        if owner.itineraries.par_iter().any(|row| row.rendezvous.is_some()) {
+            busy.par_extend(self.core.physical.work().par_iter()
+                .filter(|row| row.phase == game_lot_runtime::Phase::Working)
+                .map(|row| row.job.worker));
+            busy.par_sort_unstable();
+            busy.dedup();
+            if let Some(excluded) = self.blocked_with_rest(&busy) {
+                busy = excluded;
+            }
+        }
         let outside = self.block_away_from_stock(&busy);
-        let requests = owner.departures(TravelContext {
+        let proposals = owner.departures(TravelContext {
             people: &self.core.people,
             travel,
             busy: outside.as_deref().unwrap_or(&busy),
@@ -48,9 +59,10 @@ impl CoreHost {
             },
             controlled,
         });
-        if requests.is_empty() {
+        if proposals.is_empty() {
             return Ok((Vec::new(), Vec::new()));
         }
+        let requests: Vec<_> = proposals.par_iter().map(|row| row.departure).collect();
         let actors: Vec<_> = requests.par_iter().map(|request| request.person).collect();
         let mut outcomes = self.depart(&requests, &busy)?;
         outcomes.par_sort_unstable_by_key(|outcome| outcome.person);
@@ -58,7 +70,7 @@ impl CoreHost {
             .expeditions
             .as_mut()
             .expect("expeditions checked")
-            .record_departures(&requests, &outcomes, now);
+            .record_departures(&proposals, &outcomes, now);
         Ok((actors, events))
     }
 
@@ -460,6 +472,26 @@ impl CoreHost {
         let (_, departures) = self.expedition_departures(&[], Some(person))?;
         events.extend(departures);
         Ok(events)
+    }
+
+    pub fn set_controlled_rendezvous(
+        &mut self,
+        person: u64,
+        choice: Option<(u64, u32, u64)>,
+    ) -> Result<Event, String> {
+        let actor = self.controlled_person(person)?;
+        if actor.health == 0 {
+            return Err("person cannot choose a rendezvous".into());
+        }
+        let now = self.core.simulated_millis();
+        let rendezvous = choice.map(|(group, minimum_companions, wait)| {
+            let wait_until_millis = now.checked_add(u128::from(wait)).ok_or("rendezvous instant overflow")?;
+            Ok::<_, &str>(Rendezvous { group, minimum_companions, wait_until_millis })
+        }).transpose()?;
+        let owner = self.expeditions.as_mut().ok_or("expeditions are disabled")?;
+        let event = owner.set_rendezvous(person, rendezvous, now)?;
+        owner.pending_events.push(event);
+        Ok(event)
     }
 
     pub fn return_controlled_expedition(&mut self, person: u64) -> Result<Vec<Event>, String> {

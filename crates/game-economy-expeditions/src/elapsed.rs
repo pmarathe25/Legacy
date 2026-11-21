@@ -1,5 +1,6 @@
 //! Personal itineraries driven by accepted travel, observations, and elapsed time.
 use crate::elapsed_invitations::{Invitations, Offer, Response};
+use crate::rendezvous::{self, Proposal, Rendezvous, RouteGroup};
 use crate::{DeliveryAcquisition, DeliveryPreference, Missions, Objective};
 use game_economy_person::{Person, travel};
 use rayon::prelude::*;
@@ -39,6 +40,8 @@ pub struct Itinerary {
     pub visit_millis: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub depart_after_millis: Option<u128>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rendezvous: Option<Rendezvous>,
     pub go_on: bool,
     pub head_home: bool,
     pub stage: Stage,
@@ -58,6 +61,13 @@ pub enum EventKind {
     Planned,
     DepartureScheduled {
         depart_after_millis: Option<u128>,
+    },
+    RendezvousChanged {
+        rendezvous: Option<Rendezvous>,
+    },
+    CompanionsDeparted {
+        group: u64,
+        companions: u64,
     },
     OutboundLeg,
     ReturnLeg,
@@ -160,6 +170,7 @@ impl Itinerary {
             destination: plan.destination,
             visit_millis: plan.visit_millis,
             depart_after_millis: plan.depart_after_millis,
+            rendezvous: None,
             go_on: true,
             head_home: plan.head_home,
             stage: Stage::Ready,
@@ -250,6 +261,7 @@ impl Expeditions {
                     destination: row.destination,
                     visit_millis,
                     depart_after_millis: None,
+                    rendezvous: None,
                     go_on: true,
                     head_home: true,
                     stage: Stage::Ready,
@@ -301,6 +313,7 @@ impl Expeditions {
                     || row.origin == row.destination
                     || !regions.contains(&row.origin)
                     || !regions.contains(&row.destination)
+                    || row.rendezvous.is_some_and(|plan| plan.group == 0 || row.stage != Stage::Ready)
                     || row.delivery_preference.is_some_and(|preference| {
                         !matches!(row.objective, Some(Objective::Deliver { .. }))
                             || preference.pressure_threshold == Some(0)
@@ -486,6 +499,7 @@ impl Expeditions {
             .find(|row| row.person == person && row.stage.active())
             .ok_or("no active itinerary")?;
         row.stage = Stage::Abandoned;
+        row.rendezvous = None;
         Ok(row.event(now, region, EventKind::Abandoned))
     }
 
@@ -551,7 +565,7 @@ impl Expeditions {
 
     /// One route proposal per actor. In worlds with personal routing, use only
     /// the actor's reports. Reports may be wrong when physical travel is tried.
-    pub fn departures(&self, context: TravelContext<'_>) -> Vec<travel::Departure> {
+    pub fn departures(&self, context: TravelContext<'_>) -> Vec<Proposal> {
         let TravelContext {
             people,
             travel,
@@ -559,6 +573,7 @@ impl Expeditions {
             review,
             controlled,
         } = context;
+        let now = review.elapsed.map_or(u128::from(review.tick), |(now, _)| now);
         let mut targets: Vec<_> = self
             .itineraries
             .par_iter()
@@ -576,18 +591,13 @@ impl Expeditions {
             Vec::new()
         };
         reports.par_sort_unstable_by_key(|row| row.person);
-        let mut requests: Vec<_> = self
+        let proposals = self
             .itineraries
             .par_iter()
             .filter_map(|row| {
                 let target = row.route_target()?;
                 if row.stage == Stage::Ready
-                    && row.depart_after_millis.is_some_and(|due| {
-                        review
-                            .elapsed
-                            .map_or(u128::from(review.tick), |(now, _)| now)
-                            < due
-                    })
+                    && row.depart_after_millis.is_some_and(|due| now < due)
                 {
                     return None;
                 }
@@ -600,8 +610,11 @@ impl Expeditions {
                     .binary_search_by_key(&row.person, |person| person.id)
                     .ok()?];
                 let source = person.region?;
+                let rendezvous = row.rendezvous.filter(|_| {
+                    controlled.is_none() && row.stage == Stage::Ready && source == row.origin
+                });
                 if person.health == 0
-                    || (person.controlled && controlled.is_none())
+                    || (person.controlled && controlled.is_none() && rendezvous.is_none())
                     || source == target
                 {
                     return None;
@@ -614,31 +627,51 @@ impl Expeditions {
                     let paths = travel::known_paths_at(&reports[a..b], source, review);
                     paths.get(&target)?.1
                 };
-                Some(travel::Departure {
-                    person: row.person,
-                    destination: first_leg,
+                Some(Proposal {
+                    departure: travel::Departure { person: row.person, destination: first_leg },
+                    group: rendezvous.map(|plan| RouteGroup {
+                        group: plan.group, source, first_leg, destination: target,
+                    }),
+                    minimum_companions: rendezvous.filter(|plan| now < plan.wait_until_millis)
+                        .map_or(0, |plan| plan.minimum_companions),
                 })
             })
             .collect();
-        requests.par_sort_unstable_by_key(|request| request.person);
-        requests
+        rendezvous::admit(proposals)
+    }
+
+    pub fn set_rendezvous(
+        &mut self,
+        person: u64,
+        choice: Option<Rendezvous>,
+        now: u128,
+    ) -> Result<Event, String> {
+        if choice.is_some_and(|plan| plan.group == 0) {
+            return Err("a rendezvous requires a positive group identifier".into());
+        }
+        let row = self.itineraries.iter_mut()
+            .find(|row| row.person == person && row.stage == Stage::Ready)
+            .ok_or("the traveler has no itinerary awaiting departure")?;
+        row.rendezvous = choice;
+        Ok(row.event(now, row.origin, EventKind::RendezvousChanged { rendezvous: choice }))
     }
 
     pub fn record_departures(
         &mut self,
-        requests: &[travel::Departure],
+        proposals: &[Proposal],
         outcomes: &[travel::DepartureOutcome],
         now: u128,
     ) -> Vec<Event> {
+        let companions = rendezvous::companions(proposals, outcomes);
         self.itineraries
             .par_iter_mut()
             .filter_map(|row| {
                 row.route_target()?;
-                let request = requests.get(
-                    requests
-                        .binary_search_by_key(&row.person, |request| request.person)
+                let request = proposals.get(
+                    proposals
+                        .binary_search_by_key(&row.person, |request| request.departure.person)
                         .ok()?,
-                )?;
+                )?.departure;
                 let accepted = outcomes[outcomes
                     .binary_search_by_key(&row.person, |outcome| outcome.person)
                     .ok()?]
@@ -647,13 +680,20 @@ impl Expeditions {
                     EventKind::RouteUnavailable
                 } else if matches!(row.stage, Stage::Ready | Stage::Outbound) {
                     row.stage = Stage::Outbound;
+                    row.rendezvous = None;
                     EventKind::OutboundLeg
                 } else {
                     row.stage = Stage::Returning;
                     EventKind::ReturnLeg
                 };
-                Some(row.event(now, request.destination, kind))
+                let companion_event = companions.binary_search_by_key(&row.person, |row| row.0)
+                    .ok().map(|index| {
+                        let (_, group, companions) = companions[index];
+                        row.event(now, request.destination, EventKind::CompanionsDeparted { group, companions })
+                    });
+                Some([Some(row.event(now, request.destination, kind)), companion_event])
             })
+            .flat_map_iter(|events| events.into_iter().flatten())
             .collect()
     }
 
@@ -669,11 +709,13 @@ impl Expeditions {
                     .ok()?];
                 if person.health == 0 && person.immortal.is_none() {
                     row.stage = Stage::Died;
+                    row.rendezvous = None;
                     return Some(row.event(now, person.region.unwrap_or(0), EventKind::Died));
                 }
                 let region = person.region?;
                 let kind = match row.stage {
                     Stage::Ready | Stage::Outbound if region == row.destination => {
+                        row.rendezvous = None;
                         row.stage = Stage::Visiting {
                             until_millis: now.saturating_add(u128::from(row.visit_millis)),
                         };
