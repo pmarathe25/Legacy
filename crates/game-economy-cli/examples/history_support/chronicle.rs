@@ -22,8 +22,17 @@ struct ExpeditionParticipation {
     joined_under_pressure: u64,
 }
 
+struct RecipeTransmission {
+    first_year: u64,
+    last_year: u64,
+    teachers: BTreeSet<u64>,
+    learners: BTreeSet<u64>,
+}
+
 #[derive(Default)]
 pub(super) struct Chronicle {
+    recipes: BTreeMap<u64, String>,
+    recipe_learning: BTreeMap<u64, RecipeTransmission>,
     counts: BTreeMap<&'static str, u64>,
     people: BTreeMap<u64, BTreeMap<&'static str, u64>>,
     selected: Vec<Value>,
@@ -43,6 +52,15 @@ struct Receipt {
 
 impl Chronicle {
     pub(super) fn snapshot(&mut self, state: &Value, year: u64, opening: bool) {
+        if opening {
+            self.recipes = state
+                .pointer("/core/physical/recipes")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(|row| Some((row["id"].as_u64()?, row["name"].as_str()?.to_owned())))
+                .collect();
+        }
         let Some(contracts) = state
             .pointer("/agreements/contracts")
             .and_then(Value::as_array)
@@ -178,12 +196,35 @@ impl Chronicle {
                 | "confinement"
                 | "mechanical_experiments"
                 | "work_requests"
+                | "maturation"
+                | "recipe_learning"
         ) {
             return;
         }
         for row in event["events"].as_array().into_iter().flatten() {
             if kind == "expeditions" {
                 self.record_expedition_participation(row, year);
+            }
+            if kind == "recipe_learning"
+                && let (Some(recipe), Some(teacher), Some(student)) = (
+                    row["recipe"].as_u64(),
+                    row["teacher"].as_u64(),
+                    row["student"].as_u64(),
+                )
+            {
+                let learning =
+                    self.recipe_learning
+                        .entry(recipe)
+                        .or_insert_with(|| RecipeTransmission {
+                            first_year: year,
+                            last_year: year,
+                            teachers: BTreeSet::new(),
+                            learners: BTreeSet::new(),
+                        });
+                learning.first_year = learning.first_year.min(year);
+                learning.last_year = learning.last_year.max(year);
+                learning.teachers.insert(teacher);
+                learning.learners.insert(student);
             }
             if let Some(receipt) = classify(kind, row) {
                 self.record(event, row, year, focus, receipt);
@@ -276,8 +317,18 @@ impl Chronicle {
         expeditions
             .sort_unstable_by_key(|&(person, row)| (std::cmp::Reverse(row.people.len()), *person));
         expeditions.truncate(10);
+        let mut transmissions: Vec<_> = self.recipe_learning.iter().collect();
+        transmissions.sort_unstable_by_key(|&(recipe, learning)| {
+            (std::cmp::Reverse(learning.learners.len()), *recipe)
+        });
+        transmissions.truncate(10);
         json!({
             "counts": self.counts,
+            "recipe_transmission": transmissions.iter().map(|&(&id, learning)| json!({
+                "recipe": id, "name": self.recipes.get(&id),
+                "first_year": learning.first_year, "last_year": learning.last_year,
+                "teachers": learning.teachers, "learners": learning.learners
+            })).collect::<Vec<_>>(),
             "people": contributors.iter().map(|&(person, counts)| json!({"person":person,"counts":counts})).collect::<Vec<_>>(),
             "recurring_deliveries": ties.iter().map(|&(&(sender, recipient), &(first, latest, years))| {
                 json!({"sender":sender,"recipient":recipient,"first_year":first,"latest_year":latest,"recorded_years":years})
@@ -310,6 +361,30 @@ fn classify(kind: &str, row: &Value) -> Option<Receipt> {
             other: caregiver.map(|_| child),
         });
     }
+    if kind == "recipe_learning" {
+        return Some(Receipt {
+            label: "recipe lessons recorded",
+            actor: Some(row["teacher"].as_u64()?),
+            other: Some(row["student"].as_u64()?),
+        });
+    }
+    if kind == "maturation" {
+        let label = match row["outcome"].as_str()? {
+            "matured" => "prepared batches matured",
+            "unsuitable_temperature" => "prepared batches lost at unsuitable temperatures",
+            "storage_unavailable" => "prepared batches lost without suitable storage",
+            _ => return None,
+        };
+        let place = &row["place"];
+        let holder = (place["kind"] == "person")
+            .then(|| place["id"].as_u64())
+            .flatten();
+        return Some(Receipt {
+            label,
+            actor: None,
+            other: holder,
+        });
+    }
     let person = row["person"].as_u64();
     let kind_value = &row["kind"];
     let category = kind_value
@@ -330,6 +405,7 @@ fn classify(kind: &str, row: &Value) -> Option<Receipt> {
             _ => return None,
         },
         ("expeditions", "reached_destination") => "expedition arrivals",
+        ("expeditions", "departure_scheduled") => "expedition departure plans revised",
         ("expeditions", "supplies_acquired") => "expedition supplies acquired",
         ("expeditions", "invitation") => match kind_value["invitation"]["response"].as_str() {
             None => "expedition invitations without an immediate reply",
@@ -405,6 +481,21 @@ pub(super) fn write_world(text: &mut String, chronicle: &Value) {
                 labels.join(", ")
             )
             .unwrap();
+        }
+        text.push('\n');
+    }
+    if let Some(rows) = chronicle["recipe_transmission"]
+        .as_array()
+        .filter(|rows| !rows.is_empty())
+    {
+        text.push_str("## Recipe transmission\n\n");
+        for row in rows.iter().take(5) {
+            let name = row["name"]
+                .as_str()
+                .map_or_else(|| format!("recipe {}", row["recipe"]), str::to_owned);
+            let teachers = row["teachers"].as_array().map_or(0, Vec::len);
+            let learners = row["learners"].as_array().map_or(0, Vec::len);
+            writeln!(text, "- {teachers} people taught {learners} learners {name}. The archive records those lessons from year {} through {}.", row["first_year"], row["last_year"]).unwrap();
         }
         text.push('\n');
     }
@@ -551,6 +642,28 @@ mod tests {
             1
         );
         assert_eq!(history.selected()[0]["at_millis"], 48);
+    }
+
+    #[test]
+    fn summarizes_actual_learning_and_does_not_attribute_passive_ripening_as_work() {
+        let mut history = Chronicle::default();
+        history.snapshot(
+            &json!({"core":{"physical":{"recipes":[{"id":4,"name":"salt-roots"}]}}}),
+            0,
+            true,
+        );
+        for (year, pupil) in [(2, 9), (3, 9), (5, 10)] {
+            history.observe(&json!({"kind":"recipe_learning","events":[{"recipe":4,"teacher":1,"student":pupil}]}), year, Some(9));
+        }
+        history.observe(&json!({"kind":"maturation","at_millis":500,"events":[{"outcome":"matured","place":{"kind":"person","id":9}}]}), 5, Some(9));
+        let summary = history.summary();
+        assert_eq!(
+            summary["recipe_transmission"][0],
+            json!({"recipe":4,"name":"salt-roots","first_year":2,"last_year":5,"teachers":[1],"learners":[9,10]})
+        );
+        assert_eq!(summary["counts"]["prepared batches matured"], 1);
+        assert_eq!(summary["people"].as_array().unwrap().len(), 1);
+        assert_eq!(history.selected().last().unwrap()["at_millis"], 500);
     }
 
     #[test]
