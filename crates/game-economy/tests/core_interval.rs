@@ -567,7 +567,7 @@ fn elapsed_delivery_joins_a_maternal_journey_and_loses_to_fatal_harm() {
 fn inherited_mate_desire_controls_conception_on_an_elapsed_opportunity() {
     use game_economy::core_interval::CoreRunEvent;
 
-    let run = |quantum, workers, allele| {
+    let run = |quantum, workers, allele, initiator| {
         rayon::ThreadPoolBuilder::new().num_threads(workers).build().unwrap().install(|| {
             let mut core = fixture();
             core.physical.tick_millis = quantum;
@@ -581,6 +581,7 @@ fn inherited_mate_desire_controls_conception_on_an_elapsed_opportunity() {
                 "desire":desire,"genetic_weight":genetic_weight,"affinity_weight":0,
                 "attraction_weight":0,"hunger_weight":0,"dependent_weight":0,
             });
+            let inclination = |id| if id == initiator { profile(500, 500) } else { profile(0, 0) };
             let snapshot: CoreHostSnapshot = serde_json::from_value(serde_json::json!({
                 "core":core,
                 "family": {
@@ -590,9 +591,9 @@ fn inherited_mate_desire_controls_conception_on_an_elapsed_opportunity() {
                         "minimum_health":1,"maximum_hunger":100,"newborn_health":50,
                         "mutation_per_million":0,"mutation_step":0,"subjective_mating":true},
                     "members":[
-                        {"id":1,"age":3,"mate_preference":profile(0,0),
-                            "genome":{"sex":"Male","alleles":[[100,100],[100,100],[100,100],[100,100]]}},
-                        {"id":2,"age":3,"mate_preference":profile(500,500),
+                        {"id":1,"age":3,"mate_preference":inclination(1),
+                            "genome":{"sex":"Male","alleles":[[100,100],[100,100],[100,100],[100,100]],"mate_desire":[allele,allele]}},
+                        {"id":2,"age":3,"mate_preference":inclination(2),
                             "genome":{"sex":"Female","alleles":[[1000,1000],[100,100],[100,100],[100,100]],"mate_desire":[allele,allele]}}
                     ],"next_id":3
                 }
@@ -633,8 +634,10 @@ fn inherited_mate_desire_controls_conception_on_an_elapsed_opportunity() {
         })
     };
     for allele in [0, 1000] {
-        run(1000, 1, allele);
-        run(280, 4, allele);
+        for initiator in [1, 2] {
+            run(1000, 1, allele, initiator);
+            run(280, 4, allele, initiator);
+        }
     }
 }
 

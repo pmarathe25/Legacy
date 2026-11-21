@@ -141,11 +141,7 @@ fn subjective_partnerships(
     let region = group[0].0;
     let mut candidates: Vec<_> = group.par_iter().map(|row| row.2).collect();
     candidates.par_sort_unstable_by_key(|member| (random(seed ^ 31, member.id, tick), member.id));
-    let kin: Vec<_> = candidates
-        .par_iter()
-        .map(|member| ancestors(member.id, index))
-        .collect();
-    let mut edges: Vec<_> = candidates
+    let edges: Vec<_> = candidates
         .par_iter()
         .filter_map(|person| {
             if !seeks_mate(
@@ -157,11 +153,10 @@ fn subjective_partnerships(
             ) {
                 return None;
             }
-            let own_kin = ancestors(person.id, index);
             let offset = (random(seed ^ 71, person.id, tick) % candidates.len() as u64) as usize;
             let choice = (0..candidates.len().min(32))
                 .map(|n| (offset + n) % candidates.len())
-                .filter(|&i| candidates[i].id != person.id && own_kin.is_disjoint(&kin[i]))
+                .filter(|&i| candidates[i].id != person.id)
                 .filter_map(|i| {
                     mutual_mate_score(person, candidates[i], physical, seed).map(|score| (i, score))
                 })
@@ -171,6 +166,21 @@ fn subjective_partnerships(
             Some((person.id.min(other), person.id.max(other)))
         })
         .collect();
+    mutually_preferred_edges(edges, index, physical, seed, tick)
+        .into_par_iter()
+        .map(|(a, b)| (a, b, region))
+        .collect()
+}
+
+// The choices are one per person at this opportunity. Matches do not impose
+// exclusivity or change the participants' later preferences.
+fn mutually_preferred_edges(
+    mut edges: Vec<(u64, u64)>,
+    index: &OrderedMemberIndex<'_>,
+    physical: &impl game_family_model::PhysicalView,
+    seed: u64,
+    time: u64,
+) -> Vec<(u64, u64)> {
     edges.par_sort_unstable();
     edges.dedup();
     let mut rankings: Vec<_> = edges
@@ -180,13 +190,13 @@ fn subjective_partnerships(
                 (
                     a,
                     std::cmp::Reverse(mate_score(&index[&a], &index[&b], physical, seed)),
-                    random(seed ^ tick, a, b),
+                    random(seed ^ time, a, b),
                     b,
                 ),
                 (
                     b,
                     std::cmp::Reverse(mate_score(&index[&b], &index[&a], physical, seed)),
-                    random(seed ^ tick, b, a),
+                    random(seed ^ time, b, a),
                     a,
                 ),
             ]
@@ -207,7 +217,7 @@ fn subjective_partnerships(
                     .ok()
                     .is_some_and(|i| selected[i].1 == other)
             };
-            (accepts(a, b) && accepts(b, a)).then_some((a, b, region))
+            (accepts(a, b) && accepts(b, a)).then_some((a, b))
         })
         .collect()
 }
@@ -794,86 +804,122 @@ fn prepare_conceptions(
         eligible_at_age(member, person, rules, age)
     };
     let index = OrderedMemberIndex::new(members);
-    let mut prospective_fathers: Vec<_> = if rules.subjective_mating {
-        members
+    let can_carry = |mother: &Member| {
+        mother.pregnancy.is_none()
+            && match calendar
+                .filter(|calendar| calendar.elapsed_gestation)
+                .zip(now)
+            {
+                Some((calendar, now)) => calendar
+                    .birth_recovery
+                    .get(&mother.id)
+                    .is_none_or(|due| *due <= now),
+                None => mother.next_conception <= tick,
+            }
+    };
+    let mut selected: Vec<_> = if rules.subjective_mating {
+        let (mut mothers, mut fathers): (Vec<_>, Vec<_>) = members
             .par_iter()
-            .filter_map(|m| {
-                let person = physical.read(m.id);
-                (m.genome.sex == Sex::Male && !physical.controlled(m.id) && is_eligible(m, &person))
-                    .then(|| (person.region.unwrap(), physical.contact_partition(m.id), m))
+            .filter_map(|member| {
+                let person = physical.read(member.id);
+                (!physical.controlled(member.id)
+                    && is_eligible(member, &person)
+                    && (member.genome.sex == Sex::Male || can_carry(member)))
+                .then(|| {
+                    (
+                        (
+                            person.region.expect("eligible local person"),
+                            physical.contact_partition(member.id),
+                        ),
+                        member,
+                        person,
+                    )
+                })
+            })
+            .partition(|(_, member, _)| member.genome.sex == Sex::Female);
+        let key = |row: &MateCandidate<'_>| {
+            (
+                row.0,
+                random(seed ^ 0x46415448, row.1.id, entropy),
+                row.1.id,
+            )
+        };
+        rayon::join(
+            || mothers.par_sort_unstable_by_key(key),
+            || fathers.par_sort_unstable_by_key(key),
+        );
+        let propose = |sources: &[MateCandidate<'_>], targets: &[MateCandidate<'_>]| {
+            sources
+                .par_iter()
+                .filter_map(|(area, source, person)| {
+                    if !seeks_mate(source, person, dependent_count(source.id), seed, entropy) {
+                        return None;
+                    }
+                    let first = targets.partition_point(|row| row.0 < *area);
+                    let end = targets.partition_point(|row| row.0 <= *area);
+                    if first == end {
+                        return None;
+                    }
+                    let offset = (random(seed ^ 0x5345454b, source.id, entropy)
+                        % (end - first) as u64) as usize;
+                    let target = (0..(end - first).min(32))
+                        .map(|n| targets[first + (offset + n) % (end - first)].1)
+                        .filter_map(|target| {
+                            mutual_mate_score(source, target, physical, seed)
+                                .map(|score| (target.id, score))
+                        })
+                        .max_by_key(|&(target, score)| (score, std::cmp::Reverse(target)))?
+                        .0;
+                    Some((source.id.min(target), source.id.max(target)))
+                })
+                .collect::<Vec<_>>()
+        };
+        let (mut proposals, responded) = rayon::join(
+            || propose(&mothers, &fathers),
+            || propose(&fathers, &mothers),
+        );
+        proposals.par_extend(responded);
+        mutually_preferred_edges(proposals, &index, physical, seed, entropy)
+            .into_par_iter()
+            .map(|(a, b)| {
+                if index[&a].genome.sex == Sex::Female {
+                    (a, b)
+                } else {
+                    (b, a)
+                }
             })
             .collect()
     } else {
-        Vec::new()
-    };
-    prospective_fathers.par_sort_unstable_by_key(|(region, partition, father)| {
-        (
-            *region,
-            *partition,
-            random(seed ^ 0x46415448, father.id, entropy),
-            father.id,
-        )
-    });
-    members
-        .par_iter()
-        .filter_map(|mother| {
-            if mother.genome.sex != Sex::Female
-                || physical.controlled(mother.id)
-                || mother.pregnancy.is_some()
-                || match calendar
-                    .filter(|calendar| calendar.elapsed_gestation)
-                    .zip(now)
+        members
+            .par_iter()
+            .filter_map(|mother| {
+                if mother.genome.sex != Sex::Female
+                    || physical.controlled(mother.id)
+                    || !can_carry(mother)
+                    || !is_eligible(mother, &physical.read(mother.id))
                 {
-                    Some((calendar, now)) => calendar
-                        .birth_recovery
-                        .get(&mother.id)
-                        .is_some_and(|due| *due > now),
-                    None => mother.next_conception > tick,
-                }
-                || !is_eligible(mother, &physical.read(mother.id))
-            {
-                return None;
-            }
-            let mother_person = physical.read(mother.id);
-            let father = if rules.subjective_mating {
-                if !seeks_mate(
-                    mother,
-                    &mother_person,
-                    dependent_count(mother.id),
-                    seed,
-                    entropy,
-                ) {
                     return None;
                 }
-                let area = (mother_person.region?, physical.contact_partition(mother.id));
-                let first = prospective_fathers.partition_point(|row| (row.0, row.1) < area);
-                let end = prospective_fathers.partition_point(|row| (row.0, row.1) <= area);
-                if first == end {
-                    return None;
-                }
-                let offset =
-                    (random(seed ^ 0x5345454b, mother.id, entropy) % (end - first) as u64) as usize;
-                let mother_ancestors = ancestors(mother.id, &index);
-                (0..(end - first).min(32))
-                    .map(|n| prospective_fathers[first + (offset + n) % (end - first)].2)
-                    .filter(|father| mother_ancestors.is_disjoint(&ancestors(father.id, &index)))
-                    .filter_map(|father| {
-                        mutual_mate_score(mother, father, physical, seed)
-                            .map(|score| (father, score))
-                    })
-                    .max_by_key(|(father, score)| (*score, std::cmp::Reverse(father.id)))?
-                    .0
-            } else {
-                mother.partner.and_then(|p| index.get(&p))?
-            };
+                let father = index.get(&mother.partner?)?;
+                let father_person = physical.read(father.id);
+                (father.genome.sex == Sex::Male
+                    && !physical.controlled(father.id)
+                    && is_eligible(father, &father_person)
+                    && father_person.region == physical.read(mother.id).region
+                    && physical.contact_partition(father.id)
+                        == physical.contact_partition(mother.id)
+                    && ancestors(mother.id, &index).is_disjoint(&ancestors(father.id, &index)))
+                .then_some((mother.id, father.id))
+            })
+            .collect()
+    };
+    selected.par_sort_unstable();
+    selected
+        .into_par_iter()
+        .filter_map(|(mother_id, father_id)| {
+            let mother = &index[&mother_id];
             let chance = 500 + u64::from(mother.genome.expressed(0));
-            if father.genome.sex != Sex::Male
-                || physical.controlled(father.id)
-                || !ancestors(mother.id, &index).is_disjoint(&ancestors(father.id, &index))
-                || !is_eligible(father, &physical.read(father.id))
-                || physical.read(father.id).region != physical.read(mother.id).region
-                || physical.contact_partition(father.id) != physical.contact_partition(mother.id)
-                || !random(seed ^ 97, mother.id, entropy).is_multiple_of(rules.conception_one_in)
+            if !random(seed ^ 97, mother.id, entropy).is_multiple_of(rules.conception_one_in)
                 || random(seed ^ 107, mother.id, entropy) % 1500 >= chance
             {
                 return None;
@@ -901,7 +947,7 @@ fn prepare_conceptions(
                 Ok((
                     mother.id,
                     Pregnancy {
-                        father: father.id,
+                        father: father_id,
                         due,
                         due_at_millis,
                     },
@@ -910,6 +956,12 @@ fn prepare_conceptions(
         })
         .collect()
 }
+
+type MateCandidate<'a> = (
+    (u64, game_family_model::ContactPartition),
+    &'a Member,
+    LifeInput,
+);
 
 /// Physical age and mortality use only the opening family and physical views.
 fn stage_life(

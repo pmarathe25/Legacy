@@ -333,6 +333,9 @@ fn same_sex_partnerships_and_individual_attraction_preferences_are_possible() {
 #[test]
 fn genetic_desire_and_personal_circumstances_affect_choices() {
     let mut state = family();
+    for person in &mut state.members[1..] {
+        person.mate_preference.as_mut().unwrap().desire = 0;
+    }
     let view = View {
         reverse_affinity: 10,
         hunger: 0,
@@ -389,6 +392,9 @@ fn genetic_desire_and_personal_circumstances_affect_choices() {
 #[test]
 fn a_person_can_evaluate_existing_children_in_either_direction() {
     let mut state = family();
+    for person in &mut state.members[1..] {
+        person.mate_preference.as_mut().unwrap().desire = 0;
+    }
     let mut child = member(4, Sex::Female, None);
     child.age = 3;
     child.parents = vec![1, 3].into();
@@ -429,6 +435,43 @@ fn a_person_can_evaluate_existing_children_in_either_direction() {
             .father,
         3
     );
+}
+
+#[test]
+fn a_mans_inherited_desire_can_initiate_an_encounter_without_an_exclusive_partnership() {
+    let mut state = family();
+    for person in &mut state.members {
+        person.mate_preference.as_mut().unwrap().desire = 0;
+    }
+    let initiator = &mut state.members[2];
+    initiator.mate_preference.as_mut().unwrap().desire = 500;
+    initiator.mate_preference.as_mut().unwrap().genetic_weight = 500;
+    initiator.genome.mate_desire = [0, 0];
+    let view = View {
+        reverse_affinity: 10,
+        hunger: 0,
+    };
+    let low = state.advance_validated(&view, 9, 1).unwrap().families;
+    assert!(low.members[0].pregnancy.is_none());
+    state.members[2].genome.mate_desire = [1000, 1000];
+    let high = state.advance_validated(&view, 9, 1).unwrap().families;
+    assert_eq!(high.members[0].pregnancy.unwrap().father, 3);
+    assert_eq!(high.members[0].partner, Some(2));
+}
+
+#[test]
+fn each_recipient_can_act_on_one_of_their_own_favored_proposals_per_opportunity() {
+    let mut state = family();
+    state.members[1].reproduction_allowed = false;
+    state.members.push(member(4, Sex::Female, None));
+    state.next_id = 5;
+    let view = View {
+        reverse_affinity: 10,
+        hunger: 0,
+    };
+    let result = state.advance_validated(&view, 9, 1).unwrap().families;
+    assert!(result.members[0].pregnancy.is_none());
+    assert_eq!(result.members[3].pregnancy.unwrap().father, 3);
 }
 #[test]
 fn results_do_not_depend_on_worker_count() {
