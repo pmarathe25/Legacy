@@ -127,6 +127,10 @@ permit. For an engineering scenario, `look` lists carried items and apparatus.
 per thousand. A parent ID of zero marks the input. `experiment 7 1002 100 100
 10` tests apparatus 7 at part 1002 using 100 units of input force, 100 units
 of input travel, and 10 units of resistance.
+In the [empirical mechanics scenario](../../content/scenarios/economy-empirical-mechanics.toml),
+`pastime 1` is a reflection on previously observed trials. After it completes,
+`findings` shows what the controlled character inferred under the recorded
+conditions, including comparisons with contradictory results.
 Use `mount APPARATUS STORE` to place all parts at a reachable store and `unmount APPARATUS STORE`
 to pick them back up. People at that store can choose to use the same
 assembled apparatus. A machine serves one trial at a time, and a move

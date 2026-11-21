@@ -1,6 +1,7 @@
 //! Mechanical apparatus tied to real identified parts and physical access.
 use super::*;
 mod design;
+mod inquiry;
 mod shared;
 pub use shared::CoreSharedApparatus;
 use std::collections::HashMap;
@@ -260,6 +261,8 @@ pub struct MechanicalMemory {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub exploration: Option<MechanicalExploration>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inquiry: Option<game_mechanics::inquiry::Study>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub communication: Option<MechanicalCommunication>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub testimony: Vec<MechanicalTestimony>,
@@ -304,7 +307,11 @@ pub(super) struct Runtime {
 }
 
 impl CoreMechanics {
-    pub(super) fn compile(self, core: &CoreInterval) -> Result<Runtime, String> {
+    pub(super) fn compile(
+        self,
+        core: &CoreInterval,
+        pastimes: Option<&game_pastimes::Pastimes>,
+    ) -> Result<Runtime, String> {
         if self
             .world
             .last_tick
@@ -444,6 +451,12 @@ impl CoreMechanics {
             || self.memories.par_iter().any(|memory| {
                 memory.person == 0
                     || !(1..=64).contains(&memory.capacity)
+                    || memory.inquiry.as_ref().is_some_and(|study| {
+                        !study.validate(core.simulated_millis())
+                            || study.trial_limit > memory.capacity
+                            || !memory.retain
+                            || pastimes.and_then(|owner| owner.activity(study.activity)).is_none()
+                    })
                     || memory.design.as_ref().is_some_and(|policy| {
                         policy
                             .inputs
@@ -1343,7 +1356,7 @@ impl CoreHost {
         {
             return Err("finish the pending decision before changing mechanics".into());
         }
-        self.mechanics = Some(owner.compile(&self.core)?);
+        self.mechanics = Some(owner.compile(&self.core, self.pastimes.as_ref())?);
         Ok(())
     }
 

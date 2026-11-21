@@ -810,6 +810,7 @@ pub enum CoreRunEvent {
         events: Vec<crate::gathering::Harvested>,
     },
     MechanicalExperiments(Vec<game_mechanics::Observation>),
+    MechanicalConclusions(Vec<MechanicalConclusion>),
     MechanicalLoads(Vec<MechanicalLoadResult>),
     MechanicalAssemblies(Vec<game_mechanics::AssemblyOutcome>),
     PersonalStrikes {
@@ -838,6 +839,19 @@ pub struct CoreRun {
     pub events: Vec<CoreRunEvent>,
     /// Earlier events and elapsed time remain committed when an action fails.
     pub failure: Option<String>,
+}
+
+impl CoreRun {
+    fn record_pastimes(&mut self, settled: super::pastimes::SettledPastimes) -> bool {
+        let activities_ended = !settled.activities.is_empty();
+        if activities_ended {
+            self.events.push(CoreRunEvent::Pastimes(settled.activities));
+        }
+        if !settled.conclusions.is_empty() {
+            self.events.push(CoreRunEvent::MechanicalConclusions(settled.conclusions));
+        }
+        activities_ended
+    }
 }
 struct PreparedSegment {
     offset_millis: u64,
@@ -1289,13 +1303,9 @@ impl CoreHost {
                     }
                     handled = true;
                 }
-                if deadline.pastime {
-                    let events = self.settle_pastimes();
-                    if !events.is_empty() {
-                        run.events.push(CoreRunEvent::Pastimes(events));
-                        handled = true;
-                        rest_dirty = true;
-                    }
+                if deadline.pastime && run.record_pastimes(self.settle_pastimes()) {
+                    handled = true;
+                    rest_dirty = true;
                 }
                 if deadline.storage_temperature
                     && let Some(celsius) = attempt!('run, self.publish_storage_temperature())
@@ -3953,8 +3963,7 @@ impl CoreHost {
                     events: elapsed.agreement_expiries,
                 });
             }
-            if !elapsed.pastimes.is_empty() {
-                run.events.push(CoreRunEvent::Pastimes(elapsed.pastimes));
+            if run.record_pastimes(elapsed.pastimes) {
                 rest_dirty = true;
             }
             if !elapsed.local_arrivals.is_empty() {

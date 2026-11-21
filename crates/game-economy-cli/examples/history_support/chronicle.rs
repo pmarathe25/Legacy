@@ -87,6 +87,7 @@ pub(super) struct Chronicle {
     repeated_ties: BTreeMap<(u64, u64), (u64, u64, u64)>,
     supply_episodes: BTreeMap<SupplyGroup, Vec<SupplyEpisode>>,
     expedition_participation: BTreeMap<u64, ExpeditionParticipation>,
+    mechanical_findings: std::collections::VecDeque<Value>,
 }
 
 #[derive(Clone, Copy)]
@@ -273,6 +274,7 @@ impl Chronicle {
                 | "tactical"
                 | "confinement"
                 | "mechanical_experiments"
+                | "mechanical_conclusions"
                 | "mechanical_assemblies"
                 | "soil_amendments"
                 | "pastimes"
@@ -287,6 +289,16 @@ impl Chronicle {
             return;
         }
         for row in event["events"].as_array().into_iter().flatten() {
+            if kind == "mechanical_conclusions"
+                && focus.is_none_or(|person| row["person"].as_u64() == Some(person))
+                && classify(kind, row).is_some()
+            {
+                if self.mechanical_findings.len() == 12 {
+                    self.mechanical_findings.pop_front();
+                }
+                self.mechanical_findings.push_back(json!({ "year": year, "person": row["person"],
+                    "at_millis": row["at_millis"], "evidence": row["evidence"] }));
+            }
             if kind == "expeditions" {
                 self.record_expedition_participation(row, year);
             }
@@ -419,6 +431,7 @@ impl Chronicle {
         json!({
             "shared_crews": crews.iter().map(|&(&lead, crew)| crew.summary(lead)).collect::<Vec<_>>(),
             "counts": self.counts,
+            "recent_mechanical_findings": self.mechanical_findings,
             "lexicon": self.lexicon.summary(),
             "recipe_transmission": transmissions.iter().map(|&(&id, learning)| json!({
                 "recipe": id, "name": self.recipes.get(&id),
@@ -444,6 +457,16 @@ impl Chronicle {
 }
 
 fn classify(kind: &str, row: &Value) -> Option<Receipt> {
+    if kind == "mechanical_conclusions" {
+        let evidence = &row["evidence"];
+        let moved = evidence["largest_load_moved"].as_u64()?;
+        let stalled = evidence["smallest_load_stalled"].as_u64()?;
+        return Some(Receipt {
+            label: if moved < stalled { "conditional load estimates recorded" } else { "contradictory mechanical comparisons recorded" },
+            actor: Some(row["person"].as_u64()?),
+            other: None,
+        });
+    }
     if kind == "care" {
         let child = row["child"].as_u64()?;
         let caregiver = row["caregiver"].as_u64();
@@ -605,6 +628,19 @@ fn classify(kind: &str, row: &Value) -> Option<Receipt> {
 }
 
 pub(super) fn write_world(text: &mut String, chronicle: &Value) {
+    if let Some(findings) = chronicle["recent_mechanical_findings"].as_array().filter(|rows| !rows.is_empty()) {
+        text.push_str("## Recent mechanical findings\n\n");
+        for row in findings {
+            let evidence = &row["evidence"];
+            let conditions = &evidence["conditions"];
+            let (Some(moved), Some(stalled)) = (evidence["largest_load_moved"].as_u64(), evidence["smallest_load_stalled"].as_u64()) else { continue };
+            let assessment = if moved < stalled { "The trials suggest a boundary between those loads." } else { "The two results overlap, so the comparison does not establish a boundary." };
+            writeln!(text, "- In year {}, person {} compared trials on apparatus {} at output {} with input force {} and travel {}. The largest observed load that moved was {moved}. The smallest that stalled was {stalled}. {assessment}",
+                row["year"], row["person"], conditions["apparatus"], conditions["output_part"],
+                conditions["input_force"], conditions["input_distance"]).unwrap();
+        }
+        text.push('\n');
+    }
     if let Some(counts) = chronicle["counts"]
         .as_object()
         .filter(|counts| !counts.is_empty())

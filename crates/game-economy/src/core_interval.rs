@@ -37,6 +37,7 @@ pub use game_mechanics::{
     Apparatus as MechanicalApparatus, Experiment as MechanicalExperiment,
     Observation as MechanicalObservation,
 };
+pub use game_mechanics::inquiry::{Comparison as MechanicalComparison, Conclusion as MechanicalConclusion};
 pub use host::{
     BarrierAction, CoreAssistRecord, CoreAssistSession, CoreChoiceEvent, CoreChoiceIntent,
     CoreChoiceOutcome, CoreConfinement, CoreConstructionResults, CoreCrewStart,

@@ -129,6 +129,7 @@ fn observation(event: &CoreRunEvent, current_tick: &mut u64) -> Option<Value> {
         CoreRunEvent::PersonalStrikes { events, harm } if !events.is_empty() => Some(json!({"kind":"personal_strikes","tick":*current_tick,"events":events,"harm":harm})),
         CoreRunEvent::MechanicalAssemblies(rows) if !rows.is_empty() => Some(json!({"kind":"mechanical_assemblies","events":rows})),
         CoreRunEvent::MechanicalExperiments(rows) if !rows.is_empty() => Some(json!({"kind":"mechanical_experiments","events":rows})),
+        CoreRunEvent::MechanicalConclusions(rows) if !rows.is_empty() => Some(json!({"kind":"mechanical_conclusions","events":rows})),
         CoreRunEvent::HaulingRequests(rows) if !rows.is_empty() => Some(json!({"kind":"hauling_requests","people":rows})),
         CoreRunEvent::HaulingTransfers(rows) if !rows.is_empty() => Some(json!({"kind":"hauling_transfers","outcomes":rows})),
         CoreRunEvent::ReadPages(rows) if !rows.is_empty() => Some(json!({"kind":"read_pages","items":rows})),
@@ -186,9 +187,6 @@ fn run(
     }
     let year_duration = u128::from(YEAR_MILLIS);
     let start_time = host.core().simulated_millis();
-    if !start_time.is_multiple_of(year_duration) {
-        return Err("history must start at a calendar year boundary".into());
-    }
     let start_year = u64::try_from(start_time / year_duration)
         .map_err(|_| "history year overflow")?;
     let end_year = start_year
@@ -228,9 +226,12 @@ fn run(
     if resume {
         limitations.push("consult the source history metadata for scenario-specific limitations");
     }
+    if !start_time.is_multiple_of(year_duration) {
+        limitations.push("the first observation period begins after the opening year boundary");
+    }
     line(
         &mut writer,
-        &json!({"kind":"metadata","schema":2,"years_requested":years,"start_year":start_year,"tick_millis":tick_millis,"step_millis":step_millis,"ticks_per_year":ticks_per_year,"year_millis":YEAR_MILLIS,"calendar":"365-day years","seed":initial.core.seed,"workers":workers,"git_revision":revision(root),"git_revision_scope":"checkout at run time; executable build provenance is not verified","tracked_source_modified":tracked_changes(root),"executable":std::env::current_exe().ok(),"source":source,"source_kind":if resume {"checkpoint"} else {"scenario"},"scenario":scenario_text,"limitations":limitations}),
+        &json!({"kind":"metadata","schema":2,"years_requested":years,"start_year":start_year,"starting_at_millis":start_time,"tick_millis":tick_millis,"step_millis":step_millis,"ticks_per_year":ticks_per_year,"year_millis":YEAR_MILLIS,"calendar":"365-day years","seed":initial.core.seed,"workers":workers,"git_revision":revision(root),"git_revision_scope":"checkout at run time; executable build provenance is not verified","tracked_source_modified":tracked_changes(root),"executable":std::env::current_exe().ok(),"source":source,"source_kind":if resume {"checkpoint"} else {"scenario"},"scenario":scenario_text,"limitations":limitations}),
     )?;
     line(
         &mut writer,
@@ -972,6 +973,31 @@ mod tests {
                 && state.food_search.is_some()
         );
         assert!(state.shared_work.is_some() && state.taking.is_some() && state.tool_wear.is_some());
+    }
+
+    #[test]
+    fn history_resume_preserves_the_midyear_checkpoint_and_completes_the_opening_year() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let scenario = root.join("content/scenarios/economy-history-pilot.toml");
+        let mut original = game_economy_cli::core_scenario(&scenario, &root.join("content")).unwrap();
+        let elapsed = YEAR_MILLIS / 3;
+        assert_eq!(original.advance_continuous(elapsed, &[]).unwrap().failure, None);
+        let name = format!("legacy-history-midyear-{}", std::process::id());
+        let save = std::env::temp_dir().join(format!("{name}.json"));
+        let archive = std::env::temp_dir().join(format!("{name}.ndjson"));
+        serde_json::to_writer(File::create(&save).unwrap(), &original.snapshot()).unwrap();
+        run(&root, &save, &archive, 1, 2, true, Some(elapsed / 3 + 7)).unwrap();
+        let rows = records(&archive);
+        assert_eq!(rows[0]["starting_at_millis"], elapsed);
+        assert_eq!(rows[1]["at_millis"], elapsed);
+        let expected = original.advance_continuous(YEAR_MILLIS - elapsed, &[]).unwrap();
+        assert_eq!(expected.failure, None);
+        let year_path = archive.with_extension("year-1.json");
+        let year: CoreHostSnapshot = serde_json::from_reader(File::open(&year_path).unwrap()).unwrap();
+        assert_eq!(year, original.snapshot());
+        for path in [save, archive, year_path] {
+            fs::remove_file(path).unwrap();
+        }
     }
 
     #[test]

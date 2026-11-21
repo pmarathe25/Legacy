@@ -1,6 +1,17 @@
 id = "pastimes/daily"
 version = 1
 
+[data.activities.compare-trials]
+abilities = { intelligence = 150 }
+name = "Reflect on earlier trials"
+inputs = {}
+requires = {}
+duration = 60000
+satisfaction_span = 14400000
+affinity = "contemplation"
+concept = "reflection"
+skill = "reflection"
+
 [data.activities.whittle]
 abilities = { agility = 100, gesturing = 200 }
 name = "Whittle a keepsake"

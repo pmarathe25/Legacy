@@ -1,4 +1,5 @@
 //! Deterministic, independently staged quasi-static apparatus experiments.
+pub mod inquiry;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;

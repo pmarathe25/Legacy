@@ -683,7 +683,7 @@ impl CoreHost {
             }
             knowledge = Some(legacy);
         }
-        let mechanics = mechanics.map(|owner| owner.compile(&core)).transpose()?;
+        let mechanics = mechanics.map(|owner| owner.compile(&core, pastimes.as_ref())).transpose()?;
         if campaign.as_ref().is_some_and(|owner| owner.costs.is_some()) {
             personal_conflict.get_or_insert_with(CorePersonalConflict::default);
         }
