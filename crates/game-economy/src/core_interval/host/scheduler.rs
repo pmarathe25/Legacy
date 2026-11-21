@@ -19,7 +19,8 @@ const SELECTED_DOMAINS: u64 = BASE_DOMAINS
     | (1 << 17)
     | (1 << 18)
     | (1 << 19)
-    | (1 << personal_choice::CONFINEMENT);
+    | (1 << personal_choice::CONFINEMENT)
+    | (1 << personal_choice::READ_TEXT);
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "phase", rename_all = "snake_case")]
@@ -584,6 +585,11 @@ impl CoreSchedule {
                                     || form.sounds.is_empty() || form.sounds.len() > 16
                                     || form.marks.is_empty() || form.marks.len() > 16 || form.marks.contains(&0)
                             }
+                            (personal_choice::READ_TEXT, None, None, None) => {
+                                intent.health_value.is_some() || intent.tool_damage.is_some()
+                                    || intent.meal_value.is_some() || intent.experiment_value != Some(1)
+                                    || intent.second_movement.is_some()
+                            }
                             (personal_choice::CONFINEMENT, None, None, None) => {
                                 intent.health_value.is_some() || intent.tool_damage.is_some()
                                     || intent.meal_value.is_some() || intent.experiment_value.is_some()
@@ -904,6 +910,25 @@ impl CoreHost {
                     .is_some_and(|language| language.writing.is_some())
                 || self.tool_wear.is_some()
                 || self.food_search.is_some()
+                || (self
+                    .writing
+                    .as_ref()
+                    .is_some_and(|owner| !owner.pages.is_empty())
+                    && self
+                        .schedule
+                        .as_ref()
+                        .and_then(|row| row.personal_choices.as_ref())
+                        .is_some_and(|profiles| {
+                            profiles.par_iter().any(|profile| {
+                                profile
+                                    .preferences
+                                    .binary_search_by_key(&personal_choice::READ_TEXT, |row| {
+                                        row.domain
+                                    })
+                                    .ok()
+                                    .is_some_and(|index| profile.preferences[index].enabled)
+                            })
+                        }))
                 || self
                     .health
                     .as_ref()
@@ -1725,6 +1750,22 @@ impl CoreHost {
                     DecisionPhase::ReadPages { mut meal_people } => {
                         let mut busy = blocked.to_vec();
                         busy.extend(meal_people.iter().copied());
+                        if let Some(profiles) = &schedule.personal_choices {
+                            busy.par_extend(
+                                profiles
+                                    .par_iter()
+                                    .filter(|profile| {
+                                        profile
+                                            .preferences
+                                            .binary_search_by_key(
+                                                &personal_choice::READ_TEXT,
+                                                |row| row.domain,
+                                            )
+                                            .is_ok()
+                                    })
+                                    .map(|profile| profile.id),
+                            );
+                        }
                         busy.par_sort_unstable();
                         busy.dedup();
                         let result = attempt!('run,self.read_texts_autonomously(&busy));
@@ -1976,6 +2017,7 @@ impl CoreHost {
                             18,
                             19,
                             personal_choice::CONFINEMENT,
+                            personal_choice::READ_TEXT,
                         ]
                         .into_iter()
                         .filter(|domain| remaining & (1u64 << domain) != 0)
@@ -1988,6 +2030,54 @@ impl CoreHost {
                         })
                         .expect("validated nonempty batch");
                         let remaining = remaining & !(1u64 << domain);
+                        if domain == personal_choice::READ_TEXT {
+                            let mut meal_people = meal_people;
+                            let mut busy = blocked.to_vec();
+                            busy.extend(meal_people.iter().copied());
+                            busy.par_sort_unstable();
+                            busy.dedup();
+                            let profiles =
+                                schedule.personal_choices.as_ref().expect("choice profile");
+                            let (unavailable, mut choices) = attempt!('run, self.choice_blocked(&busy, profiles, &intents, domain));
+                            let reads: Vec<_> = intents
+                                .par_iter()
+                                .filter(|intent| {
+                                    intent.key.domain == domain
+                                        && unavailable.binary_search(&intent.actor).is_err()
+                                })
+                                .map(|intent| (intent.actor, intent.key.action))
+                                .collect();
+                            let result = attempt!('run, self.read_selected_texts(&reads, &busy));
+                            choices.par_extend(reads.par_iter().map(|&(actor, item)| {
+                                CoreChoiceEvent {
+                                    tick: self.core.physical.tick(),
+                                    offset_millis: offset,
+                                    actor,
+                                    key: Some(game_personal_choice::Key {
+                                        domain,
+                                        action: item,
+                                    }),
+                                    outcome: if result.actors.binary_search(&actor).is_ok() {
+                                        CoreChoiceOutcome::Accepted
+                                    } else {
+                                        CoreChoiceOutcome::Stale
+                                    },
+                                }
+                            }));
+                            meal_people.extend(result.actors);
+                            meal_people.par_sort_unstable();
+                            meal_people.dedup();
+                            if !choices.is_empty() {
+                                choices.par_sort_unstable_by_key(|choice| choice.actor);
+                                self.record_personal_choices(&mut run, choices);
+                            }
+                            if !result.items.is_empty() {
+                                run.events.push(CoreRunEvent::ReadPages(result.items));
+                            }
+                            self.schedule.as_mut().expect("active schedule").phase =
+                                self.after_selected_batch(meal_people, intents, remaining);
+                            continue;
+                        }
                         self.schedule.as_mut().expect("active schedule").phase = match domain {
                             1 => DecisionPhase::ChosenConstruction {
                                 meal_people,

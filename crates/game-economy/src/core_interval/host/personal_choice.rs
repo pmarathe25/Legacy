@@ -27,6 +27,7 @@ pub(super) const REST: u32 = 21;
 pub(super) const RESUME: u32 = 22;
 pub(super) const PRACTICE_LESSON: u32 = 23;
 pub(super) const CONFINEMENT: u32 = 24;
+pub(super) const READ_TEXT: u32 = 25;
 
 fn index_by_person<T>(rows: &[T], id: u64, key: impl Fn(&T) -> u64) -> Option<usize> {
     rows.first()
@@ -2190,6 +2191,76 @@ impl CoreHost {
                     fatigue_value: None,
                 },
             ));
+        }
+        if domain.is_none_or(|domain| domain == READ_TEXT)
+            && let Some(owner) = &self.writing
+            && let Some(people) = self
+                .schedule
+                .as_ref()
+                .and_then(|schedule| schedule.personal_choices.as_deref())
+        {
+            let preferred = |id| {
+                index_by_person(people, id, |row| row.id).is_some_and(|index| {
+                    let profile = &people[index];
+                    profile
+                        .preferences
+                        .binary_search_by_key(&READ_TEXT, |row| row.domain)
+                        .ok()
+                        .is_some_and(|row| profile.preferences[row].enabled)
+                })
+            };
+            if people.par_iter().any(|row| preferred(row.id)) {
+                let reads = owner.read_opportunities(
+                    &self.core.people,
+                    &busy,
+                    &self.core.physical,
+                    false,
+                    preferred,
+                );
+                let round = self.core.decision_time_key();
+                intents.par_extend(reads.par_chunk_by(|a, b| a.0 == b.0).filter_map(|group| {
+                    let actor = group[0].0;
+                    let index = index_by_person(people, actor, |row| row.id)?;
+                    let profile = &people[index];
+                    let key = |item| Key {
+                        domain: READ_TEXT,
+                        action: item,
+                    };
+                    let item = group
+                        .iter()
+                        .map(|row| row.1)
+                        .filter_map(|item| {
+                            let value = game_personal_choice::score(profile, key(item), 1)?;
+                            Some((
+                                value,
+                                game_genetics::random(self.core.seed ^ actor, item, round),
+                                item,
+                            ))
+                        })
+                        .max()?
+                        .2;
+                    Some(CoreChoiceIntent {
+                        actor,
+                        key: key(item),
+                        fatigue_value: None,
+                        barrier: None,
+                        written_form: None,
+                        strike: None,
+                        watch: None,
+                        assembly: None,
+                        cultivation: None,
+                        mechanical_load: None,
+                        movement: None,
+                        second_movement: None,
+                        work: None,
+                        experiment: None,
+                        experiment_value: Some(1),
+                        meal_value: None,
+                        tool_damage: None,
+                        health_value: None,
+                    })
+                }));
+            }
         }
         if intents
             .par_windows(2)
