@@ -92,6 +92,20 @@ shelter_reduction = 0
                 host.snapshot()
             })
     };
+    let mut controlled = opening.clone();
+    controlled.core.people[2].controlled = true;
+    let good = controlled.environment.as_ref().unwrap().clothing[0].good;
+    let mut host = CoreHost::resume(controlled).unwrap();
+    assert!(host.choose_controlled_clothing(3, Some(good)).is_err());
+    let mut controlled = opening.clone();
+    controlled.core.people[1].controlled = true;
+    let mut host = CoreHost::resume(controlled).unwrap();
+    host.choose_controlled_clothing(2, Some(good)).unwrap();
+    assert_eq!(host.advance_continuous(83, &[]).unwrap().failure, None);
+    host.choose_controlled_clothing(2, None).unwrap();
+    assert_eq!(host.advance_continuous(83, &[]).unwrap().failure, None);
+    assert_eq!(host.snapshot().core.people[1].health, 92);
+
     let state = run(1, &[166]);
     assert_eq!(state, run(4, &[64, 19, 82, 1]));
     assert_eq!(
