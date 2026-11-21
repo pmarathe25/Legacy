@@ -17,3 +17,22 @@ When walking is enabled, an acquisition may specify `known_store` as a personall
 Set `LEGACY_MISSION_SEARCH=1` on the existing concentrated expedition-acquisition benchmark to measure departures toward a known store. On a Ryzen 5 7600, 100,000 travelers took 70.5 ms with one worker and 24.2 ms with six; state fingerprints matched. These results are specific to the workload and sublinear.
 
 Set `LEGACY_MISSION_AT_DESTINATION=1` instead to measure searches during a visit. On the same machine, 100,000 travelers took 72.4 and 28.5 ms with one and six workers, with matching fingerprints.
+
+## Interval host
+
+Fresh individual plans in `[missions]` are available in the interval host.
+The importer converts an authored visit duration to elapsed milliseconds. A
+physical arrival starts the visit, and the visit deadline makes a return an
+available choice. The itinerary observes each actual leg and leaves a journey
+in progress when its traveler abandons the plan. Personal-routing scenarios
+use the traveler's own dated route reports when choosing a leg.
+
+The interval player supports `trip REGION VISIT_MILLISECONDS [food]` and
+`trip go|survey|back|cancel`. An expedition food survey reads reachable stock.
+Meeting objectives use accepted encounters, and delivery objectives count
+accepted transfers to the specified recipient in the destination. Independent
+delivery preferences can account for carried reserves, felt obligation, or
+fear. Visit deadlines and objective receipts are available in history.
+
+Invitation, coordinated departure, and expedition-specific sourcing still
+need their interval hosts.

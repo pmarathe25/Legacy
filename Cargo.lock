@@ -441,6 +441,7 @@ dependencies = [
  "game-social",
  "game-transport",
  "rayon",
+ "serde",
 ]
 
 [[package]]

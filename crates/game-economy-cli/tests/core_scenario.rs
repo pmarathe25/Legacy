@@ -1367,6 +1367,134 @@ guard_policies = [{ person = 3, site = 1, willing = true, oppose_opening = true 
 }
 
 #[test]
+fn expedition_arrival_observation_visit_and_return_use_elapsed_time() {
+    use game_economy::MissionObjective;
+    use game_economy::core_interval::{
+        CoreHost, CoreRunEvent, ExpeditionEventKind, ExpeditionStage,
+    };
+
+    let root = root();
+    let template =
+        std::fs::read_to_string(root.join("content/scenarios/economy-core-player.toml")).unwrap();
+    let mut source = template
+        .split_once("[hauling]")
+        .unwrap()
+        .0
+        .replace("seed = 7", "seed = 7\ndecision_period_millis = 100")
+        .replace("stock = { grain = 0 }", "stock = { grain = 6 }");
+    source.push_str(
+        r#"
+[missions]
+next_id = 2
+[[missions.entries]]
+id = 1
+person = 1
+origin = 1
+destination = 2
+visit_ticks = 1
+phase = "ready"
+objective = { kind = "observe_food" }
+"#,
+    );
+    let path = std::env::temp_dir().join(format!(
+        "legacy-core-expeditions-{}.toml",
+        std::process::id()
+    ));
+    std::fs::write(&path, source).unwrap();
+    let loaded = game_economy_cli::core_scenario(&path, &root.join("content"));
+    std::fs::remove_file(path).unwrap();
+    let mut opening = loaded.unwrap().snapshot();
+    opening.core.people[0].controlled = false;
+    let run = |workers, steps: &[u64]| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut host = CoreHost::resume(opening.clone()).unwrap();
+                let mut travel = Vec::new();
+                for &step in steps {
+                    let run = host.advance_continuous(step, &[]).unwrap();
+                    assert_eq!(run.failure, None);
+                    for event in run.events {
+                        if let CoreRunEvent::Expeditions(events) = event {
+                            travel.extend(events);
+                        }
+                    }
+                    host = CoreHost::resume(
+                        serde_json::from_str(&serde_json::to_string(&host.snapshot()).unwrap())
+                            .unwrap(),
+                    )
+                    .unwrap();
+                }
+                use ExpeditionEventKind::*;
+                assert_eq!(
+                    travel
+                        .iter()
+                        .map(|event| (event.at_millis, event.kind))
+                        .collect::<Vec<_>>(),
+                    [
+                        (0, OutboundLeg),
+                        (1000, ReachedDestination),
+                        (1000, ObjectiveMet),
+                        (2000, VisitElapsed),
+                        (2000, ReturnLeg),
+                        (3000, ReachedOrigin)
+                    ]
+                );
+                assert_eq!(travel[2].food_observed, Some(6));
+                assert_eq!(host.expedition(1), None);
+                let state = host.snapshot();
+                assert_eq!(state.core.people[0].region, Some(1));
+                assert!(state.expeditions.as_ref().unwrap().itineraries[0].objective_met);
+                (travel, state)
+            })
+    };
+    assert_eq!(run(1, &[3001]), run(4, &[251, 750, 137, 725, 1138]));
+
+    opening.core.people[0].controlled = true;
+    opening.expeditions.as_mut().unwrap().itineraries.clear();
+    let mut host = CoreHost::resume(opening).unwrap();
+    let plan = host
+        .plan_controlled_expedition(1, 2, 173, Some(MissionObjective::ObserveFood))
+        .unwrap();
+    assert_eq!(plan.kind, ExpeditionEventKind::Planned);
+    assert_eq!(
+        host.continue_controlled_expedition(1).unwrap()[0].kind,
+        ExpeditionEventKind::OutboundLeg
+    );
+    assert_eq!(host.advance_continuous(1137, &[]).unwrap().failure, None);
+    assert_eq!(
+        host.expedition(1).unwrap().stage,
+        ExpeditionStage::Visiting { until_millis: 1173 }
+    );
+    assert_eq!(
+        host.survey_controlled_expedition(1).unwrap()[0].food_observed,
+        Some(6)
+    );
+    let mut host = CoreHost::resume(host.snapshot()).unwrap();
+    let visit = host.advance_continuous(63, &[]).unwrap();
+    assert_eq!(visit.failure, None);
+    assert!(visit.events.iter().any(|event| matches!(event, CoreRunEvent::Expeditions(rows) if rows.iter().any(|row| row.at_millis == 1173 && row.kind == ExpeditionEventKind::VisitElapsed))));
+    assert_eq!(
+        host.expedition(1).unwrap().stage,
+        ExpeditionStage::ReadyToReturn
+    );
+    assert_eq!(host.player_view(1).unwrap().person.region, Some(2));
+    assert_eq!(
+        host.return_controlled_expedition(1).unwrap()[0].kind,
+        ExpeditionEventKind::ReturnLeg
+    );
+    assert_eq!(
+        host.abandon_controlled_expedition(1).unwrap().kind,
+        ExpeditionEventKind::Abandoned
+    );
+    assert_eq!(host.advance_continuous(1001, &[]).unwrap().failure, None);
+    assert_eq!(host.player_view(1).unwrap().person.region, Some(1));
+    assert!(host.expedition(1).is_none());
+}
+
+#[test]
 fn a_goal_builder_can_choose_to_make_the_missing_site_for_their_own_recipe() {
     use game_personal_choice::{Person, Preference};
 

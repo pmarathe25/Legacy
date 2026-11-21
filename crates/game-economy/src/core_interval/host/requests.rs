@@ -84,12 +84,13 @@ impl CoreHost {
             .par_iter()
             .map(|person| (person.id, person.region, person.health, person.hunger))
             .collect();
+        let at_reachable_endpoint = |debtor, creditor| self.can_pass_possession(debtor, creditor);
         let plan = game_lot_projection::agreement::Context {
             agreements: owner,
             opinions: self.opinions.as_ref(),
             people: &people,
             locations: None,
-            endpoint_together: None,
+            endpoint_together: Some(&at_reachable_endpoint),
             busy: &busy,
             blocked_receivers: &[],
             tick,
@@ -190,12 +191,13 @@ impl CoreHost {
                 .ok()
                 .and_then(|index| self.core.people[index].region)
                 .is_none_or(|region| {
-                    !together(
-                        &self.core.people,
-                        transfer.debtor,
-                        transfer.creditor,
-                        region,
-                    )
+                    !self.can_pass_possession(transfer.debtor, transfer.creditor)
+                        || !together(
+                            &self.core.people,
+                            transfer.debtor,
+                            transfer.creditor,
+                            region,
+                        )
                 })
         }) {
             return Err("agreement delivery requires local living people".into());
@@ -244,6 +246,29 @@ impl CoreHost {
             .physical
             .validate_interval_consumption(&physical)?;
         self.core.physical.commit_interval_consumption(physical)?;
+        if self.expeditions.is_some() {
+            let mut receipts: Vec<_> = ordered
+                .par_iter()
+                .zip(transfers.par_iter())
+                .filter_map(|(delivery, transfer)| {
+                    accepted.binary_search(&delivery.contract).ok()?;
+                    let region = self.core.people[self
+                        .core
+                        .people
+                        .binary_search_by_key(&transfer.debtor, |person| person.id)
+                        .ok()?]
+                    .region?;
+                    Some(game_economy_expeditions::elapsed::Delivery {
+                        traveler: transfer.debtor,
+                        receiver: transfer.creditor,
+                        region,
+                        good: transfer.good,
+                        quantity: transfer.quantity,
+                    })
+                })
+                .collect();
+            self.record_expedition_deliveries(&mut receipts);
+        }
         if self.tracks_work_expectations() {
             let base = (self.practice_work_evidence.starts.len()
                 + self.practice_work_evidence.gifts.len()) as u64;

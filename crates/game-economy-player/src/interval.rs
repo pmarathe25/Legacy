@@ -61,6 +61,40 @@ impl<'a> Player<'a> {
         self.host.pause_controlled_walk(self.person, paused)
     }
 
+    pub fn plan_expedition(
+        &mut self,
+        destination: u64,
+        visit_millis: u64,
+        objective: Option<game_economy::MissionObjective>,
+    ) -> Result<game_economy::core_interval::ExpeditionEvent, String> {
+        self.host
+            .plan_controlled_expedition(self.person, destination, visit_millis, objective)
+    }
+
+    pub fn continue_expedition(
+        &mut self,
+    ) -> Result<Vec<game_economy::core_interval::ExpeditionEvent>, String> {
+        self.host.continue_controlled_expedition(self.person)
+    }
+
+    pub fn return_from_expedition(
+        &mut self,
+    ) -> Result<Vec<game_economy::core_interval::ExpeditionEvent>, String> {
+        self.host.return_controlled_expedition(self.person)
+    }
+
+    pub fn survey_expedition(
+        &mut self,
+    ) -> Result<Vec<game_economy::core_interval::ExpeditionEvent>, String> {
+        self.host.survey_controlled_expedition(self.person)
+    }
+
+    pub fn abandon_expedition(
+        &mut self,
+    ) -> Result<game_economy::core_interval::ExpeditionEvent, String> {
+        self.host.abandon_controlled_expedition(self.person)
+    }
+
     pub fn confine(&mut self, target: u64, site: u64) -> Result<bool, String> {
         self.host
             .confine_controlled_target(self.person, target, site)

@@ -15,7 +15,7 @@ fn command(host: &mut CoreHost, person: u64, words: &[&str]) -> Result<bool, Str
     match words {
         [] => {}
         ["help"] => println!(
-            "look | wait MILLISECONDS | move REGION | walk stock|store ID | pause-walk | resume-walk | confine PERSON SITE | guard SITE | release PERSON | escape | build BLUEPRINT | demolish SITE | salvage SITE GOOD QUANTITY | eat GOOD | treat GOOD | work RECIPE UNITS | stop JOB | stop-assist | rest on|off | word place|person|object ID SOUNDS | form SOUNDS MARKS | inscribe SOUNDS | read PAGE | recall PAGE | save PATH | load PATH | quit (SOUNDS and MARKS are comma-separated numbers)"
+            "look | wait MILLISECONDS | move REGION | walk stock|store ID | pause-walk | resume-walk | trip REGION VISIT_MILLISECONDS [food] | trip go|survey|back|cancel | confine PERSON SITE | guard SITE | release PERSON | escape | build BLUEPRINT | demolish SITE | salvage SITE GOOD QUANTITY | eat GOOD | treat GOOD | work RECIPE UNITS | stop JOB | stop-assist | rest on|off | word place|person|object ID SOUNDS | form SOUNDS MARKS | inscribe SOUNDS | read PAGE | recall PAGE | save PATH | load PATH | quit (SOUNDS and MARKS are comma-separated numbers)"
         ),
         ["quit"] | ["exit"] => return Ok(false),
         ["look"] => {
@@ -60,6 +60,12 @@ fn command(host: &mut CoreHost, person: u64, words: &[&str]) -> Result<bool, Str
             }
             if let Some(site) = view.held_at {
                 println!("held_at={site}");
+            }
+            if let Some(plan) = &view.expedition {
+                println!(
+                    "trip={} destination={} stage={:?} objective_met={}",
+                    plan.id, plan.destination, plan.stage, plan.objective_met
+                );
             }
             for report in view.route_reports {
                 let observed = report.observed_at_millis.map_or_else(
@@ -133,6 +139,32 @@ fn command(host: &mut CoreHost, person: u64, words: &[&str]) -> Result<bool, Str
                 "walk_changed={}",
                 Player::new(host, person)?.pause_walk(words[0] == "pause-walk")?
             );
+        }
+        ["trip", "go" | "survey" | "back" | "cancel"] => {
+            let mut player = Player::new(host, person)?;
+            let events = match words[1] {
+                "go" => player.continue_expedition()?,
+                "survey" => player.survey_expedition()?,
+                "back" => player.return_from_expedition()?,
+                _ => vec![player.abandon_expedition()?],
+            };
+            for event in events {
+                println!(
+                    "trip={} event={:?} region={} at_millis={}",
+                    event.itinerary, event.kind, event.region, event.at_millis
+                );
+                if let Some(food) = event.food_observed {
+                    println!("food_observed={food}");
+                }
+            }
+        }
+        ["trip", region, duration] | ["trip", region, duration, "food"] => {
+            let region = region.parse().map_err(|_| "invalid region")?;
+            let duration = duration.parse().map_err(|_| "invalid visit duration")?;
+            let objective =
+                (words.len() == 4).then_some(game_economy::MissionObjective::ObserveFood);
+            let event = Player::new(host, person)?.plan_expedition(region, duration, objective)?;
+            println!("trip={} planned=true", event.itinerary);
         }
         ["confine", target, site] => {
             let target = target.parse::<u64>().map_err(|_| "invalid person")?;

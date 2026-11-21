@@ -561,6 +561,20 @@ impl CoreHost {
             .is_some_and(|region| self.regional_stock_reachable(person, region))
     }
 
+    pub(super) fn can_pass_possession(&self, a: u64, b: u64) -> bool {
+        let Some(owner) = self.confinement() else {
+            return self.same_local_endpoint(a, b);
+        };
+        if !owner.can_communicate(a, b) {
+            return false;
+        }
+        match (owner.site_of(a), owner.site_of(b)) {
+            (Some(_), None) => self.free_at_stock(b),
+            (None, Some(_)) => self.free_at_stock(a),
+            _ => self.same_local_endpoint(a, b),
+        }
+    }
+
     fn publish_confinement(&mut self, state: CoreConfinement, events: &[Event], tick: u64) {
         if let Some(opinions) = &mut self.opinions {
             use game_opinions::{ConfinementExperience, ConfinementExperienceKind as Kind};

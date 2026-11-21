@@ -12,7 +12,6 @@ impl CoreHostSnapshot {
         }
         let mut unsupported = Vec::new();
         for (name, present) in [
-            ("missions", state.missions.is_some()),
             ("campaign", state.campaign.is_some()),
             ("combat", state.combat.is_some()),
         ] {
@@ -33,6 +32,16 @@ impl CoreHostSnapshot {
                 unsupported.join(", ")
             ));
         }
+        let expeditions = state
+            .missions
+            .take()
+            .map(|owner| {
+                game_economy_expeditions::elapsed::Expeditions::from_fresh(
+                    owner,
+                    state.physical.tick_millis,
+                )
+            })
+            .transpose()?;
         let mut construction = state.construction.take();
         let maintenance = construction
             .as_mut()
@@ -68,6 +77,7 @@ impl CoreHostSnapshot {
         });
         Ok(Self {
             mechanics: None,
+            expeditions,
             personal_conflict: state.confinement.take().map(|owner| CorePersonalConflict {
                 confinement: Some(CoreConfinement::new(owner)),
                 ..Default::default()

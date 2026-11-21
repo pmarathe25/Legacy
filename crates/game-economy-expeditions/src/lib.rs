@@ -1,5 +1,6 @@
 //! Personal expeditions use the same travel and physical people as the economy.
 pub mod acquisition;
+pub mod elapsed;
 use game_economy_person::{
     Person,
     travel::{Departure, Travel},

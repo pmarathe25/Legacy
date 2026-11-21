@@ -47,6 +47,7 @@ fn observations(events: &[CoreRunEvent], current_tick: &mut u64) -> Vec<Value> {
         CoreRunEvent::LocalWalking { at_millis, events } => Some(json!({"kind":"local_walking","at_millis":at_millis,"events":events})),
         CoreRunEvent::Confinement { at_millis, events } => Some(json!({"kind":"confinement","at_millis":at_millis,"events":events})),
         CoreRunEvent::SiteChanges { at_millis, changes } => Some(json!({"kind":"site_changes","at_millis":at_millis,"demolished":changes.demolished,"salvaged":changes.salvaged,"released":changes.released})),
+        CoreRunEvent::Expeditions(events) => Some(json!({"kind":"expeditions","events":events})),
         CoreRunEvent::Incapacitations { at_millis, people } => Some(json!({"kind":"incapacitations","at_millis":at_millis,"people":people})),
         CoreRunEvent::FamilyTransitions { at_millis, events } => Some(json!({"kind":"elapsed_family_events","at_millis":at_millis,"events":events})),
         CoreRunEvent::Meals(rows) if !rows.is_empty() => Some(json!({"kind":"meals","events":rows})),

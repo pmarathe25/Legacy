@@ -13,6 +13,7 @@ mod conflict;
 mod construction;
 mod dependent_care;
 mod dreams;
+mod expeditions;
 mod family;
 mod fatigue;
 mod fauna;
@@ -55,6 +56,10 @@ pub use conflict::{
 };
 pub use construction::CoreConstructionResults;
 pub use food_search::{CoreFoodProvision, CoreFoodSearch};
+pub use game_economy_expeditions::elapsed::{
+    Event as ExpeditionEvent, EventKind as ExpeditionEventKind, Itinerary as ExpeditionItinerary,
+    Stage as ExpeditionStage,
+};
 pub use giving::CorePracticeWorkEvidence;
 pub use hauling::CoreHaulingResults;
 pub use local_transport::CoreLocalTransportResults;
@@ -107,6 +112,8 @@ pub struct CoreHostSnapshot {
     pub mechanics: Option<CoreMechanics>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub personal_conflict: Option<CorePersonalConflict>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expeditions: Option<game_economy_expeditions::elapsed::Expeditions>,
     #[serde(default)]
     pub autowork: Option<Autowork>,
     #[serde(default)]
@@ -211,6 +218,7 @@ pub struct CoreHost {
     core: CoreInterval,
     mechanics: Option<mechanics::Runtime>,
     personal_conflict: Option<CorePersonalConflict>,
+    expeditions: Option<game_economy_expeditions::elapsed::Expeditions>,
     autowork: Option<Autowork>,
     tool_wear: Option<ToolWear>,
     tool_requirements: Vec<game_economy_work::tools::Requirement>,
@@ -269,6 +277,7 @@ pub struct CoreHost {
 struct CoreRuntimeOptions {
     mechanics: Option<CoreMechanics>,
     personal_conflict: Option<CorePersonalConflict>,
+    expeditions: Option<game_economy_expeditions::elapsed::Expeditions>,
     sites: Option<CoreSites>,
     schedule: Option<CoreSchedule>,
     tool_requirements: Vec<game_economy_work::tools::Requirement>,
@@ -324,6 +333,7 @@ impl CoreHost {
             core,
             mechanics,
             personal_conflict,
+            expeditions,
             autowork,
             tool_wear,
             tool_requirements,
@@ -388,6 +398,7 @@ impl CoreHost {
             CoreRuntimeOptions {
                 mechanics,
                 personal_conflict,
+                expeditions,
                 dreams,
                 shared_work,
                 market,
@@ -439,6 +450,7 @@ impl CoreHost {
             core,
             mechanics,
             personal_conflict,
+            expeditions,
             autowork,
             tool_wear,
             tool_requirements,
@@ -499,6 +511,7 @@ impl CoreHost {
             CoreRuntimeOptions {
                 mechanics,
                 personal_conflict,
+                expeditions,
                 dreams,
                 shared_work,
                 market,
@@ -557,6 +570,7 @@ impl CoreHost {
         let CoreRuntimeOptions {
             mechanics,
             personal_conflict,
+            expeditions,
             dreams,
             shared_work,
             market,
@@ -619,6 +633,24 @@ impl CoreHost {
         let mechanics = mechanics.map(|owner| owner.compile(&core)).transpose()?;
         if let Some(owner) = &personal_conflict {
             owner.validate(&core)?;
+        }
+        if let Some(owner) = &expeditions {
+            if core.travel.is_none() && !owner.itineraries.is_empty() {
+                return Err("expeditions require physical travel".into());
+            }
+            let people = core.people.par_iter().map(|row| row.id).collect();
+            let goods = core.physical.goods().par_iter().map(|row| row.id).collect();
+            let regions = core
+                .physical
+                .stock_view(core.physical.tick())?
+                .containers
+                .into_par_iter()
+                .filter_map(|row| match row.place {
+                    game_lots::Place::Stock { region, .. } => Some(region),
+                    _ => None,
+                })
+                .collect();
+            owner.validate(&people, &regions, &goods, core.simulated_millis())?;
         }
         if let Some(owner) = &autowork {
             let people: Vec<_> = core
@@ -1427,6 +1459,7 @@ impl CoreHost {
             core,
             mechanics,
             personal_conflict,
+            expeditions,
             autowork,
             tool_wear,
             tool_requirements,
@@ -1527,6 +1560,7 @@ impl CoreHost {
             core: self.core.snapshot(),
             mechanics: self.mechanics.as_ref().map(mechanics::Runtime::snapshot),
             personal_conflict: self.personal_conflict.clone(),
+            expeditions: self.expeditions.clone(),
             autowork: self.autowork.clone(),
             tool_wear: self.tool_wear.clone(),
             tool_requirements: self.tool_requirements.clone(),
@@ -1621,6 +1655,7 @@ impl CoreHost {
         let dry_field = self.next_dry_field();
         let disease = self.next_disease_deadline();
         let local_arrival = self.next_local_arrival();
+        let expedition = self.next_expedition_deadline();
         let first = [
             recovery,
             exposure,
@@ -1631,6 +1666,7 @@ impl CoreHost {
             dry_field,
             disease,
             local_arrival,
+            expedition,
         ]
         .into_iter()
         .flatten()
@@ -1652,6 +1688,7 @@ impl CoreHost {
                     dry_field: dry_field == Some(after_millis),
                     disease: disease == Some(after_millis),
                     local_arrival: local_arrival == Some(after_millis),
+                    expedition: expedition == Some(after_millis),
                     recovery: recovery == Some(after_millis),
                     exposure: exposure == Some(after_millis),
                 };
@@ -1665,6 +1702,7 @@ impl CoreHost {
                 deadline.dry_field = dry_field == Some(after_millis);
                 deadline.disease = disease == Some(after_millis);
                 deadline.local_arrival = local_arrival == Some(after_millis);
+                deadline.expedition = expedition == Some(after_millis);
             }
         }
         Ok(deadline)

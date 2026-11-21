@@ -38,6 +38,7 @@ pub use host::{
     PersonalHarm, PersonalStrikeReaction, StrikeCapability, StrikeFeeling, StrikeInterpretation,
     WitnessedMechanicalResult, WoundCarePolicy, WoundTreatment,
 };
+pub use host::{ExpeditionEvent, ExpeditionEventKind, ExpeditionItinerary, ExpeditionStage};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -139,6 +140,7 @@ pub struct CoreDeadline {
     pub dry_field: bool,
     pub disease: bool,
     pub local_arrival: bool,
+    pub expedition: bool,
 }
 /// Travelers published at a partial-interval offset.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -455,6 +457,7 @@ impl CoreInterval {
             dry_field: false,
             disease: false,
             local_arrival: false,
+            expedition: false,
             food_health: food_health == Some(after),
         })
     }

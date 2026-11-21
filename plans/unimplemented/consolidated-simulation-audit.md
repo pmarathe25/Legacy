@@ -58,8 +58,8 @@ performance characteristics. Crate count is a diagnostic, not a target.
 Keep the [feature ownership index](../../docs/design/feature-ownership.md) current as
 boundaries change.
 
-The larger simplification is one execution path. Migrate campaign, missions,
-tactical combat, and the [other paths rejected by the interval loader](../../crates/game-economy/src/core_interval/host/scenario.rs)
+The larger simplification is one execution path. Migrate campaign, coordinated
+expeditions, tactical combat, and the [other paths rejected by the interval loader](../../crates/game-economy/src/core_interval/host/scenario.rs)
 before removing the whole-boundary runner. Include authoring, normal CLI/player
 access, history, and saved state in the migration. Exercise the feature through
 the interval host before deleting its old driver.

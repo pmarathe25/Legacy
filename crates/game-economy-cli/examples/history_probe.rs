@@ -134,6 +134,13 @@ fn run_steps(
                     )?;
                     ("confinement", events.len())
                 }
+                CoreRunEvent::Expeditions(events) => {
+                    write_line(
+                        &mut writer,
+                        &json!({"kind":"expeditions","step":step,"events":events}),
+                    )?;
+                    ("expeditions", events.len())
+                }
                 CoreRunEvent::Disease(rows) => {
                     write_line(
                         &mut writer,

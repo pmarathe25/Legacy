@@ -24,7 +24,8 @@ pub use game_economy_confinement::{
 pub use game_economy_dynamics::Dynamics;
 pub use game_economy_expeditions::{
     DeliveryAcquisition as MissionDeliveryAcquisition,
-    DeliveryPreference as MissionDeliveryPreference, MissionPhase, Missions, Start as MissionStart,
+    DeliveryPreference as MissionDeliveryPreference, MissionPhase, Missions,
+    Objective as MissionObjective, Start as MissionStart,
 };
 use game_economy_family as family;
 pub use game_economy_family::Families;

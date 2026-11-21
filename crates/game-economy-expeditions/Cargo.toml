@@ -17,3 +17,4 @@ game-production-model = { path = "../game-production-model" }
 game-lot-runtime = { path = "../game-lot-runtime" }
 game-lots = { path = "../game-lots" }
 rayon.workspace = true
+serde.workspace = true

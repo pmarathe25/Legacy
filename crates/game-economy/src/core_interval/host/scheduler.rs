@@ -696,6 +696,7 @@ pub enum CoreRunEvent {
         at_millis: u128,
         changes: CoreSiteChanges,
     },
+    Expeditions(Vec<game_economy_expeditions::elapsed::Event>),
     PersonalChoices(Vec<CoreChoiceEvent>),
     MechanicalExperiments(Vec<game_mechanics::Observation>),
     MechanicalLoads(Vec<MechanicalLoadResult>),
@@ -971,6 +972,11 @@ impl CoreHost {
                 run.boundary = true;
                 break;
             }
+            let expedition_events = self.expedition_time_events();
+            if !expedition_events.is_empty() {
+                run.events
+                    .push(CoreRunEvent::Expeditions(expedition_events));
+            }
             attempt!('run, self.sync_work_rates(blocked));
             let deadline = attempt!('run, self.host_deadline(None));
             if deadline.after_millis == 0 {
@@ -1052,6 +1058,10 @@ impl CoreHost {
                 if due {
                     let dynamics = attempt!('run, self.advance_dynamics_autonomously(blocked));
                     if !dynamics.meetings.is_empty() {
+                        let events = self.record_expedition_meetings(&dynamics.meetings);
+                        if !events.is_empty() {
+                            run.events.push(CoreRunEvent::Expeditions(events));
+                        }
                         run.events.push(CoreRunEvent::Meetings(dynamics.meetings));
                     }
                     if !dynamics.written_explanations.is_empty() {
@@ -1213,6 +1223,10 @@ impl CoreHost {
                         let dynamics = attempt!('run, self.advance_dynamics_autonomously(&busy));
                         let meetings = dynamics.meetings;
                         if !meetings.is_empty() {
+                            let events = self.record_expedition_meetings(&meetings);
+                            if !events.is_empty() {
+                                run.events.push(CoreRunEvent::Expeditions(events));
+                            }
                             meal_people.par_extend(
                                 meetings
                                     .par_iter()
@@ -3261,6 +3275,15 @@ impl CoreHost {
                                 events: walking,
                             });
                         }
+                        let (actors, events) = attempt!('run, self.act_on_expeditions(&busy));
+                        if !actors.is_empty() {
+                            busy.extend(actors);
+                            busy.par_sort_unstable();
+                            busy.dedup();
+                        }
+                        if !events.is_empty() {
+                            run.events.push(CoreRunEvent::Expeditions(events));
+                        }
                         let departures = attempt!('run, self.depart_autonomously(&busy));
                         if !departures.is_empty() {
                             run.events.push(CoreRunEvent::Departures(departures));
@@ -3372,6 +3395,12 @@ impl CoreHost {
             combined
                 .events
                 .push(CoreRunEvent::Boundary(Box::new(events)));
+            let expedition_events = self.expedition_time_events();
+            if !expedition_events.is_empty() {
+                combined
+                    .events
+                    .push(CoreRunEvent::Expeditions(expedition_events));
+            }
             if let Some(health) = self
                 .health
                 .as_ref()
