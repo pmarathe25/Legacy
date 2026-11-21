@@ -799,6 +799,64 @@ mod elapsed_tests {
     }
 
     #[test]
+    fn renewal_updates_only_changed_active_nodes_across_sparse_shards() {
+        let run = |workers, steps: &[u64]| {
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(workers)
+                .build()
+                .unwrap()
+                .install(|| {
+                    let mut owner = Gathering {
+                        max_hunger: 20,
+                        elapsed_renewal: true,
+                        elapsed_actions: false,
+                        inherit_births: false,
+                        wild_plants: None,
+                        policies: Vec::new(),
+                        nodes: (0..2000)
+                            .map(|slot| Node {
+                                id: slot + 1,
+                                region: 1,
+                                good: 1,
+                                available: if slot % 10 == 0 { 5 } else { 0 },
+                                capacity: 5,
+                                regrowth: 0,
+                                renewal_rate: (slot % 5 == 0).then_some(RenewalRate {
+                                    units: 1,
+                                    per_millis: 100,
+                                }),
+                                renewal_remainder: 0,
+                                seasonal: false,
+                                yield_per_action: 1,
+                            })
+                            .collect(),
+                    };
+                    let active = owner.renewal_slots();
+                    assert_eq!(active.len(), 400);
+                    for &millis in steps {
+                        let draft = owner
+                            .progress_renewal(&active, millis, None)
+                            .unwrap()
+                            .unwrap();
+                        assert_eq!(draft.updates.len(), 200);
+                        draft.publish(&mut owner.nodes);
+                    }
+                    assert!(owner.nodes.iter().enumerate().all(|(slot, node)| {
+                        node.renewal_remainder == 0
+                            && node.available
+                                == match slot % 10 {
+                                    0 => 5,
+                                    5 => 1,
+                                    _ => 0,
+                                }
+                    }));
+                    owner
+                })
+        };
+        assert_eq!(run(1, &[100]), run(6, &[25, 75]));
+    }
+
+    #[test]
     fn renewal_preserves_fraction_across_arbitrary_partitions_and_saturation() {
         let rate = RenewalRate {
             units: 3,
