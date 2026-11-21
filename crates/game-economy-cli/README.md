@@ -103,3 +103,9 @@ permit. For an engineering scenario, `look` lists carried items and apparatus.
 per thousand. A parent ID of zero marks the input. `experiment 7 1002 100 100
 10` tests apparatus 7 at part 1002 using 100 units of input force, 100 units
 of input travel, and 10 units of resistance.
+
+With elapsed agreements enabled, `promise PERSON GOOD QUANTITY DUE_IN_MILLISECONDS`
+offers a future transfer. Parties can see their promises with `look`.
+`respond PROMISE accept` and `respond PROMISE decline` are recipient choices.
+The person who made the promise can use `deliver PROMISE QUANTITY` or
+`respond PROMISE withdraw`. Custody changes when a delivery succeeds.

@@ -203,3 +203,48 @@ fn elapsed_offer_retry_does_not_compel_an_occupied_person() {
     assert_eq!(retried.contracts[1].due, 170);
     assert_eq!(retried.offering[0].next_review, 220);
 }
+
+#[test]
+fn a_controlled_person_can_offer_unheld_goods_and_choose_to_withdraw() {
+    use game_economy::core_interval::CorePromiseReply;
+    use game_economy_player::interval::Player;
+
+    let mut opening = scenario(1250, false).snapshot();
+    opening
+        .core
+        .people
+        .iter_mut()
+        .for_each(|person| person.controlled = true);
+    let good = opening
+        .core
+        .physical
+        .goods
+        .iter()
+        .find(|good| good.name == "bread")
+        .unwrap()
+        .id;
+    let mut host = CoreHost::resume(opening).unwrap();
+    let id = Player::new(&mut host, 1)
+        .unwrap()
+        .promise(2, good, 2, 60)
+        .unwrap();
+    let mut creditor = Player::new(&mut host, 2).unwrap();
+    assert_eq!(creditor.view().unwrap().promises[0].due, 60);
+    assert!(
+        creditor
+            .respond_to_promise(id, CorePromiseReply::Withdraw)
+            .is_err()
+    );
+    creditor
+        .respond_to_promise(id, CorePromiseReply::Accept)
+        .unwrap();
+    let mut debtor = Player::new(&mut host, 1).unwrap();
+    assert!(!debtor.deliver_promise(id, 2).unwrap());
+    assert!(debtor.deliver_promise(id, 1).unwrap());
+    debtor
+        .respond_to_promise(id, CorePromiseReply::Withdraw)
+        .unwrap();
+    let state = restored(&host).snapshot();
+    let row = &state.agreements.unwrap().contracts[0];
+    assert_eq!((row.status, row.delivered), (Status::Withdrawn, 1));
+}

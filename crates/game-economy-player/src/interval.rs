@@ -1,7 +1,7 @@
 //! Player-controlled actions on the interval host, without administrative events.
 use game_economy::core_interval::{
-    CoreHost, CoreMarkInscription, CoreMarkObservation, CorePlayerView, MechanicalApparatus,
-    MechanicalExperiment, MechanicalObservation, WoundTreatment,
+    CoreHost, CoreMarkInscription, CoreMarkObservation, CorePlayerView, CorePromiseReply,
+    MechanicalApparatus, MechanicalExperiment, MechanicalObservation, WoundTreatment,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -53,6 +53,31 @@ impl<'a> Player<'a> {
 
     pub fn gather(&mut self, node: u64) -> Result<Option<game_economy::GatheredResource>, String> {
         self.host.gather_controlled(self.person, node)
+    }
+
+    pub fn promise(
+        &mut self,
+        recipient: u64,
+        good: u32,
+        quantity: u64,
+        due_in_millis: u64,
+    ) -> Result<u64, String> {
+        self.host
+            .promise_controlled(self.person, recipient, good, quantity, due_in_millis)
+    }
+
+    pub fn respond_to_promise(
+        &mut self,
+        contract: u64,
+        reply: CorePromiseReply,
+    ) -> Result<(), String> {
+        self.host
+            .respond_to_controlled_promise(self.person, contract, reply)
+    }
+
+    pub fn deliver_promise(&mut self, contract: u64, quantity: u64) -> Result<bool, String> {
+        self.host
+            .deliver_controlled_promise(self.person, contract, quantity)
     }
 
     pub fn assemble(&mut self, apparatus: MechanicalApparatus) -> Result<bool, String> {

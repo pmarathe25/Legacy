@@ -28,6 +28,101 @@ fn together(people: &[Person], requester: u64, worker: u64, region: u64) -> bool
 }
 
 impl CoreHost {
+    /// A controlled person can describe a future transfer without reserving goods.
+    pub fn promise_controlled(
+        &mut self,
+        person: u64,
+        recipient: u64,
+        good: u32,
+        quantity: u64,
+        due_in_millis: u64,
+    ) -> Result<u64, String> {
+        let actor = self.controlled_person(person)?;
+        let local = actor
+            .region
+            .is_some_and(|region| together(&self.core.people, person, recipient, region));
+        if !local || !self.same_local_endpoint(person, recipient) {
+            return Err("the recipient is outside conversational reach".into());
+        }
+        let owner = self
+            .agreements
+            .as_ref()
+            .filter(|owner| owner.time_unit_millis.is_some())
+            .ok_or("elapsed promises are disabled")?;
+        let now = owner
+            .instant(self.core.simulated_millis(), self.core.physical.tick())
+            .map_err(str::to_owned)?
+            .now;
+        let due = now
+            .checked_add(due_in_millis)
+            .ok_or("promise deadline overflow")?;
+        let proposal = game_agreements::Proposal {
+            debtor: person,
+            creditor: recipient,
+            good,
+            quantity,
+            due,
+        };
+        let ids = self.propose_agreements(&[proposal])?;
+        Ok(ids[0])
+    }
+
+    pub fn respond_to_controlled_promise(
+        &mut self,
+        person: u64,
+        contract: u64,
+        reply: CorePromiseReply,
+    ) -> Result<(), String> {
+        let actor = self.controlled_person(person)?;
+        if actor.health == 0 {
+            return Err("the controlled person is incapacitated".into());
+        }
+        let known = self
+            .agreements
+            .as_ref()
+            .and_then(|owner| {
+                owner.contracts.par_iter().find_any(|row| {
+                    row.id == contract
+                        && match reply {
+                            CorePromiseReply::Accept | CorePromiseReply::Decline => {
+                                row.creditor == person
+                            }
+                            CorePromiseReply::Withdraw => row.debtor == person,
+                        }
+                })
+            })
+            .ok_or("no promise available for this choice")?;
+        if reply != CorePromiseReply::Withdraw
+            && (!actor
+                .region
+                .is_some_and(|region| together(&self.core.people, known.debtor, person, region))
+                || !self.same_local_endpoint(known.debtor, person))
+        {
+            return Err("the proposer is outside conversational reach".into());
+        }
+        self.decide_agreements(&[game_agreements::Decision {
+            contract,
+            actor: person,
+            accept: reply == CorePromiseReply::Accept,
+        }])
+    }
+
+    pub fn deliver_controlled_promise(
+        &mut self,
+        person: u64,
+        contract: u64,
+        quantity: u64,
+    ) -> Result<bool, String> {
+        self.controlled_person(person)?;
+        let delivery = game_agreements::Delivery {
+            contract,
+            actor: person,
+            quantity,
+        };
+        let outcomes = self.deliver_agreements(&[delivery])?;
+        Ok(outcomes.first().is_some_and(|row| row.accepted))
+    }
+
     /// Each debtor evaluates their own policy and directed feelings. Neither
     /// the promise nor another person's wishes force physical delivery.
     pub fn deliver_agreements_autonomously(

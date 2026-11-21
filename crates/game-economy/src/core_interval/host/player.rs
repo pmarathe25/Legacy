@@ -55,6 +55,13 @@ pub struct CorePlayerResource {
     pub yield_per_action: u64,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CorePromiseReply {
+    Accept,
+    Decline,
+    Withdraw,
+}
+
 /// The controlled person's own state and physically accessible observations.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CorePlayerView {
@@ -72,6 +79,7 @@ pub struct CorePlayerView {
     pub accessible_sites: Vec<CorePlayerSite>,
     pub accessible_resources: Vec<CorePlayerResource>,
     pub carried_apparatus: Vec<game_mechanics::Apparatus>,
+    pub promises: Vec<game_agreements::Contract>,
     pub wound: Option<CorePlayerWound>,
     pub job: Option<CorePlayerJob>,
     pub fatigue: Option<CorePlayerFatigue>,
@@ -511,6 +519,16 @@ impl CoreHost {
             accessible_sites,
             accessible_resources,
             carried_apparatus: self.carried_apparatus(id),
+            promises: self.agreements.as_ref().map_or_else(Vec::new, |owner| {
+                let mut promises: Vec<_> = owner
+                    .contracts
+                    .par_iter()
+                    .filter(|contract| contract.debtor == id || contract.creditor == id)
+                    .cloned()
+                    .collect();
+                promises.par_sort_unstable_by_key(|row| row.id);
+                promises
+            }),
             wound,
             job,
             fatigue,

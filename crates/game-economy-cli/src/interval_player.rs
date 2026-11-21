@@ -1,5 +1,5 @@
 //! Limited interactive access to the interval host through a controlled person.
-use game_economy::core_interval::{CoreHost, CoreHostSnapshot};
+use game_economy::core_interval::{CoreHost, CoreHostSnapshot, CorePromiseReply};
 use game_economy_player::interval::Player;
 use std::fs::{File, OpenOptions};
 use std::path::Path;
@@ -53,7 +53,7 @@ fn command(host: &mut CoreHost, person: u64, words: &[&str]) -> Result<bool, Str
     match words {
         [] => {}
         ["help"] => println!(
-            "look | wait MILLISECONDS | move REGION | walk stock|store ID | pause-walk | resume-walk | trip REGION VISIT_MILLISECONDS [food] | trip go|survey|back|cancel | trip leave-in MILLISECONDS | fight PERSON | join-fight BENEFICIARY OPPONENT | tactic wait|defend|retreat | tactic attack PERSON | tactic attack-site SITE | tactic move X Y | confine PERSON SITE | guard SITE | release PERSON | escape | build BLUEPRINT | demolish SITE | salvage SITE GOOD QUANTITY | gather NODE | assemble APPARATUS PART... | experiment APPARATUS OUTPUT FORCE DISTANCE LOAD | eat GOOD | treat GOOD | wear GOOD | unwear | work RECIPE UNITS | stop JOB | stop-assist | rest on|off | word place|person|object ID SOUNDS | form SOUNDS MARKS | inscribe SOUNDS | read PAGE | recall PAGE | save PATH | load PATH | quit (SOUNDS and MARKS are comma-separated numbers)"
+            "look | wait MILLISECONDS | move REGION | walk stock|store ID | pause-walk | resume-walk | trip REGION VISIT_MILLISECONDS [food] | trip go|survey|back|cancel | trip leave-in MILLISECONDS | fight PERSON | join-fight BENEFICIARY OPPONENT | tactic wait|defend|retreat | tactic attack PERSON | tactic attack-site SITE | tactic move X Y | confine PERSON SITE | guard SITE | release PERSON | escape | build BLUEPRINT | demolish SITE | salvage SITE GOOD QUANTITY | gather NODE | assemble APPARATUS PART... | experiment APPARATUS OUTPUT FORCE DISTANCE LOAD | promise PERSON GOOD QUANTITY DUE_IN_MILLISECONDS | respond PROMISE accept|decline|withdraw | deliver PROMISE QUANTITY | eat GOOD | treat GOOD | wear GOOD | unwear | work RECIPE UNITS | stop JOB | stop-assist | rest on|off | word place|person|object ID SOUNDS | form SOUNDS MARKS | inscribe SOUNDS | read PAGE | recall PAGE | save PATH | load PATH | quit (SOUNDS and MARKS are comma-separated numbers)"
         ),
         ["quit"] | ["exit"] => return Ok(false),
         ["look"] => {
@@ -102,6 +102,19 @@ fn command(host: &mut CoreHost, person: u64, words: &[&str]) -> Result<bool, Str
                         part.id, part.component, part.parent, part.share_per_mille, part.broken
                     );
                 }
+            }
+            for promise in &view.promises {
+                println!(
+                    "promise={} debtor={} creditor={} good={} delivered={} quantity={} due={} status={:?}",
+                    promise.id,
+                    promise.debtor,
+                    promise.creditor,
+                    promise.good,
+                    promise.delivered,
+                    promise.quantity,
+                    promise.due,
+                    promise.status
+                );
             }
             if let Some(wound) = view.wound {
                 println!("wound_severity={}", wound.severity);
@@ -400,6 +413,30 @@ fn command(host: &mut CoreHost, person: u64, words: &[&str]) -> Result<bool, Str
                 result.delivered_work,
                 result.broken_parts
             );
+        }
+        ["promise", recipient, good, quantity, until] => {
+            let id = Player::new(host, person)?.promise(
+                number(recipient)?,
+                number(good)?,
+                number(quantity)?,
+                number(until)?,
+            )?;
+            println!("promise={id} proposed");
+        }
+        ["respond", pledge, choice] => {
+            let reply = match *choice {
+                "accept" => CorePromiseReply::Accept,
+                "decline" => CorePromiseReply::Decline,
+                "withdraw" => CorePromiseReply::Withdraw,
+                _ => return Err("expected accept, decline, or withdraw".into()),
+            };
+            Player::new(host, person)?.respond_to_promise(number(pledge)?, reply)?;
+            println!("promise response recorded");
+        }
+        ["deliver", pledge, quantity] => {
+            let accepted =
+                Player::new(host, person)?.deliver_promise(number(pledge)?, number(quantity)?)?;
+            println!("delivered={accepted}");
         }
         ["gather", node] => {
             let node = node.parse::<u64>().map_err(|_| "invalid resource node")?;
