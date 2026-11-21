@@ -118,6 +118,7 @@ mod tests {
             quantity: 10,
             batch: None,
             item: None,
+            freshness: Default::default(),
             expires_at: Some(4),
         };
         let mut state = State {

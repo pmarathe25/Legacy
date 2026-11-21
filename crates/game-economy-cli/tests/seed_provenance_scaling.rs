@@ -114,6 +114,7 @@ track_seed_batches = {tracking}
             quantity: 10,
             batch: Some(batch),
             item: None,
+            freshness: Default::default(),
             expires_at: None,
         })
         .collect();

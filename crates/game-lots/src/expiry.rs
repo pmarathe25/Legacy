@@ -4,38 +4,115 @@ use game_lot_planning::{Draft, TransactionTime};
 use rayon::prelude::*;
 use std::collections::BTreeSet;
 
+const SHARDS: usize = 64;
+const PARALLEL_CHANGES: usize = 256;
+type Deadline = (u64, Place);
+
+fn shard(place: Place) -> usize {
+    let key = match place {
+        Place::Person(id) => id,
+        Place::Stock { region, good } => region.rotate_left(17) ^ u64::from(good),
+        Place::Inventory(id) => id ^ 0x19,
+        Place::Site(id) => id ^ 0x31,
+        Place::JobInput(id) => id ^ 0x27,
+        Place::JobOutput(id) => id ^ 0x41,
+    };
+    let mix = key ^ (key >> 6) ^ (key >> 19);
+    (mix as usize) & (SHARDS - 1)
+}
+
 pub(super) struct ExpiryIndex {
-    due: BTreeSet<(u64, Place)>,
+    shards: Vec<BTreeSet<Deadline>>,
+    next: Option<u64>,
 }
 
 impl ExpiryIndex {
     pub fn new(containers: &[Container]) -> Self {
-        let rows: Vec<_> = containers
+        let mut rows: Vec<_> = containers
             .par_iter()
-            .filter_map(|row| row.next_expiry.map(|at| (at, row.place)))
+            .filter_map(|row| {
+                row.next_expiry
+                    .map(|at| (shard(row.place), (at, row.place)))
+            })
             .collect();
-        Self {
-            due: rows.into_iter().collect(),
-        }
+        rows.par_sort_unstable();
+        let shards = (0..SHARDS)
+            .into_par_iter()
+            .map(|index| {
+                let first = rows.partition_point(|row| row.0 < index);
+                let last = rows.partition_point(|row| row.0 <= index);
+                rows[first..last].iter().map(|row| row.1).collect()
+            })
+            .collect();
+        let mut index = Self { shards, next: None };
+        index.refresh();
+        index
+    }
+
+    fn refresh(&mut self) {
+        self.next = self
+            .shards
+            .iter()
+            .filter_map(|rows| rows.first().map(|row| row.0))
+            .min();
     }
 
     pub fn next(&self) -> Option<u64> {
-        self.due.first().map(|&(time, _)| time)
+        self.next
     }
 
     pub fn update(&mut self, before: &[Container], changes: &[(usize, Container)]) {
-        for (index, after) in changes {
-            let before = &before[*index];
-            if before.next_expiry == after.next_expiry {
-                continue;
+        let edits = |(index, after): &(usize, Container)| {
+            let old = before[*index].next_expiry;
+            let new = after.next_expiry;
+            (old != new).then(|| (shard(after.place), after.place, old, new))
+        };
+        let publish = |rows: &mut BTreeSet<Deadline>, place, old, new| {
+            if let Some(old) = old {
+                rows.remove(&(old, place));
             }
-            if let Some(old) = before.next_expiry {
-                self.due.remove(&(old, before.place));
+            if let Some(new) = new {
+                rows.insert((new, place));
             }
-            if let Some(new) = after.next_expiry {
-                self.due.insert((new, after.place));
+        };
+        if changes.len() < PARALLEL_CHANGES {
+            let mut refresh = false;
+            for (slot, place, old, new) in changes.iter().filter_map(edits) {
+                refresh |= old.is_some() && old == self.next;
+                if let Some(new) = new {
+                    self.next = Some(self.next.map_or(new, |current| current.min(new)));
+                }
+                publish(&mut self.shards[slot], place, old, new);
             }
+            if refresh {
+                self.refresh();
+            }
+            return;
         }
+
+        let mut edits: Vec<_> = changes.par_iter().filter_map(edits).collect();
+        if edits.is_empty() {
+            return;
+        }
+        edits.par_sort_unstable_by_key(|row| row.0);
+        self.shards
+            .par_iter_mut()
+            .enumerate()
+            .for_each(|(index, rows)| {
+                let first = edits.partition_point(|row| row.0 < index);
+                let last = edits.partition_point(|row| row.0 <= index);
+                let edits = &edits[first..last];
+                if edits.len() == rows.len()
+                    && edits.iter().all(|row| row.2.is_some() && row.3.is_none())
+                {
+                    rows.clear();
+                    return;
+                }
+                for &(_, place, old, new) in edits {
+                    publish(rows, place, old, new);
+                }
+            });
+        self.refresh();
     }
 
     pub fn prepare(
@@ -63,36 +140,95 @@ impl ExpiryIndex {
             return Ok(draft);
         }
         let due: Vec<_> = self
-            .due
-            .iter()
-            .take_while(|&&(at, _)| at <= time.at)
-            .map(|&(_, place)| place)
-            .collect();
-        let mut replacements: Vec<_> = due
+            .shards
             .par_iter()
-            .map(|place| {
-                let index = state
+            .flat_map_iter(|rows| {
+                rows.iter()
+                    .take_while(|&&(at, _)| at <= time.at)
+                    .map(|&(_, place)| place)
+            })
+            .collect();
+        let (indices, ordered): (Vec<_>, _) = if due.len() >= state.containers.len() / 8 {
+            (
+                state
                     .containers
-                    .binary_search_by_key(place, |row| row.place)
-                    .expect("expiry index names existing custody");
+                    .par_iter()
+                    .enumerate()
+                    .filter_map(|(index, row)| {
+                        row.next_expiry
+                            .is_some_and(|at| at <= time.at)
+                            .then_some(index)
+                    })
+                    .collect(),
+                true,
+            )
+        } else {
+            (
+                due.par_iter()
+                    .map(|place| {
+                        state
+                            .containers
+                            .binary_search_by_key(place, |row| row.place)
+                            .expect("expiry index names existing custody")
+                    })
+                    .collect(),
+                false,
+            )
+        };
+        let mut replacements: Vec<_> = indices
+            .into_par_iter()
+            .map(|index| {
                 let old = &state.containers[index];
-                let mut receipts = Vec::new();
-                let mut lots = Vec::with_capacity(old.lots.len());
-                for lot in &old.lots {
+                let place = old.place;
+                let classify = |lot: &game_lot_model::Lot| {
                     if let Some(at) = lot.expires_at.filter(|&at| at <= time.at) {
-                        receipts.push(Spoilage {
-                            place: *place,
+                        rayon::iter::Either::Right(Spoilage {
+                            place,
                             good: lot.good,
                             quantity: lot.quantity,
                             expires_at: at,
                             batch: lot.batch,
-                        });
+                        })
                     } else {
-                        lots.push(lot.clone());
+                        rayon::iter::Either::Left(lot.clone())
                     }
-                }
+                };
+                let (lots, receipts): (Vec<_>, Vec<_>) = if old.lots.len() >= 1024
+                    && old
+                        .lots
+                        .first()
+                        .zip(old.lots.last())
+                        .is_some_and(|(first, last)| first.good == last.good)
+                {
+                    let due = old
+                        .lots
+                        .partition_point(|lot| lot.expires_at.is_some_and(|at| at <= time.at));
+                    let receipts = old.lots[..due]
+                        .par_iter()
+                        .map(|lot| Spoilage {
+                            place,
+                            good: lot.good,
+                            quantity: lot.quantity,
+                            expires_at: lot.expires_at.expect("due lot"),
+                            batch: lot.batch,
+                        })
+                        .collect();
+                    (old.lots[due..].to_vec(), receipts)
+                } else if old.lots.len() >= 1024 {
+                    old.lots.par_iter().partition_map(classify)
+                } else {
+                    let mut receipts = Vec::new();
+                    let mut lots = Vec::with_capacity(old.lots.len());
+                    for lot in &old.lots {
+                        match classify(lot) {
+                            rayon::iter::Either::Left(lot) => lots.push(lot),
+                            rayon::iter::Either::Right(receipt) => receipts.push(receipt),
+                        }
+                    }
+                    (lots, receipts)
+                };
                 let updated = Container {
-                    place: *place,
+                    place,
                     capacity: old.capacity,
                     used: old.used - receipts.iter().map(|row| row.quantity).sum::<u64>(),
                     next_expiry: lots.iter().filter_map(|row| row.expires_at).min(),
@@ -101,12 +237,15 @@ impl ExpiryIndex {
                 ((index, updated), receipts)
             })
             .collect();
-        replacements.par_sort_unstable_by_key(|row| row.0.0);
-        let mut changes = Vec::with_capacity(replacements.len());
-        for (change, mut receipts) in replacements {
-            changes.push(change);
-            draft.spoiled.append(&mut receipts);
+        if !ordered {
+            replacements.par_sort_unstable_by_key(|row| row.0.0);
         }
+        let (changes, mut spoiled): (Vec<_>, Vec<_>) = replacements.into_par_iter().unzip();
+        draft.spoiled = if spoiled.len() == 1 {
+            spoiled.pop().expect("one expiry holder")
+        } else {
+            spoiled.into_par_iter().flatten().collect()
+        };
         draft.changes = changes.into();
         Ok(draft)
     }

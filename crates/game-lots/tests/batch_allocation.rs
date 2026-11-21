@@ -6,6 +6,7 @@ fn lot(batch: Option<u64>) -> Lot {
         quantity: 1,
         batch,
         item: None,
+        freshness: Default::default(),
         expires_at: None,
     }
 }

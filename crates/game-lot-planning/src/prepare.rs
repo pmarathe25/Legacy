@@ -741,6 +741,7 @@ pub fn prepare_at(
                                 item: original.item,
                                 good: original.good,
                                 quantity,
+                                freshness: original.freshness,
                                 expires_at: original.expires_at,
                             });
                         }
@@ -787,6 +788,7 @@ pub fn prepare_at(
                                 item: lot.item,
                                 good: lot.good,
                                 quantity,
+                                freshness: lot.freshness,
                                 expires_at: lot.expires_at,
                             })
                         })
@@ -812,6 +814,7 @@ pub fn prepare_at(
                             item: lot.item,
                             good: lot.good,
                             quantity,
+                            freshness: lot.freshness,
                             expires_at: lot.expires_at,
                         });
                         remaining -= quantity;
@@ -889,6 +892,7 @@ pub fn prepare_at(
                                 item: lot.item,
                                 good: lot.good,
                                 quantity: (right - left) as u64,
+                                freshness: lot.freshness,
                                 expires_at: lot.expires_at,
                             });
                         }
@@ -973,24 +977,53 @@ pub fn prepare_at(
         })
         .collect();
     let mut outcomes = OutcomeBatch::from_chunks(chunks);
-    let mut incoming: Vec<_> = pieces
-        .par_iter()
-        .flat_map_iter(|(_, destination, lots)| {
-            destination
-                .iter()
-                .flat_map(|&destination| lots.iter().cloned().map(move |lot| (destination, lot)))
-        })
-        .collect();
-    incoming.par_extend(
-        creations
-            .par_iter()
-            .enumerate()
-            .filter_map(|(index, creation)| {
-                accepted[claims.len() + index]
-                    .load(Ordering::Relaxed)
-                    .then(|| (creation_destinations[index], creation.lot.clone()))
-            }),
-    );
+    let mut incoming =
+        if state.ages_with_temperature() {
+            let containers = &containers;
+            let mut incoming: Vec<_> = pieces
+                .par_iter()
+                .flat_map_iter(|(movement, destination, lots)| {
+                    let from = moves[*movement].from;
+                    destination.iter().flat_map(move |&destination| {
+                        let to = containers[destination].place;
+                        lots.iter().cloned().map(move |mut lot| {
+                            state.date_lot(&mut lot, Some(from), to, instant)?;
+                            Ok::<_, String>((destination, lot))
+                        })
+                    })
+                })
+                .collect::<Result<_, _>>()?;
+            let created: Vec<_> = creations
+                .par_iter()
+                .enumerate()
+                .filter(|(index, _)| accepted[claims.len() + index].load(Ordering::Relaxed))
+                .map(|(index, creation)| {
+                    let mut lot = creation.lot.clone();
+                    state.date_lot(&mut lot, None, creation.to, instant)?;
+                    Ok::<_, String>((creation_destinations[index], lot))
+                })
+                .collect::<Result<_, _>>()?;
+            incoming.extend(created);
+            incoming
+        } else {
+            let mut incoming: Vec<_> = pieces
+                .par_iter()
+                .flat_map_iter(|(_, destination, lots)| {
+                    destination.iter().flat_map(|&destination| {
+                        lots.iter().cloned().map(move |lot| (destination, lot))
+                    })
+                })
+                .collect();
+            incoming.par_extend(creations.par_iter().enumerate().filter_map(
+                |(index, creation)| {
+                    accepted[claims.len() + index]
+                        .load(Ordering::Relaxed)
+                        .then(|| (creation_destinations[index], creation.lot.clone()))
+                },
+            ));
+
+            incoming
+        };
     incoming.par_sort_unstable_by_key(|row| (row.0, key(&row.1)));
     // Only touched or expiring custody needs materializing. Searching every
     // unchanged container for incoming and outgoing lots scales with the
@@ -1055,6 +1088,7 @@ pub fn prepare_at(
                             item: lot.item,
                             good: lot.good,
                             quantity,
+                            freshness: lot.freshness,
                             expires_at: lot.expires_at,
                         });
                     }
@@ -1107,6 +1141,7 @@ pub fn prepare_at(
                         item: lot.item,
                         good: lot.good,
                         quantity,
+                        freshness: lot.freshness,
                         expires_at: lot.expires_at,
                     }]
                 };
@@ -1144,6 +1179,7 @@ pub fn prepare_at(
                             item: lot.item,
                             good: lot.good,
                             quantity: lot.quantity - consumed,
+                            freshness: lot.freshness,
                             expires_at: lot.expires_at,
                         });
                     }
@@ -1202,6 +1238,7 @@ pub fn prepare_at(
                                 item: lot.item,
                                 good: lot.good,
                                 quantity: lot.quantity - consumed,
+                                freshness: lot.freshness,
                                 expires_at: lot.expires_at,
                             })
                         })
@@ -1216,6 +1253,7 @@ pub fn prepare_at(
                     batch: group[0].batch,
                     item: group[0].item,
                     good: group[0].good,
+                    freshness: group[0].freshness,
                     expires_at: group[0].expires_at,
                     quantity: group
                         .par_iter()
@@ -1278,6 +1316,7 @@ mod time_tests {
                         quantity: 1,
                         batch: Some(7),
                         item: None,
+                        freshness: Default::default(),
                         expires_at: Some(83),
                     }],
                 )

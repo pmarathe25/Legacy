@@ -444,7 +444,7 @@ fn elapsed_growth_changes_work_capability_inside_the_physical_interval() {
             let stock = Place::Stock {region: 2, good: 1};
             let opening = state.physical.custody.containers.iter_mut().find(|row| row.place == stock).unwrap();
             *opening = Container::new(stock, 10, vec![Lot {
-                batch: None, item: None, good: 1, quantity: 2, expires_at: None,
+                batch: None, item: None, good: 1, quantity: 2, freshness: Default::default(), expires_at: None,
             }]).unwrap();
             let snapshot: CoreHostSnapshot = serde_json::from_value(serde_json::json!({
                 "core": state,
@@ -831,6 +831,7 @@ fn fixture() -> CoreSnapshot {
                     item: None,
                     good,
                     quantity,
+                    freshness: Default::default(),
                     expires_at: None,
                 }]
             },
@@ -1102,6 +1103,7 @@ fn mechanical_experiments_require_real_carried_parts_and_survive_reload() {
                                 item: Some(100),
                                 good: 1,
                                 quantity: 1,
+                                freshness: Default::default(),
                                 expires_at: None,
                             },
                             Lot {
@@ -1109,6 +1111,7 @@ fn mechanical_experiments_require_real_carried_parts_and_survive_reload() {
                                 item: Some(101),
                                 good: 2,
                                 quantity: 1,
+                                freshness: Default::default(),
                                 expires_at: None,
                             },
                         ],
@@ -1294,6 +1297,7 @@ fn independent_physical_mechanics_benchmark() {
                     item: Some(actor + 1000),
                     good: 1,
                     quantity: 1,
+                    freshness: Default::default(),
                     expires_at: None,
                 }],
             )
@@ -1641,6 +1645,7 @@ fn concentrated_work_continuation_benchmark() {
             item: None,
             good: 1,
             quantity: (count - 1) * 2,
+            freshness: Default::default(),
             expires_at: None,
         }],
     )
@@ -2368,6 +2373,7 @@ fn timed_fatigue_tracks_early_completion_across_save_and_workers() {
                         item: None,
                         good: 2,
                         quantity: 1,
+                        freshness: Default::default(),
                         expires_at: None,
                     }],
                 )
@@ -2686,6 +2692,7 @@ fn chosen_departure_progresses_from_its_offset_and_survives_reload() {
                             item: None,
                             good: 2,
                             quantity: 1,
+                            freshness: Default::default(),
                             expires_at: None,
                         }],
                     )
@@ -2858,6 +2865,7 @@ fn core_host_departure_benchmark() {
                     item: None,
                     good: 2,
                     quantity: count / 2,
+                    freshness: Default::default(),
                     expires_at: None,
                 }],
             )
@@ -3423,7 +3431,7 @@ fn personal_food_acquisition_contends_for_real_stock_then_eats() {
             portion: 1, hunger_relief: 2, nutrients: Default::default(), health_effect: 0, shelf_days: None,
         });
         let stock = initial.physical.custody.containers.iter_mut().find(|row| row.place == Place::Stock {region: 1, good: 2}).unwrap();
-        *stock = Container::new(stock.place, 10, vec![Lot { batch: None,item: None, good: 2, quantity: 1, expires_at: None}]).unwrap();
+        *stock = Container::new(stock.place, 10, vec![Lot { batch: None,item: None, good: 2, quantity: 1, freshness: Default::default(), expires_at: None}]).unwrap();
         initial.physical.custody.containers.extend([2,3].map(|id| Container::new(Place::Person(id), 10, vec![]).unwrap()));
         initial.physical.custody.containers.sort_by_key(|row| row.place);
         let snapshot = CoreHostSnapshot { work_capabilities: None, personal_conflict: None, expeditions: None, campaign: None, mechanics: None,
@@ -3518,6 +3526,7 @@ fn autonomous_work_respects_individual_claim_choices_but_explicit_work_can_take_
                         item: None,
                         good: 1,
                         quantity: 2,
+                        freshness: Default::default(),
                         expires_at: None,
                     }],
                 )
@@ -3694,6 +3703,7 @@ fn interval_shared_transfer_benchmark() {
             item: None,
             good: 1,
             quantity: count,
+            freshness: Default::default(),
             expires_at: None,
         }],
     )
@@ -3855,6 +3865,7 @@ fn interval_identified_meals_benchmark() {
                     item: Some(id),
                     good: 2,
                     quantity: 1,
+                    freshness: Default::default(),
                     expires_at: None,
                 }],
             )
@@ -3985,6 +3996,7 @@ fn core_host_autonomous_work_benchmark() {
                 item: None,
                 good: 1,
                 quantity: (count - 1) * 2,
+                freshness: Default::default(),
                 expires_at: None,
             }]
         },
@@ -4019,6 +4031,7 @@ fn core_host_autonomous_work_benchmark() {
                 item: None,
                 good: 2,
                 quantity: count - 1,
+                freshness: Default::default(),
                 expires_at: None,
             }],
         )
@@ -4222,6 +4235,7 @@ fn core_host_work_requests_benchmark() {
             item: None,
             good: 1,
             quantity: (count - 1) * 2,
+            freshness: Default::default(),
             expires_at: None,
         }],
     )
@@ -4475,6 +4489,7 @@ fn abandoning_interval_work_frees_the_worker_without_freeing_reserved_goods() {
             item: None,
             good: 1,
             quantity: 2,
+            freshness: Default::default(),
             expires_at: None,
         }],
     )
@@ -4547,6 +4562,7 @@ fn local_interval_transfer_moves_real_custody_and_preserves_inflight_work() {
                             item: None,
                             good: 1,
                             quantity: 1,
+                            freshness: Default::default(),
                             expires_at: None,
                         }],
                     )
@@ -4593,6 +4609,7 @@ fn local_interval_transfer_moves_real_custody_and_preserves_inflight_work() {
                         item: None,
                         good: 1,
                         quantity: 1,
+                        freshness: Default::default(),
                         expires_at: None,
                     },
                 });
@@ -4835,6 +4852,7 @@ fn elapsed_food_credits_nutrients_before_metabolism_and_deficiency_stops_work() 
                 item: None,
                 good: 2,
                 quantity: 1,
+                freshness: Default::default(),
                 expires_at: None,
             }],
         )
@@ -4898,6 +4916,7 @@ fn delayed_food_health_survives_settlement_and_interrupts_work_once() {
                     item: None,
                     good: 2,
                     quantity: 1,
+                    freshness: Default::default(),
                     expires_at: None,
                 }],
             )
@@ -4976,6 +4995,7 @@ fn interval_meals_consume_real_food_and_apply_effects_at_the_right_time() {
                             item: None,
                             good: 2,
                             quantity: 1,
+                            freshness: Default::default(),
                             expires_at: None,
                         }],
                     )
@@ -5083,6 +5103,7 @@ fn identified_meals_stage_item_removal_with_hunger_and_later_production() {
                             item: Some(10),
                             good: 2,
                             quantity: 1,
+                            freshness: Default::default(),
                             expires_at: None,
                         }],
                     )
@@ -5222,6 +5243,7 @@ fn autonomous_interval_meals_follow_personal_preferences_and_occupancy() {
                                     item: None,
                                     good: 2,
                                     quantity: 1,
+                                    freshness: Default::default(),
                                     expires_at: Some(1),
                                 },
                                 Lot {
@@ -5229,6 +5251,7 @@ fn autonomous_interval_meals_follow_personal_preferences_and_occupancy() {
                                     item: None,
                                     good: 2,
                                     quantity: 1,
+                                    freshness: Default::default(),
                                     expires_at: Some(3),
                                 },
                             ],
@@ -5306,6 +5329,7 @@ fn autonomous_interval_work_respects_personal_choices_and_real_stock() {
                         item: None,
                         good: 1,
                         quantity: 2,
+                        freshness: Default::default(),
                         expires_at: None,
                     }],
                 )
@@ -5420,6 +5444,7 @@ fn opening_offset_actions_do_not_receive_prior_progress() {
             item: None,
             good: 1,
             quantity: 2,
+            freshness: Default::default(),
             expires_at: None,
         }],
     )
@@ -5484,6 +5509,7 @@ fn saved_core_host_coordinates_personal_work_meals_and_tool_ownership() {
                         item: None,
                         good: 1,
                         quantity: 2,
+                        freshness: Default::default(),
                         expires_at: None,
                     }],
                 )
@@ -5501,6 +5527,7 @@ fn saved_core_host_coordinates_personal_work_meals_and_tool_ownership() {
                                 item: None,
                                 good: 1,
                                 quantity: 1,
+                                freshness: Default::default(),
                                 expires_at: None,
                             }],
                         )
@@ -5663,6 +5690,7 @@ fn externally_chosen_work_does_not_require_willingness_and_can_be_abandoned() {
             item: None,
             good: 1,
             quantity: 2,
+            freshness: Default::default(),
             expires_at: None,
         }],
     )
@@ -5808,6 +5836,7 @@ fn scheduled_requests_use_directed_fear_and_obligation_without_binding_work() {
                         item: None,
                         good: 1,
                         quantity: 4,
+                        freshness: Default::default(),
                         expires_at: None,
                     }],
                 )
@@ -6136,6 +6165,7 @@ fn contested_request_reservations_do_not_turn_shortage_into_refusal() {
                         item: None,
                         good: 1,
                         quantity: 2,
+                        freshness: Default::default(),
                         expires_at: None,
                     }],
                 )
@@ -6274,6 +6304,7 @@ fn future_request_does_not_hide_an_existing_local_request() {
             item: None,
             good: 1,
             quantity: 2,
+            freshness: Default::default(),
             expires_at: None,
         }],
     )
@@ -6411,6 +6442,7 @@ fn requested_work_follows_the_workers_own_claim_preference() {
                         item: None,
                         good: 1,
                         quantity: 2,
+                        freshness: Default::default(),
                         expires_at: None,
                     }],
                 )
@@ -7019,6 +7051,7 @@ fn personal_treatment_consumes_medicine_and_only_clears_matching_episodes() {
                             item: None,
                             good: 2,
                             quantity: 1,
+                            freshness: Default::default(),
                             expires_at: None,
                         }],
                     )
@@ -7156,6 +7189,7 @@ fn personal_treatment_consumes_medicine_and_only_clears_matching_episodes() {
                         item: Some(10),
                         good: 2,
                         quantity: 1,
+                        freshness: Default::default(),
                         expires_at: None,
                     }],
                 )
@@ -7270,6 +7304,7 @@ fn boundary_cultivation_uses_real_seeds_grows_and_harvests_after_reload() {
                         item: None,
                         good: 1,
                         quantity: 1,
+                        freshness: Default::default(),
                         expires_at: None,
                     }],
                 )
@@ -7380,6 +7415,7 @@ fn boundary_cultivation_uses_real_seeds_grows_and_harvests_after_reload() {
                         item: Some(20),
                         good: 1,
                         quantity: 1,
+                        freshness: Default::default(),
                         expires_at: None,
                     }],
                 )
@@ -7587,7 +7623,7 @@ fn irrigation_consumes_contested_water_and_gates_next_growth() {
         initial.travel = None; initial.nutrition = None; initial.pending_food.clear(); initial.rules.starvation_damage = 0;
         initial.physical.goods.push(Good {
         maturation: None,id: 3, name: "water".into(), food: None});
-        initial.physical.custody.containers.push(Container::new(Place::Stock {region: 1, good: 3}, 10, vec![Lot { batch: None,item: None, good: 3, quantity: 1, expires_at: None}]).unwrap());
+        initial.physical.custody.containers.push(Container::new(Place::Stock {region: 1, good: 3}, 10, vec![Lot { batch: None,item: None, good: 3, quantity: 1, freshness: Default::default(), expires_at: None}]).unwrap());
         initial.physical.custody.containers.sort_by_key(|row| row.place);
         let agriculture = Agriculture { growth_clock: None, provenance: None,
             inherit_births: false, requests: None, soil: None, crops: vec![Crop {id: 1, seed: 1, seed_quantity: 1, output: 2, output_quantity: 1, growth_ticks: 1}],
@@ -7605,7 +7641,7 @@ fn irrigation_consumes_contested_water_and_gates_next_growth() {
             opinions: Some(opinions), goals: None, dreams: None, shared_work: None, market: None, writing: None, local_transport: None, construction: None, hauling: None, agreements: None, sites: None, schedule: None};
         let mut identified = snapshot.clone();
         let stock = identified.core.physical.custody.containers.iter_mut().find(|row| row.place == Place::Stock {region: 1, good: 3}).unwrap();
-        *stock = Container::new(stock.place, 10, vec![Lot { batch: None,item: Some(30), good: 3, quantity: 1, expires_at: None}]).unwrap();
+        *stock = Container::new(stock.place, 10, vec![Lot { batch: None,item: Some(30), good: 3, quantity: 1, freshness: Default::default(), expires_at: None}]).unwrap();
         let mut failed = CoreHost::begin(identified, &[(1, 1)]).unwrap();
         failed.progress(1000).unwrap();
         let before = failed.snapshot();
@@ -7682,6 +7718,7 @@ fn gathering_depletes_resources_into_real_personal_custody() {
                             item: None,
                             good: 1,
                             quantity: 1,
+                            freshness: Default::default(),
                             expires_at: None,
                         }],
                     )
@@ -7980,6 +8017,7 @@ fn gathering_depletes_resources_into_real_personal_custody() {
                         item: None,
                         good: 2,
                         quantity: 1,
+                        freshness: Default::default(),
                         expires_at: None,
                     }],
                 )
@@ -8367,6 +8405,7 @@ fn core_host_cultivation_benchmark() {
                         item: None,
                         good: 1,
                         quantity: 1,
+                        freshness: Default::default(),
                         expires_at: None,
                     }]
                 } else {
@@ -8392,6 +8431,7 @@ fn core_host_cultivation_benchmark() {
                         item: None,
                         good: 1,
                         quantity: 1,
+                        freshness: Default::default(),
                         expires_at: None,
                     }]
                 } else {
@@ -8419,6 +8459,7 @@ fn core_host_cultivation_benchmark() {
                         item: None,
                         good: 1,
                         quantity: 1,
+                        freshness: Default::default(),
                         expires_at: None,
                     }],
                 )
@@ -8464,6 +8505,7 @@ fn core_host_cultivation_benchmark() {
                             item: None,
                             good: 2,
                             quantity: 1,
+                            freshness: Default::default(),
                             expires_at: None,
                         }]
                     } else {
@@ -8494,6 +8536,7 @@ fn core_host_cultivation_benchmark() {
                     item: None,
                     good: 3,
                     quantity: count / 2,
+                    freshness: Default::default(),
                     expires_at: None,
                 }],
             )
@@ -8520,6 +8563,7 @@ fn core_host_cultivation_benchmark() {
             item: None,
             good: 1,
             quantity: if dependent { count / 3 } else { count - 1 },
+            freshness: Default::default(),
             expires_at: None,
         }],
     )
@@ -9353,6 +9397,7 @@ fn core_host_social_benchmark() {
                         item: None,
                         good: 2,
                         quantity: 1,
+                        freshness: Default::default(),
                         expires_at: None,
                     }],
                 )
@@ -9589,7 +9634,7 @@ fn core_host_social_benchmark() {
                 let mut studies = Vec::new();
                 for (i, pair) in pairs.iter().enumerate() {
                     let item = i as u64 + 1;
-                    snapshot.core.physical.custody.containers.push(Container::new(Place::Person(pair.a), 10, vec![Lot { batch: None, item: Some(item), good: 5, quantity: 1, expires_at: None }]).unwrap());
+                    snapshot.core.physical.custody.containers.push(Container::new(Place::Person(pair.a), 10, vec![Lot { batch: None, item: Some(item), good: 5, quantity: 1, freshness: Default::default(), expires_at: None }]).unwrap());
                     pages.push(serde_json::json!({"item":item,"author":pair.a,"script":1,"written_at":0,"text":"A page"}));
                     literacy.push(serde_json::json!({"person":pair.a,"script":1,"read":true}));
                     studies.push(serde_json::json!({"person":pair.b,"script":1,"required":1,"enabled":true}));
@@ -9896,7 +9941,7 @@ fn scheduled_personal_goals_create_requests_and_count_only_witnessed_help() {
             initial.nutrition = None;
             initial.pending_food.clear();
             let stock = initial.physical.custody.containers.iter_mut().find(|row| row.place == Place::Stock { region: 1, good: 1 }).unwrap();
-            *stock = Container::new(stock.place, 10, vec![Lot { batch: None, item: None, good: 1, quantity: 2, expires_at: None }]).unwrap();
+            *stock = Container::new(stock.place, 10, vec![Lot { batch: None, item: None, good: 1, quantity: 2, freshness: Default::default(), expires_at: None }]).unwrap();
             let requests = Requests {
                 next_id: 1, inherit_births: false, memory_limit: 4,
                 work_links: vec![], memories: vec![],
@@ -9941,10 +9986,10 @@ fn work_practice_asks_then_freely_gives_for_witnessed_work() {
             initial.nutrition = None;
             initial.pending_food.clear();
             let stock = initial.physical.custody.containers.iter_mut().find(|row| row.place == Place::Stock { region: 1, good: 1 }).unwrap();
-            *stock = Container::new(stock.place, 10, vec![Lot { batch: None, item: None, good: 1, quantity: 2, expires_at: None }]).unwrap();
+            *stock = Container::new(stock.place, 10, vec![Lot { batch: None, item: None, good: 1, quantity: 2, freshness: Default::default(), expires_at: None }]).unwrap();
             initial.physical.custody.containers.extend([
                 Container::new(Place::Person(1), 10, vec![]).unwrap(),
-                Container::new(Place::Person(2), 10, vec![Lot { batch: None, item: None, good: 2, quantity: 1, expires_at: None }]).unwrap(),
+                Container::new(Place::Person(2), 10, vec![Lot { batch: None, item: None, good: 2, quantity: 1, freshness: Default::default(), expires_at: None }]).unwrap(),
             ]);
             initial.physical.custody.containers.sort_unstable_by_key(|row| row.place);
             let requests = Requests {
@@ -10002,10 +10047,10 @@ fn worker_subjectively_reacts_to_received_or_missing_work_gift() {
             initial.nutrition = None;
             initial.pending_food.clear();
             let stock = initial.physical.custody.containers.iter_mut().find(|row| row.place == Place::Stock { region: 1, good: 1 }).unwrap();
-            *stock = Container::new(stock.place, 10, vec![Lot { batch: None, item: None, good: 1, quantity: 2, expires_at: None }]).unwrap();
+            *stock = Container::new(stock.place, 10, vec![Lot { batch: None, item: None, good: 1, quantity: 2, freshness: Default::default(), expires_at: None }]).unwrap();
             initial.physical.custody.containers.extend([
                 Container::new(Place::Person(1), 10, vec![]).unwrap(),
-                Container::new(Place::Person(2), 10, vec![Lot { batch: None, item: None, good: 2, quantity: 1, expires_at: None }]).unwrap(),
+                Container::new(Place::Person(2), 10, vec![Lot { batch: None, item: None, good: 2, quantity: 1, freshness: Default::default(), expires_at: None }]).unwrap(),
             ]);
             initial.physical.custody.containers.sort_unstable_by_key(|row| row.place);
             let requests = Requests {
@@ -10072,10 +10117,10 @@ fn same_interval_delivery_respects_its_order_relative_to_work_start() {
             initial.nutrition = None;
             initial.pending_food.clear();
             let stock = initial.physical.custody.containers.iter_mut().find(|row| row.place == Place::Stock { region: 1, good: 1 }).unwrap();
-            *stock = Container::new(stock.place, 10, vec![Lot { batch: None, item: None, good: 1, quantity: 2, expires_at: None }]).unwrap();
+            *stock = Container::new(stock.place, 10, vec![Lot { batch: None, item: None, good: 1, quantity: 2, freshness: Default::default(), expires_at: None }]).unwrap();
             initial.physical.custody.containers.extend([
                 Container::new(Place::Person(1), 10, vec![]).unwrap(),
-                Container::new(Place::Person(2), 10, vec![Lot { batch: None, item: None, good: 2, quantity: 1, expires_at: None }]).unwrap(),
+                Container::new(Place::Person(2), 10, vec![Lot { batch: None, item: None, good: 2, quantity: 1, freshness: Default::default(), expires_at: None }]).unwrap(),
             ]);
             initial.physical.custody.containers.sort_unstable_by_key(|row| row.place);
             let requests = Requests {
@@ -10152,10 +10197,10 @@ fn worker_can_dislike_a_gift_and_enjoy_not_receiving_it() {
             initial.nutrition = None;
             initial.pending_food.clear();
             let stock = initial.physical.custody.containers.iter_mut().find(|row| row.place == Place::Stock { region: 1, good: 1 }).unwrap();
-            *stock = Container::new(stock.place, 10, vec![Lot { batch: None, item: None, good: 1, quantity: 2, expires_at: None }]).unwrap();
+            *stock = Container::new(stock.place, 10, vec![Lot { batch: None, item: None, good: 1, quantity: 2, freshness: Default::default(), expires_at: None }]).unwrap();
             initial.physical.custody.containers.extend([
                 Container::new(Place::Person(1), 10, vec![]).unwrap(),
-                Container::new(Place::Person(2), 10, vec![Lot { batch: None, item: None, good: 2, quantity: 1, expires_at: None }]).unwrap(),
+                Container::new(Place::Person(2), 10, vec![Lot { batch: None, item: None, good: 2, quantity: 1, freshness: Default::default(), expires_at: None }]).unwrap(),
             ]);
             initial.physical.custody.containers.sort_unstable_by_key(|row| row.place);
             let requests = Requests {
@@ -10223,10 +10268,10 @@ fn abandoned_requested_work_does_not_create_a_completed_expectation() {
             initial.nutrition = None;
             initial.pending_food.clear();
             let stock = initial.physical.custody.containers.iter_mut().find(|row| row.place == Place::Stock { region: 1, good: 1 }).unwrap();
-            *stock = Container::new(stock.place, 10, vec![Lot { batch: None, item: None, good: 1, quantity: 2, expires_at: None }]).unwrap();
+            *stock = Container::new(stock.place, 10, vec![Lot { batch: None, item: None, good: 1, quantity: 2, freshness: Default::default(), expires_at: None }]).unwrap();
             initial.physical.custody.containers.extend([
                 Container::new(Place::Person(1), 10, vec![]).unwrap(),
-                Container::new(Place::Person(2), 10, vec![Lot { batch: None, item: None, good: 2, quantity: 1, expires_at: None }]).unwrap(),
+                Container::new(Place::Person(2), 10, vec![Lot { batch: None, item: None, good: 2, quantity: 1, freshness: Default::default(), expires_at: None }]).unwrap(),
             ]);
             initial.physical.custody.containers.sort_unstable_by_key(|row| row.place);
             let requests = Requests {
@@ -10286,10 +10331,10 @@ fn work_expectation_observes_only_accepted_early_deliveries() {
             initial.nutrition = None;
             initial.pending_food.clear();
             let stock = initial.physical.custody.containers.iter_mut().find(|row| row.place == Place::Stock { region: 1, good: 1 }).unwrap();
-            *stock = Container::new(stock.place, 10, vec![Lot { batch: None, item: None, good: 1, quantity: 2, expires_at: None }]).unwrap();
+            *stock = Container::new(stock.place, 10, vec![Lot { batch: None, item: None, good: 1, quantity: 2, freshness: Default::default(), expires_at: None }]).unwrap();
             initial.physical.custody.containers.extend([
                 Container::new(Place::Person(1), 10, vec![]).unwrap(),
-                Container::new(Place::Person(2), 10, vec![Lot { batch: None, item: None, good: 2, quantity: 1, expires_at: None }]).unwrap(),
+                Container::new(Place::Person(2), 10, vec![Lot { batch: None, item: None, good: 2, quantity: 1, freshness: Default::default(), expires_at: None }]).unwrap(),
             ]);
             initial.physical.custody.containers.sort_unstable_by_key(|row| row.place);
             let requests = Requests {
@@ -10369,10 +10414,10 @@ fn work_expectation_survives_early_completion_and_save() {
             initial.nutrition = None;
             initial.pending_food.clear();
             let stock = initial.physical.custody.containers.iter_mut().find(|row| row.place == Place::Stock { region: 1, good: 1 }).unwrap();
-            *stock = Container::new(stock.place, 10, vec![Lot { batch: None, item: None, good: 1, quantity: 2, expires_at: None }]).unwrap();
+            *stock = Container::new(stock.place, 10, vec![Lot { batch: None, item: None, good: 1, quantity: 2, freshness: Default::default(), expires_at: None }]).unwrap();
             initial.physical.custody.containers.extend([
                 Container::new(Place::Person(1), 10, vec![]).unwrap(),
-                Container::new(Place::Person(2), 10, vec![Lot { batch: None, item: None, good: 2, quantity: 1, expires_at: None }]).unwrap(),
+                Container::new(Place::Person(2), 10, vec![Lot { batch: None, item: None, good: 2, quantity: 1, freshness: Default::default(), expires_at: None }]).unwrap(),
             ]);
             initial.physical.custody.containers.sort_unstable_by_key(|row| row.place);
             let requests = Requests {
@@ -10617,6 +10662,7 @@ fn personal_goal_selects_work_and_advances_only_after_completion() {
             item: None,
             good: 1,
             quantity: 2,
+            freshness: Default::default(),
             expires_at: None,
         }],
     )
@@ -10729,6 +10775,7 @@ fn an_unfunded_offer_can_motivate_work_without_forcing_delivery() {
             item: None,
             good: 1,
             quantity: 2,
+            freshness: Default::default(),
             expires_at: None,
         }],
     )
@@ -10907,6 +10954,7 @@ fn voluntary_deliveries_record_only_successful_physical_transfers() {
                             item: None,
                             good: 1,
                             quantity: 1,
+                            freshness: Default::default(),
                             expires_at: None,
                         }],
                     )
@@ -11091,7 +11139,7 @@ fn scheduled_delivery_is_a_personal_choice_that_fear_can_motivate() {
         initial.pending_food.clear();
         initial.physical.custody.containers.extend([
             Container::new(Place::Person(1), 10, vec![]).unwrap(),
-            Container::new(Place::Person(2), 10, vec![Lot { batch: None, item: None, good: 1, quantity: 1, expires_at: None }]).unwrap(),
+            Container::new(Place::Person(2), 10, vec![Lot { batch: None, item: None, good: 1, quantity: 1, freshness: Default::default(), expires_at: None }]).unwrap(),
         ]);
         initial.physical.custody.containers.sort_by_key(|row| row.place);
         let policy: game_agreements::Policy = serde_json::from_value(serde_json::json!({"person":2,"honor":false,"fear_honor_threshold":5})).unwrap();
@@ -11273,6 +11321,7 @@ fn completed_work_wears_a_site_and_real_repairs_reopen_it() {
                         item: None,
                         good: 1,
                         quantity: 2,
+                        freshness: Default::default(),
                         expires_at: None,
                     }],
                 )
@@ -11285,6 +11334,7 @@ fn completed_work_wears_a_site_and_real_repairs_reopen_it() {
                             item: None,
                             good: 1,
                             quantity: 1,
+                            freshness: Default::default(),
                             expires_at: None,
                         }],
                     )
@@ -11440,13 +11490,13 @@ fn scheduled_tool_repair_consumes_material_and_preserves_identity() {
         initial.travel = None;
         initial.nutrition = None;
         initial.pending_food.clear();
-        initial.physical.custody.containers.push(Container::new(Place::Person(2), 10, vec![Lot { batch: None, item: Some(10), good: 1, quantity: 1, expires_at: None }, Lot { batch: None, item: None, good: 2, quantity: 1, expires_at: None }]).unwrap());
+        initial.physical.custody.containers.push(Container::new(Place::Person(2), 10, vec![Lot { batch: None, item: Some(10), good: 1, quantity: 1, freshness: Default::default(), expires_at: None }, Lot { batch: None, item: None, good: 2, quantity: 1, freshness: Default::default(), expires_at: None }]).unwrap());
         initial.physical.custody.containers.sort_by_key(|row| row.place);
         let tool_wear = game_economy_work::tool_wear::ToolWear { next_item: 11, rules: vec![game_economy_work::tool_wear::Rule { good: 1, durability: 10, wear: 1, repair_good: 2, repair_quantity: 1 }], conditions: vec![game_economy_work::tool_wear::Condition { item: 10, good: 1, damage: 4 }], repairs: vec![game_economy_work::tool_wear::RepairChoice { person: 2, item: 10, willing: true }], events: vec![] };
         let snapshot = CoreHostSnapshot { work_capabilities: None, personal_conflict: None, expeditions: None, campaign: None, mechanics: None, core: initial, autowork: None, tool_wear: Some(tool_wear), opinions: None, goals: None, dreams: None, shared_work: None, market: None, writing: None, local_transport: None, construction: None, hauling: None, agreements: None, sites: None, tool_requirements: vec![], paused_work_rates: vec![], pending_vital_deaths: vec![], fatigue: None, activity: vec![], giving: None, practice_work_asks: vec![], practice_work_evidence: Default::default(), skills: None, taking: None, medical: None, goal_setbacks: vec![], purpose: None, animal_restraints: None, animal_products: None, recovery: None, fauna: None, hunting: None, animal_feelings: None, animal_care: None, animal_handling: None, family: None, dependent_care: None, gathering: None, environment: None, irrigation: None, agriculture: None, health: None, knowledge: None, social: None, personality: None, claims: None, food_search: None, schedule: None };
         let mut no_material = snapshot.clone();
         let bag = no_material.core.physical.custody.containers.iter_mut().find(|row| row.place == Place::Person(2)).unwrap();
-        *bag = Container::new(bag.place, 10, vec![Lot { batch: None, item: Some(10), good: 1, quantity: 1, expires_at: None }]).unwrap();
+        *bag = Container::new(bag.place, 10, vec![Lot { batch: None, item: Some(10), good: 1, quantity: 1, freshness: Default::default(), expires_at: None }]).unwrap();
         let mut no_material = CoreHost::begin(no_material, &[(1, 1)]).unwrap();
         assert!(!no_material.repair_tools_autonomously(&[]).unwrap().events[0].accepted);
         assert_eq!(no_material.snapshot().tool_wear.unwrap().conditions[0].damage, 4);
@@ -11494,6 +11544,7 @@ fn work_requires_carried_tools_and_wears_only_physically_started_jobs() {
                                 item: None,
                                 good: 1,
                                 quantity: 1,
+                                freshness: Default::default(),
                                 expires_at: None,
                             },
                             Lot {
@@ -11501,6 +11552,7 @@ fn work_requires_carried_tools_and_wears_only_physically_started_jobs() {
                                 item: Some(10),
                                 good: 2,
                                 quantity: 1,
+                                freshness: Default::default(),
                                 expires_at: None,
                             },
                         ],
@@ -11628,6 +11680,7 @@ fn work_requires_carried_tools_and_wears_only_physically_started_jobs() {
                         item: None,
                         good: 1,
                         quantity: 4,
+                        freshness: Default::default(),
                         expires_at: None,
                     }],
                 )
@@ -11649,6 +11702,7 @@ fn work_requires_carried_tools_and_wears_only_physically_started_jobs() {
                         item: None,
                         good: 1,
                         quantity: 1,
+                        freshness: Default::default(),
                         expires_at: None,
                     }],
                 )
@@ -11662,6 +11716,7 @@ fn work_requires_carried_tools_and_wears_only_physically_started_jobs() {
                             item: Some(10),
                             good: 2,
                             quantity: 1,
+                            freshness: Default::default(),
                             expires_at: None,
                         }],
                     )
@@ -11742,6 +11797,7 @@ fn work_pauses_when_a_required_tool_moves_and_resumes_after_its_return() {
                         item: None,
                         good: 1,
                         quantity: 2,
+                        freshness: Default::default(),
                         expires_at: None,
                     }],
                 )
@@ -11756,6 +11812,7 @@ fn work_pauses_when_a_required_tool_moves_and_resumes_after_its_return() {
                             item: Some(10),
                             good: 2,
                             quantity: 1,
+                            freshness: Default::default(),
                             expires_at: None,
                         }],
                     )
@@ -12041,6 +12098,7 @@ fn core_host_tool_repair_benchmark() {
                         item: Some(person),
                         good: 1,
                         quantity: 1,
+                        freshness: Default::default(),
                         expires_at: None,
                     },
                     Lot {
@@ -12048,6 +12106,7 @@ fn core_host_tool_repair_benchmark() {
                         item: None,
                         good: 2,
                         quantity: 1,
+                        freshness: Default::default(),
                         expires_at: None,
                     },
                 ],
@@ -12216,6 +12275,7 @@ fn core_host_site_admission_benchmark() {
                         item: Some(person),
                         good: 2,
                         quantity: 1,
+                        freshness: Default::default(),
                         expires_at: None,
                     }],
                 )
@@ -12254,6 +12314,7 @@ fn core_host_site_admission_benchmark() {
             item: None,
             good: 1,
             quantity: (count - 1) * 2,
+            freshness: Default::default(),
             expires_at: None,
         }],
     )
@@ -12531,6 +12592,7 @@ fn core_host_site_repair_benchmark() {
                     item: None,
                     good: 1,
                     quantity: 1,
+                    freshness: Default::default(),
                     expires_at: None,
                 }],
             )
@@ -12852,6 +12914,7 @@ fn core_host_agreement_delivery_benchmark() {
                         item: None,
                         good: 1,
                         quantity: 1,
+                        freshness: Default::default(),
                         expires_at: None,
                     }]
                 } else {
@@ -13009,6 +13072,7 @@ fn core_host_physical_taking_preserves_item_identity_without_implied_permission(
                 item: Some(10),
                 good: 1,
                 quantity: 1,
+                freshness: Default::default(),
                 expires_at: None,
             }],
         )
@@ -13144,6 +13208,7 @@ fn core_host_rejects_unowned_identified_consumption_without_mutation() {
                 item: Some(10),
                 good: 1,
                 quantity: 1,
+                freshness: Default::default(),
                 expires_at: None,
             },
             Lot {
@@ -13151,6 +13216,7 @@ fn core_host_rejects_unowned_identified_consumption_without_mutation() {
                 item: Some(11),
                 good: 1,
                 quantity: 1,
+                freshness: Default::default(),
                 expires_at: None,
             },
         ],
@@ -13230,7 +13296,7 @@ fn scheduled_core_host_is_partition_independent_at_tied_deadlines() {
         initial.people[1].willing_to_work = true;
         initial.travel.as_mut().unwrap().journeys[0].progress_millis = 500;
         let stock = initial.physical.custody.containers.iter_mut().find(|row| row.place == Place::Stock { region: 2, good: 1 }).unwrap();
-        *stock = Container::new(stock.place, 10, vec![Lot { batch: None, item: None, good: 1, quantity: 2, expires_at: None }]).unwrap();
+        *stock = Container::new(stock.place, 10, vec![Lot { batch: None, item: None, good: 1, quantity: 2, freshness: Default::default(), expires_at: None }]).unwrap();
         let snapshot = CoreHostSnapshot { work_capabilities: None, personal_conflict: None, expeditions: None, campaign: None, mechanics: None,
             core: initial,
             autowork: Some(game_autowork::Autowork { next_id: 2, policies: vec![game_autowork::Policy { person: 2, recipe: 1, enabled: true, disregard_claims: false }], requests: None }),
@@ -13302,6 +13368,7 @@ fn scheduled_decision_resumes_after_work_failure_without_repeating_meal() {
             item: None,
             good: 1,
             quantity: 2,
+            freshness: Default::default(),
             expires_at: None,
         }],
     )
@@ -13315,6 +13382,7 @@ fn scheduled_decision_resumes_after_work_failure_without_repeating_meal() {
                 item: None,
                 good: 2,
                 quantity: 2,
+                freshness: Default::default(),
                 expires_at: None,
             }],
         )
@@ -13467,6 +13535,7 @@ fn scheduled_runner_defers_perishable_work_and_publishes_other_completion() {
             item: None,
             good: 1,
             quantity: 2,
+            freshness: Default::default(),
             expires_at: None,
         }],
     )
@@ -13580,7 +13649,7 @@ fn continuous_core_host_crosses_boundaries_without_partition_or_reload_drift() {
         initial.nutrition = None;
         initial.pending_food.clear();
         let stock = initial.physical.custody.containers.iter_mut().find(|row| row.place == Place::Stock { region: 1, good: 1 }).unwrap();
-        *stock = Container::new(stock.place, 10, vec![Lot { batch: None, item: None, good: 1, quantity: 2, expires_at: None }]).unwrap();
+        *stock = Container::new(stock.place, 10, vec![Lot { batch: None, item: None, good: 1, quantity: 2, freshness: Default::default(), expires_at: None }]).unwrap();
         let tool_wear = game_economy_work::tool_wear::ToolWear { next_item: 10,
             rules: vec![game_economy_work::tool_wear::Rule { good: 2, durability: 10, wear: 1, repair_good: 1, repair_quantity: 1 }],
             conditions: vec![], repairs: vec![], events: vec![] };
@@ -14024,6 +14093,7 @@ fn unsupported_completed_work_can_be_deferred_without_blocking_other_jobs() {
                             item: None,
                             good: 1,
                             quantity: 2,
+                            freshness: Default::default(),
                             expires_at: None,
                         }],
                     )
@@ -14366,6 +14436,7 @@ fn early_work_consuming_identified_inputs_requires_owner_staging() {
                 item: Some(10),
                 good: 1,
                 quantity: 1,
+                freshness: Default::default(),
                 expires_at: None,
             },
             Lot {
@@ -14373,6 +14444,7 @@ fn early_work_consuming_identified_inputs_requires_owner_staging() {
                 item: Some(11),
                 good: 1,
                 quantity: 1,
+                freshness: Default::default(),
                 expires_at: None,
             },
         ],
@@ -14571,6 +14643,7 @@ fn arrival_can_start_work_that_completes_before_the_boundary() {
                         item: None,
                         good: 1,
                         quantity: 2,
+                        freshness: Default::default(),
                         expires_at: None,
                     }],
                 )
@@ -14728,6 +14801,7 @@ fn mixed_interval_admission_preserves_rejected_stock_and_resumes() {
                         item: None,
                         good: 1,
                         quantity: 2,
+                        freshness: Default::default(),
                         expires_at: None,
                     }],
                 )
@@ -14787,6 +14861,7 @@ fn a_worker_can_start_again_after_early_completion() {
             item: None,
             good: 1,
             quantity: 2,
+            freshness: Default::default(),
             expires_at: None,
         }],
     )
@@ -14880,6 +14955,7 @@ fn interval_work_admission_benchmark() {
                 item: None,
                 good: 1,
                 quantity: stock_units * 2,
+                freshness: Default::default(),
                 expires_at: None,
             }]
         },
@@ -15347,6 +15423,7 @@ fn composed_core_progress_benchmark() {
                     item: None,
                     good: 1,
                     quantity: count - 2,
+                    freshness: Default::default(),
                     expires_at: None,
                 }]
             },
@@ -15503,7 +15580,7 @@ fn family_birth_custody_and_worker_death_commit_atomically() {
                 let stock = caring.core.physical.custody.containers.iter_mut()
                     .find(|row| row.place == Place::Stock { region: 1, good: 1 }).unwrap();
                 *stock = Container::new(stock.place, 10, vec![Lot { batch: None,
-                    item: None, good: 1, quantity: 2, expires_at: None,
+                    item: None, good: 1, quantity: 2, freshness: Default::default(), expires_at: None,
                 }]).unwrap();
                 let mut caring = CoreHost::begin(caring, &[(1, 1)]).unwrap();
                 caring.progress(1000).unwrap(); caring.settle().unwrap();
@@ -15728,7 +15805,7 @@ fn family_birth_custody_and_worker_death_commit_atomically() {
             let seed = farming.core.physical.custody.containers.iter_mut()
                 .find(|row| row.place == Place::Stock { region: 1, good: 1 }).unwrap();
             *seed = Container::new(seed.place, 10, vec![Lot { batch: None,
-                item: None, good: 1, quantity: 1, expires_at: None,
+                item: None, good: 1, quantity: 1, freshness: Default::default(), expires_at: None,
             }]).unwrap();
             farming.agriculture = Some(game_economy_agriculture::Agriculture { growth_clock: None, provenance: None,
                 inherit_births: false, requests: None, soil: None,
@@ -15762,7 +15839,7 @@ fn completed_work_teaches_personal_skill_and_speeds_a_later_job() {
             initial.nutrition = None;
             initial.pending_food.clear();
             let stock = initial.physical.custody.containers.iter_mut().find(|row| row.place == Place::Stock { region: 1, good: 1 }).unwrap();
-            *stock = Container::new(stock.place, 10, vec![Lot { batch: None, item: None, good: 1, quantity: 2, expires_at: None }]).unwrap();
+            *stock = Container::new(stock.place, 10, vec![Lot { batch: None, item: None, good: 1, quantity: 2, freshness: Default::default(), expires_at: None }]).unwrap();
             let snapshot: CoreHostSnapshot = serde_json::from_value(serde_json::json!({
                 "core":initial,"skills":{"owner":{"rules":[{"recipe":1,"completions_per_level":1,"max_level":5,"work_per_level":2}]}}
             })).unwrap();
@@ -15866,6 +15943,7 @@ fn core_host_skill_learning_benchmark() {
             item: None,
             good: 1,
             quantity: 2 * (count - 1),
+            freshness: Default::default(),
             expires_at: None,
         }],
     )
@@ -15983,7 +16061,7 @@ fn personal_teaching_follows_willingness_pressure_and_subjective_reactions() {
             let mut student = initial.people[1].clone(); student.id = 3; initial.people.push(student);
             initial.travel = None; initial.nutrition = None; initial.pending_food.clear();
             let stock = initial.physical.custody.containers.iter_mut().find(|row| row.place == Place::Stock { region: 1, good: 1 }).unwrap();
-            *stock = Container::new(stock.place, 10, vec![Lot { batch: None, item: None, good: 1, quantity: 2, expires_at: None }]).unwrap();
+            *stock = Container::new(stock.place, 10, vec![Lot { batch: None, item: None, good: 1, quantity: 2, freshness: Default::default(), expires_at: None }]).unwrap();
             let social = game_economy::core_interval::CoreSocial { language: None, signals: None,
                 owner: game_social::Social {
                     inherit_births: false, rules: game_social::Rules { interval: 1, min_health: 1, max_hunger: 10, familiarity_gain: 1, familiarity_max: 10, relationship_retention: None },
@@ -16061,7 +16139,7 @@ fn autonomous_work_uses_the_workers_learned_skill_rate() {
             initial.people[1].region = Some(1); initial.people[1].willing_to_work = true;
             initial.travel = None; initial.nutrition = None; initial.pending_food.clear();
             let stock = initial.physical.custody.containers.iter_mut().find(|row| row.place == Place::Stock { region: 1, good: 1 }).unwrap();
-            *stock = Container::new(stock.place, 10, vec![Lot { batch: None, item: None, good: 1, quantity: 2, expires_at: None }]).unwrap();
+            *stock = Container::new(stock.place, 10, vec![Lot { batch: None, item: None, good: 1, quantity: 2, freshness: Default::default(), expires_at: None }]).unwrap();
             let snapshot: CoreHostSnapshot = serde_json::from_value(serde_json::json!({
                 "core":initial,"autowork":{"next_id":2,"policies":[{"person":2,"recipe":1,"enabled":true}]},
                 "skills":{"owner":{"rules":[{"recipe":1,"completions_per_level":1,"max_level":5,"work_per_level":2}],
@@ -16123,7 +16201,7 @@ fn personality_controls_voluntary_autonomous_work_and_survives_resume() {
             initial.people[1].region = Some(1); initial.people[1].willing_to_work = true;
             initial.travel = None; initial.nutrition = None; initial.pending_food.clear();
             let stock = initial.physical.custody.containers.iter_mut().find(|row| row.place == Place::Stock { region: 1, good: 1 }).unwrap();
-            *stock = Container::new(stock.place, 10, vec![Lot { batch: None,item:None,good:1,quantity:2,expires_at:None}]).unwrap();
+            *stock = Container::new(stock.place, 10, vec![Lot { batch: None,item:None,good:1,quantity:2,freshness: Default::default(), expires_at:None}]).unwrap();
             let snapshot: CoreHostSnapshot = serde_json::from_value(serde_json::json!({
                 "core":initial,"autowork":{"next_id":2,"policies":[{"person":2,"recipe":1,"enabled":true}]},
                 "personality":{"social_urgency_per_isolation":0,"people":[{"person":2,"sociability":1000,"diligence":diligence}]}
@@ -16152,7 +16230,7 @@ fn personal_aspirations_review_actual_goal_progress_and_roll_back_overflow() {
             initial.people[1].region = Some(1); initial.people[1].willing_to_work = true;
             initial.travel = None; initial.nutrition = None; initial.pending_food.clear();
             let stock = initial.physical.custody.containers.iter_mut().find(|row| row.place == Place::Stock {region: 1, good: 1}).unwrap();
-            *stock = Container::new(stock.place, 10, vec![Lot { batch: None, item: None, good: 1, quantity: 4, expires_at: None }]).unwrap();
+            *stock = Container::new(stock.place, 10, vec![Lot { batch: None, item: None, good: 1, quantity: 4, freshness: Default::default(), expires_at: None }]).unwrap();
             let snapshot: CoreHostSnapshot = serde_json::from_value(serde_json::json!({
                 "core":initial,"autowork":{"next_id":2,"policies":[]},
                 "goals":{"retry_interval":1,"people":[]},
@@ -16192,7 +16270,7 @@ fn aspirations_learn_from_witnessed_early_work_and_survive_save() {
             let mut requester = initial.people[0].clone(); requester.id = 3; initial.people.push(requester);
             initial.travel = None; initial.nutrition = None; initial.pending_food.clear();
             let stock = initial.physical.custody.containers.iter_mut().find(|row| row.place == Place::Stock { region: 1, good: 1 }).unwrap();
-            *stock = Container::new(stock.place, 10, vec![Lot { batch: None, item: None, good: 1, quantity: 2, expires_at: None }]).unwrap();
+            *stock = Container::new(stock.place, 10, vec![Lot { batch: None, item: None, good: 1, quantity: 2, freshness: Default::default(), expires_at: None }]).unwrap();
             let snapshot: CoreHostSnapshot = serde_json::from_value(serde_json::json!({
                 "core":initial,"autowork":{"next_id":2,"policies":[],"requests":{
                     "next_id":2,"memory_limit":4,"preferences":[{"person":2,"effort":0,"help_value":1,"affinity_weight":0,"trust_weight":0}],
@@ -16725,6 +16803,7 @@ fn core_host_shared_work_benchmark() {
                 item: None,
                 good: 1,
                 quantity: (jobs - 1) * 2,
+                freshness: Default::default(),
                 expires_at: None,
             }],
         )
@@ -17034,6 +17113,7 @@ fn personal_exchange_fixture(stocked: bool, pressured: bool) -> CoreHostSnapshot
                     item: None,
                     good: 1,
                     quantity: 2,
+                    freshness: Default::default(),
                     expires_at: None,
                 }]
             } else {
@@ -17051,6 +17131,7 @@ fn personal_exchange_fixture(stocked: bool, pressured: bool) -> CoreHostSnapshot
                 item: None,
                 good: 2,
                 quantity: 1,
+                freshness: Default::default(),
                 expires_at: None,
             }],
         )
@@ -17287,6 +17368,7 @@ fn independent_personal_exchanges_settle_together() {
                             item: None,
                             good: 1,
                             quantity: 2,
+                            freshness: Default::default(),
                             expires_at: None,
                         }],
                     )
@@ -17301,6 +17383,7 @@ fn independent_personal_exchanges_settle_together() {
                             item: None,
                             good: 2,
                             quantity: 1,
+                            freshness: Default::default(),
                             expires_at: None,
                         }],
                     )
@@ -17408,6 +17491,7 @@ fn core_host_personal_exchange_benchmark() {
                     item: None,
                     good,
                     quantity: 1,
+                    freshness: Default::default(),
                     expires_at: None,
                 }],
             )
@@ -17502,6 +17586,7 @@ fn personal_exchange_enforces_each_persons_actual_capacity_atomically() {
                         item: None,
                         good: 1,
                         quantity: 1,
+                        freshness: Default::default(),
                         expires_at: None,
                     }],
                 )
@@ -17522,6 +17607,7 @@ fn personal_exchange_enforces_each_persons_actual_capacity_atomically() {
                         item: None,
                         good: 2,
                         quantity: 2,
+                        freshness: Default::default(),
                         expires_at: None,
                     }],
                 )
@@ -17581,6 +17667,7 @@ fn text_writing_fixture(supplied: bool) -> CoreHostSnapshot {
                 item: None,
                 good: 3,
                 quantity: 1,
+                freshness: Default::default(),
                 expires_at: None,
             },
             Lot {
@@ -17588,6 +17675,7 @@ fn text_writing_fixture(supplied: bool) -> CoreHostSnapshot {
                 item: None,
                 good: 4,
                 quantity: 1,
+                freshness: Default::default(),
                 expires_at: None,
             },
         ]
@@ -17597,6 +17685,7 @@ fn text_writing_fixture(supplied: bool) -> CoreHostSnapshot {
             item: None,
             good: 3,
             quantity: 1,
+            freshness: Default::default(),
             expires_at: None,
         }]
     };
@@ -17736,6 +17825,7 @@ fn core_host_text_writing_benchmark() {
                     item: Some(person - 1),
                     good: 5,
                     quantity: 1,
+                    freshness: Default::default(),
                     expires_at: None,
                 }]
             } else {
@@ -17745,6 +17835,7 @@ fn core_host_text_writing_benchmark() {
                         item: None,
                         good: 3,
                         quantity: 1,
+                        freshness: Default::default(),
                         expires_at: None,
                     },
                     Lot {
@@ -17752,6 +17843,7 @@ fn core_host_text_writing_benchmark() {
                         item: None,
                         good: 4,
                         quantity: 1,
+                        freshness: Default::default(),
                         expires_at: None,
                     },
                 ]
@@ -17921,6 +18013,7 @@ fn literacy_study_depends_on_personal_choice_encounter_and_a_physical_page() {
                             item: Some(1),
                             good: 5,
                             quantity: 1,
+                            freshness: Default::default(),
                             expires_at: None,
                         }],
                     )
@@ -18119,6 +18212,7 @@ fn consumed_written_pages_are_retired_but_personal_memories_survive() {
                         item: Some(1),
                         good: 5,
                         quantity: 1,
+                        freshness: Default::default(),
                         expires_at: None,
                     }],
                 )
@@ -18242,6 +18336,7 @@ fn core_host_written_page_consumption_benchmark() {
             item: Some(1),
             good: 5,
             quantity: 1,
+            freshness: Default::default(),
             expires_at: None,
         }],
     )
@@ -18264,6 +18359,7 @@ fn core_host_written_page_consumption_benchmark() {
                     item: Some(item),
                     good: 5,
                     quantity: 1,
+                    freshness: Default::default(),
                     expires_at: None,
                 })
                 .collect(),
@@ -18353,6 +18449,7 @@ fn written_page_retirement_rolls_back_when_another_item_has_no_owner() {
                 item: Some(1),
                 good: 5,
                 quantity: 1,
+                freshness: Default::default(),
                 expires_at: None,
             },
             Lot {
@@ -18360,6 +18457,7 @@ fn written_page_retirement_rolls_back_when_another_item_has_no_owner() {
                 item: Some(2),
                 good: 1,
                 quantity: 1,
+                freshness: Default::default(),
                 expires_at: None,
             },
         ],
@@ -18390,7 +18488,7 @@ fn local_carrying_uses_personal_custody_and_willingness_or_fear() {
         rayon::ThreadPoolBuilder::new().num_threads(workers).build().unwrap().install(||{
             let mut core=fixture();core.people[1].region=Some(1);core.travel=None;core.nutrition=None;core.pending_food.clear();
             let stock=core.physical.custody.containers.iter_mut().find(|row|row.place==Place::Stock{region:1,good:1}).unwrap();
-            *stock=Container::new(stock.place,10,vec![Lot{ batch: None,item:None,good:1,quantity:5,expires_at:None}]).unwrap();
+            *stock=Container::new(stock.place,10,vec![Lot{ batch: None,item:None,good:1,quantity:5,freshness: Default::default(), expires_at:None}]).unwrap();
             core.physical.custody.containers.push(Container::new(Place::Person(2),10,vec![]).unwrap());
             core.physical.custody.containers.push(Container::new(Place::Inventory(1),10,vec![]).unwrap());
             core.physical.custody.containers.sort_by_key(|row|row.place);
@@ -18458,6 +18556,7 @@ fn core_host_local_carrying_benchmark() {
                 item: None,
                 good: 1,
                 quantity: count - 1,
+                freshness: Default::default(),
                 expires_at: None,
             }]
         } else {
@@ -18482,6 +18581,7 @@ fn core_host_local_carrying_benchmark() {
                             item: None,
                             good: 1,
                             quantity: 1,
+                            freshness: Default::default(),
                             expires_at: None,
                         }]
                     },
@@ -18517,7 +18617,7 @@ fn local_carrying_arbitrates_real_shared_stock_without_overdraft() {
             let mut core=fixture();core.people[1].region=Some(1);let mut third=core.people[1].clone();third.id=3;core.people.push(third);
             core.travel=None;core.nutrition=None;core.pending_food.clear();
             let stock=core.physical.custody.containers.iter_mut().find(|row|row.place==Place::Stock{region:1,good:1}).unwrap();
-            *stock=Container::new(stock.place,10,vec![Lot{ batch: None,item:None,good:1,quantity:3,expires_at:None}]).unwrap();
+            *stock=Container::new(stock.place,10,vec![Lot{ batch: None,item:None,good:1,quantity:3,freshness: Default::default(), expires_at:None}]).unwrap();
             for person in 2..=3 {core.physical.custody.containers.push(Container::new(Place::Person(person),10,vec![]).unwrap());}
             core.physical.custody.containers.push(Container::new(Place::Inventory(1),10,vec![]).unwrap());core.physical.custody.containers.sort_by_key(|row|row.place);
             let policies:Vec<_>=(2..=3).map(|person|serde_json::json!({"person":person,"region":1,"source":{"kind":"stock"},"destination":{"kind":"store","id":1},"good":1,"quantity":2,"willing":true})).collect();
@@ -18539,7 +18639,7 @@ fn personal_construction_consumes_kits_and_preserves_recoverable_material() {
         rayon::ThreadPoolBuilder::new().num_threads(workers).build().unwrap().install(||{
             let mut core=fixture();core.people[1].region=Some(1);core.travel=None;core.nutrition=None;core.pending_food.clear();
             let stock=core.physical.custody.containers.iter_mut().find(|row|row.place==Place::Stock{region:1,good:1}).unwrap();
-            *stock=Container::new(stock.place,10,vec![Lot{ batch: None,item:None,good:1,quantity:3,expires_at:None}]).unwrap();
+            *stock=Container::new(stock.place,10,vec![Lot{ batch: None,item:None,good:1,quantity:3,freshness: Default::default(), expires_at:None}]).unwrap();
             let mut snapshot:CoreHostSnapshot=serde_json::from_value(serde_json::json!({"core":core,
                 "sites":{"facilities":{"next_id":1,"sites":[],"requirements":[],"bindings":[]},"maintenance":{"rules":[{"kind":"mill","wear_limit":10,"wear_per_slot":1,"repair_good":1,"repair_quantity":1}]}},
                 "construction":{"blueprints":[{"id":1,"name":"Mill","kind":"mill","capacity":2,"kit":1,"quantity":2,"salvage":1}],
@@ -18565,7 +18665,7 @@ fn competing_builders_do_not_publish_failed_sites_or_empty_custody() {
     fn run(workers: usize) -> serde_json::Value {
         rayon::ThreadPoolBuilder::new().num_threads(workers).build().unwrap().install(||{
             let mut core=fixture();core.people[1].region=Some(1);let mut third=core.people[1].clone();third.id=3;core.people.push(third);core.travel=None;core.nutrition=None;core.pending_food.clear();
-            let stock=core.physical.custody.containers.iter_mut().find(|row|row.place==Place::Stock{region:1,good:1}).unwrap();*stock=Container::new(stock.place,10,vec![Lot{ batch: None,item:None,good:1,quantity:3,expires_at:None}]).unwrap();
+            let stock=core.physical.custody.containers.iter_mut().find(|row|row.place==Place::Stock{region:1,good:1}).unwrap();*stock=Container::new(stock.place,10,vec![Lot{ batch: None,item:None,good:1,quantity:3,freshness: Default::default(), expires_at:None}]).unwrap();
             let policies:Vec<_>=(2..=3).map(|person|serde_json::json!({"person":person,"blueprint":1,"target_sites":1,"willing":true})).collect();
             let snapshot:CoreHostSnapshot=serde_json::from_value(serde_json::json!({"core":core,"sites":{"facilities":{"next_id":1,"sites":[],"requirements":[],"bindings":[]}},"construction":{"blueprints":[{"id":1,"name":"Mill","kind":"mill","capacity":2,"kit":1,"quantity":2,"salvage":1}],"policies":policies}})).unwrap();
             let mut host=CoreHost::begin(snapshot,&[(1,1)]).unwrap();let result=host.build_sites_autonomously(&[]).unwrap();
@@ -18620,6 +18720,7 @@ fn core_host_site_construction_benchmark() {
                 item: None,
                 good: 1,
                 quantity: (count - 1) * 2,
+                freshness: Default::default(),
                 expires_at: None,
             }]
         } else {
@@ -18640,6 +18741,7 @@ fn core_host_site_construction_benchmark() {
                         item: None,
                         good: 1,
                         quantity: 2,
+                        freshness: Default::default(),
                         expires_at: None,
                     }],
                 )
@@ -18667,7 +18769,7 @@ fn personal_hauling_moves_real_cargo_across_a_route_without_compulsion() {
         rayon::ThreadPoolBuilder::new().num_threads(workers).build().unwrap().install(||{
             let mut core=fixture();core.people[1].region=Some(1);core.nutrition=None;core.pending_food.clear();
             let travel=core.travel.as_mut().unwrap();travel.journeys.clear();travel.routes.push(Route{source:2,destination:1,ticks:1});
-            let stock=core.physical.custody.containers.iter_mut().find(|row|row.place==Place::Stock{region:1,good:1}).unwrap();*stock=Container::new(stock.place,10,vec![Lot{ batch: None,item:None,good:1,quantity:3,expires_at:None}]).unwrap();
+            let stock=core.physical.custody.containers.iter_mut().find(|row|row.place==Place::Stock{region:1,good:1}).unwrap();*stock=Container::new(stock.place,10,vec![Lot{ batch: None,item:None,good:1,quantity:3,freshness: Default::default(), expires_at:None}]).unwrap();
             core.physical.custody.containers.push(Container::new(Place::Person(2),10,vec![]).unwrap());core.physical.custody.containers.sort_by_key(|row|row.place);
             let mut snapshot:CoreHostSnapshot=serde_json::from_value(serde_json::json!({"core":core,"hauling":{"policies":[{"person":2,"source":1,"destination":2,"good":1,"quantity":2,"willing":willing,"pressured_by":if pressured {Some(1)} else {None},"pressure_threshold":if pressured {Some(1)} else {None}}]}})).unwrap();
             if pressured {snapshot.opinions=Some(serde_json::from_value(serde_json::json!({"rules":{"minimum":-10,"maximum":10,"initial":0,"fulfilled_gain":1,"default_loss":1},"records":[{"observer":2,"target":1,"trust":0,"fear":2}]})).unwrap());}
@@ -18734,6 +18836,7 @@ fn core_host_hauling_pickup_benchmark() {
                 item: None,
                 good: 1,
                 quantity: count - 1,
+                freshness: Default::default(),
                 expires_at: None,
             }]
         } else {
@@ -18754,6 +18857,7 @@ fn core_host_hauling_pickup_benchmark() {
                         item: None,
                         good: 1,
                         quantity: 1,
+                        freshness: Default::default(),
                         expires_at: None,
                     }]
                 } else {
@@ -18780,6 +18884,7 @@ fn core_host_hauling_pickup_benchmark() {
                         item: None,
                         good,
                         quantity: 1,
+                        freshness: Default::default(),
                         expires_at: None,
                     }],
                 )
@@ -18814,7 +18919,7 @@ fn competing_haulers_cannot_overdraw_a_shared_source() {
         rayon::ThreadPoolBuilder::new().num_threads(workers).build().unwrap().install(||{
             let mut core=fixture();core.people[1].region=Some(1);let mut third=core.people[1].clone();third.id=3;core.people.push(third);core.nutrition=None;core.pending_food.clear();
             let travel=core.travel.as_mut().unwrap();travel.journeys.clear();travel.routes.push(Route{source:2,destination:1,ticks:1});
-            let stock=core.physical.custody.containers.iter_mut().find(|row|row.place==Place::Stock{region:1,good:1}).unwrap();*stock=Container::new(stock.place,10,vec![Lot{ batch: None,item:None,good:1,quantity:3,expires_at:None}]).unwrap();
+            let stock=core.physical.custody.containers.iter_mut().find(|row|row.place==Place::Stock{region:1,good:1}).unwrap();*stock=Container::new(stock.place,10,vec![Lot{ batch: None,item:None,good:1,quantity:3,freshness: Default::default(), expires_at:None}]).unwrap();
             for person in 2..=3 {core.physical.custody.containers.push(Container::new(Place::Person(person),10,vec![]).unwrap());}core.physical.custody.containers.sort_by_key(|row|row.place);
             let policies:Vec<_>=(2..=3).map(|person|serde_json::json!({"person":person,"source":1,"destination":2,"good":1,"quantity":2,"willing":true})).collect();
             let snapshot:CoreHostSnapshot=serde_json::from_value(serde_json::json!({"core":core,"hauling":{"policies":policies}})).unwrap();
@@ -18832,7 +18937,7 @@ fn hauling_requests_do_not_bind_carriers_and_can_motivate_through_fear() {
         rayon::ThreadPoolBuilder::new().num_threads(workers).build().unwrap().install(||{
             let mut core=fixture();core.people[1].region=Some(1);let mut requester=core.people[1].clone();requester.id=3;core.people.push(requester);core.nutrition=None;core.pending_food.clear();
             let travel=core.travel.as_mut().unwrap();travel.journeys.clear();travel.routes.push(Route{source:2,destination:1,ticks:1});
-            let stock=core.physical.custody.containers.iter_mut().find(|row|row.place==Place::Stock{region:1,good:1}).unwrap();*stock=Container::new(stock.place,10,vec![Lot{ batch: None,item:None,good:1,quantity:3,expires_at:None}]).unwrap();
+            let stock=core.physical.custody.containers.iter_mut().find(|row|row.place==Place::Stock{region:1,good:1}).unwrap();*stock=Container::new(stock.place,10,vec![Lot{ batch: None,item:None,good:1,quantity:3,freshness: Default::default(), expires_at:None}]).unwrap();
             core.physical.custody.containers.push(Container::new(Place::Person(2),10,vec![]).unwrap());core.physical.custody.containers.sort_by_key(|row|row.place);
             let mut snapshot:CoreHostSnapshot=serde_json::from_value(serde_json::json!({"core":core,"hauling":{
                 "policies":[{"person":2,"source":1,"destination":2,"good":1,"quantity":2,"willing":willing,"requires_request":true,"request_pressure_threshold":1}],
@@ -18910,6 +19015,7 @@ fn core_host_hauling_requests_benchmark() {
             item: None,
             good: 1,
             quantity: pairs,
+            freshness: Default::default(),
             expires_at: None,
         }],
     )

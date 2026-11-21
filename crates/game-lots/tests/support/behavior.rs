@@ -6,6 +6,7 @@ fn lot(good: u32, quantity: u64, expires_at: Option<u64>) -> Lot {
         item: None,
         good,
         quantity,
+        freshness: Default::default(),
         expires_at,
     }
 }
@@ -1487,6 +1488,7 @@ fn mixed_atomic_actions_match_general_arbitration() {
             item: Some(42),
             good: 1,
             quantity: 1,
+            freshness: Default::default(),
             expires_at: None,
         }],
     ));
@@ -1548,6 +1550,7 @@ fn shared_stock_to_new_custody_matches_general_commit_and_stale_checks() {
                         item: Some(42),
                         good: 1,
                         quantity: 1,
+                        freshness: Default::default(),
                         expires_at: None,
                     }],
                 ),
@@ -3452,6 +3455,7 @@ fn shared_compact_consumption_falls_back_for_identified_items_and_rejects_stale_
                 good: 1,
                 quantity: 1,
                 item: Some(42),
+                freshness: Default::default(),
                 expires_at: None,
             },
             lot(1, 200, None),
@@ -3556,6 +3560,7 @@ fn large_identified_transfer_preserves_every_item_and_receipt_across_workers() {
                     good: 1,
                     quantity: 1,
                     item: Some(id),
+                    freshness: Default::default(),
                     expires_at: None,
                 })
                 .collect(),
@@ -3627,6 +3632,7 @@ fn large_creation_batches_preserve_transaction_ownership_and_identity() {
                             good: 1,
                             quantity: 1,
                             item: Some(id),
+                            freshness: Default::default(),
                             expires_at: None,
                         },
                     }
@@ -3679,6 +3685,7 @@ fn oversized_large_creation_transaction_is_rejected_atomically() {
                     good: 1,
                     quantity: 1,
                     item: Some(id),
+                    freshness: Default::default(),
                     expires_at: None,
                 },
             })

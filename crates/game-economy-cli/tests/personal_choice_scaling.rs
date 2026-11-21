@@ -177,6 +177,7 @@ capacity = 10000
                         item: None,
                         good: medicine,
                         quantity: 1,
+                        freshness: Default::default(),
                         expires_at: None,
                     }],
                 )
@@ -289,6 +290,7 @@ capacity = 10000
                             item: None,
                             good: grain,
                             quantity: 1,
+                            freshness: Default::default(),
                             expires_at: None,
                         },
                         Lot {
@@ -296,6 +298,7 @@ capacity = 10000
                             item: Some(1_000_000 + id),
                             good: tool,
                             quantity: 1,
+                            freshness: Default::default(),
                             expires_at: None,
                         },
                     ],
@@ -378,6 +381,7 @@ capacity = 10000
                         item: None,
                         good,
                         quantity: 10,
+                        freshness: Default::default(),
                         expires_at: None,
                     }],
                 )
@@ -426,6 +430,7 @@ capacity = 10000
                         item: None,
                         good,
                         quantity: 1,
+                        freshness: Default::default(),
                         expires_at: None,
                     }],
                 )

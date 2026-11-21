@@ -308,6 +308,7 @@ fn prepare_rows(
                             item: lot.item,
                             good: lot.good,
                             quantity,
+                            freshness: lot.freshness,
                             expires_at: lot.expires_at,
                         };
                         incoming.push((row.destination, part.clone()));

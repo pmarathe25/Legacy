@@ -1880,6 +1880,7 @@ mod tests {
             item: Some(id),
             good: 1,
             quantity: 1,
+            freshness: Default::default(),
             expires_at: None,
         };
         let bag = game_lots::Container::new(

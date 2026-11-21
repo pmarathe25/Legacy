@@ -32,6 +32,7 @@ fn after(container: &Container, tick: u64, good: u32, mut debit: u64) -> Contain
                 good: lot.good,
                 quantity: lot.quantity - consumed,
                 item: lot.item,
+                freshness: lot.freshness,
                 expires_at: lot.expires_at,
             })
         })

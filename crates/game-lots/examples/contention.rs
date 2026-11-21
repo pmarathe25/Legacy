@@ -15,6 +15,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if mode == "recipes" {
         return recipes(workers, count, repeats);
     }
+    if matches!(mode, "expiry" | "expiry-shared") {
+        return expiry(workers, count, mode == "expiry-shared", repeats);
+    }
     if !matches!(mode, "source" | "destination") {
         return Err("invalid contention mode".into());
     }
@@ -24,6 +27,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         item: None,
         good: 1,
         quantity: 1,
+        freshness: Default::default(),
         expires_at: Some(5),
     };
     let mut containers = vec![Container::new(
@@ -125,6 +129,7 @@ fn recipes(workers: usize, count: u64, repeats: usize) -> Result<(), Box<dyn std
                     item: None,
                     good: 1,
                     quantity: count / 2,
+                    freshness: Default::default(),
                     expires_at: Some(5),
                 }],
             )?,
@@ -151,6 +156,7 @@ fn recipes(workers: usize, count: u64, repeats: usize) -> Result<(), Box<dyn std
                     item: None,
                     good: 2,
                     quantity: 1,
+                    freshness: Default::default(),
                     expires_at: Some(5),
                 },
             }],
@@ -180,5 +186,71 @@ fn recipes(workers: usize, count: u64, repeats: usize) -> Result<(), Box<dyn std
         samples.sort_by(f64::total_cmp);
         println!("workers={workers} recipes={count} granted={last_granted} rounds={repeats} median={:.6}", samples[repeats / 2]);
     });
+    Ok(())
+}
+
+fn expiry(
+    workers: usize,
+    count: u64,
+    shared: bool,
+    repeats: usize,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let food = |id| Lot {
+        batch: Some(id),
+        item: None,
+        good: 1,
+        quantity: 1,
+        freshness: Default::default(),
+        expires_at: Some(60_000),
+    };
+    let containers = if shared {
+        vec![Container::new(
+            Place::Inventory(1),
+            count,
+            (1..=count).map(food).collect(),
+        )?]
+    } else {
+        (1..=count)
+            .map(|id| Container::new(Place::Person(id), 1, vec![food(id)]))
+            .collect::<Result<Vec<_>, _>>()?
+    };
+    let state = State {
+        next_batch: None,
+        expiry_millis: Some(0),
+        storage_climate: None,
+        tick: 0,
+        revision: 0,
+        containers,
+    };
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(workers)
+        .build()?;
+    pool.install(|| -> Result<(), String> {
+        let mut samples = Vec::with_capacity(repeats);
+        for run in 0..=repeats {
+            let mut store = Store::compile(state.clone())?;
+            let start = Instant::now();
+            let expiry = store.prepare_expiry_at(60_000)?;
+            let spoiled = store.commit_expiry_at(expiry)?;
+            let elapsed = start.elapsed().as_secs_f64();
+            if run > 0 {
+                samples.push(elapsed);
+            }
+            assert_eq!(spoiled.len() as u64, count);
+            assert!(
+                spoiled
+                    .iter()
+                    .zip(1..=count)
+                    .all(|(row, id)| row.batch == Some(id) && row.expires_at == 60_000)
+            );
+            assert_eq!(store.next_expiry(), None);
+        }
+        samples.sort_by(f64::total_cmp);
+        println!(
+            "workers={workers} lots={count} shared={shared} repeats={repeats} median_ms={:.6}",
+            samples[repeats / 2] * 1000.0
+        );
+        Ok(())
+    })?;
     Ok(())
 }

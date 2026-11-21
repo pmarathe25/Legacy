@@ -99,6 +99,22 @@ coincides with settlement. Prepared work dates fresh output on completion.
 Older saves without an elapsed custody clock retain their archived boundary
 dates.
 
+Prepared recipes can define `matures:`, `maturation-days:`, and Celsius bounds
+on their inedible object. Maturation uses the same deadline index. Moving
+a preparation preserves its due time. The physical holder determines its
+temperature when it is ready. Acceptable conditions transform the actual
+cohort into food, and its shelf life begins at that instant.
+
+A scenario can supply `storage_climate` with an `ambient_celsius` temperature
+and optional `places` overrides for particular physical holders. Its
+`aging_rates` list defines lower Celsius bounds and a positive
+`per_thousand` rate at each bound. A rate of 1000 is standard and 500
+consumes shelf life at half speed. Food retains exact fractional age
+when moved across different thermal rates, including when only part of
+a batch moves. The index follows its new projected deadline. Curing
+continues on its own clock. Storage temperatures currently stay fixed for
+each holder.
+
 An elapsed environment can set `exposure_period_millis` to schedule personal
 hazard damage and shelter rotation at fixed simulated times. The host uses
 the season just before each exposure event and applies it before new choices

@@ -21,6 +21,7 @@ fn runtime() -> Runtime {
                     item: None,
                     good,
                     quantity,
+                    freshness: Default::default(),
                     expires_at: None,
                 }]
             },
@@ -71,6 +72,7 @@ fn environmental_outputs_compete_for_real_capacity_and_must_be_fresh() {
                 item: None,
                 good: 2,
                 quantity: 7,
+                freshness: Default::default(),
                 expires_at,
             },
         }],
@@ -581,6 +583,7 @@ fn worker_can_abandon_even_when_reserved_material_cannot_yet_fit() {
             item: None,
             good: 1,
             quantity: 4,
+            freshness: Default::default(),
             expires_at: None,
         }],
     )
@@ -619,6 +622,7 @@ fn concentrated(count: u64) -> (Snapshot, Vec<Start>) {
             item: None,
             good: 1,
             quantity: count,
+            freshness: Default::default(),
             expires_at: None,
         }],
     )
@@ -767,6 +771,7 @@ fn loading_rejects_orphan_or_excess_job_custody() {
             item: None,
             good: 1,
             quantity: 3,
+            freshness: Default::default(),
             expires_at: None,
         }],
     )
@@ -791,6 +796,7 @@ fn expiry_interrupts_a_real_job_and_frees_the_worker() {
             item: None,
             good: 1,
             quantity: 2,
+            freshness: Default::default(),
             expires_at: Some(2),
         }],
     )
@@ -849,6 +855,7 @@ fn blocked_finished_food_spoils_without_being_recreated() {
             item: None,
             good: 2,
             quantity: 1,
+            freshness: Default::default(),
             expires_at: None,
         }],
     )
@@ -991,6 +998,7 @@ fn external_taking_remains_physical_and_cannot_create_goods() {
                 item: None,
                 good: 1,
                 quantity: 1,
+                freshness: Default::default(),
                 expires_at: None,
             },
         }],
@@ -1192,6 +1200,7 @@ fn flat_transfers_match_general_runtime_and_rollback() {
                         item: None,
                         good: 1,
                         quantity: 2,
+                        freshness: Default::default(),
                         expires_at: Some(1),
                     },
                     Lot {
@@ -1199,6 +1208,7 @@ fn flat_transfers_match_general_runtime_and_rollback() {
                         item: None,
                         good: 1,
                         quantity: 3,
+                        freshness: Default::default(),
                         expires_at: Some(3),
                     },
                 ],
@@ -1373,6 +1383,7 @@ fn shared_source_flat_runtime_matches_general_arbitration() {
                     item: None,
                     good: 1,
                     quantity: 80,
+                    freshness: Default::default(),
                     expires_at: Some(1),
                 },
                 Lot {
@@ -1380,6 +1391,7 @@ fn shared_source_flat_runtime_matches_general_arbitration() {
                     item: None,
                     good: 1,
                     quantity: 120,
+                    freshness: Default::default(),
                     expires_at: Some(3),
                 },
                 Lot {
@@ -1387,6 +1399,7 @@ fn shared_source_flat_runtime_matches_general_arbitration() {
                     item: None,
                     good: 1,
                     quantity: 50,
+                    freshness: Default::default(),
                     expires_at: None,
                 },
             ],
@@ -1477,6 +1490,7 @@ fn shared_destination_flat_runtime_matches_general_arbitration() {
                         item: None,
                         good: 1,
                         quantity: 1,
+                        freshness: Default::default(),
                         expires_at: Some(1),
                     },
                     Lot {
@@ -1484,6 +1498,7 @@ fn shared_destination_flat_runtime_matches_general_arbitration() {
                         item: None,
                         good: 1,
                         quantity: if id % 9 == 0 { 1 } else { 3 },
+                        freshness: Default::default(),
                         expires_at: Some(3 + id % 2),
                     },
                 ],
@@ -1500,6 +1515,7 @@ fn shared_destination_flat_runtime_matches_general_arbitration() {
                 item: None,
                 good: 1,
                 quantity: 20,
+                freshness: Default::default(),
                 expires_at: Some(1),
             }],
         )
@@ -1592,6 +1608,7 @@ fn grouped_sources_match_general_runtime_with_expiry_and_capacity() {
                         item: None,
                         good,
                         quantity: 15,
+                        freshness: Default::default(),
                         expires_at: Some(1),
                     },
                     Lot {
@@ -1599,6 +1616,7 @@ fn grouped_sources_match_general_runtime_with_expiry_and_capacity() {
                         item: None,
                         good,
                         quantity: 40,
+                        freshness: Default::default(),
                         expires_at: Some(3),
                     },
                     Lot {
@@ -1606,6 +1624,7 @@ fn grouped_sources_match_general_runtime_with_expiry_and_capacity() {
                         item: None,
                         good,
                         quantity: 30,
+                        freshness: Default::default(),
                         expires_at: None,
                     },
                 ],
@@ -1623,6 +1642,7 @@ fn grouped_sources_match_general_runtime_with_expiry_and_capacity() {
                     item: None,
                     good: 1,
                     quantity: 1,
+                    freshness: Default::default(),
                     expires_at: Some(1),
                 }]
             } else {
@@ -1640,6 +1660,7 @@ fn grouped_sources_match_general_runtime_with_expiry_and_capacity() {
                 item: None,
                 good: 2,
                 quantity: 2,
+                freshness: Default::default(),
                 expires_at: Some(1),
             }],
         )
@@ -1725,6 +1746,7 @@ fn packed_receipts_outlive_the_runtime_and_can_be_owned() {
                         item: None,
                         good: 1,
                         quantity: 1,
+                        freshness: Default::default(),
                         expires_at: Some(2),
                     },
                     Lot {
@@ -1732,6 +1754,7 @@ fn packed_receipts_outlive_the_runtime_and_can_be_owned() {
                         item: None,
                         good: 1,
                         quantity: 2,
+                        freshness: Default::default(),
                         expires_at: Some(4),
                     },
                 ],
@@ -1770,6 +1793,7 @@ fn packed_receipts_outlive_the_runtime_and_can_be_owned() {
                     item: None,
                     good: 1,
                     quantity: 1,
+                    freshness: Default::default(),
                     expires_at: Some(2)
                 },
                 Lot {
@@ -1777,6 +1801,7 @@ fn packed_receipts_outlive_the_runtime_and_can_be_owned() {
                     item: None,
                     good: 1,
                     quantity: 1,
+                    freshness: Default::default(),
                     expires_at: Some(4)
                 },
             ]
@@ -2117,6 +2142,7 @@ fn a_worker_can_leave_in_a_detached_generation_even_if_return_is_blocked() {
             item: None,
             good: 1,
             quantity: 4,
+            freshness: Default::default(),
             expires_at: None,
         }],
     )
@@ -2289,6 +2315,7 @@ fn identified_job_outputs_avoid_simultaneous_written_item_and_respect_stale_draf
                     good: 3,
                     quantity: 1,
                     item: None,
+                    freshness: Default::default(),
                     expires_at: None,
                 },
                 Lot {
@@ -2296,6 +2323,7 @@ fn identified_job_outputs_avoid_simultaneous_written_item_and_respect_stale_draf
                     good: 5,
                     quantity: 1,
                     item: None,
+                    freshness: Default::default(),
                     expires_at: None,
                 },
             ],
@@ -2420,6 +2448,7 @@ fn spoiled_job_inputs_do_not_allocate_or_publish_tool_identities() {
             good: 1,
             quantity: 2,
             item: None,
+            freshness: Default::default(),
             expires_at: Some(1),
         }],
     )

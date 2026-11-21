@@ -122,6 +122,7 @@ fn physical_job_reserves_then_produces_and_delivers_without_refreshing_output() 
                     item: None,
                     good,
                     quantity,
+                    freshness: Default::default(),
                     expires_at: None,
                 }]
             },
@@ -242,6 +243,7 @@ fn blocked_waiting_output_spoils_in_its_job_and_cannot_be_recreated_by_delivery(
                     item: None,
                     good: 1,
                     quantity: 1,
+                    freshness: Default::default(),
                     expires_at: None,
                 }],
             )
@@ -254,6 +256,7 @@ fn blocked_waiting_output_spoils_in_its_job_and_cannot_be_recreated_by_delivery(
                     item: None,
                     good: 2,
                     quantity: 1,
+                    freshness: Default::default(),
                     expires_at: None,
                 }],
             )
@@ -354,6 +357,7 @@ fn interruption_returns_surviving_input_without_refreshing_it() {
                         item: None,
                         good: 1,
                         quantity: 2,
+                        freshness: Default::default(),
                         expires_at: Some(2),
                     },
                     Lot {
@@ -361,6 +365,7 @@ fn interruption_returns_surviving_input_without_refreshing_it() {
                         item: None,
                         good: 1,
                         quantity: 3,
+                        freshness: Default::default(),
                         expires_at: Some(8),
                     },
                 ],
@@ -400,6 +405,7 @@ fn interruption_returns_surviving_input_without_refreshing_it() {
             item: None,
             good: 1,
             quantity: 3,
+            freshness: Default::default(),
             expires_at: Some(8)
         }]
     );
@@ -426,6 +432,7 @@ fn delivery_moves_only_unexpired_output_and_reports_the_loss() {
                         item: None,
                         good: 2,
                         quantity: 1,
+                        freshness: Default::default(),
                         expires_at: Some(2),
                     },
                     Lot {
@@ -433,6 +440,7 @@ fn delivery_moves_only_unexpired_output_and_reports_the_loss() {
                         item: None,
                         good: 2,
                         quantity: 2,
+                        freshness: Default::default(),
                         expires_at: Some(5),
                     },
                 ],
@@ -469,6 +477,7 @@ fn delivery_moves_only_unexpired_output_and_reports_the_loss() {
             item: None,
             good: 2,
             quantity: 2,
+            freshness: Default::default(),
             expires_at: Some(5)
         }]
     );
@@ -504,6 +513,7 @@ fn missing_or_expiring_inputs_interrupt_work_and_do_not_make_output() {
                 item: None,
                 good: 1,
                 quantity: 1,
+                freshness: Default::default(),
                 expires_at: Some(2),
             },
             Lot {
@@ -511,6 +521,7 @@ fn missing_or_expiring_inputs_interrupt_work_and_do_not_make_output() {
                 item: None,
                 good: 1,
                 quantity: 1,
+                freshness: Default::default(),
                 expires_at: Some(4),
             },
         ],

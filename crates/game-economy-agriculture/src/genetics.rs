@@ -243,6 +243,7 @@ mod tests {
             quantity,
             batch,
             item: None,
+            freshness: Default::default(),
             expires_at: None,
         }
     }

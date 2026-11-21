@@ -134,28 +134,75 @@ impl Draft {
         &self.inner.transactions
     }
 }
+fn normalize_climate(state: &mut State) -> Result<(), String> {
+    if let Some(climate) = &mut state.storage_climate {
+        climate.places.par_sort_unstable_by_key(|row| row.place);
+        climate
+            .aging_rates
+            .sort_unstable_by_key(|row| row.from_celsius);
+        if state.expiry_millis.is_none()
+            || climate
+                .places
+                .par_windows(2)
+                .any(|pair| pair[0].place == pair[1].place)
+            || climate.places.par_iter().any(|row| !row.place.valid())
+            || climate
+                .aging_rates
+                .windows(2)
+                .any(|pair| pair[0].from_celsius == pair[1].from_celsius)
+            || climate
+                .aging_rates
+                .iter()
+                .any(|rate| rate.per_thousand == 0)
+        {
+            return Err("invalid elapsed storage conditions".into());
+        }
+    }
+    Ok(())
+}
+
 impl Store {
+    /// Date starting goods once for their first storage conditions.
+    pub fn date_authored_custody(state: &mut State) -> Result<(), String> {
+        normalize_climate(state)?;
+        if !state.ages_with_temperature() {
+            return Ok(());
+        }
+        let at = state
+            .expiry_millis
+            .ok_or("elapsed storage requires a clock")?;
+        let containers = state
+            .containers
+            .par_iter()
+            .map(|holder| {
+                if holder.next_expiry.is_none() {
+                    return Ok(holder.clone());
+                }
+                let mut lots = holder.lots.clone();
+                for lot in &mut lots {
+                    state.date_lot(lot, None, holder.place, at)?;
+                }
+                Container::new(holder.place, holder.capacity, lots)
+            })
+            .collect::<Result<_, _>>()?;
+        state.containers = containers;
+        Ok(())
+    }
     /// Validate a saved state once; subsequent mutations go through staged drafts.
     pub fn compile(mut state: State) -> Result<Self, String> {
-        if let Some(climate) = &mut state.storage_climate {
-            climate.places.par_sort_unstable_by_key(|row| row.place);
-            if state.expiry_millis.is_none()
-                || climate
-                    .places
-                    .par_windows(2)
-                    .any(|pair| pair[0].place == pair[1].place)
-                || climate.places.par_iter().any(|row| !row.place.valid())
-            {
-                return Err("invalid elapsed storage conditions".into());
-            }
-        }
+        normalize_climate(&mut state)?;
         let now = state.expiry_millis.unwrap_or(state.tick);
         if state
             .containers
             .par_windows(2)
             .any(|pair| pair[0].place >= pair[1].place)
             || state.containers.par_iter().any(|container| {
-                container.validate().is_err() || container.next_expiry.is_some_and(|at| at <= now)
+                container.validate().is_err()
+                    || container.next_expiry.is_some_and(|at| at <= now)
+                    || container
+                        .lots
+                        .iter()
+                        .any(|lot| !state.valid_age(container.place, lot))
             })
         {
             return Err("invalid lot state".into());
@@ -308,14 +355,7 @@ impl Store {
         self.state
             .storage_climate
             .as_ref()
-            .map_or(AMBIENT_CELSIUS, |climate| {
-                climate
-                    .places
-                    .binary_search_by_key(&place, |row| row.place)
-                    .map_or(climate.ambient_celsius, |index| {
-                        climate.places[index].celsius
-                    })
-            })
+            .map_or(AMBIENT_CELSIUS, |climate| climate.temperature(place))
     }
 
     pub fn elapsed_millis(&self) -> Option<u64> {
@@ -949,7 +989,12 @@ impl Store {
         }
         self.validate_batch_creations(transactions, allocation)?;
         let check_items = self.check_creations(transactions)?;
-        if check_items
+        let thermal = self.state.ages_with_temperature()
+            && transactions
+                .par_iter()
+                .any(|action| self.state.thermal_transaction(action));
+        if !thermal
+            && check_items
             && containers.is_empty()
             && compact.is_empty()
             && let Some(inner) = game_lot_batches::prepare_local_creations(
@@ -961,7 +1006,8 @@ impl Store {
         {
             return self.item_draft(inner, containers, true);
         }
-        if check_items
+        if !thermal
+            && check_items
             && containers.is_empty()
             && compact.is_empty()
             && let Some(inner) = game_lot_batches::prepare_independent_items(
@@ -1002,7 +1048,12 @@ impl Store {
         }
         self.validate_batch_creations(transactions, allocation)?;
         let check_items = self.check_creations(transactions)?;
-        if !check_items
+        let thermal = self.state.ages_with_temperature()
+            && transactions
+                .par_iter()
+                .any(|action| self.state.thermal_transaction(action));
+        if !thermal
+            && !check_items
             && !advance
             && additions.is_empty()
             && let Some(inner) = game_lot_batches::prepare_disjoint_transformations(
@@ -1013,7 +1064,8 @@ impl Store {
         {
             return self.item_draft(inner, additions, false);
         }
-        if check_items
+        if !thermal
+            && check_items
             && additions.is_empty()
             && let Some(inner) = game_lot_batches::prepare_local_creations(
                 &self.state,
@@ -1024,7 +1076,8 @@ impl Store {
         {
             return self.item_draft(inner, additions, true);
         }
-        if check_items
+        if !thermal
+            && check_items
             && additions.is_empty()
             && let Some(inner) = game_lot_batches::prepare_independent_items(
                 &self.state,
@@ -1058,7 +1111,11 @@ impl Store {
         transfers: &[SimpleTransfer],
         advance: bool,
     ) -> Result<Option<Draft>, String> {
-        if transfers.par_iter().any(|row| row.movement.item.is_some())
+        if (self.state.ages_with_temperature()
+            && transfers
+                .par_iter()
+                .any(|row| self.state.thermal_move(&row.movement)))
+            || transfers.par_iter().any(|row| row.movement.item.is_some())
             || (!self.item_places.is_empty()
                 && transfers
                     .par_iter()
@@ -1089,7 +1146,11 @@ impl Store {
         transfers: &[SimpleTransfer],
         advance: bool,
     ) -> Result<Option<Draft>, String> {
-        if transfers.par_iter().any(|row| row.movement.item.is_some())
+        if (self.state.ages_with_temperature()
+            && transfers
+                .par_iter()
+                .any(|row| self.state.thermal_move(&row.movement)))
+            || transfers.par_iter().any(|row| row.movement.item.is_some())
             || (!self.item_places.is_empty()
                 && transfers
                     .par_iter()
@@ -1121,7 +1182,11 @@ impl Store {
         additions: Vec<Container>,
         advance: bool,
     ) -> Result<Option<Draft>, String> {
-        if transfers.par_iter().any(|row| row.movement.item.is_some())
+        if (self.state.ages_with_temperature()
+            && transfers
+                .par_iter()
+                .any(|row| self.state.thermal_move(&row.movement)))
+            || transfers.par_iter().any(|row| row.movement.item.is_some())
             || (!self.item_places.is_empty()
                 && transfers
                     .par_iter()

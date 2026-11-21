@@ -19,7 +19,8 @@ pub(super) fn stage(
     let mut destinations: Vec<_> = creations
         .par_iter()
         .map(|output| {
-            let lot = &output.lot;
+            let mut lot = output.lot.clone();
+            state.date_lot(&mut lot, None, output.to, at)?;
             if output.id == 0
                 || !output.to.accepts(lot.good)
                 || lot.quantity == 0
@@ -27,16 +28,16 @@ pub(super) fn stage(
                 || lot.batch == Some(0)
                 || lot.expires_at.is_some_and(|expires| expires <= at)
             {
-                return Err("invalid matured lot");
+                return Err("invalid matured lot".to_owned());
             }
             let index = state
                 .containers
                 .binary_search_by_key(&output.to, |row| row.place)
                 .map_err(|_| "unknown maturation destination")?;
-            Ok((index, output))
+            Ok((index, output.id, lot))
         })
-        .collect::<Result<_, &str>>()?;
-    destinations.par_sort_unstable_by_key(|(index, output)| (*index, output.id));
+        .collect::<Result<_, String>>()?;
+    destinations.par_sort_unstable_by_key(|(index, id, _)| (*index, *id));
     let changes = draft.changes.flat_mut();
     let patches: Vec<_> = destinations
         .par_chunk_by(|left, right| left.0 == right.0)
@@ -48,21 +49,19 @@ pub(super) fn stage(
             let room = u128::from(holder.capacity - holder.used);
             let quantities: Vec<_> = destination
                 .par_iter()
-                .map(|(_, output)| output.lot.quantity)
+                .map(|(_, _, lot)| lot.quantity)
                 .collect();
             let prefixes = game_lot_allocation::prefixes(&quantities);
             let receipts: Vec<_> = destination
                 .par_iter()
                 .zip(prefixes.into_par_iter())
-                .map(|(&(_, output), prefix)| {
-                    (output.id, prefix + u128::from(output.lot.quantity) <= room)
-                })
+                .map(|((_, id, lot), prefix)| (*id, prefix + u128::from(lot.quantity) <= room))
                 .collect();
             let mut lots: Vec<_> = destination
                 .par_iter()
                 .zip(receipts.par_iter())
                 .filter(|(_, receipt)| receipt.1)
-                .map(|((_, output), _)| output.lot.clone())
+                .map(|((_, _, lot), _)| lot.clone())
                 .collect();
             let replacement = (!lots.is_empty()).then(|| {
                 let used = holder.used + lots.par_iter().map(|lot| lot.quantity).sum::<u64>();

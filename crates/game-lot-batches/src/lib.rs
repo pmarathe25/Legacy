@@ -308,7 +308,11 @@ fn prepare_impl(
             .iter()
             .any(|movement| movement.batch.is_some())
     });
-    let partition = partition && !targeted_batch;
+    let thermal = state.ages_with_temperature()
+        && transactions
+            .par_iter()
+            .any(|action| state.thermal_transaction(action));
+    let partition = partition && !targeted_batch && !thermal;
     #[cfg(feature = "profile")]
     let mut phase = game_diagnostics::span("physical.batches.validate");
     additions.par_sort_unstable_by_key(|row| row.place);
@@ -360,6 +364,7 @@ fn prepare_impl(
         phase = game_diagnostics::span("physical.batches.partition");
     }
     if targeted_batch
+        && !thermal
         && additions.is_empty()
         && compact.is_empty()
         && let Some(draft) = independent_transfer::prepare(state, instance, transactions, advance)?

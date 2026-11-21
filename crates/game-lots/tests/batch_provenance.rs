@@ -6,6 +6,7 @@ fn cohort(batch: u64, quantity: u64, expiry: Option<u64>) -> Lot {
         quantity,
         batch: Some(batch),
         item: None,
+        freshness: Default::default(),
         expires_at: expiry,
     }
 }

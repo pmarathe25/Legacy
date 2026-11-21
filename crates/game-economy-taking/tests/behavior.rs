@@ -68,6 +68,7 @@ fn runtime(capacity: u64, stock: u64) -> Runtime {
                             item: None,
                             good: 1,
                             quantity: 1,
+                            freshness: Default::default(),
                             expires_at: Some(5),
                         }]
                     } else {
@@ -86,6 +87,7 @@ fn runtime(capacity: u64, stock: u64) -> Runtime {
                             item: None,
                             good: 1,
                             quantity: stock,
+                            freshness: Default::default(),
                             expires_at: Some(5),
                         }]
                     },

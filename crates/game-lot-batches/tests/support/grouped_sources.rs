@@ -11,6 +11,7 @@ fn fixture(count: u64) -> (State, Vec<SimpleTransfer>) {
                     item: None,
                     good: 1,
                     quantity: count / 4,
+                    freshness: Default::default(),
                     expires_at: None,
                 }],
             )

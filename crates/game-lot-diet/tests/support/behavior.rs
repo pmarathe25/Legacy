@@ -34,6 +34,7 @@ fn runtime(expiry: u64) -> Runtime {
                         item: None,
                         good: 1,
                         quantity: 2,
+                        freshness: Default::default(),
                         expires_at: Some(expiry),
                     }],
                 )
@@ -135,6 +136,7 @@ fn interval_meal_receipts_match_when_orders_differ() {
                 item: None,
                 good: 1,
                 quantity: 2,
+                freshness: Default::default(),
                 expires_at: None,
             }],
         )
@@ -189,6 +191,7 @@ fn duplicate_meals_and_effect_tick_overflow_are_rejected() {
             item: None,
             good: 1,
             quantity: 2,
+            freshness: Default::default(),
             expires_at: None,
         }],
     )
@@ -220,6 +223,7 @@ fn many_dated_meals_produce_the_same_personal_effects_on_one_and_four_workers() 
                             item: None,
                             good: 1,
                             quantity: 2,
+                            freshness: Default::default(),
                             expires_at: Some(if person % 2 == 0 { 1 } else { 3 }),
                         }],
                     )
