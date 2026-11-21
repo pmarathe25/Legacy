@@ -1661,6 +1661,32 @@ fn scenario_with_options_inner(
     if let Some(seed) = seed {
         scenario.seed = seed;
     }
+    if interval_features && let Some(campaign) = &mut scenario.campaign {
+        let guardians =
+            campaign.embody_opening_guardians(scenario.tick_millis, scenario.rules.max_health)?;
+        if let Some(highest) = guardians.iter().map(|row| row.id).max()
+            && let Some(family) = &mut scenario.family
+        {
+            family.next_id = family
+                .next_id
+                .max(highest.checked_add(1).ok_or("guardian identity overflow")?);
+        }
+        scenario
+            .people
+            .extend(guardians.into_iter().map(|row| Resident {
+                id: row.id,
+                region: row.region.expect("opening guardians have a region"),
+                health: row.health,
+                hunger: row.hunger,
+                immortal: row.immortal,
+                willing_to_work: row.willing_to_work,
+                seek_meals: row.seek_meals,
+                controlled: row.controlled,
+                recipe: None,
+                goods: BTreeMap::new(),
+                items: Vec::new(),
+            }));
+    }
     let mut regions = HashSet::new();
     if scenario
         .regions
