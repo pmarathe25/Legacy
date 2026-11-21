@@ -667,6 +667,10 @@ pub enum CoreRunEvent {
         at_millis: u128,
         lots: Vec<game_lots::Spoilage>,
     },
+    StorageTemperature {
+        at_millis: u128,
+        celsius: i16,
+    },
     Maturation {
         at_millis: u128,
         events: Vec<game_lot_runtime::MaturationEvent>,
@@ -1086,6 +1090,12 @@ impl CoreHost {
             let previous = prepared.take();
             let offset = self.core.elapsed_millis().expect("active interval");
             if offset == quantum {
+                if let Some(celsius) = attempt!('run, self.publish_storage_temperature()) {
+                    run.events.push(CoreRunEvent::StorageTemperature {
+                        at_millis: self.core.simulated_millis(),
+                        celsius,
+                    });
+                }
                 if self.core.physical.elapsed_expiry_time().is_some()
                     && let Some(events) = attempt!('run, self.publish_early_work())
                 {
@@ -1127,6 +1137,15 @@ impl CoreHost {
             let decision_due = decision == Some(u128::from(offset));
             if deadline.after_millis == 0 {
                 let mut handled = false;
+                if deadline.storage_temperature
+                    && let Some(celsius) = attempt!('run, self.publish_storage_temperature())
+                {
+                    run.events.push(CoreRunEvent::StorageTemperature {
+                        at_millis: self.core.simulated_millis(),
+                        celsius,
+                    });
+                    handled = true;
+                }
                 if deadline.wounds {
                     let people = self.recover_due_wounds();
                     if !people.is_empty() {

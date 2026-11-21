@@ -47,6 +47,7 @@ mod site_lifecycle;
 mod sites;
 mod skills;
 mod social;
+mod storage;
 mod tactical;
 mod tactical_reinforcements;
 mod tactical_sites;
@@ -1166,6 +1167,22 @@ impl CoreHost {
                 })?;
             }
             crate::environment::validate(environment.as_ref(), &view, &goods)?;
+            let now = core.simulated_millis();
+            if let Some(owner) = &environment
+                && let Some(active) = owner.seasonal_storage_at(now)
+            {
+                let stored = core
+                    .physical
+                    .ambient_storage_celsius()
+                    .ok_or("seasonal storage requires an elapsed storage climate")?;
+                if stored != active
+                    && (now == 0 || owner.seasonal_storage_at(now - 1) != Some(stored))
+                {
+                    return Err(
+                        "stored ambient temperature disagrees with the elapsed season".into(),
+                    );
+                }
+            }
         }
         if let Some(owner) = &gathering {
             if owner.elapsed_renewal
@@ -1769,6 +1786,7 @@ impl CoreHost {
         let care = self.next_elapsed_care();
         let fauna = self.next_fauna_lifecycle();
         let social = self.next_social_encounter();
+        let storage_temperature = self.next_storage_temperature();
         let fear_relaxation = self.next_fear_relaxation();
         let first = [
             recovery,
@@ -1787,6 +1805,7 @@ impl CoreHost {
             care,
             fauna,
             social,
+            storage_temperature,
             fear_relaxation,
         ]
         .into_iter()
@@ -1817,6 +1836,7 @@ impl CoreHost {
                     care: care == Some(after_millis),
                     fauna: fauna == Some(after_millis),
                     social: social == Some(after_millis),
+                    storage_temperature: storage_temperature == Some(after_millis),
                     fear_relaxation: fear_relaxation == Some(after_millis),
                     recovery: recovery == Some(after_millis),
                     exposure: exposure == Some(after_millis),
@@ -1838,6 +1858,7 @@ impl CoreHost {
                 deadline.care = care == Some(after_millis);
                 deadline.fauna = fauna == Some(after_millis);
                 deadline.social = social == Some(after_millis);
+                deadline.storage_temperature = storage_temperature == Some(after_millis);
                 deadline.fear_relaxation = fear_relaxation == Some(after_millis);
             }
         }

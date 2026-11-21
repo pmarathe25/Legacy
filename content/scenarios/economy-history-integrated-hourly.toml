@@ -1967,6 +1967,7 @@ shelter_good = "reed-shelter-kit"
 [[environment.seasons]]
 name = "growing season"
 duration = 5840
+storage_celsius = 18
 food_growth_per_thousand = 1000
 exposure_per_thousand = 1000
 planting_allowed = true
@@ -1975,6 +1976,7 @@ harvest_allowed = true
 [[environment.seasons]]
 name = "cold season"
 duration = 2920
+storage_celsius = 6
 food_growth_per_thousand = 500
 exposure_per_thousand = 1000
 planting_allowed = false

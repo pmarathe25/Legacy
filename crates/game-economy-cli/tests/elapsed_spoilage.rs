@@ -184,3 +184,116 @@ fn simulate(
             (receipts, bread)
         })
 }
+
+#[test]
+fn seasonal_storage_consumes_exact_shelf_life_without_changing_protected_stock() {
+    let simulate = |workers, quantum: u64, parts: &[u64]| {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let path = std::env::temp_dir().join(format!(
+            "legacy-seasonal-spoilage-{}-{workers}-{quantum}.toml",
+            std::process::id()
+        ));
+        let scenario = SCENARIO
+            .replace("QUANTUM", &quantum.to_string())
+            .replace("[rules]", r#"
+[storage_climate]
+ambient_celsius = 20
+places = [{ place = { kind = "person", id = 1 }, celsius = 20 }]
+aging_rates = [{ from_celsius = -50, per_thousand = 500 }, { from_celsius = 12, per_thousand = 1000 }]
+
+[rules]"#);
+        std::fs::write(
+            &path,
+            format!(
+                "{scenario}\n{}",
+                r#"
+goods = { bread = 3 }
+
+[environment]
+regions = []
+season_unit_millis = 86400000
+
+[[environment.seasons]]
+name = "warm"
+duration = 2
+food_growth_per_thousand = 1000
+exposure_per_thousand = 1000
+storage_celsius = 20
+
+[[environment.seasons]]
+name = "cold"
+duration = 20
+food_growth_per_thousand = 1000
+exposure_per_thousand = 1000
+storage_celsius = 6
+"#
+            ),
+        )
+        .unwrap();
+        let opening = game_economy_cli::core_scenario(&path, &root.join("content"));
+        std::fs::remove_file(path).unwrap();
+        let mut host = opening.unwrap();
+        let bread = host
+            .snapshot()
+            .core
+            .physical
+            .goods
+            .iter()
+            .find(|row| row.name == "bread")
+            .unwrap()
+            .id;
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut temperatures = Vec::new();
+                let mut spoiled = Vec::new();
+                for &part in parts {
+                    let run = host.advance_continuous(part, &[]).unwrap();
+                    assert_eq!(run.failure, None);
+                    assert_eq!(run.elapsed_millis, part);
+                    for event in run.events {
+                        match event {
+                            CoreRunEvent::StorageTemperature { at_millis, celsius } => {
+                                temperatures.push((at_millis, celsius));
+                            }
+                            CoreRunEvent::Spoilage { at_millis, lots } => {
+                                spoiled.extend(lots.into_iter().filter_map(|lot| {
+                                    (lot.good == bread).then_some((
+                                        at_millis,
+                                        lot.place,
+                                        lot.quantity,
+                                    ))
+                                }));
+                            }
+                            _ => {}
+                        }
+                    }
+                    let saved = serde_json::to_string(&host.snapshot()).unwrap();
+                    host = CoreHost::resume(serde_json::from_str(&saved).unwrap()).unwrap();
+                }
+                (temperatures, spoiled, bread)
+            })
+    };
+    let whole = simulate(1, 7 * DAY, &[8 * DAY]);
+    assert_eq!(
+        whole,
+        simulate(4, 2 * DAY, &[DAY, DAY - 1, 1, 3 * DAY, 3 * DAY])
+    );
+    assert_eq!(whole.0, [(u128::from(2 * DAY), 6)]);
+    assert_eq!(
+        whole.1,
+        [
+            (u128::from(5 * DAY), Place::Person(1), 3),
+            (
+                u128::from(8 * DAY),
+                Place::Stock {
+                    region: 1,
+                    good: whole.2
+                },
+                7
+            ),
+        ],
+    );
+}
