@@ -112,6 +112,13 @@ uses the carried materials when it starts, and leaves reusable instruments in
 custody. The [pastime scenario](../../content/scenarios/economy-pastimes.toml)
 includes song composition, instrument practice, and painting.
 
+With a ready personal itinerary, `trip meet GROUP MINIMUM WAIT_MILLISECONDS`
+chooses an appointment for the first leg. The character waits for their
+minimum number of nearby travelers on that appointment and route. After
+the wait expires they can depart on their next review even if fewer travel.
+Use `trip meet off` to clear the appointment or `trip go` to attempt the
+leg yourself. Each traveler can separately change their plans.
+
 `gather NODE` takes one yield into personal custody if stock and carrying space
 permit. For an engineering scenario, `look` lists carried items and apparatus.
 `assemble 7 1001:1:0:1000 1002:2:1001:1000` connects item 1002 to item

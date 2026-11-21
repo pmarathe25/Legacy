@@ -53,7 +53,7 @@ fn command(host: &mut CoreHost, person: u64, words: &[&str]) -> Result<bool, Str
     match words {
         [] => {}
         ["help"] => println!(
-            "look | wait MILLISECONDS | move REGION | walk stock|store ID | pause-walk | resume-walk | trip REGION VISIT_MILLISECONDS [food] | trip go|survey|back|cancel | trip leave-in MILLISECONDS | fight PERSON | join-fight BENEFICIARY OPPONENT | tactic wait|defend|retreat | tactic attack PERSON | tactic attack-site SITE | tactic move X Y | confine PERSON SITE | guard SITE | release PERSON | escape | build BLUEPRINT | demolish SITE | salvage SITE GOOD QUANTITY | gather NODE | cultivate FIELD [CARRIED_SEED_BATCH] | amend FIELD | water FIELD QUANTITY | pastime ACTIVITY | pastime stop | assemble APPARATUS PART... | mount APPARATUS STORE | unmount APPARATUS STORE | experiment APPARATUS OUTPUT FORCE DISTANCE LOAD | promise PERSON GOOD QUANTITY DUE_IN_MILLISECONDS | respond PROMISE accept|decline|withdraw | deliver PROMISE QUANTITY | eat GOOD | treat GOOD | wear GOOD | unwear | work RECIPE UNITS | stop JOB | stop-assist | rest on|off | word place|person|object ID SOUNDS | form SOUNDS MARKS | inscribe SOUNDS | read PAGE | recall PAGE | save PATH | load PATH | quit (SOUNDS and MARKS are comma-separated numbers)"
+            "look | wait MILLISECONDS | move REGION | walk stock|store ID | pause-walk | resume-walk | trip REGION VISIT_MILLISECONDS [food] | trip go|survey|back|cancel | trip leave-in MILLISECONDS | trip meet GROUP MINIMUM WAIT_MILLISECONDS | trip meet off | fight PERSON | join-fight BENEFICIARY OPPONENT | tactic wait|defend|retreat | tactic attack PERSON | tactic attack-site SITE | tactic move X Y | confine PERSON SITE | guard SITE | release PERSON | escape | build BLUEPRINT | demolish SITE | salvage SITE GOOD QUANTITY | gather NODE | cultivate FIELD [CARRIED_SEED_BATCH] | amend FIELD | water FIELD QUANTITY | pastime ACTIVITY | pastime stop | assemble APPARATUS PART... | mount APPARATUS STORE | unmount APPARATUS STORE | experiment APPARATUS OUTPUT FORCE DISTANCE LOAD | promise PERSON GOOD QUANTITY DUE_IN_MILLISECONDS | respond PROMISE accept|decline|withdraw | deliver PROMISE QUANTITY | eat GOOD | treat GOOD | wear GOOD | unwear | work RECIPE UNITS | stop JOB | stop-assist | rest on|off | word place|person|object ID SOUNDS | form SOUNDS MARKS | inscribe SOUNDS | read PAGE | recall PAGE | save PATH | load PATH | quit (SOUNDS and MARKS are comma-separated numbers)"
         ),
         ["quit"] | ["exit"] => return Ok(false),
         ["look"] => {
@@ -168,6 +168,10 @@ fn command(host: &mut CoreHost, person: u64, words: &[&str]) -> Result<bool, Str
                     "trip={} destination={} stage={:?} objective_met={}",
                     plan.id, plan.destination, plan.stage, plan.objective_met
                 );
+                if let Some(rendezvous) = plan.rendezvous {
+                    println!("rendezvous={} minimum_companions={} wait_until_millis={}",
+                        rendezvous.group, rendezvous.minimum_companions, rendezvous.wait_until_millis);
+                }
             }
             if let Some(tactics) = &view.tactics {
                 println!(
@@ -292,6 +296,17 @@ fn command(host: &mut CoreHost, person: u64, words: &[&str]) -> Result<bool, Str
             let delay = delay.parse().map_err(|_| "invalid departure delay")?;
             let event = Player::new(host, person)?.schedule_expedition_departure(delay)?;
             println!("trip={} event={:?}", event.itinerary, event.kind);
+        }
+        ["trip", "meet", "off"] => {
+            let event = Player::new(host, person)?.set_expedition_rendezvous(None)?;
+            println!("rendezvous_cleared_at_millis={}", event.at_millis);
+        }
+        ["trip", "meet", group, minimum, wait] => {
+            let minimum = minimum.parse::<u32>().map_err(|_| "invalid minimum companions")?;
+            let event = Player::new(host, person)?.set_expedition_rendezvous(
+                Some((number(group)?, minimum, number(wait)?)),
+            )?;
+            println!("rendezvous_set_at_millis={}", event.at_millis);
         }
         ["trip", "go" | "survey" | "back" | "cancel"] => {
             let mut player = Player::new(host, person)?;

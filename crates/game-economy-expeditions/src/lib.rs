@@ -2,6 +2,7 @@
 pub mod acquisition;
 pub mod elapsed;
 pub mod elapsed_invitations;
+pub mod rendezvous;
 use game_economy_person::{
     Person,
     travel::{Departure, Travel},

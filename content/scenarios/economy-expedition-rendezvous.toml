@@ -1,0 +1,99 @@
+# Every traveler chooses their own minimum company and how long to wait.
+seed = 21
+tick_millis = 3001
+decision_period_millis = 1000
+travel_unit_millis = 1000
+expedition_visit_unit_millis = 1000
+stock_capacity = 100
+food_relief_divisor = 20
+
+[rules]
+hunger_per_tick = 0
+meal_threshold = 5
+starvation_threshold = 50
+starvation_damage = 1
+max_health = 100
+carrying_capacity = 10
+max_work_hunger = 20
+
+[[regions]]
+id = 1
+stock = {}
+
+[[regions]]
+id = 2
+stock = {}
+
+[[routes]]
+source = 1
+destination = 2
+ticks = 1
+
+[[routes]]
+source = 2
+destination = 1
+ticks = 1
+
+[[people]]
+id = 1
+region = 1
+health = 100
+hunger = 0
+willing_to_work = false
+seek_meals = false
+
+[[people]]
+id = 2
+region = 1
+health = 100
+hunger = 0
+willing_to_work = false
+seek_meals = false
+
+[[people]]
+id = 3
+region = 1
+health = 100
+hunger = 0
+willing_to_work = false
+seek_meals = false
+
+[[people]]
+id = 4
+region = 1
+health = 100
+hunger = 0
+willing_to_work = false
+seek_meals = false
+controlled = true
+
+[missions]
+next_id = 5
+entries = [
+    { id = 1, person = 1, origin = 1, destination = 2, visit_ticks = 10, phase = "ready" },
+    { id = 2, person = 2, origin = 1, destination = 2, visit_ticks = 10, phase = "ready" },
+    { id = 3, person = 3, origin = 1, destination = 2, visit_ticks = 10, phase = "ready" },
+    { id = 4, person = 4, origin = 1, destination = 2, visit_ticks = 10, phase = "ready" },
+]
+
+[[expedition_departures]]
+person = 2
+after_millis = 1500
+
+[[expedition_rendezvous]]
+person = 1
+group = 7
+minimum_companions = 1
+wait_millis = 5000
+
+[[expedition_rendezvous]]
+person = 2
+group = 7
+minimum_companions = 0
+wait_millis = 0
+
+[[expedition_rendezvous]]
+person = 3
+group = 7
+minimum_companions = 5
+wait_millis = 2500
