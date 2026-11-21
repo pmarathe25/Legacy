@@ -1118,7 +1118,9 @@ impl CoreHost {
                                 .then_some(MechanicalPolicy {
                                     id: machine.id,
                                     experiment,
-                                    value: 1i64.saturating_add(reaction),
+                                    value: 1i64.saturating_add(reaction).saturating_add(
+                                        memory.and_then(|row| row.inquiry.as_ref()).map_or(0, |study| study.appeal(&experiment)),
+                                    ),
                                     willing: true,
                                 })
                         })
@@ -1342,7 +1344,15 @@ impl CoreHost {
                     .is_some_and(|person| !person.controlled)
                     && owner.eligible(self, &policy.experiment, occupied, &active)
             })
-            .copied()
+            .map(|policy| {
+                let mut policy = *policy;
+                if let Some(study) = indexed(&owner.memories, policy.experiment.actor, |row| row.person)
+                    .and_then(|row| row.inquiry.as_ref())
+                {
+                    policy.value = policy.value.saturating_add(study.appeal(&policy.experiment));
+                }
+                policy
+            })
             .collect())
     }
 

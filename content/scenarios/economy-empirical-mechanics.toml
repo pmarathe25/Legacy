@@ -55,7 +55,24 @@ max_distance = 200
 person = 1
 capacity = 8
 retain = true
-inquiry = { activity = 1, trial_limit = 8, capacity = 4 }
+inquiry = { activity = 1, trial_limit = 8, capacity = 4, assessment = { likely_moved = 6, likely_stalled = -3 } }
+
+[[mechanics.policies]]
+id = 1
+willing = true
+value = 4
+experiment = { actor = 1, apparatus = 1, output_part = 1002, input_force = 100, input_distance = 100, load_force = 20 }
+
+[[mechanics.policies]]
+id = 2
+willing = true
+value = 5
+experiment = { actor = 1, apparatus = 1, output_part = 1002, input_force = 100, input_distance = 100, load_force = 500 }
+
+[[personal_choices]]
+id = 1
+idle = 0
+preferences = [{ domain = 6, enabled = true, bias = 0 }]
 
 [pastimes]
 catalogs = ["pastimes/daily.toml"]

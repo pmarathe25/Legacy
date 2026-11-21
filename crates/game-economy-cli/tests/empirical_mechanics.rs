@@ -11,6 +11,50 @@ const TRIAL: MechanicalExperiment = MechanicalExperiment {
     load_force: 20,
 };
 
+#[test]
+fn private_findings_change_trial_choice_according_to_the_persons_own_assessment() {
+    let mut host = scene(900000);
+    host.experiment_controlled_apparatus(TRIAL).unwrap();
+    assert_eq!(host.advance_continuous(2000, &[]).unwrap().failure, None);
+    host.experiment_controlled_apparatus(MechanicalExperiment {
+        load_force: 500,
+        ..TRIAL
+    })
+    .unwrap();
+    assert!(Player::new(&mut host, 1).unwrap().start_pastime(1).unwrap());
+    assert_eq!(host.advance_continuous(60001, &[]).unwrap().failure, None);
+    let mut saved = host.snapshot();
+    saved.core.people[0].controlled = false;
+    let choose = |snapshot| {
+        let mut host = CoreHost::resume(snapshot).unwrap();
+        let run = host.advance_continuous(838001, &[]).unwrap();
+        assert_eq!(run.failure, None);
+        let chosen: Vec<_> = run
+            .events
+            .into_iter()
+            .filter_map(|event| match event {
+                CoreRunEvent::MechanicalExperiments(rows) => Some(rows),
+                _ => None,
+            })
+            .flatten()
+            .map(|row| row.load_force)
+            .collect();
+        assert_eq!(chosen.len(), 1);
+        chosen[0]
+    };
+    assert_eq!(choose(saved.clone()), 20);
+    let private = saved.mechanics.as_mut().unwrap().memories[0]
+        .inquiry
+        .as_mut()
+        .unwrap();
+    private.assessment = Some(game_mechanics::inquiry::Assessment {
+        likely_moved: -3,
+        likely_stalled: 6,
+        ..Default::default()
+    });
+    assert_eq!(choose(saved), 500);
+}
+
 fn scene(quantum: u64) -> CoreHost {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let text =
