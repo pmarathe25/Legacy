@@ -610,6 +610,27 @@ struct EnvironmentConfig {
     season_unit_millis: Option<u64>,
     #[serde(default)]
     seasons: Vec<game_economy::Season>,
+    #[serde(default)]
+    clothing: Vec<ClothingConfig>,
+    #[serde(default)]
+    clothing_choices: Vec<ClothingChoiceConfig>,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ClothingConfig {
+    good: GoodReference,
+    insulation: u32,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ClothingChoiceConfig {
+    person: u64,
+    good: GoodReference,
+    protection_weight: i32,
+    #[serde(default)]
+    hunger_weight: i32,
+    #[serde(default)]
+    effort: i32,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -627,6 +648,18 @@ enum GoodReference {
     Name(String),
     Id(u32),
 }
+impl GoodReference {
+    fn resolve(self, goods: &BTreeMap<&str, u32>, role: &str) -> Result<u32, String> {
+        match self {
+            Self::Id(id) => Ok(id),
+            Self::Name(name) => goods
+                .get(name.as_str())
+                .copied()
+                .ok_or_else(|| format!("unknown {role} good {name}")),
+        }
+    }
+}
+
 fn resolve_environment(
     config: EnvironmentConfig,
     goods: &BTreeMap<&str, u32>,
@@ -637,13 +670,7 @@ fn resolve_environment(
         .map(|hazard| {
             let shelter_good = hazard
                 .shelter_good
-                .map(|reference| match reference {
-                    GoodReference::Id(id) => Ok(id),
-                    GoodReference::Name(name) => goods
-                        .get(name.as_str())
-                        .copied()
-                        .ok_or_else(|| format!("unknown shelter good {name}")),
-                })
+                .map(|reference| reference.resolve(goods, "shelter"))
                 .transpose()?;
             Ok(game_economy::Hazard {
                 region: hazard.region,
@@ -654,7 +681,32 @@ fn resolve_environment(
             })
         })
         .collect::<Result<Vec<_>, String>>()?;
+    let clothing = config
+        .clothing
+        .into_iter()
+        .map(|row| {
+            Ok(game_economy::Clothing {
+                good: row.good.resolve(goods, "clothing")?,
+                insulation: row.insulation,
+            })
+        })
+        .collect::<Result<_, String>>()?;
+    let clothing_choices = config
+        .clothing_choices
+        .into_iter()
+        .map(|row| {
+            Ok(game_economy::ClothingChoice {
+                person: row.person,
+                good: row.good.resolve(goods, "clothing")?,
+                protection_weight: row.protection_weight,
+                hunger_weight: row.hunger_weight,
+                effort: row.effort,
+            })
+        })
+        .collect::<Result<_, String>>()?;
     Ok(game_economy::Environment {
+        clothing,
+        clothing_choices,
         regions,
         exposure_period_millis: config.exposure_period_millis,
         season_unit_millis: config.season_unit_millis,

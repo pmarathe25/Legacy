@@ -117,6 +117,12 @@ pub fn apply(
             0
         });
         let damage = season.map_or(damage, |s| s.exposure(damage));
-        person.health = person.health.saturating_sub(damage);
+        let insulation = environment.choose_clothing(person.id, person.hunger, damage, |good| {
+            view.container(Place::Person(person.id))
+                .is_some_and(|holder| holder.quantity(good) > 0)
+        });
+        person.health = person
+            .health
+            .saturating_sub(damage.saturating_sub(insulation));
     });
 }

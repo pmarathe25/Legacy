@@ -14,6 +14,10 @@ pub struct Environment {
     /// Repeating calendar; an empty list retains constant conditions.
     #[serde(default)]
     pub seasons: Vec<Season>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub clothing: Vec<Clothing>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub clothing_choices: Vec<ClothingChoice>,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -29,6 +33,27 @@ pub struct Season {
     #[serde(default = "allowed")]
     pub harvest_allowed: bool,
 }
+/// An actual carried good can provide this much protection when worn.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Clothing {
+    pub good: u32,
+    pub insulation: u32,
+}
+
+/// A person evaluates one garment using their own situation and inclinations.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ClothingChoice {
+    pub person: u64,
+    pub good: u32,
+    pub protection_weight: i32,
+    #[serde(default)]
+    pub hunger_weight: i32,
+    #[serde(default)]
+    pub effort: i32,
+}
+
 fn allowed() -> bool {
     true
 }
@@ -44,6 +69,74 @@ pub struct Hazard {
     pub shelter_good: Option<u32>,
 }
 impl Environment {
+    pub fn choose_clothing(
+        &self,
+        person: u64,
+        hunger: u32,
+        damage: u32,
+        possesses: impl Fn(u32) -> bool,
+    ) -> u32 {
+        if damage == 0 || self.clothing_choices.is_empty() {
+            return 0;
+        }
+        let start = self
+            .clothing_choices
+            .partition_point(|row| row.person < person);
+        self.clothing_choices[start..]
+            .iter()
+            .take_while(|row| row.person == person)
+            .filter_map(|choice| {
+                let i = self
+                    .clothing
+                    .binary_search_by_key(&choice.good, |row| row.good)
+                    .ok()?;
+                let insulation = self.clothing[i].insulation.min(damage);
+                let value = i128::from(choice.protection_weight) * i128::from(insulation)
+                    + i128::from(choice.hunger_weight) * i128::from(hunger)
+                    - i128::from(choice.effort);
+                (value > 0 && possesses(choice.good)).then_some((
+                    value,
+                    std::cmp::Reverse(choice.good),
+                    insulation,
+                ))
+            })
+            .max()
+            .map_or(0, |(_, _, insulation)| insulation)
+    }
+
+    pub fn normalize_clothing(
+        &mut self,
+        goods: &HashSet<u32>,
+        person_exists: impl Fn(u64) -> bool,
+    ) -> Result<(), String> {
+        self.clothing.sort_unstable_by_key(|row| row.good);
+        self.clothing_choices
+            .sort_unstable_by_key(|row| (row.person, row.good));
+        if self
+            .clothing
+            .windows(2)
+            .any(|pair| pair[0].good == pair[1].good)
+            || self
+                .clothing
+                .iter()
+                .any(|row| row.insulation == 0 || !goods.contains(&row.good))
+            || self
+                .clothing_choices
+                .windows(2)
+                .any(|pair| (pair[0].person, pair[0].good) == (pair[1].person, pair[1].good))
+            || self.clothing_choices.iter().any(|row| {
+                !person_exists(row.person)
+                    || self
+                        .clothing
+                        .binary_search_by_key(&row.good, |item| item.good)
+                        .is_err()
+            })
+        {
+            return Err("invalid clothing definition or personal choice".into());
+        }
+        Ok(())
+    }
+
     pub fn validate(&self, regions: &HashSet<u64>) -> Result<(), String> {
         if self.season_unit_millis == Some(0) {
             return Err("season duration unit must be positive".into());

@@ -7432,6 +7432,8 @@ fn boundary_cultivation_uses_real_seeds_grows_and_harvests_after_reload() {
                     harvest_allowed: harvest,
                 };
                 seasonal.environment = Some(game_environment::Environment {
+                    clothing: vec![],
+                    clothing_choices: vec![],
                     exposure_period_millis: None,
                     season_unit_millis: None,
                     regions: vec![],
@@ -7465,6 +7467,8 @@ fn boundary_cultivation_uses_real_seeds_grows_and_harvests_after_reload() {
                 exposure.core.people.truncate(2);
                 exposure.agriculture = None;
                 exposure.environment = Some(game_environment::Environment {
+                    clothing: vec![],
+                    clothing_choices: vec![],
                     exposure_period_millis: None,
                     season_unit_millis: None,
                     regions: vec![game_environment::Hazard {
@@ -8797,6 +8801,8 @@ fn core_host_cultivation_benchmark() {
             }
         }),
         environment: exposure.then(|| game_environment::Environment {
+            clothing: vec![],
+            clothing_choices: vec![],
             exposure_period_millis: None,
             season_unit_millis: None,
             regions: vec![game_environment::Hazard {

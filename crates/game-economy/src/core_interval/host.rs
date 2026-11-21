@@ -628,7 +628,7 @@ impl CoreHost {
             taking,
             agriculture,
             irrigation,
-            environment,
+            mut environment,
             recovery,
             mut purpose,
             gathering,
@@ -1137,6 +1137,11 @@ impl CoreHost {
                 .map(|good| good.id)
                 .collect();
             let view = core.physical.view(core.physical.tick())?;
+            if let Some(owner) = &mut environment {
+                owner.normalize_clothing(&goods, |id| {
+                    core.people.binary_search_by_key(&id, |row| row.id).is_ok()
+                })?;
+            }
             crate::environment::validate(environment.as_ref(), &view, &goods)?;
         }
         if let Some(owner) = &gathering {

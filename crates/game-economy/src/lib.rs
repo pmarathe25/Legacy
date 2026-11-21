@@ -164,7 +164,7 @@ pub use game_economy_agriculture::requests as cultivation_requests;
 pub use game_economy_agriculture::{
     Agriculture, Crop, Field, Phase as CropPhase, Policy as FarmPolicy,
 };
-pub use game_environment::{Environment, Hazard, Season};
+pub use game_environment::{Clothing, ClothingChoice, Environment, Hazard, Season};
 pub use game_nutrition::Nutrition;
 pub use state::{Agreements, Immortal, Person, Rules, State};
 pub use writing::{
