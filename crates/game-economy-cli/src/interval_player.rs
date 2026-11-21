@@ -53,7 +53,7 @@ fn command(host: &mut CoreHost, person: u64, words: &[&str]) -> Result<bool, Str
     match words {
         [] => {}
         ["help"] => println!(
-            "look | wait MILLISECONDS | move REGION | walk stock|store ID | pause-walk | resume-walk | trip REGION VISIT_MILLISECONDS [food] | trip go|survey|back|cancel | trip leave-in MILLISECONDS | trip meet GROUP MINIMUM WAIT_MILLISECONDS | trip meet off | fight PERSON | join-fight BENEFICIARY OPPONENT | tactic wait|defend|retreat | tactic attack PERSON | tactic attack-site SITE | tactic move X Y | confine PERSON SITE | guard SITE | release PERSON | escape | build BLUEPRINT | demolish SITE | salvage SITE GOOD QUANTITY | gather NODE | cultivate FIELD [CARRIED_SEED_BATCH] | amend FIELD | water FIELD QUANTITY | pastime ACTIVITY | pastime stop | memories [PERSON] | reflect-memory PERSON | reflect-memory activity ACTIVITY | assemble APPARATUS PART... | mount APPARATUS STORE | unmount APPARATUS STORE | experiment APPARATUS OUTPUT FORCE DISTANCE LOAD | promise PERSON GOOD QUANTITY DUE_IN_MILLISECONDS | respond PROMISE accept|decline|withdraw | deliver PROMISE QUANTITY | eat GOOD | treat GOOD | wear GOOD | unwear | work RECIPE UNITS | stop JOB | stop-assist | rest on|off | word place|person|object ID SOUNDS | form SOUNDS MARKS | inscribe SOUNDS | read PAGE | recall PAGE | save PATH | load PATH | quit (SOUNDS and MARKS are comma-separated numbers)"
+            "look | wait MILLISECONDS | move REGION | walk stock|store ID | pause-walk | resume-walk | trip REGION VISIT_MILLISECONDS [food] | trip go|survey|back|cancel | trip leave-in MILLISECONDS | trip meet GROUP MINIMUM WAIT_MILLISECONDS | trip meet off | fight PERSON | join-fight BENEFICIARY OPPONENT | tactic wait|defend|retreat | tactic attack PERSON | tactic attack-site SITE | tactic move X Y | confine PERSON SITE | guard SITE | release PERSON | escape | build BLUEPRINT | demolish SITE | salvage SITE GOOD QUANTITY | gather NODE | cultivate FIELD [CARRIED_SEED_BATCH] | amend FIELD | water FIELD QUANTITY | pastime ACTIVITY | pastime stop | memories [PERSON] | reflect-memory PERSON | reflect-memory activity ACTIVITY | findings | assemble APPARATUS PART... | mount APPARATUS STORE | unmount APPARATUS STORE | experiment APPARATUS OUTPUT FORCE DISTANCE LOAD | promise PERSON GOOD QUANTITY DUE_IN_MILLISECONDS | respond PROMISE accept|decline|withdraw | deliver PROMISE QUANTITY | eat GOOD | treat GOOD | wear GOOD | unwear | work RECIPE UNITS | stop JOB | stop-assist | rest on|off | word place|person|object ID SOUNDS | form SOUNDS MARKS | inscribe SOUNDS | read PAGE | recall PAGE | save PATH | load PATH | quit (SOUNDS and MARKS are comma-separated numbers)"
         ),
         ["quit"] | ["exit"] => return Ok(false),
         ["look"] => {
@@ -552,6 +552,20 @@ fn command(host: &mut CoreHost, person: u64, words: &[&str]) -> Result<bool, Str
                 game_economy::core_interval::EpisodeCue::CreativePractice { activity },
             )?;
             println!("memory_reinforced={reflected}");
+        }
+        ["findings"] => {
+            let player = Player::new(host, person)?;
+            let comparisons = player.mechanical_comparisons()?;
+            if comparisons.is_empty() {
+                println!("No retained trial comparisons.");
+            }
+            for row in comparisons {
+                let status = if row.contradicted() { "contradicted" } else { "provisional" };
+                println!("apparatus={} output={} input_force={} input_distance={} largest_load_moved={} smallest_load_stalled={} distinct_moved_loads={} distinct_stalled_loads={} status={status}",
+                    row.conditions.apparatus, row.conditions.output_part, row.conditions.input_force,
+                    row.conditions.input_distance, row.largest_load_moved, row.smallest_load_stalled,
+                    row.distinct_moved_loads, row.distinct_stalled_loads);
+            }
         }
         ["amend", field] => {
             let field = number(field)?;

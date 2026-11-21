@@ -2,6 +2,12 @@
 use super::*;
 use game_pastimes::{Activity, Event, Outcome, Session};
 
+#[derive(Default)]
+pub(super) struct SettledPastimes {
+    pub activities: Vec<Event>,
+    pub conclusions: Vec<MechanicalConclusion>,
+}
+
 impl CoreHost {
     pub(super) fn next_pastime_finish(&self) -> Option<u64> {
         self.pastimes
@@ -186,12 +192,12 @@ impl CoreHost {
             .start(accepted))
     }
 
-    pub(super) fn settle_pastimes(&mut self) -> Vec<Event> {
+    pub(super) fn settle_pastimes(&mut self) -> SettledPastimes {
         if self.pastime_people().next().is_none() {
-            return Vec::new();
+            return SettledPastimes::default();
         }
         let Some(mut owner) = self.pastimes.take() else {
-            return Vec::new();
+            return SettledPastimes::default();
         };
         let events = owner.settle(self.core.simulated_millis(), |session, activity| {
             self.core.person(session.person).is_some_and(|person| {
@@ -218,6 +224,7 @@ impl CoreHost {
                 purpose.owner.appraise(&experiences);
             }
         }
-        events
+        let conclusions = self.complete_mechanical_reflection(&events);
+        SettledPastimes { activities: events, conclusions }
     }
 }

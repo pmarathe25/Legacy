@@ -11,7 +11,7 @@ pub(super) struct ElapsedProgress {
     pub fauna: Option<CoreFaunaTransitions>,
     pub wild_plants: Option<game_economy_agriculture::wild_plants::Cycle>,
     pub agreement_expiries: Vec<game_agreements::Event>,
-    pub pastimes: Vec<game_pastimes::Event>,
+    pub pastimes: super::pastimes::SettledPastimes,
     pub disease_events: Vec<game_disease::Event>,
     pub local_arrivals: Vec<game_economy_local_transport::walking::Event>,
 }

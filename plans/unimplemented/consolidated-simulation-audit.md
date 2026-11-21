@@ -31,6 +31,10 @@ to track rates, deadlines, and behavior under different advance sizes. The
   it. Simultaneous trials arbitrate per apparatus, use the actual decision
   instant, and publish only changed apparatus. Broader parts selection and
   learning remain open.
+- A person can spend an elapsed interval reflecting on their own retained
+  trials. Comparing load outcomes holds measured apparatus, output, input
+  force, and input travel constant. Results are provisional and contradictory
+  evidence stays visible. Interrupted reflection produces no finding.
 - Wildlife selects local mates through personal attraction and inherited
   desire. An authored inherited flexibility can give different animals
   different selectivity within one species. The earlier elapsed history lost
