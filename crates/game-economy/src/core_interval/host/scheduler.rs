@@ -764,7 +764,46 @@ pub struct CoreRun {
     /// Earlier events and elapsed time remain committed when an action fails.
     pub failure: Option<String>,
 }
+struct PreparedSegment {
+    offset_millis: u64,
+    work_revision: u64,
+    deadline: PreparedDeadline,
+    activity: Option<super::fatigue::ActivityFrame>,
+}
+
+/// Advance an exclusively borrowed world through successive observation horizons.
+/// Numeric state is current at every observation. Derived preparation is dropped
+/// when the caller releases the borrow to issue a command or change blockers.
+pub struct CoreStepper<'world> {
+    host: &'world mut CoreHost,
+    blocked: &'world [u64],
+    segment: Option<PreparedSegment>,
+}
+
+impl CoreStepper<'_> {
+    pub fn advance(&mut self, requested_millis: u64) -> Result<CoreRun, String> {
+        self.host
+            .advance_continuous_prepared(requested_millis, self.blocked, &mut self.segment)
+    }
+
+    pub fn host(&self) -> &CoreHost {
+        self.host
+    }
+
+    pub fn take_opinion_events(&mut self) -> Vec<game_opinions::Event> {
+        self.host.take_opinion_events()
+    }
+}
+
 impl CoreHost {
+    pub fn stepper<'world>(&'world mut self, blocked: &'world [u64]) -> CoreStepper<'world> {
+        CoreStepper {
+            host: self,
+            blocked,
+            segment: None,
+        }
+    }
+
     pub fn enable_on_site_meals(&mut self) -> Result<(), String> {
         let schedule = self
             .schedule
@@ -951,13 +990,14 @@ impl CoreHost {
             .as_ref()
             .ok_or("no core schedule")?
             .validate_clock(&self.core)?;
-        self.advance_validated_segment(requested_millis, blocked)
+        self.advance_validated_segment(requested_millis, blocked, &mut None)
     }
 
     fn advance_validated_segment(
         &mut self,
         requested_millis: u64,
         external_blocked: &[u64],
+        prepared: &mut Option<PreparedSegment>,
     ) -> Result<CoreRun, String> {
         let start = self.core.elapsed_millis().ok_or("no physical interval")?;
         let quantum = self.core.physical.tick_millis();
@@ -998,6 +1038,7 @@ impl CoreHost {
                     busy
                 });
             let blocked = pending_busy.as_deref().unwrap_or(blocked);
+            let previous = prepared.take();
             let offset = self.core.elapsed_millis().expect("active interval");
             if offset == quantum {
                 if self.core.physical.elapsed_expiry_time().is_some()
@@ -1009,16 +1050,29 @@ impl CoreHost {
                 break;
             }
             let expedition_events = self.expedition_time_events();
-            if !expedition_events.is_empty() {
+            let expedition_events_were_empty = expedition_events.is_empty();
+            if !expedition_events_were_empty {
                 run.events
                     .push(CoreRunEvent::Expeditions(expedition_events));
             }
             let campaign_events = attempt!('run, self.campaign_lifecycle(&[]));
-            if !campaign_events.is_empty() {
+            let campaign_events_were_empty = campaign_events.is_empty();
+            if !campaign_events_were_empty {
                 run.events.push(CoreRunEvent::Campaign(campaign_events));
             }
             attempt!('run, self.sync_work_rates(blocked));
-            let plan = attempt!('run, self.host_deadline(None));
+            let work_revision = self.core.physical.work_revision();
+            let (plan, activity) = match previous {
+                Some(segment)
+                    if segment.offset_millis == offset
+                        && segment.work_revision == work_revision
+                        && expedition_events_were_empty
+                        && campaign_events_were_empty =>
+                {
+                    (segment.deadline, segment.activity)
+                }
+                _ => (attempt!('run, self.host_deadline(None)), None),
+            };
             let deadline = &plan.deadline;
             if deadline.after_millis == 0 {
                 let mut handled = false;
@@ -3366,6 +3420,12 @@ impl CoreHost {
             }
             let spent = offset - start;
             if spent >= requested_millis {
+                *prepared = Some(PreparedSegment {
+                    offset_millis: offset,
+                    work_revision,
+                    deadline: plan,
+                    activity,
+                });
                 break;
             }
             let until_decision = decision.map_or(u64::MAX, |next| {
@@ -3378,9 +3438,28 @@ impl CoreHost {
                 run.failure = Some("core schedule made no progress".into());
                 break;
             }
-            let elapsed =
-                attempt!('run, self.progress_with_activity(step, external_blocked, Some(plan)));
+            let elapsed = attempt!('run, self.progress_with_activity(step, external_blocked, Some(plan), activity));
             let expiry = self.core.physical.take_elapsed_expiry();
+            if !elapsed.interrupted_preparation
+                && elapsed.millis < plan.deadline.after_millis
+                && elapsed.millis < until_decision
+                && elapsed.incapacitations.is_empty()
+                && elapsed.family_events.is_empty()
+                && elapsed.disease_events.is_empty()
+                && elapsed.local_arrivals.is_empty()
+                && elapsed.fauna.is_none()
+                && expiry.spoilage.is_empty()
+                && expiry.maturation.is_empty()
+            {
+                let mut deadline = plan;
+                deadline.deadline.after_millis -= elapsed.millis;
+                *prepared = Some(PreparedSegment {
+                    offset_millis: offset + elapsed.millis,
+                    work_revision: self.core.physical.work_revision(),
+                    deadline,
+                    activity: elapsed.activity,
+                });
+            }
             if !expiry.spoilage.is_empty() {
                 run.events.push(CoreRunEvent::Spoilage {
                     at_millis: self.core.simulated_millis(),
@@ -3437,6 +3516,15 @@ impl CoreHost {
         requested_millis: u64,
         blocked: &[u64],
     ) -> Result<CoreRun, String> {
+        self.advance_continuous_prepared(requested_millis, blocked, &mut None)
+    }
+
+    fn advance_continuous_prepared(
+        &mut self,
+        requested_millis: u64,
+        blocked: &[u64],
+        prepared: &mut Option<PreparedSegment>,
+    ) -> Result<CoreRun, String> {
         if blocked.par_windows(2).any(|rows| rows[0] >= rows[1]) {
             return Err("invalid occupied people".into());
         }
@@ -3447,7 +3535,7 @@ impl CoreHost {
         let mut combined = CoreRun::default();
         loop {
             let remaining = requested_millis - combined.elapsed_millis;
-            let mut segment = self.advance_validated_segment(remaining, blocked)?;
+            let mut segment = self.advance_validated_segment(remaining, blocked, prepared)?;
             combined.elapsed_millis += segment.elapsed_millis;
             combined.events.append(&mut segment.events);
             let Some(decisions) = combined.decisions.checked_add(segment.decisions) else {

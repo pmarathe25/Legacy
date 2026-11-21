@@ -4,13 +4,20 @@ use super::*;
 #[derive(Default)]
 pub(super) struct ElapsedProgress {
     pub millis: u64,
+    pub interrupted_preparation: bool,
+    pub activity: Option<ActivityFrame>,
     pub incapacitations: Vec<scheduler::Incapacitation>,
     pub family_events: Vec<game_economy_family::FamilyEvent>,
     pub fauna: Option<CoreFaunaTransitions>,
     pub disease_events: Vec<game_disease::Event>,
     pub local_arrivals: Vec<game_economy_local_transport::walking::Event>,
 }
-use game_economy_fatigue::TimedActivity;
+use game_economy_fatigue::{ElapsedActivity, TimedActivity};
+
+pub(super) struct ActivityFrame {
+    activity: Vec<ElapsedActivity>,
+    people: std::collections::HashSet<u64>,
+}
 
 struct ElapsedLimits {
     limit: u64,
@@ -256,11 +263,94 @@ impl CoreHost {
         Ok(())
     }
 
+    fn elapsed_activity_frame(
+        &self,
+        resting: &[u64],
+        externally_busy: &[u64],
+    ) -> Result<ActivityFrame, String> {
+        let mut working: Vec<_> = self
+            .core
+            .physical
+            .work_interval()
+            .ok_or("no physical interval")?
+            .rates
+            .par_iter()
+            .map(|&(job, _)| {
+                self.core
+                    .physical
+                    .work()
+                    .binary_search_by_key(&job, |row| row.job.id)
+                    .map(|index| self.core.physical.work()[index].job.worker)
+                    .map_err(|_| "missing activity job".to_string())
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        if let Some(shared) = &self.shared_work {
+            working.par_extend(
+                shared
+                    .sessions
+                    .par_iter()
+                    .map(|session| session.event.person),
+            );
+        }
+        working.par_sort_unstable();
+        working.dedup();
+        let mut traveling: Vec<_> = self.core.travel.as_ref().map_or_else(Vec::new, |travel| {
+            travel
+                .journeys
+                .par_iter()
+                .map(|journey| journey.person)
+                .collect()
+        });
+        traveling.par_extend(self.local_travelers());
+        traveling.par_sort_unstable();
+        let people: std::collections::HashSet<_> = self
+            .core
+            .people
+            .par_iter()
+            .map(|person| person.id)
+            .collect();
+        let activity: Vec<_> = self
+            .core
+            .people
+            .par_iter()
+            .map(|person| {
+                use game_economy_fatigue::Exertion;
+                let work = working.binary_search(&person.id).is_ok();
+                let travel = traveling.binary_search(&person.id).is_ok();
+                if person.health > 0 && work && travel {
+                    return Err("overlapping work and travel activity".to_string());
+                }
+                let exertion = if person.health == 0 {
+                    Exertion::Inactive
+                } else if work {
+                    Exertion::Work
+                } else if travel {
+                    Exertion::Travel
+                } else if person.region.is_none()
+                    || externally_busy.binary_search(&person.id).is_ok()
+                {
+                    Exertion::Other
+                } else if resting.binary_search(&person.id).is_ok() {
+                    Exertion::Rest
+                } else {
+                    Exertion::Idle
+                };
+                Ok(game_economy_fatigue::ElapsedActivity {
+                    id: person.id,
+                    exertion,
+                })
+            })
+            .collect::<Result<Vec<_>, String>>()?;
+
+        Ok(ActivityFrame { activity, people })
+    }
+
     pub(super) fn progress_with_activity(
         &mut self,
         requested: u64,
         externally_busy: &[u64],
         prepared: Option<PreparedDeadline>,
+        mut activity: Option<ActivityFrame>,
     ) -> Result<ElapsedProgress, String> {
         let quantum = self.core.physical.tick_millis();
         let scheduled = prepared.is_some();
@@ -281,81 +371,12 @@ impl CoreHost {
             if consumed == 0 {
                 return Ok(ElapsedProgress::default());
             }
-            let mut working: Vec<_> = self
-                .core
-                .physical
-                .work_interval()
-                .ok_or("no physical interval")?
-                .rates
-                .par_iter()
-                .map(|&(job, _)| {
-                    self.core
-                        .physical
-                        .work()
-                        .binary_search_by_key(&job, |row| row.job.id)
-                        .map(|index| self.core.physical.work()[index].job.worker)
-                        .map_err(|_| "missing activity job".to_string())
-                })
-                .collect::<Result<Vec<_>, _>>()?;
-            if let Some(shared) = &self.shared_work {
-                working.par_extend(
-                    shared
-                        .sessions
-                        .par_iter()
-                        .map(|session| session.event.person),
-                );
+            if activity.is_none() {
+                activity = Some(self.elapsed_activity_frame(&owner.resting(), externally_busy)?);
             }
-            working.par_sort_unstable();
-            working.dedup();
-            let mut traveling: Vec<_> = self.core.travel.as_ref().map_or_else(Vec::new, |travel| {
-                travel
-                    .journeys
-                    .par_iter()
-                    .map(|journey| journey.person)
-                    .collect()
-            });
-            traveling.par_extend(self.local_travelers());
-            traveling.par_sort_unstable();
-            let resting = owner.resting();
-            let people: std::collections::HashSet<_> = self
-                .core
-                .people
-                .par_iter()
-                .map(|person| person.id)
-                .collect();
-            let activity: Vec<_> = self
-                .core
-                .people
-                .par_iter()
-                .map(|person| {
-                    use game_economy_fatigue::Exertion;
-                    let work = working.binary_search(&person.id).is_ok();
-                    let travel = traveling.binary_search(&person.id).is_ok();
-                    if person.health > 0 && work && travel {
-                        return Err("overlapping work and travel activity".to_string());
-                    }
-                    let exertion = if person.health == 0 {
-                        Exertion::Inactive
-                    } else if work {
-                        Exertion::Work
-                    } else if travel {
-                        Exertion::Travel
-                    } else if person.region.is_none()
-                        || externally_busy.binary_search(&person.id).is_ok()
-                    {
-                        Exertion::Other
-                    } else if resting.binary_search(&person.id).is_ok() {
-                        Exertion::Rest
-                    } else {
-                        Exertion::Idle
-                    };
-                    Ok(game_economy_fatigue::ElapsedActivity {
-                        id: person.id,
-                        exertion,
-                    })
-                })
-                .collect::<Result<Vec<_>, String>>()?;
-            let (millis, draft) = owner.prepare_segment(&activity, consumed, &people)?;
+            let frame = activity.as_ref().expect("prepared elapsed activity");
+            let (millis, draft) =
+                owner.prepare_segment(&frame.activity, consumed, &frame.people)?;
             consumed = millis;
             elapsed_draft = Some(draft);
         }
@@ -529,6 +550,8 @@ impl CoreHost {
         };
         let local_progress = self.stage_local_progress(consumed);
         let (growth, batches) = self.stage_crop_growth(crop_rates, consumed)?;
+        let interrupted_preparation =
+            consumed != requested || has_injuries || recovery_due || batches.is_some();
         let moisture = self
             .irrigation
             .as_ref()
@@ -595,6 +618,8 @@ impl CoreHost {
             }
             return Ok(ElapsedProgress {
                 millis: advanced,
+                interrupted_preparation,
+                activity,
                 incapacitations,
                 family_events,
                 fauna: fauna_transitions,
@@ -795,6 +820,8 @@ impl CoreHost {
         self.remember_skill_practice(skill_practice);
         Ok(ElapsedProgress {
             millis: advanced,
+            interrupted_preparation,
+            activity,
             incapacitations,
             family_events,
             fauna: fauna_transitions,
