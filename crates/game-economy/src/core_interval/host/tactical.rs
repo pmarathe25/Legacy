@@ -85,10 +85,11 @@ impl CoreHost {
         let tactical = self
             .tactical()
             .filter(|owner| !owner.engagements.is_empty());
-        if self.fatigue.is_none() && tactical.is_none() {
+        if self.fatigue.is_none() && tactical.is_none() && self.pastime_people().next().is_none() {
             return None;
         }
         let mut people = external.to_vec();
+        people.extend(self.pastime_people());
         if let Some(owner) = &self.fatigue {
             people.par_extend(owner.fatigue.resting());
         }

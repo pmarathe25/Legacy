@@ -41,12 +41,14 @@ pub struct ActionAppraisal {
     pub accepted: i32,
     pub denied: i32,
     pub stopped: i32,
+    pub completed: i32,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ActionOutcome {
     Accepted,
     Denied,
     Stopped,
+    Completed,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Experience {
@@ -128,6 +130,7 @@ impl Purpose {
                     ActionOutcome::Accepted => action.accepted,
                     ActionOutcome::Denied => action.denied,
                     ActionOutcome::Stopped => action.stopped,
+                    ActionOutcome::Completed => action.completed,
                 };
                 (relief != 0).then_some((index, order, i64::from(relief)))
             })

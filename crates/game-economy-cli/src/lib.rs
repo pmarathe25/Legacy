@@ -1,5 +1,6 @@
 //! Load new economic scenarios from authored content and retain lot ages in saves.
 mod population;
+mod pastimes;
 mod seed_batches;
 use game_autowork::{Autowork, Policy};
 use game_economy::{
@@ -48,6 +49,7 @@ struct Scenario {
     /// Autonomous decision cadence, independent of the physical quantum.
     #[serde(default)]
     decision_period_millis: Option<u64>,
+    pastimes: Option<pastimes::Config>,
     /// Elapsed time between autonomous opportunities to meet.
     #[serde(default)]
     social_period_millis: Option<u64>,
@@ -1135,6 +1137,7 @@ pub fn core_scenario_with_options(
     let language_topic_profiles = std::mem::take(&mut authored.language_topic_profiles);
     let signals = authored.signals.take();
     let decision_period_millis = authored.decision_period_millis;
+    let pastimes = authored.pastimes.take();
     let social_period_millis = authored.social_period_millis;
     let combat_round_millis = authored.combat_round_millis;
     let invocation_period_millis = authored.invocation_period_millis;
@@ -1155,6 +1158,7 @@ pub fn core_scenario_with_options(
     let meal_preferences = std::mem::take(&mut authored.meal_preferences);
     let scenario = build_scenario(authored, content, seed, population_path)?;
     let mut snapshot = game_economy::core_interval::CoreHostSnapshot::from_scenario(scenario)?;
+    snapshot.pastimes = pastimes.map(|config| config.compile(content, &snapshot.core.physical.goods)).transpose()?;
     let mut personal_conflict = personal_conflict
         .map(|mut authored| {
             let goods = snapshot

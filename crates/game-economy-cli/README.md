@@ -105,6 +105,13 @@ reachable stock.
 With elapsed irrigation enabled, `water FIELD QUANTITY` draws water
 from reachable regional stock.
 
+In a scenario with a pastime catalog, `look` lists activities the character
+has the materials and instruments to do. Use `pastime ACTIVITY` to start
+and `pastime stop` to stop. The activity takes its authored elapsed duration,
+uses the carried materials when it starts, and leaves reusable instruments in
+custody. The [pastime scenario](../../content/scenarios/economy-pastimes.toml)
+includes song composition, instrument practice, and painting.
+
 `gather NODE` takes one yield into personal custody if stock and carrying space
 permit. For an engineering scenario, `look` lists carried items and apparatus.
 `assemble 7 1001:1:0:1000 1002:2:1001:1000` connects item 1002 to item

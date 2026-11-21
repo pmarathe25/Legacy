@@ -275,6 +275,7 @@ impl Chronicle {
                 | "mechanical_experiments"
                 | "mechanical_assemblies"
                 | "soil_amendments"
+                | "pastimes"
                 | "work_requests"
                 | "maturation"
                 | "recipe_learning"
@@ -562,6 +563,9 @@ fn classify(kind: &str, row: &Value) -> Option<Receipt> {
             "fallow" => "fields harvested",
             _ => return None,
         },
+        ("pastimes", _) if row["outcome"].as_str() == Some("completed") => {
+            "leisure or creative activities completed"
+        }
         ("agreement_expiry", "defaulted") => "unfulfilled agreements that expired",
         ("agreement_expiry", "withdrawn") => "unaccepted proposals that expired",
         ("personal_practices", "aid_proposed") => "individual aid proposals",

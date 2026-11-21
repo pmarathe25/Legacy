@@ -86,6 +86,18 @@ impl<'a> Player<'a> {
         self.host.water_controlled(self.person, field, quantity)
     }
 
+    pub fn available_pastimes(&self) -> Result<Vec<(u32, String)>, String> {
+        self.host.available_pastimes(self.person)
+    }
+
+    pub fn start_pastime(&mut self, activity: u32) -> Result<bool, String> {
+        Ok(self.host.start_pastime_controlled(self.person, activity)?.is_some())
+    }
+
+    pub fn stop_pastime(&mut self) -> Result<bool, String> {
+        Ok(self.host.stop_pastime_controlled(self.person)?.is_some())
+    }
+
     pub fn promise(
         &mut self,
         recipient: u64,

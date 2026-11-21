@@ -175,6 +175,7 @@ pub struct CoreDeadline {
     pub storage_temperature: bool,
     pub fear_relaxation: bool,
     pub agreement_expiry: bool,
+    pub pastime: bool,
 }
 /// Travelers published at a partial-interval offset.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -510,6 +511,7 @@ impl CoreInterval {
             storage_temperature: false,
             fear_relaxation: false,
             agreement_expiry: false,
+            pastime: false,
             food_health: food_health == Some(after),
         })
     }

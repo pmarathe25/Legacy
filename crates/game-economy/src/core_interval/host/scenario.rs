@@ -179,6 +179,7 @@ impl CoreHostSnapshot {
                 owner,
                 progress: vec![],
             }),
+            pastimes: None,
             gathering: state.gathering,
             fauna: state.fauna,
             hunting: state.hunting,
