@@ -71,6 +71,36 @@ impl<'a> Player<'a> {
             .plan_controlled_expedition(self.person, destination, visit_millis, objective)
     }
 
+    pub fn expedition_invitations(
+        &self,
+    ) -> Result<Vec<game_economy::core_interval::ExpeditionInvitation>, String> {
+        self.host.expedition_invitations(self.person)
+    }
+
+    pub fn invite_expedition(
+        &mut self,
+        target: u64,
+    ) -> Result<game_economy::core_interval::CoreExpeditionOffer, String> {
+        self.host.invite_controlled_expedition(self.person, target)
+    }
+
+    pub fn reply_to_expedition(
+        &mut self,
+        invitation: u64,
+        join: bool,
+    ) -> Result<game_economy::core_interval::ExpeditionReply, String> {
+        self.host
+            .reply_controlled_expedition(self.person, invitation, join)
+    }
+
+    pub fn withdraw_expedition_invitation(
+        &mut self,
+        invitation: u64,
+    ) -> Result<game_economy::core_interval::ExpeditionReply, String> {
+        self.host
+            .withdraw_controlled_expedition_invitation(self.person, invitation)
+    }
+
     pub fn continue_expedition(
         &mut self,
     ) -> Result<Vec<game_economy::core_interval::ExpeditionEvent>, String> {

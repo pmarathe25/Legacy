@@ -172,6 +172,34 @@ fn command(host: &mut CoreHost, person: u64, words: &[&str]) -> Result<bool, Str
                 Player::new(host, person)?.pause_walk(words[0] == "pause-walk")?
             );
         }
+        ["trip", "invites"] => {
+            for invitation in Player::new(host, person)?.expedition_invitations()? {
+                println!(
+                    "invitation={} from={} destination={}",
+                    invitation.id, invitation.inviter, invitation.destination
+                );
+            }
+        }
+        ["trip", "invite", target] => {
+            let target = target.parse().map_err(|_| "invalid invitee")?;
+            let offer = Player::new(host, person)?.invite_expedition(target)?;
+            println!(
+                "invitation={} sent=true response={:?}",
+                offer.invitation.id,
+                offer.response.map(|reply| reply.response)
+            );
+        }
+        ["trip", "reply", invitation, "yes" | "no"] => {
+            let invitation = invitation.parse().map_err(|_| "invalid invitation ID")?;
+            let reply =
+                Player::new(host, person)?.reply_to_expedition(invitation, words[3] == "yes")?;
+            println!("invitation={} response={:?}", invitation, reply.response);
+        }
+        ["trip", "withdraw", invitation] => {
+            let invitation = invitation.parse().map_err(|_| "invalid invitation ID")?;
+            Player::new(host, person)?.withdraw_expedition_invitation(invitation)?;
+            println!("invitation={} withdrawn=true", invitation);
+        }
         ["trip", "go" | "survey" | "back" | "cancel"] => {
             let mut player = Player::new(host, person)?;
             let events = match words[1] {

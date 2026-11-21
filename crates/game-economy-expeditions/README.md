@@ -34,5 +34,10 @@ accepted transfers to the specified recipient in the destination. Independent
 delivery preferences can account for carried reserves, felt obligation, or
 fear. Visit deadlines and objective receipts are available in history.
 
-Invitation, coordinated departure, and expedition-specific sourcing still
-need their interval hosts.
+Players can use `trip invite PERSON`, `trip invites`, `trip reply ID yes|no`,
+and `trip withdraw ID`. An autonomous recipient evaluates the destination
+using their own `expedition_invitation_preferences` or responds to directed
+fear and obligation if the scenario configures an invitation pressure
+threshold. A response creates an independent trip for the recipient. The
+recipient may have their own return preference and can abandon the trip.
+Synchronized departures and expedition-specific sourcing are follow-ups.
