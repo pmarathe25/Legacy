@@ -34,7 +34,7 @@ fn command(host: &mut CoreHost, person: u64, words: &[&str]) -> Result<bool, Str
     match words {
         [] => {}
         ["help"] => println!(
-            "look | wait MILLISECONDS | move REGION | walk stock|store ID | pause-walk | resume-walk | trip REGION VISIT_MILLISECONDS [food] | trip go|survey|back|cancel | fight PERSON | join-fight BENEFICIARY OPPONENT | tactic wait|defend|retreat | tactic attack PERSON | tactic attack-site SITE | tactic move X Y | confine PERSON SITE | guard SITE | release PERSON | escape | build BLUEPRINT | demolish SITE | salvage SITE GOOD QUANTITY | eat GOOD | treat GOOD | work RECIPE UNITS | stop JOB | stop-assist | rest on|off | word place|person|object ID SOUNDS | form SOUNDS MARKS | inscribe SOUNDS | read PAGE | recall PAGE | save PATH | load PATH | quit (SOUNDS and MARKS are comma-separated numbers)"
+            "look | wait MILLISECONDS | move REGION | walk stock|store ID | pause-walk | resume-walk | trip REGION VISIT_MILLISECONDS [food] | trip go|survey|back|cancel | fight PERSON | join-fight BENEFICIARY OPPONENT | tactic wait|defend|retreat | tactic attack PERSON | tactic attack-site SITE | tactic move X Y | confine PERSON SITE | guard SITE | release PERSON | escape | build BLUEPRINT | demolish SITE | salvage SITE GOOD QUANTITY | eat GOOD | treat GOOD | wear GOOD | unwear | work RECIPE UNITS | stop JOB | stop-assist | rest on|off | word place|person|object ID SOUNDS | form SOUNDS MARKS | inscribe SOUNDS | read PAGE | recall PAGE | save PATH | load PATH | quit (SOUNDS and MARKS are comma-separated numbers)"
         ),
         ["quit"] | ["exit"] => return Ok(false),
         ["look"] => {
@@ -311,6 +311,15 @@ fn command(host: &mut CoreHost, person: u64, words: &[&str]) -> Result<bool, Str
         ["eat", good] => {
             let good = good.parse::<u32>().map_err(|_| "invalid good")?;
             println!("consumed={}", Player::new(host, person)?.eat(good)?);
+        }
+        ["wear", good] => {
+            let good = good.parse::<u32>().map_err(|_| "invalid good")?;
+            Player::new(host, person)?.choose_clothing(Some(good))?;
+            println!("wearing={good}");
+        }
+        ["unwear"] => {
+            Player::new(host, person)?.choose_clothing(None)?;
+            println!("no protective garment selected");
         }
         ["treat", good] => {
             let good = good.parse::<u32>().map_err(|_| "invalid good")?;

@@ -174,6 +174,10 @@ impl<'a> Player<'a> {
         self.host.eat_controlled(self.person, good)
     }
 
+    pub fn choose_clothing(&mut self, good: Option<u32>) -> Result<(), String> {
+        self.host.choose_controlled_clothing(self.person, good)
+    }
+
     pub fn set_rest(&mut self, resting: bool) -> Result<(), String> {
         self.host.set_controlled_rest(self.person, resting)
     }

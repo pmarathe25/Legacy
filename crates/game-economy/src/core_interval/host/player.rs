@@ -245,6 +245,54 @@ impl CoreHost {
             .ok_or_else(|| "person is not under player control".into())
     }
 
+    /// Set the controlled person's standing choice of one carried garment.
+    pub fn choose_controlled_clothing(
+        &mut self,
+        person: u64,
+        good: Option<u32>,
+    ) -> Result<(), String> {
+        if self.controlled_person(person)?.health == 0 {
+            return Err("the controlled person cannot change clothing while incapacitated".into());
+        }
+        let environment = self.environment.as_mut().ok_or("weather is disabled")?;
+        if let Some(good) = good {
+            if environment
+                .clothing
+                .binary_search_by_key(&good, |row| row.good)
+                .is_err()
+            {
+                return Err("unknown protective garment".into());
+            }
+            let carried = self
+                .core
+                .physical
+                .custody(game_lots::Place::Person(person))
+                .is_some_and(|holder| {
+                    holder.lots.iter().any(|lot| {
+                        lot.good == good
+                            && lot
+                                .expires_at
+                                .is_none_or(|at| at > self.core.physical.tick())
+                    })
+                });
+            if !carried {
+                return Err("the controlled person does not carry that garment".into());
+            }
+        }
+        let choices = &mut environment.clothing_choices;
+        let start = choices.partition_point(|row| row.person < person);
+        let end = choices.partition_point(|row| row.person <= person);
+        let choice = good.map(|good| crate::ClothingChoice {
+            person,
+            good,
+            protection_weight: 1,
+            hunger_weight: 0,
+            effort: 0,
+        });
+        choices.splice(start..end, choice);
+        Ok(())
+    }
+
     /// Construct a filtered observation without cloning the world or remote state.
     pub fn player_view(&self, id: u64) -> Result<CorePlayerView, String> {
         let person = self.controlled_person(id)?;
