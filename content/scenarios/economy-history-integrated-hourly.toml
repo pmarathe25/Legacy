@@ -2083,6 +2083,13 @@ good = "grain-seed"
 batch = 12
 quantity = 100
 
+[cultivation.soil]
+capacity = 100
+loss_per_harvest = 10
+recovery_per_fallow = 10
+recovery_clock = { period_millis = 3600000 }
+fields = [{ field = 1, fertility = 90 }]
+
 [cultivation.seed_genetics]
 growth_weight = 0
 min_factor = 500
