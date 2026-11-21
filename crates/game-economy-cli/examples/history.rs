@@ -48,7 +48,7 @@ fn observations(events: &[CoreRunEvent], current_tick: &mut u64) -> Vec<Value> {
         CoreRunEvent::Confinement { at_millis, events } => Some(json!({"kind":"confinement","at_millis":at_millis,"events":events})),
         CoreRunEvent::SiteChanges { at_millis, changes } => Some(json!({"kind":"site_changes","at_millis":at_millis,"demolished":changes.demolished,"salvaged":changes.salvaged,"released":changes.released})),
         CoreRunEvent::Expeditions(events) => Some(json!({"kind":"expeditions","events":events})),
-        CoreRunEvent::Tactical(result) => Some(json!({"kind":"tactical","events":result.events,"strikes":result.strikes,"harm":result.harm})),
+        CoreRunEvent::Tactical(result) => Some(json!({"kind":"tactical","events":result.events,"strikes":result.strikes,"harm":result.harm,"sites":result.sites,"interrupted_jobs":result.interrupted_jobs,"released":result.released})),
         CoreRunEvent::WoundRecovery { at_millis, people } => Some(json!({"kind":"wound_recovery","at_millis":at_millis,"people":people})),
         CoreRunEvent::Campaign(events) => Some(json!({"kind":"campaign","events":events})),
         CoreRunEvent::InvocationWarning { at_millis, warning } => Some(json!({"kind":"invocation_warning","at_millis":at_millis,"warning":warning})),

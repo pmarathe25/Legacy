@@ -46,6 +46,7 @@ mod sites;
 mod skills;
 mod social;
 mod tactical;
+mod tactical_sites;
 mod taking;
 mod tools;
 mod treatment;
@@ -1436,6 +1437,12 @@ impl CoreHost {
                 maintenance.enroll(&owner.facilities);
             }
         }
+        tactical_sites::validate_targets(
+            personal_conflict
+                .as_ref()
+                .and_then(|owner| owner.tactical.as_ref()),
+            sites.as_ref(),
+        )?;
         if let Some(state) = personal_conflict
             .as_ref()
             .and_then(|owner| owner.confinement.as_ref())

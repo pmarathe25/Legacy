@@ -111,6 +111,26 @@ impl Chronicle {
             );
             return;
         }
+        if kind == "tactical" {
+            for row in event["sites"].as_array().into_iter().flatten() {
+                let label = if row["collapsed"].as_bool() == Some(true) {
+                    "tactical strikes on collapsing sites"
+                } else {
+                    "tactical strikes that damaged sites"
+                };
+                self.record(
+                    event,
+                    row,
+                    year,
+                    focus,
+                    Receipt {
+                        label,
+                        actor: row["actor"].as_u64(),
+                        other: None,
+                    },
+                );
+            }
+        }
         if !matches!(
             kind,
             "campaign"

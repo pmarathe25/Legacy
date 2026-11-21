@@ -35,7 +35,7 @@ fn command(host: &mut CoreHost, person: u64, words: &[&str]) -> Result<bool, Str
     match words {
         [] => {}
         ["help"] => println!(
-            "look | wait MILLISECONDS | move REGION | walk stock|store ID | pause-walk | resume-walk | trip REGION VISIT_MILLISECONDS [food] | trip go|survey|back|cancel | fight PERSON | tactic wait|defend|retreat | tactic attack PERSON | tactic move X Y | confine PERSON SITE | guard SITE | release PERSON | escape | build BLUEPRINT | demolish SITE | salvage SITE GOOD QUANTITY | eat GOOD | treat GOOD | work RECIPE UNITS | stop JOB | stop-assist | rest on|off | word place|person|object ID SOUNDS | form SOUNDS MARKS | inscribe SOUNDS | read PAGE | recall PAGE | save PATH | load PATH | quit (SOUNDS and MARKS are comma-separated numbers)"
+            "look | wait MILLISECONDS | move REGION | walk stock|store ID | pause-walk | resume-walk | trip REGION VISIT_MILLISECONDS [food] | trip go|survey|back|cancel | fight PERSON | tactic wait|defend|retreat | tactic attack PERSON | tactic attack-site SITE | tactic move X Y | confine PERSON SITE | guard SITE | release PERSON | escape | build BLUEPRINT | demolish SITE | salvage SITE GOOD QUANTITY | eat GOOD | treat GOOD | work RECIPE UNITS | stop JOB | stop-assist | rest on|off | word place|person|object ID SOUNDS | form SOUNDS MARKS | inscribe SOUNDS | read PAGE | recall PAGE | save PATH | load PATH | quit (SOUNDS and MARKS are comma-separated numbers)"
         ),
         ["quit"] | ["exit"] => return Ok(false),
         ["look"] => {
@@ -97,6 +97,9 @@ fn command(host: &mut CoreHost, person: u64, words: &[&str]) -> Result<bool, Str
                 );
                 for (person, position) in &tactics.visible {
                     println!("fighter={person} x={} y={}", position.x, position.y);
+                }
+                for (site, position) in &tactics.visible_sites {
+                    println!("tactical_site={site} at={},{}", position.x, position.y);
                 }
             }
             for report in view.route_reports {
@@ -248,6 +251,11 @@ fn command(host: &mut CoreHost, person: u64, words: &[&str]) -> Result<bool, Str
                     pursue: true,
                 },
             )?;
+        }
+        ["tactic", "attack-site", site] => {
+            use game_economy::core_interval::TacticalChoice;
+            let site = site.parse().map_err(|_| "invalid site")?;
+            Player::new(host, person)?.choose_tactics(TacticalChoice::AttackSite { site })?;
         }
         ["tactic", "move", x, y] => {
             use game_economy::core_interval::{TacticalChoice, TacticalPoint};

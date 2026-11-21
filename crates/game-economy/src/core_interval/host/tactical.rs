@@ -3,6 +3,7 @@ use super::*;
 use game_economy_combat::{
     Combat,
     elapsed::{Actor, Choice, Engagement, Event, Start, Tactical},
+    elapsed_structures::SiteStrike,
 };
 use game_lots::Place;
 use game_personal_conflict::{Defense, Strike};
@@ -12,6 +13,9 @@ pub struct CoreTacticalResult {
     pub events: Vec<Event>,
     pub strikes: Vec<game_personal_conflict::StrikeEvent>,
     pub harm: Vec<PersonalHarm>,
+    pub sites: Vec<SiteStrike>,
+    pub interrupted_jobs: Vec<u64>,
+    pub released: Vec<game_economy_confinement::Event>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -20,6 +24,7 @@ pub struct CorePlayerTactics {
     pub next_round_millis: u128,
     pub position: game_economy_combat::Point,
     pub visible: Vec<(u64, game_economy_combat::Point)>,
+    pub visible_sites: Vec<(u64, game_economy_combat::Point)>,
 }
 
 impl CoreHost {
@@ -53,11 +58,21 @@ impl CoreHost {
                     .then_some((row.person, row.position))
             })
             .collect();
+        let visible_sites = owner
+            .structures
+            .targets
+            .par_iter()
+            .filter_map(|site| {
+                (site.region == fight.region && map.visible(position, site.position))
+                    .then_some((site.site, site.position))
+            })
+            .collect();
         Some(CorePlayerTactics {
             engagement: fight.id,
             next_round_millis: fight.next_millis,
             position,
             visible,
+            visible_sites,
         })
     }
 
@@ -349,11 +364,13 @@ impl CoreHost {
             })
             .collect();
         let opinions = self.opinions.as_ref().map(|owner| owner.index());
-        let draft = owner.prepare_rounds(now, &people, self.core.seed, &|actor, target| {
+        let mut draft = owner.prepare_rounds(now, &people, self.core.seed, &|actor, target| {
             opinions
                 .as_ref()
-                .map_or(0, |index| index.feelings(actor, target).0)
+                .map_or((0, 0), |index| index.feelings(actor, target))
         })?;
+        let mut site_strikes = std::mem::take(&mut draft.site_strikes);
+        let site_damage = self.stage_tactical_sites(&site_strikes)?;
         let strikes: Vec<_> = draft
             .hits
             .par_iter()
@@ -387,6 +404,11 @@ impl CoreHost {
             .and_then(|owner| owner.tactical.as_mut())
             .expect("tactical owner")
             .publish_rounds(draft, &unable);
+        if let Some(damage) = site_damage {
+            (result.interrupted_jobs, result.released) =
+                self.publish_tactical_sites(damage, &mut site_strikes)?;
+            result.sites = site_strikes;
+        }
         self.work_checked_revision = None;
         Ok(Some(result))
     }
@@ -396,14 +418,8 @@ pub(super) fn import_tactical(
     combat: Combat,
     round_millis: u64,
 ) -> Result<(Tactical, Option<game_personal_conflict::wounds::Wounds>), String> {
-    if !combat.structures.is_empty()
-        || !combat.structure_preferences.is_empty()
-        || !combat.interventions.is_empty()
-    {
-        return Err(
-            "interval tactical encounters do not yet import structure attacks or interventions"
-                .into(),
-        );
+    if !combat.interventions.is_empty() {
+        return Err("interval tactical encounters do not yet import interventions".into());
     }
     let wounds = combat.injuries.as_ref().map(|injuries| {
         let rules = &injuries.rules;

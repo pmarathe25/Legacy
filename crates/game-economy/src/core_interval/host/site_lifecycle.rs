@@ -158,19 +158,36 @@ impl CoreHost {
             .par_iter()
             .filter_map(|event| event.destroyed.then_some(event.site))
             .collect();
+        self.publish_destroyed_sites(facilities, &destroyed)
+    }
+
+    pub(super) fn publish_destroyed_sites(
+        &mut self,
+        facilities: crate::WorkSites,
+        destroyed: &HashSet<u64>,
+    ) -> Vec<game_economy_confinement::Event> {
         if destroyed.is_empty() {
             return Vec::new();
         }
-        owner.materials.par_iter_mut().for_each(|row| {
-            row.debris |= destroyed.contains(&row.site);
-        });
+        if let Some(owner) = &mut self.construction {
+            owner.materials.par_iter_mut().for_each(|row| {
+                row.debris |= destroyed.contains(&row.site);
+            });
+        }
         let sites = self.sites.as_mut().expect("sites checked");
         if let Some(maintenance) = &mut sites.maintenance {
             maintenance.sync(&facilities);
         }
         sites.facilities = facilities;
         self.work_checked_revision = None;
-        self.release_destroyed_barriers(&destroyed)
+        if let Some(tactical) = self
+            .personal_conflict
+            .as_mut()
+            .and_then(|owner| owner.tactical.as_mut())
+        {
+            tactical.remove_structures(destroyed);
+        }
+        self.release_destroyed_barriers(destroyed)
     }
 
     pub fn demolish_controlled_site(&mut self, person: u64, site: u64) -> Result<bool, String> {
