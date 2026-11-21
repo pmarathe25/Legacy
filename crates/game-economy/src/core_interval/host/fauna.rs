@@ -61,11 +61,6 @@ impl CoreHost {
         let season = self.environment.as_ref().and_then(|environment| {
             environment.season_at(at_millis - 1, self.core.physical.tick())
         });
-        if renewal.is_none()
-            && let Some(gathering) = &self.gathering
-        {
-            *renewal = Some(gathering.nodes.par_iter().cloned().collect());
-        }
         let mut draft =
             self.stage_fauna_lifecycle(owner, renewal.as_deref_mut(), &[], &[], season, ordinal)?;
         let restrained = |animal| {

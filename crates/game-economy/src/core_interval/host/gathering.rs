@@ -236,26 +236,50 @@ impl CoreHost {
     pub(super) fn stage_resource_renewal(
         &self,
         millis: u64,
-    ) -> Result<Option<Vec<crate::ResourceNode>>, String> {
+    ) -> Result<Option<crate::gathering::Renewal>, String> {
         let Some(owner) = self
             .gathering
             .as_ref()
-            .filter(|owner| owner.elapsed_renewal)
+            .filter(|_| !self.renewable_resource_slots.is_empty())
         else {
             return Ok(None);
         };
         let exposure = self.environment.as_ref().and_then(|environment| {
             environment.food_growth_exposure(self.core.simulated_millis(), millis)
         });
-        owner.progress_renewal(millis, exposure)
+        owner.progress_renewal(&self.renewable_resource_slots, millis, exposure)
     }
 
-    pub(super) fn publish_resource_renewal(&mut self, nodes: Option<Vec<crate::ResourceNode>>) {
-        if let Some(nodes) = nodes {
+    pub(super) fn resources_for_ecology(
+        &self,
+        renewal: Option<&crate::gathering::Renewal>,
+    ) -> Option<Vec<crate::ResourceNode>> {
+        let owner = self.gathering.as_ref()?;
+        let mut nodes: Vec<_> = owner.nodes.par_iter().cloned().collect();
+        if let Some(renewal) = renewal {
+            renewal.publish(&mut nodes);
+        }
+        Some(nodes)
+    }
+
+    pub(super) fn publish_resources(
+        &mut self,
+        renewal: Option<crate::gathering::Renewal>,
+        ecological: Option<Vec<crate::ResourceNode>>,
+    ) {
+        if let Some(nodes) = ecological {
             self.gathering
                 .as_mut()
-                .expect("prepared resource renewal")
+                .expect("prepared ecological resources")
                 .nodes = nodes;
+        } else if let Some(renewal) = renewal {
+            renewal.publish(
+                &mut self
+                    .gathering
+                    .as_mut()
+                    .expect("prepared resource renewal")
+                    .nodes,
+            );
         }
     }
 

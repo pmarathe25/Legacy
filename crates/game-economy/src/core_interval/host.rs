@@ -276,6 +276,7 @@ pub struct CoreHost {
     recovery: Option<crate::RecoveryRules>,
     purpose: Option<CorePurpose>,
     gathering: Option<crate::Gathering>,
+    renewable_resource_slots: Vec<usize>,
     fauna: Option<game_fauna::Fauna>,
     hunting: Option<crate::Hunting>,
     animal_feelings: Option<crate::AnimalFeelings>,
@@ -1577,6 +1578,8 @@ impl CoreHost {
         if let Some(schedule) = &schedule {
             schedule.validate(&core)?;
         }
+        let renewable_resource_slots = gathering.as_ref()
+            .map_or_else(Vec::new, crate::Gathering::renewal_slots);
         let skill_rates = skills.as_ref().map(|owner| owner.owner.index());
         let skill_practice_recipes = skills
             .as_ref()
@@ -1613,6 +1616,7 @@ impl CoreHost {
             recovery,
             purpose,
             gathering,
+            renewable_resource_slots,
             fauna,
             hunting,
             animal_feelings,

@@ -559,12 +559,14 @@ impl CoreHost {
         let (reductions, staged_shared) =
             self.stage_fatal_assistance(&deaths, &durations, consumed)?;
         let paused_after_deaths = self.pause_incapacitated_rates(&deaths, &reductions, consumed)?;
-        let mut renewal = self.stage_resource_renewal(consumed)?;
-        let wild = (limits.wild_plants == Some(consumed))
-            .then(|| self.stage_wild_plants(event_time, &mut renewal))
-            .transpose()?;
-        let (fauna, fauna_transitions) = if limits.fauna == Some(consumed) {
-            let (draft, transitions) = self.stage_elapsed_fauna(&mut renewal, event_time)?;
+        let renewal = self.stage_resource_renewal(consumed)?;
+        let wild_due = limits.wild_plants == Some(consumed);
+        let fauna_due = limits.fauna == Some(consumed);
+        let mut ecological = (wild_due || fauna_due)
+            .then(|| self.resources_for_ecology(renewal.as_ref())).flatten();
+        let wild = wild_due.then(|| self.stage_wild_plants(event_time, &mut ecological)).transpose()?;
+        let (fauna, fauna_transitions) = if fauna_due {
+            let (draft, transitions) = self.stage_elapsed_fauna(&mut ecological, event_time)?;
             (Some(draft), Some(transitions))
         } else {
             (None, None)
@@ -595,7 +597,7 @@ impl CoreHost {
             let mut wild_plants = None;
             if advanced > 0 {
                 local_arrivals = self.publish_local_progress(local_progress);
-                self.publish_resource_renewal(renewal);
+                self.publish_resources(renewal, ecological);
                 wild_plants = self.publish_wild_plants(wild);
                 self.publish_elapsed_fauna(fauna, fauna_transitions.as_ref());
                 self.relax_due_fear(limits.fear_relaxation == Some(advanced));
@@ -798,7 +800,7 @@ impl CoreHost {
             batches,
             delivery.as_ref().map(|delivery| delivery.physical()),
         )?;
-        self.publish_resource_renewal(renewal);
+        self.publish_resources(renewal, ecological);
         let wild_plants = self.publish_wild_plants(wild);
         self.publish_elapsed_fauna(fauna, fauna_transitions.as_ref());
         self.relax_due_fear(limits.fear_relaxation == Some(advanced));

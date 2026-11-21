@@ -122,40 +122,92 @@ pub fn enroll(
         .collect();
     owner.policies.par_extend(newborns);
 }
+pub(crate) struct Renewal {
+    updates: Vec<(usize, u64, u64)>,
+}
+
+impl Renewal {
+    pub(crate) fn publish(&self, nodes: &mut [Node]) {
+        publish_renewal(nodes, &self.updates, 0);
+    }
+}
+
+fn publish_renewal(nodes: &mut [Node], updates: &[(usize, u64, u64)], origin: usize) {
+    const LOCAL_BATCH: usize = 128;
+    if updates.len() <= LOCAL_BATCH {
+        for &(slot, available, remainder) in updates {
+            let node = &mut nodes[slot - origin];
+            node.available = available;
+            node.renewal_remainder = remainder;
+        }
+        return;
+    }
+    let middle = updates.len() / 2;
+    let right_origin = updates[middle].0;
+    let (left, right) = nodes.split_at_mut(right_origin - origin);
+    rayon::join(
+        || publish_renewal(left, &updates[..middle], origin),
+        || publish_renewal(right, &updates[middle..], right_origin),
+    );
+}
+
 impl Gathering {
-    /// Prepare independent node updates for a segment with no withdrawals.
-    pub fn progress_renewal(
+    pub(crate) fn renewal_slots(&self) -> Vec<usize> {
+        if !self.elapsed_renewal {
+            return Vec::new();
+        }
+        self.nodes
+            .par_iter()
+            .enumerate()
+            .filter_map(|(slot, node)| {
+                node.renewal_rate
+                    .is_some_and(|rate| rate.units > 0)
+                    .then_some(slot)
+            })
+            .collect()
+    }
+
+    /// Fixed and ecological nodes have no scalar work between their events.
+    pub(crate) fn progress_renewal(
         &self,
+        slots: &[usize],
         millis: u64,
         seasonal_exposure: Option<u128>,
-    ) -> Result<Option<Vec<Node>>, String> {
-        if !self.elapsed_renewal || millis == 0 {
+    ) -> Result<Option<Renewal>, String> {
+        if slots.is_empty() || millis == 0 {
             return Ok(None);
         }
+        #[cfg(feature = "profile")]
+        game_diagnostics::count("elapsed.rows.resource_renewal", slots.len() as u64);
         let neutral = u128::from(millis) * 1000;
-        let nodes = self
-            .nodes
+        let updates = slots
             .par_iter()
-            .map(|node| {
-                let mut next = node.clone();
-                if let Some(rate) = node.renewal_rate {
-                    let exposure = if node.seasonal {
-                        seasonal_exposure.unwrap_or(neutral)
-                    } else {
-                        neutral
-                    };
-                    (next.available, next.renewal_remainder) = integrate_renewal(
-                        rate,
-                        node.renewal_remainder,
-                        exposure,
-                        node.available,
-                        node.capacity,
-                    )?;
+            .filter_map(|&slot| {
+                let node = &self.nodes[slot];
+                let rate = node.renewal_rate.expect("indexed resource renewal");
+                let exposure = if node.seasonal {
+                    seasonal_exposure.unwrap_or(neutral)
+                } else {
+                    neutral
+                };
+                match integrate_renewal(
+                    rate,
+                    node.renewal_remainder,
+                    exposure,
+                    node.available,
+                    node.capacity,
+                ) {
+                    Ok((available, remainder))
+                        if available == node.available && remainder == node.renewal_remainder =>
+                    {
+                        None
+                    }
+                    Ok((available, remainder)) => Some(Ok((slot, available, remainder))),
+                    Err(error) => Some(Err(error)),
                 }
-                Ok(next)
             })
             .collect::<Result<Vec<_>, String>>()?;
-        Ok(Some(nodes))
+        Ok((!updates.is_empty()).then_some(Renewal { updates }))
     }
 
     pub fn validate_wild_plants(&self, now: u128, next_batch: Option<u64>) -> Result<(), String> {
