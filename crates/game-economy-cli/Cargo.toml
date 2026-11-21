@@ -28,7 +28,6 @@ game-lot-content = { path = "../game-lot-content" }
 game-lot-runtime = { path = "../game-lot-runtime" }
 game-lots = { path = "../game-lots" }
 game-market = { path = "../game-market" }
-game-persistence = { path = "../game-persistence" }
 game-production = { path = "../game-production" }
 game-genetics = { path = "../game-genetics" }
 game-families = { path = "../game-families" }
@@ -39,7 +38,6 @@ serde_json.workspace = true
 toml.workspace = true
 
 [dev-dependencies]
-game-economy-cli-commands = { path = "../game-economy-cli-commands" }
 game-economy-building = { path = "../game-economy-building" }
 game-economy-work = { path = "../game-economy-work" }
 game-economy-skills = { path = "../game-economy-skills" }

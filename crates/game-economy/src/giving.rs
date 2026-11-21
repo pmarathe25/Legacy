@@ -1161,9 +1161,6 @@ impl Context<'_> {
     }
 }
 impl Plan {
-    pub(crate) fn has_actions(&self) -> bool {
-        !self.records.is_empty()
-    }
     pub(crate) fn completed_work_gifts(&self, events: &Events) -> Vec<(u64, u64, u64)> {
         let accepted: HashSet<_> = events
             .physical_actions
@@ -1274,14 +1271,6 @@ impl Plan {
             .filter(|r| !fulfilled.contains(&(r.requester, r.target)))
             .cloned()
             .collect();
-    }
-    pub fn delivered(&self, actor: u64, events: &Events) -> bool {
-        self.records.iter().find(|r| r.1 == actor).is_some_and(|r| {
-            events
-                .physical_actions
-                .iter()
-                .any(|d| d.id == r.0 && d.accepted)
-        })
     }
     /// Each recipient personally interprets an accepted gift.
     pub fn help(&self, events: &Events) -> Vec<(u64, u64)> {

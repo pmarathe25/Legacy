@@ -808,49 +808,6 @@ mod tests {
     }
 
     #[test]
-    fn whole_boundary_host_supplies_directed_affinity_to_mate_choice() {
-        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
-        let scenario = root.join("content/scenarios/economy-history-monthly.toml");
-        let world = game_economy_cli::scenario(&scenario, &root.join("content")).unwrap();
-        let mut snapshot = world.snapshot();
-        let family = snapshot.family.as_mut().unwrap();
-        family.rules.conception_one_in = 1;
-        for member in &mut family.members {
-            member.reproduction_allowed = member.id == 1 || member.id == 2;
-            if member.reproduction_allowed {
-                member.genome.alleles[0] = [1000, 1000];
-                member.mate_preference = Some(game_families::MatePreference {
-                    desire: 1000,
-                    genetic_weight: 0,
-                    affinity_weight: 1,
-                    trust_weight: 0,
-                    fear_weight: 0,
-                    obligation_weight: 0,
-                    attraction_weight: 0,
-                    female_attraction: 0,
-                    male_attraction: 0,
-                    hunger_weight: 0,
-                    dependent_weight: 0,
-                    minimum: 1,
-                });
-            }
-        }
-        let run = |reverse: i32| {
-            let mut initial = snapshot.clone();
-            initial.opinions.as_mut().unwrap().records = serde_json::from_value(json!([
-                {"observer":1,"target":2,"trust":0,"affinity":10},
-                {"observer":2,"target":1,"trust":0,"affinity":reverse}
-            ]))
-            .unwrap();
-            let mut world = game_economy::Economy::compile(initial).unwrap();
-            world.advance().unwrap();
-            world.snapshot().family.unwrap().members[0].pregnancy
-        };
-        assert!(run(-10).is_none());
-        assert_eq!(run(10).unwrap().father, 2);
-    }
-
-    #[test]
     fn expanded_monthly_world_loads_its_composed_owners() {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
         let scenario = root.join("content/scenarios/economy-history-monthly-expanded.toml");

@@ -835,13 +835,11 @@ impl CoreHost {
                         people: &self.core.people,
                         opinions: self.opinions.as_ref(),
                         busy: regional,
-                        goods: self.core.physical.goods(),
                         view: view.as_ref().expect("gathering view"),
                         tick_millis: self.core.physical.tick_millis(),
                         seed: self.core.seed,
                         tick,
                         manual: None,
-                        personal_output: true,
                     }
                     .opportunities(u32::MAX)
                     .into_par_iter()

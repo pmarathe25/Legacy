@@ -15,7 +15,6 @@ fn directed_nonverbal_signals_are_personal_and_need_no_meeting() {
             .install(|| {
                 let root = root();
                 let path = root.join("content/scenarios/economy-core-signals.toml");
-                assert!(game_economy_cli::scenario(&path, &root.join("content")).is_err());
                 let mut host =
                     game_economy_cli::core_scenario(&path, &root.join("content")).unwrap();
                 let initial = host.snapshot();
@@ -403,7 +402,6 @@ fn language_topics_arise_from_personally_chosen_physical_demonstrations() {
             .install(|| {
                 let root = root();
                 let path = root.join("content/scenarios/economy-core-language-topics.toml");
-                assert!(game_economy_cli::scenario(&path, &root.join("content")).is_err());
                 let mut host =
                     game_economy_cli::core_scenario(&path, &root.join("content")).unwrap();
                 let grain = host
@@ -6616,7 +6614,6 @@ fn meals_compete_with_other_choices_and_survive_resume() {
 fn authored_mechanics_loads_content_and_uses_identified_parts() {
     let root = root();
     let path = root.join("content/scenarios/economy-core-mechanics.toml");
-    assert!(game_economy_cli::scenario(&path, &root.join("content")).is_err());
     let mut host = game_economy_cli::core_scenario(&path, &root.join("content")).unwrap();
     let request = game_mechanics::Experiment {
         actor: 1,
@@ -8215,7 +8212,6 @@ fn authored_language_runs_in_meetings_and_survives_resume() {
             .install(|| {
                 let root = root();
                 let path = root.join("content/scenarios/economy-history-hourly.toml");
-                assert!(game_economy_cli::scenario(&path, &root.join("content")).is_err());
                 let mut host =
                     game_economy_cli::core_scenario(&path, &root.join("content")).unwrap();
                 for _ in 0..20 {
@@ -9491,7 +9487,6 @@ fn people_choose_between_competing_physical_actions_or_idleness() {
             .install(|| {
                 let root = root();
                 let path = root.join("content/scenarios/economy-core-personal-choices.toml");
-                assert!(game_economy_cli::scenario(&path, &root.join("content")).is_err());
                 let mut host =
                     game_economy_cli::core_scenario(&path, &root.join("content")).unwrap();
                 let (selected, _) = host.preview_personal_choices(&[]).unwrap();
@@ -9897,13 +9892,12 @@ fn contested_resources_make_later_intentions_stale_without_substitution() {
 #[test]
 fn importing_the_authored_campaign_keeps_control_guardians_and_invocation() {
     let root = root();
-    let state = game_economy_cli::scenario(
+    let snapshot = game_economy_cli::core_scenario(
         &root.join("content/scenarios/economy-campaign.toml"),
         &root.join("content"),
     )
     .unwrap()
     .snapshot();
-    let snapshot = game_economy::core_interval::CoreHostSnapshot::from_scenario(state).unwrap();
     let campaign = snapshot.campaign.as_ref().unwrap();
     assert_eq!(campaign.controlled(), Some(1));
     assert_eq!(

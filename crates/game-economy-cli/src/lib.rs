@@ -3,9 +3,8 @@ mod population;
 mod seed_batches;
 use game_autowork::{Autowork, Policy};
 use game_economy::{
-    Agreements, Agriculture, CropPhase, DependentCare, Dream, Dreams, Economy, Families,
-    FarmPolicy, Field, Goals, Person, Route, RouteClosure, RouteObservation, RouteSharing, Rules,
-    State, Travel,
+    Agreements, Agriculture, CropPhase, DependentCare, Dream, Dreams, Families, FarmPolicy, Field,
+    Goals, Person, Route, RouteClosure, RouteObservation, RouteSharing, Rules, State, Travel,
 };
 use game_economy_agriculture::content as crop_content;
 use game_lot_content::Catalog;
@@ -1016,11 +1015,6 @@ fn default_food_preference_domain() -> u32 {
     7
 }
 
-/// Construct fresh custody only for a new scenario, never for a saved world.
-pub fn scenario(path: &Path, content: &Path) -> Result<Economy, String> {
-    scenario_with_seed(path, content, None)
-}
-
 /// Load a fresh authored scenario into the interval host and its default schedule.
 /// Unsupported owners are reported rather than silently discarded.
 pub fn core_scenario(
@@ -1057,7 +1051,7 @@ pub fn core_scenario_with_options(
     let mut personal_choices = std::mem::take(&mut authored.personal_choices);
     let birth_choices = authored.birth_choices.take();
     let meal_preferences = std::mem::take(&mut authored.meal_preferences);
-    let scenario = build_scenario(authored, content, seed, population_path, true)?;
+    let scenario = build_scenario(authored, content, seed, population_path)?;
     let mut snapshot = game_economy::core_interval::CoreHostSnapshot::from_scenario(scenario)?;
     if let Some(period) = fatigue_rate_period_millis {
         snapshot
@@ -1520,32 +1514,6 @@ pub fn core_scenario_with_options(
     Ok(host)
 }
 
-/// Override the scenario seed for both generation and subsequent simulation choices.
-pub fn scenario_with_seed(
-    path: &Path,
-    content: &Path,
-    seed: Option<u64>,
-) -> Result<Economy, String> {
-    scenario_with_options(path, content, seed, None)
-}
-
-/// Add authored population profiles to a scenario without changing its other content.
-pub fn scenario_with_options(
-    path: &Path,
-    content: &Path,
-    seed: Option<u64>,
-    population_path: Option<&Path>,
-) -> Result<Economy, String> {
-    let authored = read_scenario(path)?;
-    Economy::compile(build_scenario(
-        authored,
-        content,
-        seed,
-        population_path,
-        false,
-    )?)
-}
-
 fn read_scenario(path: &Path) -> Result<Scenario, String> {
     let source = std::fs::read_to_string(path).map_err(|error| error.to_string())?;
     toml::from_str(&source).map_err(|error: toml::de::Error| error.to_string())
@@ -1556,133 +1524,7 @@ fn build_scenario(
     content: &Path,
     seed: Option<u64>,
     population_path: Option<&Path>,
-    interval_features: bool,
 ) -> Result<State, String> {
-    if (scenario.decision_period_millis.is_some()
-        || scenario.fatigue_rate_period_millis.is_some()
-        || scenario.elapsed_fatigue)
-        && !interval_features
-    {
-        return Err(
-            "elapsed decision cadence or fatigue rates require the interval simulation host".into(),
-        );
-    }
-    if scenario.combat_round_millis.is_some() && !interval_features {
-        return Err("elapsed combat rounds require the interval simulation host".into());
-    }
-    if scenario.invocation_period_millis.is_some() && !interval_features {
-        return Err("elapsed invocation costs require the interval simulation host".into());
-    }
-    if (!scenario.expedition_invitation_preferences.is_empty()
-        || !scenario.expedition_invitation_initiatives.is_empty())
-        && !interval_features
-    {
-        return Err(
-            "expedition invitation preferences require the interval simulation host".into(),
-        );
-    }
-    if scenario.on_site_meals && !interval_features {
-        return Err("on-site meals require the interval simulation host".into());
-    }
-    if !interval_features
-        && scenario
-            .care
-            .as_ref()
-            .is_some_and(|owner| owner.elapsed.is_some())
-    {
-        return Err("elapsed dependent care requires the interval simulation host".into());
-    }
-    if scenario.rules.hunger_rate.is_some() && !interval_features {
-        return Err("elapsed hunger rates require the interval simulation host".into());
-    }
-    if !interval_features
-        && scenario
-            .nutrition
-            .as_ref()
-            .is_some_and(|owner| owner.rules.interval_millis.is_some())
-    {
-        return Err("elapsed nutrition requires the interval simulation host".into());
-    }
-    if !interval_features
-        && scenario
-            .gathering
-            .as_ref()
-            .is_some_and(|owner| owner.elapsed_renewal)
-    {
-        return Err("elapsed resource renewal requires the interval simulation host".into());
-    }
-    if !interval_features
-        && scenario
-            .recovery
-            .as_ref()
-            .is_some_and(|owner| owner.elapsed.is_some())
-    {
-        return Err("elapsed recovery requires the interval simulation host".into());
-    }
-    if !interval_features
-        && scenario
-            .cultivation
-            .as_ref()
-            .is_some_and(|owner| owner.growth_unit_millis.is_some())
-    {
-        return Err("elapsed crop growth requires the interval simulation host".into());
-    }
-    if !interval_features
-        && scenario
-            .irrigation
-            .as_ref()
-            .is_some_and(|owner| owner.evaporation_period_millis.is_some())
-    {
-        return Err("elapsed irrigation requires the interval simulation host".into());
-    }
-    if !interval_features
-        && scenario
-            .dynamics
-            .as_ref()
-            .and_then(|owner| owner.disease.as_ref())
-            .is_some_and(|owner| owner.time_unit_millis.is_some())
-    {
-        return Err("elapsed disease requires the interval simulation host".into());
-    }
-    if !interval_features
-        && scenario
-            .route_closures
-            .iter()
-            .any(|closure| closure.unit_millis.is_some())
-    {
-        return Err("elapsed route closures require the interval simulation host".into());
-    }
-    if !interval_features
-        && scenario.environment.as_ref().is_some_and(|owner| {
-            owner.season_unit_millis.is_some() || owner.exposure_period_millis.is_some()
-        })
-    {
-        return Err("elapsed environment rules require the interval simulation host".into());
-    }
-    if (scenario.language.is_some() || !scenario.language_topic_profiles.is_empty())
-        && !interval_features
-    {
-        return Err("language requires the interval simulation host".into());
-    }
-    if scenario.signals.is_some() && !interval_features {
-        return Err("signals require the interval simulation host".into());
-    }
-    if scenario.work_capabilities.is_some() && !interval_features {
-        return Err("work capabilities require the interval simulation host".into());
-    }
-    if scenario.mechanics.is_some() && !interval_features {
-        return Err("mechanics requires the interval simulation host".into());
-    }
-    if scenario.personal_conflict.is_some() && !interval_features {
-        return Err("personal conflict requires the interval simulation host".into());
-    }
-    if (!scenario.personal_choices.is_empty()
-        || !scenario.meal_preferences.is_empty()
-        || scenario.birth_choices.is_some())
-        && !interval_features
-    {
-        return Err("personal choices require the interval simulation host".into());
-    }
     if let Some(path) = population_path {
         let source = std::fs::read_to_string(path).map_err(|error| error.to_string())?;
         let overlay: population::Overlay =
@@ -1692,7 +1534,7 @@ fn build_scenario(
     if let Some(seed) = seed {
         scenario.seed = seed;
     }
-    if interval_features && let Some(campaign) = &mut scenario.campaign {
+    if let Some(campaign) = &mut scenario.campaign {
         let guardians =
             campaign.embody_opening_guardians(scenario.tick_millis, scenario.rules.max_health)?;
         if let Some(highest) = guardians.iter().map(|row| row.id).max()
@@ -3024,17 +2866,3 @@ fn build_scenario(
         local_transport,
     })
 }
-
-pub fn save(world: &Economy, path: &Path) -> Result<(), String> {
-    let data = serde_json::to_vec(&world.snapshot()).map_err(|error| error.to_string())?;
-    game_persistence::save(path, &data)
-}
-pub fn load(path: &Path) -> Result<Economy, String> {
-    let data = std::fs::read(path).map_err(|error| error.to_string())?;
-    let state = serde_json::from_slice(&data).map_err(|error| error.to_string())?;
-    Economy::compile(state)
-}
-
-#[cfg(test)]
-#[path = "../tests/support/scenario.rs"]
-mod tests;

@@ -153,6 +153,27 @@ impl Opinions {
     pub fn learn_teaching(&mut self, experiences: &[TeachingExperience], tick: u64) {
         teaching::apply(self, experiences, tick);
     }
+
+    pub fn learn_teaching_pairs(&mut self, lessons: &[(u64, u64)], tick: u64) {
+        let experiences: Vec<_> = lessons
+            .par_iter()
+            .flat_map_iter(|&(teacher, student)| {
+                [
+                    TeachingExperience {
+                        observer: teacher,
+                        other: student,
+                        role: TeachingRole::Gave,
+                    },
+                    TeachingExperience {
+                        observer: student,
+                        other: teacher,
+                        role: TeachingRole::Received,
+                    },
+                ]
+            })
+            .collect();
+        self.learn_teaching(&experiences, tick);
+    }
     pub fn tracks_opposed_action_reactions(&self) -> bool {
         self.sensitivities.par_iter().any(|row| {
             row.opposed_action_reaction.is_some()

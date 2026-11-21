@@ -90,13 +90,11 @@ impl CoreHost {
             people: &self.core.people,
             opinions: self.opinions.as_ref(),
             busy: &busy,
-            goods: self.core.physical.goods(),
             view: &view,
             tick_millis: self.core.physical.tick_millis(),
             seed: self.core.seed,
             tick,
             manual: None,
-            personal_output: true,
         };
         let profiled: Vec<_> = self
             .schedule

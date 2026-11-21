@@ -47,9 +47,7 @@ elapsed deadline.
 An optional `rules.starvation_rate` uses elapsed exposure after each person's
 hunger crosses the starvation threshold. Fractional damage is saved, and the
 interval coordinator stops at fatal deadlines before advancing work or travel
-farther. Fatal helper withdrawals and family deaths are staged and saved. The
-older boundary-only economy runner rejects elapsed physiology rates; use the
-interval host.
+farther. Fatal helper withdrawals and family deaths are staged and saved. The elapsed host enforces the fatal deadline.
 An immortal can also specify `recovery_rate = { units = ..., per_millis = ... }`.
 Its fractional recovery is saved and the interval coordinator schedules the
 return of physical capability, so work and travel cannot accrue while the
@@ -65,8 +63,7 @@ projected fatigue. Idle people compare rest with their other local options;
 workers compare it with a continuation preference. A scenario can also set
 `elapsed_fatigue = true` to integrate fatigue at activity transitions and
 schedule exhaustion damage at elapsed deadlines. The integrated history
-scenario selects this mode. Older interval saves retain boundary settlement,
-and the legacy whole-boundary runner still applies automatic rest thresholds.
+scenario selects this mode. Older elapsed saves may retain boundary settlement.
 An environment can set `season_unit_millis` to give the authored calendar
 durations a stable elapsed unit. Decisions observe the season at their actual
 instant, including transitions inside a physical interval. Seasonal renewal

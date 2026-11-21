@@ -481,15 +481,6 @@ impl Plan {
         episodes.par_sort_unstable();
         Resolved { accepted, episodes }
     }
-    pub fn accepted_treatments(&self, events: &Events) -> Vec<(u64, u32, u64)> {
-        self.accepted(events)
-            .into_par_iter()
-            .map(|choice| (choice.patient, choice.medicine, choice.quantity))
-            .collect()
-    }
-    pub fn caregivers(&self) -> Vec<u64> {
-        self.records.par_iter().map(|(_, c)| c.actor).collect()
-    }
     fn accepted(&self, events: &Events) -> Vec<Choice> {
         if self.records.is_empty() {
             return Vec::new();
@@ -522,48 +513,6 @@ impl Plan {
             .par_iter()
             .filter(|r| accepted.binary_search(&r.0).is_ok())
             .map(|r| r.1)
-            .collect()
-    }
-    pub fn contacts(&self, events: &Events) -> Vec<(u64, u64)> {
-        self.accepted(events)
-            .into_par_iter()
-            .filter(|c| c.actor != c.patient)
-            .map(|c| (c.actor, c.patient))
-            .collect()
-    }
-    pub fn apply(&self, disease: Option<&mut Disease>, events: &Events) {
-        let mut patients: Vec<_> = self
-            .accepted(events)
-            .into_par_iter()
-            .map(|c| (c.patient, c.medicine))
-            .collect();
-        patients.par_sort_unstable();
-        let mut episodes: Vec<_> = self
-            .targets
-            .par_iter()
-            .filter(|row| patients.binary_search(&(row.0, row.1)).is_ok())
-            .map(|row| (row.0, row.2, row.3))
-            .collect();
-        episodes.par_sort_unstable();
-        game_economy_dynamics::treatment::apply_episodes(disease, &episodes, events.tick);
-    }
-    pub fn attempted(&self, actor: u64, patient: u64, events: &Events) -> bool {
-        self.records.iter().any(|(id, choice)| {
-            choice.actor == actor
-                && choice.patient == patient
-                && events
-                    .physical_actions
-                    .binary_search_by_key(id, |event| event.id)
-                    .ok()
-                    .is_some_and(|index| events.physical_actions[index].accepted)
-        })
-    }
-    /// The patient interprets an actual treatment attempt, regardless of its outcome.
-    pub fn help(&self, events: &Events) -> Vec<(u64, u64)> {
-        self.accepted(events)
-            .into_par_iter()
-            .filter(|choice| choice.actor != choice.patient)
-            .map(|choice| (choice.patient, choice.actor))
             .collect()
     }
 }
@@ -665,11 +614,8 @@ mod receipt_tests {
             let resolved = plan.resolve(&events);
             assert_eq!(resolved.contacts(), vec![(1, 2)]);
             assert_eq!(resolved.help(), vec![(2, 1)]);
-            let mut expected = disease.clone();
             let mut actual = disease.clone();
-            plan.apply(Some(&mut expected), &events);
             resolved.apply(Some(&mut actual), events.tick);
-            assert_eq!(actual, expected);
             assert_eq!(actual.cases.len(), 1);
             assert_eq!(actual.cases[0].person, 4);
         }

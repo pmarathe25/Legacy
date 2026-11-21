@@ -14,9 +14,9 @@ to track rates, deadlines, and behavior under different advance sizes. The
 
 ## Working constraints
 
-- Preserve high-level features, content, and access through the normal simulation
-  and player entry points. Restore missing behavior ahead of retiring the
-  whole-boundary runner. The interval runner still rejects some authored owners.
+- Restore missing high-level features through the elapsed host and its normal
+  simulation, player and history entry points. Track unsupported authored
+  options alongside feature coverage.
 - Separate what an actor perceives and chooses from what a physical owner can
   execute. Physical force, scarce supplies, fatigue, illness, and other
   involuntary consequences can constrain choices. Standing plans can express a
@@ -64,9 +64,8 @@ tactical reinforcement, guardian bodies, past-life memories, and unattended
 succession. Finish the remaining campaign abilities, coordinated expeditions,
 larger formations, and the
 [other paths rejected by the interval loader](../../crates/game-economy/src/core_interval/host/scenario.rs)
-before removing the whole-boundary runner. Include authoring, normal CLI/player
-access, history, and saved state in the migration. Exercise the feature through
-the interval host before deleting its old driver.
+in the elapsed host. Include authoring, normal CLI and player access, history,
+and saved state in each feature. The removed runner can be inspected in Git.
 
 The interval host now loads site demolition, recovery, and construction for a
 person's active recipe goal. Follow up on procuring missing construction kits
@@ -92,7 +91,7 @@ reports.
 | Area | Behavior to review and intended direction |
 | --- | --- |
 | Scheduler and ongoing work | Early phases such as meetings, delivery, reading, and help can reserve an actor before competing proposals are compared. Move discretionary actions into personal evaluation, including the option to idle or keep, interrupt, or abandon an activity. Respect prior commitments as motives and account for setup or interruption costs. Ordinary work and shared work already have some continuation or withdrawal support. |
-| Rest and capability | Interval rest and resumption are now personal choices, and elapsed fatigue and exhaustion are physical effects in the integrated path. Keep that behavior, broaden alternatives while occupied, and retire the automatic rest thresholds with the whole-boundary path. Check remaining shared age or hunger gates on negotiation, delivery, agriculture, and work. Model relevant ability and risk directly. |
+| Rest and capability | Interval rest and resumption are now personal choices, and elapsed fatigue and exhaustion are physical effects in the integrated path. Keep that behavior, and broaden alternatives while occupied. Check remaining shared age or hunger gates on negotiation, delivery, agriculture, and work. Model relevant ability and risk directly. |
 | Meetings and pressure | Known local peers can be preferred by directed affinity, while incidental pairing chooses adjacent people from a seeded local order. Extend bounded deliberate approaches to aversion and goals. Separate an incidental encounter, a deliberate approach, and the receiver's response. Preserve refusal, compliance under pressure, and physical coercion. |
 | Teaching and language | Personal choice profiles can independently decline or rank practice lessons during encounters. Extend this to competition with other activities, comprehension, and incidental learning. Preserve exact recipe knowledge separately. Keep phoneme mappings and written marks personal and revisable, with choices about whether to explain, adopt, or modify them. |
 | Interpretation and relationships | Ordinary and pressured encounters support signed trust and affinity responses by person and directed relationship. Promise outcomes and help have shared fallbacks, with personal and directed overrides in existing paths. Extend signed interpretation and neutral responses to remaining paths. Preserve the ability to enjoy harm, feel no obligation, distrust a helpful person, or help from real affection, fear, or obligation. |
@@ -102,7 +101,7 @@ reports.
 | Observation and testimony | The stock observer can grant exact regional totals from local access. Missing food-report policy defaults to volunteering, including the default on newborn minds. Record attributable observations and estimates, and let speakers choose what to share and listeners decide how to use it. Preserve purposeful withholding, deception, provenance, and involuntary perception. |
 | Meals, search, and travel | The personal choice round ranks individual foods. Optional on-site meals let people choose locally accessible stock portions that their cargo cannot fit. Legacy meal selection takes the first qualifying food. Food search favors reported quantity before distance, may use exact local stock to abandon a search, and can use the authored map directly. Ordinary legs then progress without a travel reconsideration option. Extend personal destination, exposure, and information preferences. Reconsider at real decision points, including between legs. Keep physical progress, route closures, and observation of failures. |
 | Purpose | Signed appraisals can interpret completed work and the outcomes of individual choice domains. Deprivation and its physical effects support an elapsed clock. Expand receipt coverage to care, discoveries, and social activities as those move into personal evaluation. Add appraisal development through experience. |
-| Animals | Keep individual handling, affinity, restraint, and escape responses. Both lifecycle paths support inherited desire and circumstances when selecting willing local mates. Extend bounded encounters to individual mate preferences and model physical separation within regions. Retain ecological pressure, conception, inheritance, and matching behavior across both fauna execution paths. |
+| Animals | Keep individual handling, affinity, restraint, and escape responses. Animal mate selection uses inherited desire, individual preferences, and circumstances. Model physical separation within regions and move the lifecycle clocks to an explicit elapsed cadence. Preserve ecological pressure, conception, and inheritance. |
 | Expeditions, campaign, and tactical reactions | During migration, replace general sociability as the proxy for joining a mission with each participant's mission-specific judgment. Preserve choices to coordinate, split, stop, stay, or return. Keep authored guardian loyalty, supernatural sensing, and player reincarnation mechanics. Make pursuing, mentoring, judging readiness, and responding to requests individual actions. Player lineage does not confer political authority. Review default tactical defense on being targeted as an active decision, while preserving physical defenses, surrender, and withdrawal. |
 
 Source entry points for rechecking these behaviors include the

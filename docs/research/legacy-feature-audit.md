@@ -37,7 +37,7 @@ and richer ecological pressures remain unfinished.
 
 For each restored feature: demonstrate its owner actually runs through `CoreHost`, with data-defined configuration and observations; exercise personal refusal or noncompliance where relevant; test resource conservation and rollback, save/resume and deterministic results across worker counts. Measure independent and contested workloads separately. Do not mark the full domain complete merely because a type, catalog, or isolated helper is present. Historical institutions are descriptions of autonomous behavior and never grant authority or bind agreements by themselves.
 
-The ordinary `--player` CLI runs the elapsed campaign on the same host as the history runner. `--person PERSON` opens a personally controlled scenario with time advancement, travel, eating, chosen work, voluntary rest, self-treatment, spoken and written forms, and save/load. The explicitly selected whole-boundary interface remains during migration of the remaining player actions and observations.
+The ordinary `--player` CLI runs the elapsed campaign on the same host as the history runner. `--person PERSON` opens a personally controlled scenario with time advancement, travel, eating, chosen work, voluntary rest, self-treatment, spoken and written forms, and save/load. Historical behavior remains available in the recorded Git baseline.
 
 The ordinary unattended CLI also loads the elapsed host directly. Its `step`
 command accepts milliseconds, and saves can be resumed by the history runner.
