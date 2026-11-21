@@ -513,7 +513,7 @@ impl CoreInterval {
         self.physical.commit_early_work(draft).map(Some)
     }
     /// Stage early production so an item owner can prepare metadata before it
-    /// is published. Perishable output still waits for boundary settlement.
+    /// is published. Elapsed custody also supports perishable output.
     pub fn prepare_early_work(
         &self,
         identified: Option<game_lot_runtime::IdentifiedProduction<'_>>,

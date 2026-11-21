@@ -72,7 +72,7 @@ fn shelf_life_starts_when_work_finishes_across_steps_and_load() {
 
 #[test]
 fn reserved_input_expires_before_work_can_consume_it_at_the_same_instant() {
-    let (events, bread) = simulate(4, 7 * DAY, true, &[FINISH - 1, 1]);
+    let (events, bread) = simulate(4, FINISH, true, &[FINISH - 1, 1]);
     assert_eq!(bread, 7);
     assert_eq!(events.len(), 2);
     assert!(matches!(

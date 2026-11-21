@@ -2088,7 +2088,7 @@ impl CoreHost {
         next.retire(updates);
         Some(next)
     }
-    /// Publish completed nonperishable work and its staged tool conditions.
+    /// Publish completed work and its staged tool conditions.
     pub fn publish_early_work(
         &mut self,
     ) -> Result<Option<game_lot_runtime::EarlyWorkEvents>, String> {
