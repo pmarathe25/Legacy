@@ -22,11 +22,48 @@ struct ExpeditionParticipation {
     joined_under_pressure: u64,
 }
 
+#[derive(Default)]
 struct CrewParticipation {
-    first_year: u64,
-    last_year: u64,
     helpers: BTreeSet<u64>,
     starts: u64,
+    years: BTreeMap<u64, CrewYear>,
+}
+
+#[derive(Default)]
+struct CrewYear {
+    helpers: BTreeSet<u64>,
+    starts: u64,
+}
+
+impl CrewParticipation {
+    fn record(&mut self, year: u64, helper: u64) {
+        self.starts = self.starts.saturating_add(1);
+        self.helpers.insert(helper);
+        let annual = self.years.entry(year).or_default();
+        annual.starts = annual.starts.saturating_add(1);
+        annual.helpers.insert(helper);
+    }
+
+    fn summary(&self, lead: u64) -> Value {
+        let peak = self
+            .years
+            .iter()
+            .max_by_key(|(year, row)| (row.starts, row.helpers.len(), std::cmp::Reverse(**year)))
+            .map(|(year, row)| {
+                json!({
+                    "year": year, "starts": row.starts, "helpers": row.helpers.len()
+                })
+            });
+        json!({
+            "lead": lead, "helpers": self.helpers, "starts": self.starts,
+            "first_year": self.years.first_key_value().map(|(year, _)| year),
+            "last_year": self.years.last_key_value().map(|(year, _)| year),
+            "peak": peak,
+            "years": self.years.iter().map(|(year, row)| json!({
+                "year": year, "starts": row.starts, "helpers": row.helpers
+            })).collect::<Vec<_>>(),
+        })
+    }
 }
 
 struct RecipeTransmission {
@@ -151,16 +188,7 @@ impl Chronicle {
                 else {
                     continue;
                 };
-                let observed = self.crews.entry(lead).or_insert_with(|| CrewParticipation {
-                    first_year: year,
-                    last_year: year,
-                    helpers: BTreeSet::new(),
-                    starts: 0,
-                });
-                observed.first_year = observed.first_year.min(year);
-                observed.last_year = observed.last_year.max(year);
-                observed.helpers.insert(helper);
-                observed.starts = observed.starts.saturating_add(1);
+                self.crews.entry(lead).or_default().record(year, helper);
                 self.record(
                     event,
                     row,
@@ -386,10 +414,7 @@ impl Chronicle {
         });
         crews.truncate(10);
         json!({
-            "shared_crews": crews.iter().map(|&(lead, crew)| json!({
-                "lead":lead, "helpers":crew.helpers, "starts":crew.starts,
-                "first_year":crew.first_year, "last_year":crew.last_year
-            })).collect::<Vec<_>>(),
+            "shared_crews": crews.iter().map(|&(&lead, crew)| crew.summary(lead)).collect::<Vec<_>>(),
             "counts": self.counts,
             "lexicon": self.lexicon.summary(),
             "recipe_transmission": transmissions.iter().map(|&(&id, learning)| json!({
@@ -603,15 +628,13 @@ pub(super) fn write_world(text: &mut String, chronicle: &Value) {
         .as_array()
         .filter(|rows| !rows.is_empty())
     {
-        text.push_str(
-            "## Shared work
-
-",
-        );
+        text.push_str("## Shared work\n\n");
         for row in rows.iter().take(5) {
             let helpers = row["helpers"].as_array().map_or(0, |rows| rows.len());
-            writeln!(text, "- From year {} through {}, {helpers} people chose to help with person {}'s jobs. The archive records {} starts.",
-                row["first_year"], row["last_year"], row["lead"], row["starts"]).unwrap();
+            let years = row["years"].as_array().map_or(0, Vec::len);
+            writeln!(text, "- {helpers} people chose to help with person {}'s jobs in {years} recorded years. The first start was in year {} and the latest was in year {}. Their busiest year was {}, with {} starts from {} helpers.",
+                row["lead"], row["first_year"], row["last_year"], row["peak"]["year"],
+                row["peak"]["starts"], row["peak"]["helpers"]).unwrap();
         }
         text.push('\n');
     }
@@ -752,6 +775,14 @@ mod tests {
         assert_eq!(crew["starts"], 3);
         assert_eq!(crew["first_year"], 3);
         assert_eq!(crew["last_year"], 4);
+        assert_eq!(crew["peak"], json!({"year":4,"starts":2,"helpers":2}));
+        assert_eq!(
+            crew["years"],
+            json!([
+                {"year":3,"starts":1,"helpers":[2]},
+                {"year":4,"starts":2,"helpers":[2,3]}
+            ]),
+        );
         assert_eq!(history.selected()[0]["other"], 1);
     }
 
