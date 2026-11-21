@@ -7,7 +7,15 @@ plays a particular authored character. Either mode accepts a scenario path,
 `--seed`, and `--population`. The command examples below that use
 `--whole-boundary-player` refer to the older interface during migration.
 
-Run `cargo run -p game-economy-cli`, optionally passing a scenario TOML path. The default scenario loads goods and recipes from `content/objects` and `content/workshop`. `help` lists commands; `work`, `social`, `yield` and `treat` change an individual's future choices and `go` starts a journey along an authored route. `expedition`, `invite-expedition`, `meet-expedition` and `cancel-expedition` operate personal journeys and goals. `claims`, `claim`, `unclaim`, `take-claimed` and `claim-output` expose individual assertions and preferences. `health` displays current infections and meetings. `promise`, `decide`, and `honor` expose personal promises and choices; `catalog` lists good IDs. Scenarios can supply family, dependent-care, agreement, route, personal dynamics and named aspiration data. Save files contain exact physical lots, deadlines, journeys and disease state, and are validated before loading.
+Run `cargo run -p game-economy-cli`, optionally passing a scenario TOML path,
+for an unattended elapsed world. `step` advances a simulated minute and
+`step MILLISECONDS` advances the requested duration. `help` lists diagnostic
+commands. `status` shows absolute simulated time, and `save` and `load` use
+elapsed checkpoints compatible with the history runner. Characters remain
+autonomous during observation, including the active campaign incarnation.
+
+The earlier administrative commands and examples that use `step` with a tick
+count are available through `--whole-boundary` during migration.
 
 This runner currently exposes the composed economic slice, not the complete campaign simulation.
 
@@ -305,7 +313,11 @@ After grouping social encounters by local endpoint, two repeat runs of the same 
 
 `economy-local-food-search` demonstrates a hungry person choosing to visit a known store and then acquiring and eating actual food. The existing local visit choice can be changed with `visit-local PERSON on|off`.
 
-The interval host can load fresh authored scenarios through `game_economy_cli::core_scenario` (or `core_scenario_with_options` for seed and population overlays). `content/scenarios/economy-core.toml` exercises family birth, dependent care, gathering, and wildlife. Import currently rejects scenario owners the host does not implement, naming them in the error; it does not silently discard those owners. The existing command-line runner still uses the whole-boundary host and is not yet connected to this API.
+The normal CLI and history runner load fresh authored scenarios through
+`game_economy_cli::core_scenario` and `core_scenario_with_options`. The latter
+supports seed and population overlays. `content/scenarios/economy-core.toml`
+exercises family birth, dependent care, gathering, and wildlife. Import names
+unsupported owner combinations in the error so authors can correct them.
 
 The interval scenario also contains renewable animal-product rules and a personal collection policy. Collection depends on the animal's handling response and an accepted physical transfer.
 
