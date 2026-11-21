@@ -249,7 +249,7 @@ fn first_player_job_id() -> u64 {
     1
 }
 impl CoreSchedule {
-    pub(super) fn validate(&self, core: &CoreInterval) -> Result<(), String> {
+    fn validate_clock(&self, core: &CoreInterval) -> Result<u64, String> {
         let offset = core
             .elapsed_millis()
             .ok_or("scheduled host needs an active interval")?;
@@ -261,10 +261,19 @@ impl CoreSchedule {
             || self
                 .next_decision_millis
                 .is_some_and(|next| next < u128::from(offset))
-            || self
-                .carried_rates
-                .par_windows(2)
-                .any(|rows| rows[0].0 >= rows[1].0)
+        {
+            return Err("invalid core decision schedule".into());
+        }
+        Ok(offset)
+    }
+
+    pub(super) fn validate(&self, core: &CoreInterval) -> Result<(), String> {
+        let offset = self.validate_clock(core)?;
+        let quantum = core.physical.tick_millis();
+        if self
+            .carried_rates
+            .par_windows(2)
+            .any(|rows| rows[0].0 >= rows[1].0)
             || self
                 .carried_rates
                 .par_iter()
@@ -928,11 +937,18 @@ impl CoreHost {
         if blocked.par_windows(2).any(|rows| rows[0] >= rows[1]) {
             return Err("invalid occupied people".into());
         }
-        let external_blocked = blocked;
         self.schedule
             .as_ref()
             .ok_or("no core schedule")?
-            .validate(&self.core)?;
+            .validate_clock(&self.core)?;
+        self.advance_validated_segment(requested_millis, blocked)
+    }
+
+    fn advance_validated_segment(
+        &mut self,
+        requested_millis: u64,
+        external_blocked: &[u64],
+    ) -> Result<CoreRun, String> {
         let start = self.core.elapsed_millis().ok_or("no physical interval")?;
         let quantum = self.core.physical.tick_millis();
         let mut run = CoreRun::default();
@@ -987,7 +1003,8 @@ impl CoreHost {
                 run.events.push(CoreRunEvent::Campaign(campaign_events));
             }
             attempt!('run, self.sync_work_rates(blocked));
-            let deadline = attempt!('run, self.host_deadline(None));
+            let plan = attempt!('run, self.host_deadline(None));
+            let deadline = &plan.deadline;
             if deadline.after_millis == 0 {
                 let mut handled = false;
                 if deadline.wounds {
@@ -1108,13 +1125,14 @@ impl CoreHost {
                 }
                 continue;
             }
-            let schedule = self.schedule.as_ref().expect("active schedule").clone();
+            let decision = self
+                .schedule
+                .as_ref()
+                .expect("active schedule")
+                .next_decision_millis;
             // Periodic physiological owners advance even when the next personal
             // decision lies beyond this entire physical tick.
-            if offset == 0
-                && schedule.next_decision_millis != Some(0)
-                && self.core.physical.tick() > 0
-            {
+            if offset == 0 && decision != Some(0) && self.core.physical.tick() > 0 {
                 let tick = self.core.physical.tick();
                 let due = self
                     .social
@@ -1144,7 +1162,8 @@ impl CoreHost {
                     continue;
                 }
             }
-            if schedule.next_decision_millis == Some(u128::from(offset)) {
+            if decision == Some(u128::from(offset)) {
+                let schedule = self.schedule.as_ref().expect("active schedule").clone();
                 match schedule.phase {
                     DecisionPhase::Meals => {
                         let (rest_choices, rest_events) =
@@ -3412,7 +3431,7 @@ impl CoreHost {
             if spent >= requested_millis {
                 break;
             }
-            let until_decision = schedule.next_decision_millis.map_or(u64::MAX, |next| {
+            let until_decision = decision.map_or(u64::MAX, |next| {
                 (next - u128::from(offset)).min(u128::from(u64::MAX)) as u64
             });
             let step = (requested_millis - spent)
@@ -3422,7 +3441,8 @@ impl CoreHost {
                 run.failure = Some("core schedule made no progress".into());
                 break;
             }
-            let elapsed = attempt!('run, self.progress_with_activity(step, external_blocked));
+            let elapsed =
+                attempt!('run, self.progress_with_activity(step, external_blocked, Some(plan)));
             if !elapsed.incapacitations.is_empty() {
                 run.events.push(CoreRunEvent::Incapacitations {
                     at_millis: self.core.simulated_millis(),
@@ -3468,11 +3488,11 @@ impl CoreHost {
         self.schedule
             .as_ref()
             .ok_or("no core schedule")?
-            .validate(&self.core)?;
+            .validate_clock(&self.core)?;
         let mut combined = CoreRun::default();
         loop {
             let remaining = requested_millis - combined.elapsed_millis;
-            let mut segment = self.advance_scheduled(remaining, blocked)?;
+            let mut segment = self.advance_validated_segment(remaining, blocked)?;
             combined.elapsed_millis += segment.elapsed_millis;
             combined.events.append(&mut segment.events);
             let Some(decisions) = combined.decisions.checked_add(segment.decisions) else {

@@ -1096,21 +1096,29 @@ impl CoreInterval {
     /// Progress without repeating decisions, publishing arrivals, or completing work.
     /// Failed validation leaves all owners unchanged.
     pub fn progress(&mut self, requested_millis: u64) -> Result<u64, String> {
-        self.progress_adjusting(requested_millis, &[], None, None, None)
+        let consumed = self.progress_limit(requested_millis)?;
+        self.progress_checked_segment(consumed, &[], None, None, None)
     }
 
-    fn progress_adjusting(
+    /// Execute a duration already capped at the relevant deadlines by the host.
+    fn progress_checked_segment(
         &mut self,
-        requested_millis: u64,
+        consumed: u64,
         reductions: &[(u64, u64)],
         staged_vitals: Option<VitalsProgress>,
         batches: Option<game_lots::BatchAllocation>,
         births: Option<ElapsedBirths<'_>>,
     ) -> Result<u64, String> {
         let quantum = self.physical.tick_millis();
-        let consumed = self.progress_limit(requested_millis)?;
         if consumed == 0 {
             return Ok(0);
+        }
+        let remaining = self
+            .elapsed_millis()
+            .and_then(|elapsed| quantum.checked_sub(elapsed))
+            .ok_or("no physical time remaining")?;
+        if consumed > remaining {
+            return Err("prepared progress crosses the physical boundary".into());
         }
         let generation = self
             .generation

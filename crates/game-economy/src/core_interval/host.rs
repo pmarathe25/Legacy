@@ -227,6 +227,13 @@ pub struct CoreHostSnapshot {
     pub schedule: Option<CoreSchedule>,
 }
 
+/// Due owners for a segment whose opening state has already been checked.
+struct PreparedDeadline {
+    deadline: CoreDeadline,
+    ordinary_recovery: bool,
+    natural_death: bool,
+}
+
 /// This host composes only the owners listed in `CoreHostSnapshot`.
 pub struct CoreHost {
     core: CoreInterval,
@@ -1678,7 +1685,7 @@ impl CoreHost {
         {
             self.sync_work_rates(&[])?;
         }
-        Ok(self.progress_with_activity(millis, &[])?.millis)
+        Ok(self.progress_with_activity(millis, &[], None)?.millis)
     }
     pub fn next_deadline(&mut self, hunger: Option<u32>) -> Result<CoreDeadline, String> {
         if self
@@ -1688,10 +1695,10 @@ impl CoreHost {
         {
             self.sync_work_rates(&[])?;
         }
-        self.host_deadline(hunger)
+        Ok(self.host_deadline(hunger)?.deadline)
     }
 
-    fn host_deadline(&self, hunger: Option<u32>) -> Result<CoreDeadline, String> {
+    fn host_deadline(&self, hunger: Option<u32>) -> Result<PreparedDeadline, String> {
         let mut deadline = self.core.next_deadline(hunger)?;
         let recovery = self.next_ordinary_recovery();
         let exposure = self.next_environment_exposure();
@@ -1774,7 +1781,11 @@ impl CoreHost {
                 deadline.care = care == Some(after_millis);
             }
         }
-        Ok(deadline)
+        Ok(PreparedDeadline {
+            ordinary_recovery: recovery == Some(deadline.after_millis),
+            natural_death: natural_death == Some(deadline.after_millis),
+            deadline,
+        })
     }
 
     fn next_ordinary_recovery(&self) -> Option<u64> {
