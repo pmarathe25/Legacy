@@ -1,10 +1,12 @@
 //! Translate authored object and workshop files into numeric production catalogs.
 use game_production::{
-    Amount, FoodProfile, Good, NUTRIENT_NAMES, Production, Recipe, RecipeCategory, Stock,
+    Amount, FoodProfile, Good, MaturationProfile, NUTRIENT_NAMES, Production, Recipe,
+    RecipeCategory, Stock,
 };
 use std::collections::{BTreeMap, HashSet};
 use std::path::Path;
 use toml::Value;
+mod maturation;
 mod packs;
 fn positive(row: &Value, key: &str) -> Result<u64, String> {
     row.get(key)
@@ -75,6 +77,7 @@ pub fn augment(
     let (objects, recipes) = packs::load(objects, recipes)?;
     let mut next = production.clone();
     let mut ids = BTreeMap::new();
+    let mut maturing = Vec::new();
     let mut used: HashSet<u32> = next.goods.iter().map(|good| good.id).collect();
     for good in &next.goods {
         ids.insert(good.name.to_ascii_lowercase().replace(' ', "-"), good.id);
@@ -97,6 +100,8 @@ pub fn augment(
         }
         let food = food_profile(&object, food_relief_divisor)
             .map_err(|error| format!("object {key}: {error}"))?;
+        let maturation =
+            maturation::read(&object).map_err(|error| format!("object {key}: {error}"))?;
         if let Some(&existing) = ids.get(&key) {
             if runtime_id.is_some() {
                 return Err(format!("namespaced object {key} already exists"));
@@ -108,6 +113,9 @@ pub fn augment(
                 .expect("known good");
             if good.food.is_none() {
                 good.food = food;
+            }
+            if let Some(profile) = maturation {
+                maturing.push((existing, profile));
             }
             continue;
         }
@@ -121,10 +129,42 @@ pub fn augment(
             return Err(format!("object {key}: duplicate good identity {assigned}"));
         }
         ids.insert(key.clone(), assigned);
+        if let Some(profile) = maturation {
+            maturing.push((assigned, profile));
+        }
         next.goods.push(Good {
             id: assigned,
             name: key,
             food,
+            maturation: None,
+        });
+    }
+    let food_ids: HashSet<_> = next
+        .goods
+        .iter()
+        .filter(|good| good.food.is_some())
+        .map(|good| good.id)
+        .collect();
+    for (id, profile) in maturing {
+        let product = *ids
+            .get(&profile.product)
+            .ok_or_else(|| format!("unknown maturation product {}", profile.product))?;
+        let good = next
+            .goods
+            .iter_mut()
+            .find(|good| good.id == id)
+            .expect("known preparation");
+        if good.food.is_some() || !food_ids.contains(&product) {
+            return Err(format!(
+                "object {} must mature from an inedible preparation into food",
+                good.name
+            ));
+        }
+        good.maturation = Some(MaturationProfile {
+            product,
+            days: profile.days,
+            min_celsius: profile.min_celsius,
+            max_celsius: profile.max_celsius,
         });
     }
     let mut recipe_id = next

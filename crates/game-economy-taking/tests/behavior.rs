@@ -93,6 +93,7 @@ fn runtime(capacity: u64, stock: u64) -> Runtime {
             ],
         },
         goods: vec![Good {
+            maturation: None,
             id: 1,
             name: "goods".into(),
             food: None,

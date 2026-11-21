@@ -852,11 +852,13 @@ fn fixture() -> CoreSnapshot {
         },
         goods: vec![
             Good {
+                maturation: None,
                 id: 1,
                 name: "input".into(),
                 food: None,
             },
             Good {
+                maturation: None,
                 id: 2,
                 name: "output".into(),
                 food: None,
@@ -7582,7 +7584,8 @@ fn irrigation_consumes_contested_water_and_gates_next_growth() {
         initial.people[1].region = Some(1);
         let mut third = initial.people[1].clone(); third.id = 3; initial.people.push(third);
         initial.travel = None; initial.nutrition = None; initial.pending_food.clear(); initial.rules.starvation_damage = 0;
-        initial.physical.goods.push(Good {id: 3, name: "water".into(), food: None});
+        initial.physical.goods.push(Good {
+        maturation: None,id: 3, name: "water".into(), food: None});
         initial.physical.custody.containers.push(Container::new(Place::Stock {region: 1, good: 3}, 10, vec![Lot { batch: None,item: None, good: 3, quantity: 1, expires_at: None}]).unwrap());
         initial.physical.custody.containers.sort_by_key(|row| row.place);
         let agriculture = Agriculture { growth_clock: None, provenance: None,
@@ -8476,6 +8479,7 @@ fn core_host_cultivation_benchmark() {
     }
     if watering {
         initial.physical.goods.push(Good {
+            maturation: None,
             id: 3,
             name: "water".into(),
             food: None,
@@ -9577,7 +9581,7 @@ fn core_host_social_benchmark() {
                 let mut probe = CoreHost::begin(snapshot.clone(), &[(1, 1)]).unwrap();
                 let pairs = probe.meet_autonomously(&[]).unwrap();
                 for (id, name) in [(3, "paper"), (4, "ink"), (5, "page")] {
-                    snapshot.core.physical.goods.push(Good { id, name: name.into(), food: None });
+                    snapshot.core.physical.goods.push(Good { maturation: None, id, name: name.into(), food: None });
                 }
                 let mut pages = Vec::new();
                 let mut literacy = Vec::new();
@@ -13432,6 +13436,7 @@ fn scheduled_runner_defers_perishable_work_and_publishes_other_completion() {
     initial.nutrition = None;
     initial.pending_food.clear();
     initial.physical.goods.push(Good {
+        maturation: None,
         id: 3,
         name: "perishable".into(),
         food: Some(game_production_model::FoodProfile {
@@ -13988,6 +13993,7 @@ fn unsupported_completed_work_can_be_deferred_without_blocking_other_jobs() {
                     initial.nutrition = None;
                     initial.pending_food.clear();
                     initial.physical.goods.push(Good {
+                        maturation: None,
                         id: 3,
                         name: "perishable".into(),
                         food: Some(game_production_model::FoodProfile {
@@ -17561,6 +17567,7 @@ fn text_writing_fixture(supplied: bool) -> CoreHostSnapshot {
     core.pending_food.clear();
     for (id, name) in [(3, "paper"), (4, "ink"), (5, "page")] {
         core.physical.goods.push(Good {
+            maturation: None,
             id,
             name: name.into(),
             food: None,
@@ -17712,6 +17719,7 @@ fn core_host_text_writing_benchmark() {
     core.pending_food.clear();
     for (id, name) in [(3, "paper"), (4, "ink"), (5, "page")] {
         core.physical.goods.push(Good {
+            maturation: None,
             id,
             name: name.into(),
             food: None,
@@ -18207,6 +18215,7 @@ fn core_host_written_page_consumption_benchmark() {
     core.pending_food.clear();
     for (id, name) in [(3, "paper"), (4, "ink"), (5, "page")] {
         core.physical.goods.push(Good {
+            maturation: None,
             id,
             name: name.into(),
             food: None,
@@ -18756,6 +18765,7 @@ fn core_host_hauling_pickup_benchmark() {
         for person in 2..=count {
             let good = u32::try_from(person + 1).unwrap();
             core.physical.goods.push(Good {
+                maturation: None,
                 id: good,
                 name: format!("kit-{person}"),
                 food: None,

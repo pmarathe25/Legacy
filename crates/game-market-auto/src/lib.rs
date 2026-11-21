@@ -546,6 +546,7 @@ mod tests {
     fn selected_offers_and_committed_cargo_share_the_same_decision() {
         let people = [(1, Some(1), 10, 0), (2, Some(1), 10, 0)];
         let goods = [Good {
+            maturation: None,
             id: 1,
             name: "wood".into(),
             food: None,

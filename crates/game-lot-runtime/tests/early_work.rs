@@ -168,11 +168,13 @@ fn fixture(perishable: bool, output_quantity: u64) -> Runtime {
         },
         goods: vec![
             Good {
+                maturation: None,
                 id: 1,
                 name: "input".into(),
                 food: None,
             },
             Good {
+                maturation: None,
                 id: 2,
                 name: "output".into(),
                 food: perishable.then(|| FoodProfile {

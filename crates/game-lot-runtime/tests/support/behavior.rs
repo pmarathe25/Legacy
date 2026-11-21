@@ -4,6 +4,7 @@ use game_production_model::Amount;
 
 fn runtime() -> Runtime {
     let good = |id| Good {
+        maturation: None,
         id,
         name: format!("good-{id}"),
         food: None,
@@ -2270,6 +2271,7 @@ fn identified_job_outputs_avoid_simultaneous_written_item_and_respect_stale_draf
     let mut initial = runtime().snapshot();
     for id in [3, 4, 5] {
         initial.goods.push(Good {
+            maturation: None,
             id,
             name: format!("good-{id}"),
             food: None,

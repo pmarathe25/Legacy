@@ -5,6 +5,7 @@ use game_production_model::FoodProfile;
 use std::collections::BTreeMap;
 fn food() -> Good {
     Good {
+        maturation: None,
         id: 1,
         name: "meal".into(),
         food: Some(FoodProfile {
