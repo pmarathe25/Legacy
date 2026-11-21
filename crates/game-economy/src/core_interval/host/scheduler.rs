@@ -681,6 +681,10 @@ impl CoreSchedule {
 }
 #[derive(Debug, PartialEq, Eq)]
 pub enum CoreRunEvent {
+    AgreementExpiry {
+        at_millis: u128,
+        events: Vec<game_agreements::Event>,
+    },
     Arrivals(CoreArrivals),
     Deferred(Vec<u64>),
     Work(game_lot_runtime::EarlyWorkEvents),
@@ -1217,6 +1221,16 @@ impl CoreHost {
             let decision_due = decision == Some(u128::from(offset));
             if deadline.after_millis == 0 {
                 let mut handled = false;
+                if deadline.agreement_expiry {
+                    let events = self.expire_due_agreements();
+                    if !events.is_empty() {
+                        run.events.push(CoreRunEvent::AgreementExpiry {
+                            at_millis: self.core.simulated_millis(),
+                            events,
+                        });
+                    }
+                    handled = true;
+                }
                 if deadline.storage_temperature
                     && let Some(celsius) = attempt!('run, self.publish_storage_temperature())
                 {
@@ -3782,6 +3796,12 @@ impl CoreHost {
                     || !fauna.migrations.is_empty())
             {
                 run.events.push(CoreRunEvent::Fauna(fauna));
+            }
+            if !elapsed.agreement_expiries.is_empty() {
+                run.events.push(CoreRunEvent::AgreementExpiry {
+                    at_millis: self.core.simulated_millis(),
+                    events: elapsed.agreement_expiries,
+                });
             }
             if !elapsed.local_arrivals.is_empty() {
                 run.events.push(CoreRunEvent::LocalWalking {

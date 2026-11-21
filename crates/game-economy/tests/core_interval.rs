@@ -4315,6 +4315,7 @@ fn core_host_work_requests_benchmark() {
         construction: None,
         hauling: None,
         agreements: use_offers.then(|| game_agreements::Agreements {
+            time_unit_millis: None,
             next_id: count,
             policies: vec![],
             offering: vec![],
@@ -10819,6 +10820,7 @@ fn an_unfunded_offer_can_motivate_work_without_forcing_delivery() {
         events: vec![],
     };
     let agreements = game_agreements::Agreements {
+        time_unit_millis: None,
         next_id: 1,
         policies: vec![],
         offering: vec![],
@@ -10975,6 +10977,7 @@ fn voluntary_deliveries_record_only_successful_physical_transfers() {
                     .containers
                     .sort_by_key(|row| row.place);
                 let agreements = game_agreements::Agreements {
+                    time_unit_millis: None,
                     next_id: 1,
                     policies: vec![],
                     offering: vec![],
@@ -11150,7 +11153,7 @@ fn scheduled_delivery_is_a_personal_choice_that_fear_can_motivate() {
         ]);
         initial.physical.custody.containers.sort_by_key(|row| row.place);
         let policy: game_agreements::Policy = serde_json::from_value(serde_json::json!({"person":2,"honor":false,"fear_honor_threshold":5})).unwrap();
-        let agreements = game_agreements::Agreements { next_id: 2, policies: vec![policy], offering: vec![], work_offering: vec![], bulk_debtors: vec![], contracts: vec![game_agreements::Contract { id: 1, debtor: 2, creditor: 1, good: 1, quantity: 1, delivered: 0, due: 5, status: game_agreements::Status::Active }], events: vec![] };
+        let agreements = game_agreements::Agreements { time_unit_millis: None, next_id: 2, policies: vec![policy], offering: vec![], work_offering: vec![], bulk_debtors: vec![], contracts: vec![game_agreements::Contract { id: 1, debtor: 2, creditor: 1, good: 1, quantity: 1, delivered: 0, due: 5, status: game_agreements::Status::Active }], events: vec![] };
         let opinions: game_opinions::Opinions = serde_json::from_value(serde_json::json!({"rules":{"minimum":-10,"maximum":10,"initial":0,"fulfilled_gain":1,"default_loss":1},"records":[{"observer":2,"target":1,"trust":0,"fear":fear}]})).unwrap();
         let snapshot = CoreHostSnapshot { work_capabilities: None, personal_conflict: None, expeditions: None, campaign: None, mechanics: None, core: initial, autowork: None, tool_wear: None, opinions: Some(opinions), goals: None, dreams: None, shared_work: None, market: None, writing: None, local_transport: None, construction: None, hauling: None, agreements: Some(agreements), sites: None, tool_requirements: vec![], paused_work_rates: vec![], pending_vital_deaths: vec![], fatigue: None, activity: vec![], giving: None, practice_work_asks: vec![], practice_work_evidence: Default::default(), skills: None, taking: None, medical: None, goal_setbacks: vec![], purpose: None, animal_restraints: None, animal_products: None, recovery: None, fauna: None, hunting: None, animal_feelings: None, animal_care: None, animal_handling: None, family: None, dependent_care: None, gathering: None, environment: None, irrigation: None, agriculture: None, health: None, knowledge: None, social: None, personality: None, claims: None, food_search: None, schedule: None };
         let mut host = CoreHost::begin(snapshot, &[(1, 1)]).unwrap();
@@ -11185,7 +11188,7 @@ fn people_can_propose_and_accept_unfunded_promises_without_enforcement() {
         initial.pending_food.clear();
         let offer: game_agreements::OfferPolicy = serde_json::from_value(serde_json::json!({"person":2,"recipient":3,"good":2,"quantity":99,"due_after":2,"retry_ticks":10,"willing":true})).unwrap();
         let accept: game_agreements::Policy = serde_json::from_value(serde_json::json!({"person":3,"accept":true})).unwrap();
-        let agreements = game_agreements::Agreements { next_id: 1, policies: vec![accept], offering: vec![offer], work_offering: vec![], bulk_debtors: vec![], contracts: vec![], events: vec![] };
+        let agreements = game_agreements::Agreements { time_unit_millis: None, next_id: 1, policies: vec![accept], offering: vec![offer], work_offering: vec![], bulk_debtors: vec![], contracts: vec![], events: vec![] };
         let opinions: game_opinions::Opinions = serde_json::from_value(serde_json::json!({"rules":{"minimum":-10,"maximum":10,"initial":0,"fulfilled_gain":1,"default_loss":1},"records":[{"observer":2,"target":3,"trust":0,"obligation":0}]})).unwrap();
         let snapshot = CoreHostSnapshot { work_capabilities: None, personal_conflict: None, expeditions: None, campaign: None, mechanics: None, core: initial, autowork: None, tool_wear: None, opinions: Some(opinions.clone()), goals: None, dreams: None, shared_work: None, market: None, writing: None, local_transport: None, construction: None, hauling: None, agreements: Some(agreements), sites: None, tool_requirements: vec![], paused_work_rates: vec![], pending_vital_deaths: vec![], fatigue: None, activity: vec![], giving: None, practice_work_asks: vec![], practice_work_evidence: Default::default(), skills: None, taking: None, medical: None, goal_setbacks: vec![], purpose: None, animal_restraints: None, animal_products: None, recovery: None, fauna: None, hunting: None, animal_feelings: None, animal_care: None, animal_handling: None, family: None, dependent_care: None, gathering: None, environment: None, irrigation: None, agriculture: None, health: None, knowledge: None, social: None, personality: None, claims: None, food_search: None, schedule: None };
         let mut host = CoreHost::begin(snapshot, &[(1, 1)]).unwrap();
@@ -11223,6 +11226,7 @@ fn manually_making_a_promise_uses_the_makers_own_obligation_disposition() {
     }))
     .unwrap();
     let agreements = game_agreements::Agreements {
+        time_unit_millis: None,
         next_id: 1,
         policies: vec![],
         offering: vec![],
@@ -12793,6 +12797,7 @@ fn core_host_offer_choices_benchmark() {
         })
         .collect();
     let agreements = game_agreements::Agreements {
+        time_unit_millis: None,
         next_id: 1,
         policies,
         offering,
@@ -12936,6 +12941,7 @@ fn core_host_agreement_delivery_benchmark() {
         .containers
         .sort_by_key(|row| row.place);
     let agreements = game_agreements::Agreements {
+        time_unit_millis: None,
         next_id: count / 2 + 1,
         policies: if automatic {
             (1..=count / 2)

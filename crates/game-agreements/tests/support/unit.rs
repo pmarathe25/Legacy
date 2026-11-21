@@ -1,6 +1,7 @@
 use super::*;
 fn state() -> Agreements {
     Agreements {
+        time_unit_millis: None,
         offering: vec![],
         work_offering: vec![],
         next_id: 1,
@@ -335,4 +336,77 @@ fn private_draft_decisions_handle_unsorted_contracts_and_fail_atomically() {
     draft.decide_in_place(&choices, 1).unwrap();
     assert_eq!(draft, expected);
     draft.validate(&people, &goods, 1).unwrap();
+}
+
+#[test]
+fn elapsed_agreements_keep_the_last_delivery_instant_and_allow_withdrawal() {
+    let mut owner = state();
+    owner.time_unit_millis = Some(25);
+    owner.contracts.clear();
+    owner.events.clear();
+    let opening = owner.instant(102, 1).unwrap();
+    let proposal = Proposal {
+        debtor: 1,
+        creditor: 2,
+        good: 1,
+        quantity: 2,
+        due: 152,
+    };
+    let (offered, ids) = owner
+        .propose_at(
+            &[proposal.clone(), proposal],
+            &HashSet::from([1, 2]),
+            &HashSet::from([1]),
+            opening,
+        )
+        .unwrap();
+    let decision = Decision {
+        contract: ids[0],
+        actor: 2,
+        accept: true,
+    };
+    assert!(
+        offered
+            .decide_at(&[decision], owner.instant(152, 2).unwrap())
+            .is_err()
+    );
+    let mut active = offered
+        .decide_at(&[decision], owner.instant(151, 2).unwrap())
+        .unwrap();
+    assert_eq!(active.events[0].tick, 2);
+    let delivery = Delivery {
+        contract: ids[0],
+        actor: 1,
+        quantity: 2,
+    };
+    let fulfilled = active
+        .deliver_at(&[delivery], owner.instant(152, 2).unwrap())
+        .unwrap();
+    assert_eq!(fulfilled.state.contracts[0].status, Status::Fulfilled);
+    assert!(
+        active
+            .deliver_at(&[delivery], owner.instant(153, 2).unwrap())
+            .is_err()
+    );
+    let withdrawn = active
+        .decide_at(
+            &[Decision {
+                actor: 1,
+                accept: false,
+                ..decision
+            }],
+            owner.instant(152, 2).unwrap(),
+        )
+        .unwrap();
+    assert_eq!(withdrawn.contracts[0].status, Status::Withdrawn);
+    assert_eq!(withdrawn.contracts[0].delivered, 0);
+    let mut deadlines = runtime::Runtime::compile(&active);
+    assert_eq!(deadlines.next_expiration_after(151), Some(2));
+    deadlines.advance_at(&mut active, owner.instant(152, 2).unwrap());
+    assert!(active.events.is_empty());
+    deadlines.advance_at(&mut active, owner.instant(153, 2).unwrap());
+    assert_eq!(active.contracts[0].status, Status::Defaulted);
+    assert_eq!(active.contracts[1].status, Status::Withdrawn);
+    assert_eq!(deadlines.next_expiration_after(153), None);
+    assert!(active.events.iter().all(|event| event.tick == 2));
 }

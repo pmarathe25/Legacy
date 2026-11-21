@@ -9,6 +9,7 @@ pub(super) struct ElapsedProgress {
     pub incapacitations: Vec<scheduler::Incapacitation>,
     pub family_events: Vec<game_economy_family::FamilyEvent>,
     pub fauna: Option<CoreFaunaTransitions>,
+    pub agreement_expiries: Vec<game_agreements::Event>,
     pub disease_events: Vec<game_disease::Event>,
     pub local_arrivals: Vec<game_economy_local_transport::walking::Event>,
 }
@@ -34,6 +35,7 @@ struct ElapsedLimits {
     food_health: Option<u128>,
     fauna: Option<u64>,
     fear_relaxation: Option<u64>,
+    agreement_expiry: Option<u64>,
 }
 
 impl From<PreparedDeadline> for ElapsedLimits {
@@ -55,6 +57,7 @@ impl From<PreparedDeadline> for ElapsedLimits {
             food_health: at(deadline.food_health).map(u128::from),
             fauna: at(deadline.fauna),
             fear_relaxation: at(deadline.fear_relaxation),
+            agreement_expiry: at(deadline.agreement_expiry),
         }
     }
 }
@@ -78,6 +81,7 @@ impl ElapsedLimits {
         let disease = host.next_disease_deadline();
         let fauna = host.next_fauna_lifecycle();
         let fear_relaxation = host.next_fear_relaxation();
+        let agreement_expiry = host.next_agreement_expiry();
         let mut limit = host.core.progress_limit(requested)?;
         limit = [
             recovery,
@@ -93,6 +97,7 @@ impl ElapsedLimits {
             host.next_storage_temperature(),
             fauna,
             fear_relaxation,
+            agreement_expiry,
         ]
         .into_iter()
         .flatten()
@@ -112,6 +117,7 @@ impl ElapsedLimits {
             food_health: host.core.next_food_health(),
             fauna,
             fear_relaxation,
+            agreement_expiry,
         })
     }
 }
@@ -353,6 +359,9 @@ impl CoreHost {
     ) -> Result<ElapsedProgress, String> {
         let quantum = self.core.physical.tick_millis();
         let scheduled = prepared.is_some();
+        if !scheduled {
+            self.expire_due_agreements();
+        }
         let limits = match prepared {
             Some(plan) => ElapsedLimits::from(plan),
             None => ElapsedLimits::for_unscheduled(self, requested)?,
@@ -553,8 +562,11 @@ impl CoreHost {
         };
         let local_progress = self.stage_local_progress(consumed);
         let (growth, batches) = self.stage_crop_growth(crop_rates, consumed)?;
-        let interrupted_preparation =
-            consumed != requested || has_injuries || recovery_due || batches.is_some();
+        let interrupted_preparation = consumed != requested
+            || has_injuries
+            || recovery_due
+            || batches.is_some()
+            || limits.agreement_expiry == Some(consumed);
         let moisture = self
             .irrigation
             .as_ref()
@@ -619,8 +631,14 @@ impl CoreHost {
                     self.remove_deceased_holds();
                 }
             }
+            let agreement_expiries = if limits.agreement_expiry == Some(advanced) {
+                self.expire_due_agreements()
+            } else {
+                Vec::new()
+            };
             return Ok(ElapsedProgress {
                 millis: advanced,
+                agreement_expiries,
                 interrupted_preparation,
                 activity,
                 incapacitations,
@@ -821,8 +839,14 @@ impl CoreHost {
             self.record_assist_durations(&durations);
         }
         self.remember_skill_practice(skill_practice);
+        let agreement_expiries = if limits.agreement_expiry == Some(advanced) {
+            self.expire_due_agreements()
+        } else {
+            Vec::new()
+        };
         Ok(ElapsedProgress {
             millis: advanced,
+            agreement_expiries,
             interrupted_preparation,
             activity,
             incapacitations,

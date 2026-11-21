@@ -143,6 +143,15 @@ several encounters arise in one physical interval. The optional familiarity
 retention count is measured in encounter opportunities. The elapsed scenario
 can omit `dynamics.social.rules.interval`, which defaults to one.
 
+Set `agreements.time_unit_millis` to measure each authored offer's
+`due_after` and `retry_ticks` as durations in that fixed unit. Saved due and
+review instants are absolute elapsed milliseconds in this mode. A person
+can accept before the due instant, deliver through the due instant, or
+choose to withdraw while delivery is still possible. Expiry records a lapse
+or an unfulfilled agreement without triggering a transfer. Offer reviews
+remain personal decisions, and physical evidence keeps its original tick
+provenance.
+
 An elapsed environment can set `exposure_period_millis` to schedule personal
 hazard damage and shelter rotation at fixed simulated times. The host uses
 the season just before each exposure event and applies it before new choices

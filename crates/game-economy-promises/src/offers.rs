@@ -1,5 +1,5 @@
 //! Individual choices to propose future gifts, without compelling anyone to comply.
-use game_agreements::{Agreements, Proposal, Status};
+use game_agreements::{Agreements, Instant, Proposal, Status};
 use game_economy_person::{Person, travel::Colocation};
 use game_opinions::Opinions;
 use game_work_requests::Requests;
@@ -34,7 +34,7 @@ pub struct Context<'a> {
     pub together: &'a (dyn Fn(u64, u64) -> bool + Sync),
     pub busy: &'a [u64],
     pub max_hunger: u32,
-    pub tick: u64,
+    pub instant: Instant,
 }
 #[derive(Clone, Copy)]
 pub struct HelpMemory {
@@ -61,15 +61,15 @@ pub fn prepare(context: Context<'_>) -> Result<Plan, String> {
         together,
         busy,
         max_hunger,
-        tick,
+        instant,
     } = context;
     let Some(owner) = owner.filter(|o| {
         o.offering
             .par_iter()
-            .any(|p| p.willing || p.pressure_threshold.is_some())
-            || o.work_offering
-                .par_iter()
-                .any(|p| p.willing || p.pressure_threshold.is_some())
+            .any(|p| p.next_review <= instant.now && (p.willing || p.pressure_threshold.is_some()))
+            || o.work_offering.par_iter().any(|p| {
+                p.next_review <= instant.now && (p.willing || p.pressure_threshold.is_some())
+            })
     }) else {
         return Ok(Plan::default());
     };
@@ -172,7 +172,7 @@ pub fn prepare(context: Context<'_>) -> Result<Plan, String> {
             let observed_help = if policy.after_help {
                 let memory = find_help(policy.person)?;
                 if memory.helper != policy.recipient
-                    || memory.received_at >= tick
+                    || memory.received_at >= instant.evidence_tick
                     || policy
                         .last_help_offer_at
                         .is_some_and(|old| old >= memory.received_at)
@@ -194,7 +194,7 @@ pub fn prepare(context: Context<'_>) -> Result<Plan, String> {
                     .as_ref()
                     .is_some_and(|index| index.trust(actor.id, recipient.id) >= threshold)
             });
-            (tick >= policy.next_review
+            (instant.now >= policy.next_review
                 && !actor.controlled
                 && actor.health > 0
                 && recipient.health > 0
@@ -225,13 +225,25 @@ pub fn prepare(context: Context<'_>) -> Result<Plan, String> {
                     creditor: policy.recipient,
                     good: policy.good,
                     quantity: policy.quantity,
-                    due: tick
-                        .checked_add(policy.due_after)
+                    due: instant
+                        .now
+                        .checked_add(
+                            owner
+                                .duration(policy.due_after)
+                                .ok_or("offer deadline overflow")?,
+                        )
+                        .filter(|due| owner.time_unit_millis.is_none() || *due != u64::MAX)
                         .ok_or("promise due overflow")?,
                 },
                 (
                     policy.person,
-                    tick.checked_add(policy.retry_ticks)
+                    instant
+                        .now
+                        .checked_add(
+                            owner
+                                .duration(policy.retry_ticks)
+                                .ok_or("offer retry overflow")?,
+                        )
                         .ok_or("promise review overflow")?,
                     *observed_work,
                     *observed_help,
@@ -244,7 +256,7 @@ pub fn prepare(context: Context<'_>) -> Result<Plan, String> {
         .work_offering
         .par_iter()
         .filter_map(|policy| {
-            if tick < policy.next_review
+            if instant.now < policy.next_review
                 || busy.binary_search(&policy.person).is_ok()
                 || reviews
                     .binary_search_by_key(&policy.person, |row| row.0)
@@ -373,13 +385,25 @@ pub fn prepare(context: Context<'_>) -> Result<Plan, String> {
                     creditor: recipient,
                     good: policy.good,
                     quantity: policy.quantity,
-                    due: tick
-                        .checked_add(policy.due_after)
+                    due: instant
+                        .now
+                        .checked_add(
+                            owner
+                                .duration(policy.due_after)
+                                .ok_or("offer deadline overflow")?,
+                        )
+                        .filter(|due| owner.time_unit_millis.is_none() || *due != u64::MAX)
                         .ok_or("promise due overflow")?,
                 },
                 (
                     policy.person,
-                    tick.checked_add(policy.retry_ticks)
+                    instant
+                        .now
+                        .checked_add(
+                            owner
+                                .duration(policy.retry_ticks)
+                                .ok_or("offer retry overflow")?,
+                        )
                         .ok_or("promise review overflow")?,
                     completed,
                 ),

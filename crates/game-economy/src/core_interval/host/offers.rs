@@ -9,6 +9,39 @@ pub struct CoreSocialResults {
 }
 
 impl CoreHost {
+    pub(super) fn publish_agreements(&mut self, owner: game_agreements::Agreements) {
+        self.agreement_deadlines = owner
+            .time_unit_millis
+            .map(|_| game_agreements::runtime::Runtime::compile(&owner));
+        self.agreements = Some(owner);
+    }
+
+    pub(super) fn next_agreement_expiry(&self) -> Option<u64> {
+        self.agreement_deadlines
+            .as_ref()?
+            .next_expiration_after(self.core.simulated_millis())
+    }
+
+    pub(super) fn expire_due_agreements(&mut self) -> Vec<game_agreements::Event> {
+        if self.next_agreement_expiry() != Some(0) {
+            return Vec::new();
+        }
+        let owner = self
+            .agreements
+            .as_mut()
+            .expect("compiled agreement deadlines");
+        let due = u64::try_from(self.core.simulated_millis()).unwrap_or(u64::MAX);
+        let instant = game_agreements::Instant {
+            now: due,
+            evidence_tick: self.core.physical.tick(),
+        };
+        self.agreement_deadlines
+            .as_mut()
+            .expect("compiled agreement deadlines")
+            .advance_at(owner, instant);
+        owner.events.clone()
+    }
+
     fn social_busy(&self, blocked: &[u64]) -> Result<Vec<u64>, String> {
         if blocked.par_windows(2).any(|rows| rows[0] >= rows[1]) {
             return Err("invalid occupied people".into());
@@ -63,7 +96,9 @@ impl CoreHost {
             return Ok(CoreSocialResults::default());
         };
         let busy = self.social_busy(blocked)?;
-        let tick = self.core.physical.tick();
+        let instant = owner
+            .instant(self.core.simulated_millis(), self.core.physical.tick())
+            .map_err(str::to_owned)?;
         let locations = game_economy_person::travel::Colocation::new(None);
         let together = |a, b| {
             let find = |id| {
@@ -90,7 +125,7 @@ impl CoreHost {
                 together: &together,
                 busy: &busy,
                 max_hunger: self.core.rules.max_work_hunger,
-                tick,
+                instant,
             })?;
         let mut actors: Vec<_> = plan.actors().collect();
         actors.par_sort_unstable();
@@ -105,9 +140,14 @@ impl CoreHost {
             .as_ref()
             .filter(|owner| owner.tracks_promise_obligation())
             .cloned();
-        game_economy_promises::offers::publish(&mut next, &plan, tick, opinions.as_mut())?;
+        game_economy_promises::offers::publish(
+            &mut next,
+            &plan,
+            instant.evidence_tick,
+            opinions.as_mut(),
+        )?;
         let agreements = (first..next.next_id).collect();
-        self.agreements = Some(next);
+        self.publish_agreements(next);
         if let Some(opinions) = opinions {
             self.opinions = Some(opinions);
         }
@@ -132,7 +172,9 @@ impl CoreHost {
             return Ok(CoreSocialResults::default());
         };
         let busy = self.social_busy(blocked)?;
-        let tick = self.core.physical.tick();
+        let instant = owner
+            .instant(self.core.simulated_millis(), self.core.physical.tick())
+            .map_err(str::to_owned)?;
         let people: Vec<_> = self
             .core
             .people
@@ -146,7 +188,7 @@ impl CoreHost {
             self.opinions.as_ref(),
             &locations,
             &busy,
-            tick,
+            instant.now,
             None,
         );
         if plan.decisions.is_empty() {
@@ -157,8 +199,10 @@ impl CoreHost {
             .par_iter()
             .map(|decision| decision.contract)
             .collect();
-        let next = owner.decide(&plan.decisions, tick).map_err(str::to_owned)?;
-        self.agreements = Some(next);
+        let next = owner
+            .decide_at(&plan.decisions, instant)
+            .map_err(str::to_owned)?;
+        self.publish_agreements(next);
         Ok(CoreSocialResults {
             actors: plan.actors,
             agreements,

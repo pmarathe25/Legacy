@@ -340,6 +340,7 @@ fn promises_do_not_compel_delivery_but_fear_can_change_a_personal_choice() {
     };
     let mut runtime = Runtime::compile(snapshot.clone()).unwrap();
     let mut agreements = Agreements {
+        time_unit_millis: None,
         offering: vec![],
         work_offering: vec![],
         next_id: 2,
@@ -498,6 +499,7 @@ fn many_individual_promises_can_deliver_to_one_busy_recipient() {
         work_interval: None,
     };
     let agreements = Agreements {
+        time_unit_millis: None,
         offering: vec![],
         work_offering: vec![],
         next_id: count + 1,
@@ -623,6 +625,7 @@ fn concentrated_promise_delivery_benchmark() {
         work_interval: None,
     };
     let agreements = Agreements {
+        time_unit_millis: None,
         offering: vec![],
         work_offering: vec![],
         next_id: count + 1,

@@ -302,6 +302,7 @@ pub struct CoreHost {
     construction: Option<game_economy_building::Construction>,
     hauling: Option<crate::Hauling>,
     agreements: Option<game_agreements::Agreements>,
+    agreement_deadlines: Option<game_agreements::runtime::Runtime>,
     sites: Option<CoreSites>,
     schedule: Option<CoreSchedule>,
 }
@@ -1461,6 +1462,9 @@ impl CoreHost {
                 .map_err(str::to_owned)?;
         }
         if let Some(owner) = &agreements {
+            owner
+                .instant(core.simulated_millis(), core.physical.tick())
+                .map_err(str::to_owned)?;
             let people: HashSet<_> = core.people.par_iter().map(|person| person.id).collect();
             let goods: HashSet<_> = core
                 .physical
@@ -1628,6 +1632,10 @@ impl CoreHost {
             local_transport,
             construction,
             hauling,
+            agreement_deadlines: agreements
+                .as_ref()
+                .filter(|owner| owner.time_unit_millis.is_some())
+                .map(game_agreements::runtime::Runtime::compile),
             agreements,
             sites,
             schedule,
@@ -1794,6 +1802,7 @@ impl CoreHost {
         let social = self.next_social_encounter();
         let storage_temperature = self.next_storage_temperature();
         let fear_relaxation = self.next_fear_relaxation();
+        let agreement_expiry = self.next_agreement_expiry();
         let first = [
             recovery,
             exposure,
@@ -1813,6 +1822,7 @@ impl CoreHost {
             social,
             storage_temperature,
             fear_relaxation,
+            agreement_expiry,
         ]
         .into_iter()
         .flatten()
@@ -1844,6 +1854,7 @@ impl CoreHost {
                     social: social == Some(after_millis),
                     storage_temperature: storage_temperature == Some(after_millis),
                     fear_relaxation: fear_relaxation == Some(after_millis),
+                    agreement_expiry: agreement_expiry == Some(after_millis),
                     recovery: recovery == Some(after_millis),
                     exposure: exposure == Some(after_millis),
                 };
@@ -1866,6 +1877,7 @@ impl CoreHost {
                 deadline.social = social == Some(after_millis);
                 deadline.storage_temperature = storage_temperature == Some(after_millis);
                 deadline.fear_relaxation = fear_relaxation == Some(after_millis);
+                deadline.agreement_expiry = agreement_expiry == Some(after_millis);
             }
         }
         Ok(PreparedDeadline {
@@ -3384,17 +3396,21 @@ impl CoreHost {
         ended.par_extend(draft.events().abandoned.par_iter().copied());
         ended.par_extend(self.core.physical.work().par_iter().filter(|work| matches!(work.phase, game_lot_runtime::Phase::Suspended { until } if until <= draft.events().tick)).map(|work| work.job.id));
         let sites = self.stage_sites(&draft.events().finished, &ended, true);
-        let agreements = self.agreements.as_ref().and_then(|owner| {
-            (!owner.events.is_empty()
-                || owner.contracts.par_iter().any(|contract| {
-                    contract.due < draft.events().tick
-                        && matches!(
-                            contract.status,
-                            game_agreements::Status::Active | game_agreements::Status::Proposed
-                        )
-                }))
-            .then(|| owner.advance(draft.events().tick))
-        });
+        let agreements = self
+            .agreements
+            .as_ref()
+            .filter(|owner| owner.time_unit_millis.is_none())
+            .and_then(|owner| {
+                (!owner.events.is_empty()
+                    || owner.contracts.par_iter().any(|contract| {
+                        contract.due < draft.events().tick
+                            && matches!(
+                                contract.status,
+                                game_agreements::Status::Active | game_agreements::Status::Proposed
+                            )
+                    }))
+                .then(|| owner.advance(draft.events().tick))
+            });
         self.core.validate_settlement(&draft)?;
         let events = self.core.commit_settlement(draft)?;
         self.remove_deceased_holds();

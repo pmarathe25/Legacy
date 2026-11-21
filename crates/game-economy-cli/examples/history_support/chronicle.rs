@@ -250,6 +250,7 @@ impl Chronicle {
                 | "maturation"
                 | "recipe_learning"
                 | "personal_practices"
+                | "agreement_expiry"
         ) {
             return;
         }
@@ -498,6 +499,8 @@ fn classify(kind: &str, row: &Value) -> Option<Receipt> {
             "broke" => "mechanical tests that broke a part",
             _ => return None,
         },
+        ("agreement_expiry", "defaulted") => "unfulfilled agreements that expired",
+        ("agreement_expiry", "withdrawn") => "unaccepted proposals that expired",
         ("personal_practices", "aid_proposed") => "individual aid proposals",
         ("personal_practices", "work_proposed") => "individual work and goods proposals",
         ("personal_practices", "aid_response" | "work_response") => {

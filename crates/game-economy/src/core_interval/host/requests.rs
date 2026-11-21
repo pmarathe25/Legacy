@@ -85,6 +85,10 @@ impl CoreHost {
             .map(|person| (person.id, person.region, person.health, person.hunger))
             .collect();
         let at_reachable_endpoint = |debtor, creditor| self.can_pass_possession(debtor, creditor);
+        let now = owner
+            .instant(self.core.simulated_millis(), tick)
+            .map_err(str::to_owned)?
+            .now;
         let plan = game_lot_projection::agreement::Context {
             agreements: owner,
             opinions: self.opinions.as_ref(),
@@ -93,7 +97,7 @@ impl CoreHost {
             endpoint_together: Some(&at_reachable_endpoint),
             busy: &busy,
             blocked_receivers: &[],
-            tick,
+            tick: now,
         }
         .plan(1)?;
         let actors = plan.actors();
@@ -128,7 +132,14 @@ impl CoreHost {
             .map(|good| good.id)
             .collect();
         let (next, ids) = owner
-            .propose(proposals, &people, &goods, tick)
+            .propose_at(
+                proposals,
+                &people,
+                &goods,
+                owner
+                    .instant(self.core.simulated_millis(), tick)
+                    .map_err(str::to_owned)?,
+            )
             .map_err(str::to_owned)?;
         let mut opinions = self
             .opinions
@@ -136,7 +147,7 @@ impl CoreHost {
             .filter(|owner| owner.tracks_promise_obligation())
             .cloned();
         game_economy_promises::learn_promises(opinions.as_mut(), proposals);
-        self.agreements = Some(next);
+        self.publish_agreements(next);
         if let Some(opinions) = opinions {
             self.opinions = Some(opinions);
         }
@@ -156,8 +167,11 @@ impl CoreHost {
             return Err("publish pending interval events before deciding".into());
         }
         let owner = self.agreements.as_ref().ok_or("no agreement owner")?;
-        let next = owner.decide(decisions, tick).map_err(str::to_owned)?;
-        self.agreements = Some(next);
+        let instant = owner
+            .instant(self.core.simulated_millis(), tick)
+            .map_err(str::to_owned)?;
+        let next = owner.decide_at(decisions, instant).map_err(str::to_owned)?;
+        self.publish_agreements(next);
         Ok(())
     }
 
@@ -179,10 +193,13 @@ impl CoreHost {
             return Ok(Vec::new());
         }
         let owner = self.agreements.as_ref().ok_or("no agreement owner")?;
+        let instant = owner
+            .instant(self.core.simulated_millis(), tick)
+            .map_err(str::to_owned)?;
         let mut ordered = deliveries.to_vec();
         ordered.par_sort_unstable_by_key(|delivery| delivery.contract);
         let transfers = owner
-            .preview_deliveries(&ordered, tick)
+            .preview_deliveries(&ordered, instant.now)
             .map_err(str::to_owned)?;
         if transfers.par_iter().any(|transfer| {
             self.core
@@ -239,7 +256,7 @@ impl CoreHost {
             .filter(|delivery| accepted.binary_search(&delivery.contract).is_ok())
             .collect();
         let next = owner
-            .deliver(&successful, tick)
+            .deliver_at(&successful, instant)
             .map_err(str::to_owned)?
             .state;
         self.core
@@ -296,7 +313,7 @@ impl CoreHost {
                         }),
                 );
         }
-        self.agreements = Some(next);
+        self.publish_agreements(next);
         Ok(outcomes)
     }
 

@@ -692,6 +692,7 @@ mod preference_tests {
             status,
         };
         let agreements = Agreements {
+            time_unit_millis: None,
             next_id: 10,
             policies: vec![],
             offering: vec![],

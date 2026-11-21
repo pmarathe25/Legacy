@@ -8,6 +8,9 @@ use std::collections::HashSet;
 #[serde(deny_unknown_fields)]
 pub struct Agreements {
     pub next_id: u64,
+    /// An authored duration unit. With this enabled, due and review instants are absolute milliseconds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub time_unit_millis: Option<u64>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub policies: Vec<Policy>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -27,6 +30,7 @@ impl Clone for Agreements {
     fn clone(&self) -> Self {
         Self {
             next_id: self.next_id,
+            time_unit_millis: self.time_unit_millis,
             policies: self.policies.par_iter().cloned().collect(),
             offering: self.offering.par_iter().cloned().collect(),
             work_offering: self.work_offering.par_iter().cloned().collect(),
@@ -229,7 +233,38 @@ pub struct DeliveryDraft {
 }
 type DeliveryRow = (u64, u64, Transfer, Event);
 
+#[derive(Clone, Copy)]
+pub struct Instant {
+    pub now: u64,
+    pub evidence_tick: u64,
+}
+impl Instant {
+    fn at_tick(tick: u64) -> Self {
+        Self {
+            now: tick,
+            evidence_tick: tick,
+        }
+    }
+}
+
 impl Agreements {
+    /// Convert only the eligibility clock. Physical evidence keeps its own timestamp.
+    pub fn instant(
+        &self,
+        simulated_millis: u128,
+        evidence_tick: u64,
+    ) -> Result<Instant, &'static str> {
+        let now = if self.time_unit_millis.is_some() {
+            u64::try_from(simulated_millis).map_err(|_| "agreement clock overflow")?
+        } else {
+            evidence_tick
+        };
+        Ok(Instant { now, evidence_tick })
+    }
+
+    pub fn duration(&self, units: u64) -> Option<u64> {
+        units.checked_mul(self.time_unit_millis.unwrap_or(1))
+    }
     /// Remove authored relationships when creating a new population.
     pub fn reset_for_generation(&mut self) {
         self.next_id = 1;
@@ -247,6 +282,9 @@ impl Agreements {
         goods: &HashSet<u32>,
         now: u64,
     ) -> Result<(), &'static str> {
+        if self.time_unit_millis == Some(0) {
+            return Err("invalid agreement time unit");
+        }
         let mut policies: Vec<_> = self
             .policies
             .par_iter()
@@ -269,6 +307,8 @@ impl Agreements {
                     || p.quantity == 0
                     || p.due_after == 0
                     || p.retry_ticks == 0
+                    || self.duration(p.due_after).is_none()
+                    || self.duration(p.retry_ticks).is_none()
                     || p.pressure_threshold == Some(0)
                     || p.last_work_offer_at.is_some_and(|t| t > now)
             })
@@ -280,6 +320,8 @@ impl Agreements {
                     || p.quantity == 0
                     || p.due_after == 0
                     || p.retry_ticks == 0
+                    || self.duration(p.due_after).is_none()
+                    || self.duration(p.retry_ticks).is_none()
                     || p.pressure_threshold == Some(0)
                     || p.last_work_offer_at
                         .is_some_and(|t| t > now || p.after_work_recipe.is_none())
@@ -329,6 +371,7 @@ impl Agreements {
                     || !goods.contains(&row.good)
                     || row.quantity == 0
                     || row.delivered > row.quantity
+                    || (self.time_unit_millis.is_some() && row.due == u64::MAX)
                     || (row.status == Status::Fulfilled && row.delivered != row.quantity)
                     || (matches!(
                         row.status,
@@ -353,6 +396,16 @@ impl Agreements {
         goods: &HashSet<u32>,
         now: u64,
     ) -> Result<(Self, Vec<u64>), &'static str> {
+        self.propose_at(proposals, people, goods, Instant::at_tick(now))
+    }
+
+    pub fn propose_at(
+        &self,
+        proposals: &[Proposal],
+        people: &HashSet<u64>,
+        goods: &HashSet<u32>,
+        instant: Instant,
+    ) -> Result<(Self, Vec<u64>), &'static str> {
         if proposals.is_empty() {
             return Ok((self.clone(), Vec::new()));
         }
@@ -362,13 +415,14 @@ impl Agreements {
                 || !people.contains(&p.creditor)
                 || !goods.contains(&p.good)
                 || p.quantity == 0
-                || p.due <= now
+                || p.due <= instant.now
+                || (self.time_unit_millis.is_some() && p.due == u64::MAX)
         }) {
             return Err("invalid agreement proposal");
         }
         let mut state = self.clone();
         state.events.clear();
-        let ids = state.append_validated(proposals, now)?;
+        let ids = state.append_validated(proposals, instant.evidence_tick)?;
         Ok((state, ids))
     }
     /// Append host-validated personal proposals to a private draft without replacing its events.
@@ -417,8 +471,16 @@ impl Agreements {
     }
     /// Only the creditor can accept or decline; the debtor can withdraw.
     pub fn decide(&self, decisions: &[Decision], now: u64) -> Result<Self, &'static str> {
+        self.decide_at(decisions, Instant::at_tick(now))
+    }
+
+    pub fn decide_at(
+        &self,
+        decisions: &[Decision],
+        instant: Instant,
+    ) -> Result<Self, &'static str> {
         let mut next = self.clone();
-        next.decide_in_place(decisions, now)?;
+        next.decide_in_place_at(decisions, instant)?;
         Ok(next)
     }
     /// Validate every choice before modifying the host's private draft.
@@ -426,6 +488,14 @@ impl Agreements {
         &mut self,
         decisions: &[Decision],
         now: u64,
+    ) -> Result<(), &'static str> {
+        self.decide_in_place_at(decisions, Instant::at_tick(now))
+    }
+
+    fn decide_in_place_at(
+        &mut self,
+        decisions: &[Decision],
+        instant: Instant,
     ) -> Result<(), &'static str> {
         if decisions.is_empty() {
             return Ok(());
@@ -484,7 +554,13 @@ impl Agreements {
                     })
                     .ok_or("unknown agreement")?;
                 let contract = &self.contracts[slot];
-                if contract.status != Status::Proposed || contract.due <= now {
+                let withdrawal = d.actor == contract.debtor && !d.accept;
+                let available = if withdrawal && contract.status == Status::Active {
+                    instant.now <= contract.due
+                } else {
+                    contract.status == Status::Proposed && instant.now < contract.due
+                };
+                if !available {
                     return Err("agreement is unavailable");
                 }
                 let (status, kind) = if d.actor == contract.creditor {
@@ -502,7 +578,7 @@ impl Agreements {
                     slot,
                     status,
                     Event {
-                        tick: now,
+                        tick: instant.evidence_tick,
                         contract: contract.id,
                         actor: d.actor,
                         kind,
@@ -531,7 +607,7 @@ impl Agreements {
     fn delivery_rows(
         &self,
         requests: &[Delivery],
-        now: u64,
+        instant: Instant,
     ) -> Result<Vec<DeliveryRow>, &'static str> {
         if requests.is_empty() {
             return Ok(Vec::new());
@@ -583,7 +659,7 @@ impl Agreements {
                     .ok_or("invalid agreement state")?;
                 if c.status != Status::Active
                     || request.actor != c.debtor
-                    || now > c.due
+                    || instant.now > c.due
                     || request.quantity == 0
                     || request.quantity > remaining
                 {
@@ -599,7 +675,7 @@ impl Agreements {
                         quantity: request.quantity,
                     },
                     Event {
-                        tick: now,
+                        tick: instant.evidence_tick,
                         contract: c.id,
                         actor: c.debtor,
                         kind: if c.delivered + request.quantity == c.quantity {
@@ -621,14 +697,22 @@ impl Agreements {
         now: u64,
     ) -> Result<Vec<Transfer>, &'static str> {
         Ok(self
-            .delivery_rows(requests, now)?
+            .delivery_rows(requests, Instant::at_tick(now))?
             .into_par_iter()
             .map(|row| row.2)
             .collect())
     }
     /// Stage deliveries; the caller must perform their physical transfers atomically.
     pub fn deliver(&self, requests: &[Delivery], now: u64) -> Result<DeliveryDraft, &'static str> {
-        let rows = self.delivery_rows(requests, now)?;
+        self.deliver_at(requests, Instant::at_tick(now))
+    }
+
+    pub fn deliver_at(
+        &self,
+        requests: &[Delivery],
+        instant: Instant,
+    ) -> Result<DeliveryDraft, &'static str> {
+        let rows = self.delivery_rows(requests, instant)?;
         if rows.is_empty() {
             return Ok(DeliveryDraft {
                 state: self.clone(),
