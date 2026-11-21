@@ -167,6 +167,7 @@ impl CoreHostSnapshot {
                 owner,
                 practiced: vec![],
                 completed: vec![],
+                invoked_work: None,
             }),
             taking: state.taking,
             agriculture: state.agriculture,

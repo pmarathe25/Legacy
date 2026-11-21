@@ -186,21 +186,31 @@ impl CoreHost {
     pub fn activate_past_lives(&mut self, person: u64, lives: &[u64]) -> Result<(), String> {
         self.controlled_person(person)?;
         let now = self.campaign_now()?;
-        self.campaign
-            .as_mut()
+        let mut next = self
+            .campaign
+            .as_ref()
             .filter(|owner| owner.controlled() == Some(person))
             .ok_or("this character has no past-life access")?
-            .activate(lives, now)
+            .clone();
+        next.activate(lives, now)?;
+        self.retime_invoked_work(&next)?;
+        self.campaign = Some(next);
+        Ok(())
     }
 
     pub fn dismiss_past_lives(&mut self, person: u64) -> Result<(), String> {
         self.controlled_person(person)?;
         let now = self.campaign_now()?;
-        self.campaign
-            .as_mut()
+        let mut next = self
+            .campaign
+            .as_ref()
             .filter(|owner| owner.controlled() == Some(person))
             .ok_or("this character has no past-life access")?
-            .dismiss(now)
+            .clone();
+        next.dismiss(now)?;
+        self.retime_invoked_work(&next)?;
+        self.campaign = Some(next);
+        Ok(())
     }
 
     pub fn accept_past_life_warning(&mut self, person: u64, revision: u64) -> Result<(), String> {

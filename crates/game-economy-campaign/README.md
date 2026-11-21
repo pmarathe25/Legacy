@@ -20,6 +20,7 @@ Start a headless session with `cargo run -p game-economy-cli -- --interval-campa
 Use `campaign` to inspect the lineage, `invoke PAST_LIVES` to invoke recorded
 lives, and `accept-cost REVISION` or `dismiss` to respond to a warning.
 `recall-life LIFE` shows the invoked predecessor's retained observations,
-techniques, and language without transferring them into the current person's
-memory. Practiced capability projection and abstract guardians still need
-interval integration.
+techniques, and language. During controlled work the incarnation can draw on
+the strongest skill among the invoked lives. Invoking or dismissing lives
+changes the worker's future rate at that instant, preserving completed work
+and the contribution of any assistants. Learning remains personal.

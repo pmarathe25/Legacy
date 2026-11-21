@@ -146,7 +146,7 @@ impl CoreHost {
         &mut self,
         starts: &[(game_production_model::Start, u64)],
     ) -> Result<Vec<(u64, bool)>, String> {
-        self.start_with_sites_hunger_limit(starts, self.core.rules.max_work_hunger, false)
+        self.start_with_sites_hunger_limit(starts, self.core.rules.max_work_hunger, false, None)
     }
 
     pub(super) fn start_with_sites_hunger_limit(
@@ -154,6 +154,7 @@ impl CoreHost {
         starts: &[(game_production_model::Start, u64)],
         max_hunger: u32,
         personal: bool,
+        invoked_rate: Option<u64>,
     ) -> Result<Vec<(u64, bool)>, String> {
         if (self.walking().is_some() || self.confinement().is_some())
             && starts
@@ -162,7 +163,14 @@ impl CoreHost {
         {
             return Err("a worker is outside physical reach of the work site".into());
         }
-        let skill_rates = self.skill_start_rates(starts)?;
+        let skill_rates = if let Some(rate) = invoked_rate {
+            let [(start, _)] = starts else {
+                return Err("recalled work requires one person".into());
+            };
+            Some(vec![(*start, rate)])
+        } else {
+            self.skill_start_rates(starts)?
+        };
         let starts = skill_rates.as_deref().unwrap_or(starts);
         if !personal && let Some(family) = &self.family {
             let underage =

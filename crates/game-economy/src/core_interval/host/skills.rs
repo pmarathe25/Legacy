@@ -19,6 +19,27 @@ pub struct CoreSkills {
     /// Jobs whose completion was published before this boundary.
     #[serde(default)]
     pub completed: Vec<CoreSkillCredit>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub invoked_work: Option<InvokedWork>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct InvokedWork {
+    pub job: u64,
+    pub person: u64,
+    pub recipe: u32,
+    pub raw_rate: u64,
+    pub own_factor: u64,
+    pub bonus_rate: u64,
+}
+
+impl InvokedWork {
+    pub(super) fn effective_rate(self) -> Option<u64> {
+        self.raw_rate
+            .checked_mul(self.own_factor)?
+            .checked_add(self.bonus_rate)
+    }
 }
 
 pub(super) struct TeachingFrame {
@@ -47,6 +68,7 @@ impl CoreSkills {
             },
             practiced: self.practiced.par_iter().copied().collect(),
             completed: self.completed.par_iter().copied().collect(),
+            invoked_work: self.invoked_work,
         }
     }
     pub(super) fn initial_rates(
@@ -113,6 +135,16 @@ impl CoreSkills {
             .collect();
         self.owner
             .validate(&people, &recipes, core.physical.tick())?;
+        if self.invoked_work.is_some_and(|work| {
+            work.job == 0
+                || work.raw_rate == 0
+                || work.own_factor == 0
+                || work.effective_rate().is_none()
+                || !people.contains(&work.person)
+                || !recipes.contains(&work.recipe)
+        }) {
+            return Err("invalid recalled work expertise".into());
+        }
         for rows in [&self.practiced, &self.completed] {
             if rows
                 .par_windows(2)
@@ -306,6 +338,7 @@ impl CoreHost {
             owner: owner.owner.prepare(&credits, tick),
             practiced: vec![],
             completed: vec![],
+            invoked_work: owner.invoked_work,
         })
     }
     /// A real meeting can become a lesson through the teacher's and student's choices.

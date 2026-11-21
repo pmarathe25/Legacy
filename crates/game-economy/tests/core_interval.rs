@@ -4054,7 +4054,7 @@ fn core_host_autonomous_work_benchmark() {
         skills: skilled.then(|| game_economy::core_interval::CoreSkills {
             owner: game_economy_skills::Skills { rules: vec![game_economy_skills::Rule { recipe: 1, completions_per_level: 1, max_level: 5, work_per_level: 1, practice_each_tick: false }], aliases: vec![], catalog_training: None,
                 records: (2..=count).map(|person| serde_json::from_value(serde_json::json!({"person":person,"recipe":1,"completions":1,"credited_jobs":[{"job":person,"finished_at":0}]})).unwrap()).collect(),
-                events: vec![], lessons: vec![], teachers: vec![], recipe_knowledge: None, inherit_teachers: false }, practiced: vec![], completed: vec![],
+                events: vec![], lessons: vec![], teachers: vec![], recipe_knowledge: None, inherit_teachers: false }, practiced: vec![], completed: vec![], invoked_work: None,
         }),
         taking: None,
         medical: None,
@@ -8572,7 +8572,7 @@ fn core_host_cultivation_benchmark() {
         paused_work_rates: vec![], pending_vital_deaths: vec![],
         fatigue: None,
         activity: vec![], practice_work_asks: vec![], practice_work_evidence: Default::default(), skills: teaching_inheritance.then(|| game_economy::core_interval::CoreSkills {
-            owner: game_economy_skills::Skills { rules: vec![game_economy_skills::Rule { recipe: 1, completions_per_level: 1, max_level: 5, work_per_level: 1, practice_each_tick: false }], aliases: vec![], catalog_training: None, records: vec![], events: vec![], lessons: vec![], teachers: (1..=count).map(|person| game_economy_skills::TeacherPolicy { person, recipe: 1, enabled: true, eligible_at: 0 }).collect(), recipe_knowledge: None, inherit_teachers: true }, practiced: vec![], completed: vec![],
+            owner: game_economy_skills::Skills { rules: vec![game_economy_skills::Rule { recipe: 1, completions_per_level: 1, max_level: 5, work_per_level: 1, practice_each_tick: false }], aliases: vec![], catalog_training: None, records: vec![], events: vec![], lessons: vec![], teachers: (1..=count).map(|person| game_economy_skills::TeacherPolicy { person, recipe: 1, enabled: true, eligible_at: 0 }).collect(), recipe_knowledge: None, inherit_teachers: true }, practiced: vec![], completed: vec![], invoked_work: None,
         }), taking: taking.then(|| game_economy_taking::Taking {
             policies: (2..=count / 2).map(|person| game_economy_taking::Policy {
                 person, target: if taking_contested { count / 2 + 1 } else { person + count / 2 },
@@ -9674,7 +9674,7 @@ fn core_host_social_benchmark() {
                 let records: Vec<game_economy_skills::Record> = pairs.iter().map(|event| serde_json::from_value(serde_json::json!({"person":event.a,"recipe":1,"completions":1,"credited_jobs":[{"job":event.a,"finished_at":0}]})).unwrap()).collect();
                 let teachers: Vec<_> = pairs.iter().map(|event| game_economy_skills::TeacherPolicy { person: event.a, recipe: 1, enabled: true, eligible_at: 0 }).collect();
                 snapshot.skills = Some(game_economy::core_interval::CoreSkills {
-                    owner: game_economy_skills::Skills { rules: vec![game_economy_skills::Rule { recipe: 1, completions_per_level: 1, max_level: 5, work_per_level: 1, practice_each_tick: false }], aliases: vec![], catalog_training: None, records, events: vec![], lessons: vec![], teachers, recipe_knowledge: None, inherit_teachers: false }, practiced: vec![], completed: vec![],
+                    owner: game_economy_skills::Skills { rules: vec![game_economy_skills::Rule { recipe: 1, completions_per_level: 1, max_level: 5, work_per_level: 1, practice_each_tick: false }], aliases: vec![], catalog_training: None, records, events: vec![], lessons: vec![], teachers, recipe_knowledge: None, inherit_teachers: false }, practiced: vec![], completed: vec![], invoked_work: None,
                 });
             }
             let mut host = CoreHost::begin(snapshot, &[(1, 1)]).unwrap();

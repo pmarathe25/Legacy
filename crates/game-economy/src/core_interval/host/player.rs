@@ -163,7 +163,13 @@ impl CoreHost {
         };
         let tick = self.core.physical.tick();
         let rate = schedule.work_rate;
-        let outcomes = self.start_with_sites_hunger_limit(&[(start, rate)], u32::MAX, true)?;
+        let invoked = self.plan_invoked_work(start, rate)?;
+        let outcomes = self.start_with_sites_hunger_limit(
+            &[(start, rate)],
+            u32::MAX,
+            true,
+            invoked.and_then(|work| work.effective_rate()),
+        )?;
         self.schedule
             .as_mut()
             .expect("schedule checked")
@@ -172,7 +178,14 @@ impl CoreHost {
             owner.next_id = owner.next_id.max(next);
         }
         self.publish_claim_work(&claims, &outcomes, tick);
-        Ok((job, outcomes.first().is_some_and(|outcome| outcome.1)))
+        let started = outcomes.first().is_some_and(|outcome| outcome.1);
+        if started && let Some(work) = invoked {
+            self.skills
+                .as_mut()
+                .expect("invoked work requires skills")
+                .invoked_work = Some(work);
+        }
+        Ok((job, started))
     }
 
     /// Consume an explicitly chosen carried meal without a hunger preference gate.

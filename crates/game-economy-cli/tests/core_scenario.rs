@@ -1470,6 +1470,84 @@ capacity = 1
     };
     let whole = run(1, &[350]);
     assert_eq!(whole, run(4, &[99, 1, 199, 1, 50]));
+    let mut experienced = whole.clone();
+    let skills = &mut experienced.skills.as_mut().unwrap().owner;
+    skills.rules.push(game_economy_skills::Rule {
+        recipe: known_recipe,
+        completions_per_level: 1,
+        max_level: 4,
+        work_per_level: 2,
+        practice_each_tick: false,
+    });
+    skills.records.push(
+        serde_json::from_value(serde_json::json!({
+        "person": 1, "recipe": known_recipe, "completions": 10, "credited_jobs": []
+        }))
+        .unwrap(),
+    );
+    let current_rate = |host: &CoreHost, job| {
+        host.snapshot()
+            .core
+            .physical
+            .work_interval
+            .unwrap()
+            .rates
+            .into_iter()
+            .find(|row| row.0 == job)
+            .unwrap()
+            .1
+    };
+    let work_remaining = |host: &CoreHost, job| {
+        let physical = host.snapshot().core.physical;
+        let period = physical
+            .work_rate_period_millis
+            .unwrap_or(physical.tick_millis);
+        let row = physical
+            .work
+            .into_iter()
+            .find(|row| row.job.id == job)
+            .unwrap();
+        u128::from(row.job.remaining) * u128::from(period) - u128::from(row.progress_remainder)
+    };
+    let mut trainee = CoreHost::resume(experienced.clone()).unwrap();
+    let (job, started) = trainee.start_controlled_work(3, known_recipe, 1).unwrap();
+    assert!(started);
+    let own = current_rate(&trainee, job);
+    let opening_work = work_remaining(&trainee, job);
+    assert_eq!(trainee.advance_continuous(11, &[]).unwrap().failure, None);
+    let before_invocation = work_remaining(&trainee, job);
+    assert_eq!(opening_work - before_invocation, u128::from(own) * 11);
+    trainee.activate_past_lives(3, &[1]).unwrap();
+    assert_eq!(current_rate(&trainee, job), own * 9);
+    assert_eq!(work_remaining(&trainee, job), before_invocation);
+    assert_eq!(trainee.advance_continuous(27, &[]).unwrap().failure, None);
+    assert_eq!(
+        before_invocation - work_remaining(&trainee, job),
+        u128::from(own) * 9 * 27
+    );
+    let mut recovered = CoreHost::resume(
+        serde_json::from_value(serde_json::to_value(trainee.snapshot()).unwrap()).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(current_rate(&recovered, job), own * 9);
+    recovered.dismiss_past_lives(3).unwrap();
+    assert_eq!(current_rate(&recovered, job), own);
+    assert_eq!(
+        work_remaining(&recovered, job),
+        work_remaining(&trainee, job)
+    );
+    assert_eq!(recovered.snapshot().skills.unwrap().owner.records.len(), 1);
+
+    let mut already_invoked = CoreHost::resume(experienced).unwrap();
+    already_invoked.activate_past_lives(3, &[1]).unwrap();
+    let (next_job, started) = already_invoked
+        .start_controlled_work(3, known_recipe, 1)
+        .unwrap();
+    assert!(started);
+    assert_eq!(current_rate(&already_invoked, next_job), own * 9);
+    already_invoked.dismiss_past_lives(3).unwrap();
+    assert_eq!(current_rate(&already_invoked, next_job), own);
+
     let mut host = CoreHost::resume(whole).unwrap();
     assert!(host.consult_past_life(3, 1).is_err());
     host.activate_past_lives(3, &[1]).unwrap();
@@ -7043,6 +7121,7 @@ fn work_intentions_compete_with_carrying_and_share_scarce_inputs() {
                     },
                     practiced: vec![],
                     completed: vec![],
+                    invoked_work: None,
                 });
                 lesson_state.social = Some(game_economy::core_interval::CoreSocial {
                     owner: game_social::Social {
