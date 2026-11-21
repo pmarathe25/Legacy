@@ -3372,6 +3372,10 @@ impl CoreHost {
                                 events: walking,
                             });
                         }
+                        let invitations = attempt!('run, self.offer_autonomous_expeditions(&busy));
+                        if !invitations.is_empty() {
+                            run.events.push(CoreRunEvent::Expeditions(invitations));
+                        }
                         let (actors, events) = attempt!('run, self.act_on_expeditions(&busy));
                         if !actors.is_empty() {
                             busy.extend(actors);

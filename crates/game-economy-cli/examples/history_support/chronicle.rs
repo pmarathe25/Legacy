@@ -215,6 +215,7 @@ fn classify(kind: &str, row: &Value) -> Option<Receipt> {
         },
         ("expeditions", "reached_destination") => "expedition arrivals",
         ("expeditions", "supplies_acquired") => "expedition supplies acquired",
+        ("expeditions", "invitation") => "expedition invitations",
         ("expeditions", "objective_met") => "completed expedition objectives",
         ("expeditions", "reached_origin") => "expedition returns",
         ("expeditions", "abandoned") => "abandoned expeditions",

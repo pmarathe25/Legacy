@@ -2,7 +2,7 @@
 use crate::elapsed::Plan;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -39,6 +39,24 @@ pub struct Preference {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Companion {
+    pub person: u64,
+    pub value: i64,
+    #[serde(default)]
+    pub affinity_weight: i32,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Initiative {
+    pub person: u64,
+    #[serde(default)]
+    pub idle: i64,
+    pub companions: Vec<Companion>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Response {
     Declined,
@@ -63,6 +81,10 @@ pub struct Invitations {
     pending: Vec<Invitation>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub preferences: Vec<Preference>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub initiatives: Vec<Initiative>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    attempted: BTreeMap<u64, u64>,
 }
 
 impl Default for Invitations {
@@ -71,13 +93,19 @@ impl Default for Invitations {
             next_id: 1,
             pending: Vec::new(),
             preferences: Vec::new(),
+            initiatives: Vec::new(),
+            attempted: BTreeMap::new(),
         }
     }
 }
 
 impl Invitations {
     pub fn is_pristine(&self) -> bool {
-        self.next_id == 1 && self.pending.is_empty() && self.preferences.is_empty()
+        self.next_id == 1
+            && self.pending.is_empty()
+            && self.preferences.is_empty()
+            && self.initiatives.is_empty()
+            && self.attempted.is_empty()
     }
 
     pub fn preference(&self, person: u64, destination: u64) -> Option<Preference> {
@@ -101,6 +129,29 @@ impl Invitations {
                 .preferences
                 .par_iter()
                 .any(|row| !people.contains(&row.person) || !regions.contains(&row.destination))
+            || self
+                .initiatives
+                .par_windows(2)
+                .any(|rows| rows[0].person >= rows[1].person)
+            || self.initiatives.par_iter().any(|row| {
+                !people.contains(&row.person)
+                    || row.companions.len() > 8
+                    || row
+                        .companions
+                        .windows(2)
+                        .any(|pair| pair[0].person >= pair[1].person)
+                    || row.companions.iter().any(|target| {
+                        target.person == row.person || !people.contains(&target.person)
+                    })
+            })
+            || self.attempted.iter().any(|(&person, &trip)| {
+                trip == 0
+                    || !people.contains(&person)
+                    || self
+                        .initiatives
+                        .binary_search_by_key(&person, |row| row.person)
+                        .is_err()
+            })
             || self
                 .pending
                 .par_windows(2)
@@ -139,6 +190,62 @@ impl Invitations {
             .filter(|row| row.recipient == person)
             .copied()
             .collect()
+    }
+
+    pub fn may_offer(&self, inviter: u64, itinerary: u64) -> bool {
+        self.attempted
+            .get(&inviter)
+            .is_none_or(|&previous| previous != itinerary)
+    }
+
+    pub fn pending_pairs(&self) -> HashSet<(u64, u64)> {
+        self.pending
+            .par_iter()
+            .map(|row| (row.itinerary, row.recipient))
+            .collect()
+    }
+
+    pub(super) fn prepare_offers(
+        &self,
+        offers: &[(Offer, Option<(Response, bool)>)],
+        now: u128,
+    ) -> Result<Vec<Invitation>, String> {
+        self.next_id
+            .checked_add(offers.len() as u64)
+            .ok_or("expedition invitation ID overflow")?;
+        let pending = self.pending_pairs();
+        offers
+            .par_iter()
+            .enumerate()
+            .map(|(index, (offer, _))| {
+                if offer.inviter == offer.recipient
+                    || offer.origin == offer.destination
+                    || offer.visit_millis == 0
+                    || pending.contains(&(offer.itinerary, offer.recipient))
+                    || !self.may_offer(offer.inviter, offer.itinerary)
+                {
+                    return Err("invalid or previously offered expedition invitation".into());
+                }
+                Ok(Invitation {
+                    id: self.next_id + index as u64,
+                    inviter: offer.inviter,
+                    recipient: offer.recipient,
+                    itinerary: offer.itinerary,
+                    origin: offer.origin,
+                    destination: offer.destination,
+                    visit_millis: offer.visit_millis,
+                    offered_at_millis: now,
+                })
+            })
+            .collect()
+    }
+
+    pub(super) fn commit_offers(&mut self, invitations: &[Invitation], pending: &[Invitation]) {
+        self.next_id += invitations.len() as u64;
+        self.pending.extend_from_slice(pending);
+        for row in invitations {
+            self.attempted.insert(row.inviter, row.itinerary);
+        }
     }
 
     pub fn offer(&mut self, offer: Offer, now: u128) -> Result<Invitation, String> {

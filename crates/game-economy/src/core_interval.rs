@@ -25,8 +25,9 @@ pub use game_economy_combat::elapsed::{
     Choice as TacticalChoice, Event as TacticalEvent, EventKind as TacticalEventKind,
 };
 pub use game_economy_expeditions::elapsed_invitations::{
-    Invitation as ExpeditionInvitation, Preference as ExpeditionInvitationPreference,
-    Reply as ExpeditionReply, Response as ExpeditionReplyKind,
+    Initiative as ExpeditionInvitationInitiative, Invitation as ExpeditionInvitation,
+    Preference as ExpeditionInvitationPreference, Reply as ExpeditionReply,
+    Response as ExpeditionReplyKind,
 };
 pub use host::CoreTacticalResult;
 pub use host::{
