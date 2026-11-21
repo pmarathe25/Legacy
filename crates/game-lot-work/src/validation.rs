@@ -6,7 +6,45 @@ use game_production_model::{Amount, JobPhase, valid_items};
 use rayon::prelude::*;
 use std::collections::{HashMap, HashSet};
 
-fn bounded(actual: &Container, expected: &[Amount]) -> bool {
+fn bounded(actual: &Container, expected: &[Amount], catalog: &Catalog) -> bool {
+    let product = |good| {
+        catalog
+            .maturation(good)
+            .map_or(good, |profile| profile.product)
+    };
+    if expected
+        .iter()
+        .any(|item| catalog.maturation(item.good).is_some())
+    {
+        let quantity = |good| {
+            actual
+                .lots
+                .iter()
+                .filter(|lot| lot.good == good)
+                .map(|lot| u128::from(lot.quantity))
+                .sum::<u128>()
+        };
+        return actual.lots.iter().all(|lot| {
+            expected
+                .iter()
+                .any(|item| item.good == lot.good || product(item.good) == lot.good)
+        }) && expected.iter().all(|item| {
+            let output = product(item.good);
+            let opening = expected
+                .iter()
+                .filter(|row| product(row.good) == output)
+                .map(|row| u128::from(row.quantity))
+                .sum::<u128>();
+            let remaining = actual
+                .lots
+                .iter()
+                .filter(|lot| product(lot.good) == output)
+                .map(|lot| u128::from(lot.quantity))
+                .sum::<u128>();
+            (output == item.good || quantity(item.good) <= u128::from(item.quantity))
+                && remaining <= opening
+        });
+    }
     actual
         .lots
         .iter()
@@ -97,7 +135,7 @@ pub fn validate(state: &Snapshot, catalog: &Catalog) -> Result<(), String> {
                     .binary_search_by_key(&id, |row| row.job.id)
                     .map_or(true, |index| {
                         let work = &state.work[index];
-                        work.phase == Phase::Waiting || !bounded(container, &work.job.reserved)
+                        work.phase == Phase::Waiting || !bounded(container, &work.job.reserved, catalog)
                     }),
                 Place::JobOutput(id) => state
                     .work
@@ -105,7 +143,7 @@ pub fn validate(state: &Snapshot, catalog: &Catalog) -> Result<(), String> {
                     .map_or(true, |index| {
                         let work = &state.work[index];
                         if work.phase == Phase::Waiting {
-                            !bounded(container, &work.job.outputs)
+                            !bounded(container, &work.job.outputs, catalog)
                         } else {
                             container.used != 0
                         }
