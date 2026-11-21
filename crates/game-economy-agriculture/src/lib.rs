@@ -1,5 +1,6 @@
 //! Parallel cultivation over real seed and dated harvest custody.
 pub mod amendment;
+pub mod elapsed_actions;
 pub mod content;
 pub mod elapsed_growth;
 mod evaporation;
@@ -64,6 +65,8 @@ pub struct Policy {
 #[serde(deny_unknown_fields)]
 pub struct Agriculture {
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub action_clock: Option<elapsed_actions::Clock>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub growth_clock: Option<elapsed_growth::GrowthClock>,
     /// Optional physical seed history for currently planted fields.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -86,6 +89,7 @@ pub struct Agriculture {
 impl Clone for Agriculture {
     fn clone(&self) -> Self {
         Self {
+            action_clock: self.action_clock,
             growth_clock: self.growth_clock.clone(),
             provenance: self.provenance.clone(),
             inherit_births: self.inherit_births,
@@ -177,6 +181,12 @@ impl Agriculture {
         Ok(next)
     }
     pub fn validate(&self, people: &[Person], goods: &[Good], view: &View) -> Result<(), String> {
+        if let Some(clock) = self.action_clock {
+            clock.validate()?;
+            if self.growth_clock.is_none() {
+                return Err("elapsed cultivation actions require elapsed crop growth".into());
+            }
+        }
         if let Some(clock) = &self.growth_clock {
             clock.validate(&self.fields)?;
         }
@@ -247,6 +257,9 @@ impl Agriculture {
         }
         if let Some(requests) = &self.requests {
             requests.validate(&ids, &fields)?;
+            if let Some(clock) = self.action_clock {
+                requests.validate_clock(clock)?;
+            }
             if requests
                 .offer_values
                 .par_iter()
@@ -346,6 +359,7 @@ macro_rules! cultivation_methods {
 
 pub struct Plan {
     boundary: bool,
+    action_review: Option<elapsed_actions::Review>,
     pub actors: Vec<u64>,
     pub requesters: Vec<u64>,
     pub plant: Vec<Transaction>,
@@ -356,6 +370,11 @@ pub struct Plan {
     requests: Option<requests::Prepared>,
     track_seeds: bool,
     maturations: Option<reproduction::Maturations>,
+}
+impl Plan {
+    pub fn advances_review(&self) -> bool {
+        self.action_review.is_some()
+    }
 }
 pub fn append_planting(plan: &mut Option<Plan>, actions: &mut Vec<Transaction>) -> Vec<u64> {
     plan.as_mut().map_or_else(Vec::new, |plan| {
@@ -391,7 +410,7 @@ pub fn publish_optional(
 }
 pub struct Context<'a> {
     pub agriculture: &'a Agriculture,
-    pub agreements: Option<&'a game_agreements::Agreements>,
+    pub agreement_evidence: Option<(&'a game_agreements::Agreements, u64)>,
     pub people: &'a [Person],
     pub opinions: Option<&'a Opinions>,
     pub claims: Option<&'a game_economy_claims::Index<'a>>,
@@ -407,6 +426,13 @@ pub struct Context<'a> {
     pub reserved_field: Option<u64>,
     pub season: Option<&'a game_environment::Season>,
 }
+#[derive(Clone, Copy)]
+enum Preparation {
+    Boundary,
+    PersonalChoice,
+    ElapsedReview(elapsed_actions::Review),
+}
+
 impl Context<'_> {
     pub fn prepare(&self, base: u64) -> Result<Plan, String> {
         self.prepare_choices(base, &[], &[], &[])
@@ -421,7 +447,7 @@ impl Context<'_> {
         choice_people: &[u64],
         selected_blocked: &[u64],
     ) -> Result<Plan, String> {
-        self.prepare_work(base, selected, choice_people, selected_blocked, true, None)
+        self.prepare_work(base, selected, choice_people, selected_blocked, Preparation::Boundary, None)
     }
 
     /// Stage the competing intentions that actually won their personal decision round.
@@ -430,7 +456,18 @@ impl Context<'_> {
         selected: &[opportunities::Opportunity],
         actors: &[u64],
     ) -> Result<Plan, String> {
-        self.prepare_work(1, selected, actors, self.busy, false, None)
+        self.prepare_work(1, selected, actors, self.busy, Preparation::PersonalChoice, None)
+    }
+
+    /// Reconsider voluntary policies and requests alongside exact individual choices.
+    pub fn prepare_elapsed_review(
+        &self,
+        selected: &[opportunities::Opportunity],
+        choice_people: &[u64],
+        selected_blocked: &[u64],
+        review: elapsed_actions::Review,
+    ) -> Result<Plan, String> {
+        self.prepare_work(1, selected, choice_people, selected_blocked, Preparation::ElapsedReview(review), None)
     }
 
     /// A controlled character may plant a specifically chosen batch from their own cargo.
@@ -438,7 +475,7 @@ impl Context<'_> {
         if self.manual.is_none() || carried_batch == Some(0) {
             return Err("invalid controlled cultivation choice".into());
         }
-        self.prepare_work(1, &[], &[], self.busy, false, carried_batch)
+        self.prepare_work(1, &[], &[], self.busy, Preparation::PersonalChoice, carried_batch)
     }
 
     fn prepare_work(
@@ -447,9 +484,15 @@ impl Context<'_> {
         selected: &[opportunities::Opportunity],
         choice_people: &[u64],
         selected_blocked: &[u64],
-        boundary: bool,
+        preparation: Preparation,
         carried_batch: Option<u64>,
     ) -> Result<Plan, String> {
+        let boundary = matches!(preparation, Preparation::Boundary);
+        let action_review = match preparation {
+            Preparation::ElapsedReview(review) => Some(review),
+            _ => None,
+        };
+        let ordinary = action_review.is_some() || (boundary && self.agriculture.action_clock.is_none());
         if selected.par_windows(2).any(|p| p[0].person >= p[1].person)
             || choice_people.par_windows(2).any(|p| p[0] >= p[1])
             || selected_blocked.par_windows(2).any(|p| p[0] >= p[1])
@@ -497,7 +540,7 @@ impl Context<'_> {
         if crops.par_windows(2).any(|p| p[0].id > p[1].id) {
             crops.par_sort_unstable_by_key(|c| c.id);
         }
-        let mut policies: Vec<_> = if boundary {
+        let mut policies: Vec<_> = if ordinary {
             self.agriculture.policies.par_iter().collect()
         } else {
             Vec::new()
@@ -505,7 +548,7 @@ impl Context<'_> {
         if policies.par_windows(2).any(|p| p[0].person > p[1].person) {
             policies.par_sort_unstable_by_key(|p| p.person);
         }
-        let opinions = self.opinions.filter(|_| boundary).map(Opinions::index);
+        let opinions = self.opinions.filter(|_| ordinary).map(Opinions::index);
         if (self.manual_response.is_some() || self.manual_withdrawal.is_some())
             && self.agriculture.requests.is_none()
         {
@@ -515,8 +558,8 @@ impl Context<'_> {
             .agriculture
             .requests
             .as_ref()
-            .filter(|_| boundary)
-            .map(|owner| requests::prepare(owner, self, opinions.as_ref()))
+            .filter(|_| ordinary)
+            .map(|owner| requests::prepare(owner, self, opinions.as_ref(), &selected_fields, action_review))
             .transpose()?;
         let ordinary_people = if policies.is_empty() {
             &[]
@@ -969,6 +1012,7 @@ impl Context<'_> {
                 });
         Ok(Plan {
             boundary,
+            action_review,
             track_seeds: self.agriculture.provenance.is_some(),
             maturations: None,
             actors,
@@ -1127,14 +1171,14 @@ impl Plan {
                 Ok(field)
             })
             .collect::<Result<_, _>>()?;
-        let requests = if self.boundary {
-            self.requests
-                .map(|prepared| prepared.publish(&changes, &decisions))
-                .transpose()?
+        let requests = if let Some(prepared) = self.requests {
+            Some(prepared.publish(&changes, &decisions)?)
         } else {
             owner.requests.clone()
         };
         Ok(Agriculture {
+            action_clock: self.action_review.map(elapsed_actions::Review::committed_clock)
+                .or(owner.action_clock),
             growth_clock: owner.growth_clock.clone(),
             provenance,
             inherit_births: owner.inherit_births,

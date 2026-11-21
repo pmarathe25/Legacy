@@ -279,6 +279,7 @@ impl Chronicle {
                 | "maturation"
                 | "recipe_learning"
                 | "written_explanations"
+                | "farm_review"
                 | "personal_practices"
                 | "agreement_expiry"
         ) {
@@ -556,6 +557,11 @@ fn classify(kind: &str, row: &Value) -> Option<Receipt> {
         ("soil_amendments", _) if row["accepted"].as_bool() == Some(true) => {
             "soil amendments completed"
         }
+        ("farm_review", _) => match row["resulting_phase"].as_str()? {
+            "growing" => "fields planted",
+            "fallow" => "fields harvested",
+            _ => return None,
+        },
         ("agreement_expiry", "defaulted") => "unfulfilled agreements that expired",
         ("agreement_expiry", "withdrawn") => "unaccepted proposals that expired",
         ("personal_practices", "aid_proposed") => "individual aid proposals",

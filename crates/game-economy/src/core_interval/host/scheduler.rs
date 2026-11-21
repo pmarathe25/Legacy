@@ -70,6 +70,9 @@ pub enum DecisionPhase {
     WaterFields {
         meal_people: Vec<u64>,
     },
+    FarmOnly {
+        meal_people: Vec<u64>,
+    },
     Exchange {
         meal_people: Vec<u64>,
     },
@@ -644,6 +647,7 @@ impl CoreSchedule {
         | DecisionPhase::Assisting { meal_people }
         | DecisionPhase::AmendFields { meal_people }
         | DecisionPhase::WaterFields { meal_people }
+        | DecisionPhase::FarmOnly { meal_people }
         | DecisionPhase::Exchange { meal_people }
         | DecisionPhase::ExchangeProposals { meal_people }
         | DecisionPhase::ReadPages { meal_people }
@@ -795,6 +799,10 @@ pub enum CoreRunEvent {
     SoilAmendment {
         at_millis: u128,
         events: Vec<game_economy_agriculture::amendment::Event>,
+    },
+    FarmReview {
+        at_millis: u128,
+        review: super::agriculture::FarmReview,
     },
     ElapsedGathering {
         at_millis: u128,
@@ -956,6 +964,13 @@ impl CoreHost {
     }
 
     fn after_amending(&self, meal_people: Vec<u64>) -> DecisionPhase {
+        if self.farm_review_due() {
+            return if self.schedule.as_ref().is_some_and(|row| row.personal_choices.is_some()) {
+                DecisionPhase::ChooseLocal { meal_people }
+            } else {
+                DecisionPhase::FarmOnly { meal_people }
+            };
+        }
         if self
             .schedule
             .as_ref()
@@ -1027,7 +1042,12 @@ impl CoreHost {
                     }))
         {
             DecisionPhase::ChooseLocal { meal_people }
-        } else if self.gathers_at_decisions() {
+        } else {
+            self.after_farm_only(meal_people)
+        }
+    }
+    fn after_farm_only(&self, meal_people: Vec<u64>) -> DecisionPhase {
+        if self.gathers_at_decisions() {
             DecisionPhase::ChosenBatch {
                 meal_people,
                 intents: Arc::new(Vec::new()),
@@ -2002,6 +2022,26 @@ impl CoreHost {
                         let next = self.after_watering(meal_people);
                         self.schedule.as_mut().expect("active schedule").phase = next;
                     }
+                    DecisionPhase::FarmOnly { mut meal_people } => {
+                        let mut busy = blocked.to_vec();
+                        busy.par_extend(meal_people.par_iter().copied());
+                        busy.par_sort_unstable();
+                        busy.dedup();
+                        let cultivation = attempt!('run, self.cultivate_at_decision(&busy, &[]));
+                        if let Some(review) = cultivation.review
+                            && !(review.work.is_empty() && review.requests.is_empty())
+                        {
+                            run.events.push(CoreRunEvent::FarmReview {
+                                at_millis: self.core.simulated_millis(),
+                                review,
+                            });
+                        }
+                        meal_people.par_extend(cultivation.actors);
+                        meal_people.par_sort_unstable();
+                        meal_people.dedup();
+                        let next = self.after_farm_only(meal_people);
+                        self.schedule.as_mut().expect("active schedule").phase = next;
+                    }
                     DecisionPhase::ChooseLocal { mut meal_people } => {
                         let mut busy = blocked.to_vec();
                         busy.extend(meal_people.iter().copied());
@@ -2032,6 +2072,14 @@ impl CoreHost {
                                 run.events.push(CoreRunEvent::ElapsedCultivation {
                                     at_millis: self.core.simulated_millis(),
                                     fields: cultivation.fields,
+                                });
+                            }
+                            if let Some(review) = cultivation.review
+                                && !(review.work.is_empty() && review.requests.is_empty())
+                            {
+                                run.events.push(CoreRunEvent::FarmReview {
+                                    at_millis: self.core.simulated_millis(),
+                                    review,
                                 });
                             }
                             (cultivation.actors, cultivation.choices)

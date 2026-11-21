@@ -133,6 +133,29 @@ pub struct Requests {
 }
 
 impl Requests {
+    pub(crate) fn validate_clock(
+        &self,
+        clock: crate::elapsed_actions::Clock,
+    ) -> Result<(), String> {
+        let fits = |duration: u64| duration.checked_mul(clock.request_unit_millis).is_some();
+        if self
+            .askers
+            .par_iter()
+            .any(|row| !fits(row.interval) || !fits(row.lifetime))
+            || self
+                .discoverers
+                .par_iter()
+                .any(|row| !fits(row.interval) || !fits(row.lifetime))
+            || self
+                .withdrawal_preferences
+                .par_iter()
+                .any(|row| !fits(row.retry_after))
+        {
+            return Err("cultivation request duration exceeds the elapsed clock".into());
+        }
+        Ok(())
+    }
+
     pub fn validate(&self, people: &HashSet<u64>, fields: &[u64]) -> Result<(), String> {
         let mut askers: Vec<_> = self
             .askers
@@ -242,23 +265,34 @@ pub fn prepare(
     owner: &Requests,
     context: &Context<'_>,
     opinions: Option<&Index<'_>>,
+    selected_fields: &[u64],
+    review: Option<crate::elapsed_actions::Review>,
 ) -> Result<Prepared, String> {
+    let now = review.map_or(context.tick, |review| review.now);
+    let duration = |units| review.map_or(Some(units), |review| review.duration(units));
+    let due = |interval| {
+        review.map_or_else(
+            || now.is_multiple_of(interval),
+            |review| review.policy_due(interval),
+        )
+    };
     let mut fields: Vec<_> = context.agriculture.fields.par_iter().collect();
     fields.par_sort_unstable_by_key(|f| f.id);
     let mut preferences: Vec<_> = owner.preferences.par_iter().collect();
     preferences.par_sort_unstable_by_key(|p| p.person);
     let mut values: Vec<_> = owner.offer_values.par_iter().collect();
     values.par_sort_unstable_by_key(|row| row.person);
-    let mut offers: Vec<_> = if values.par_iter().any(|row| row.value_per_unit != 0) {
-        context
-            .agreements
-            .map_or(&[][..], |owner| owner.contracts.as_slice())
+    let mut offers: Vec<_> = if let Some((agreements, agreement_now)) = context.agreement_evidence
+        && values.par_iter().any(|row| row.value_per_unit != 0)
+    {
+        agreements
+            .contracts
             .par_iter()
             .filter_map(|contract| {
                 use game_agreements::Status;
                 let live = match contract.status {
-                    Status::Proposed => contract.due > context.tick,
-                    Status::Active => contract.due >= context.tick,
+                    Status::Proposed => contract.due > agreement_now,
+                    Status::Active => contract.due >= agreement_now,
                     _ => false,
                 };
                 let remaining = contract.quantity.saturating_sub(contract.delivered);
@@ -315,8 +349,8 @@ pub fn prepare(
         let f = field(request.field).ok_or("unknown requested field")?;
         if !worker.controlled
             || worker.health == 0
-            || request.created_at >= context.tick
-            || context.tick > request.expires
+            || request.created_at >= now
+            || now > request.expires
         {
             return Err("person cannot respond to this cultivation request".into());
         }
@@ -350,8 +384,8 @@ pub fn prepare(
         let requester = person(actor).ok_or("unknown person")?;
         if !requester.controlled
             || requester.health == 0
-            || request.created_at >= context.tick
-            || context.tick > request.expires
+            || request.created_at >= now
+            || now > request.expires
         {
             return Err("person cannot withdraw this cultivation request".into());
         }
@@ -381,8 +415,8 @@ pub fn prepare(
                     || unavailable(requester.id)
                     || context.contact_blocked.binary_search(&requester.id).is_ok()
                     || context.contact_blocked.binary_search(&worker.id).is_ok()
-                    || request.created_at >= context.tick
-                    || context.tick > request.expires
+                    || request.created_at >= now
+                    || now > request.expires
                     || field(request.field).is_none_or(|field| field.phase != request.phase)
                     || context
                         .manual_response
@@ -408,7 +442,7 @@ pub fn prepare(
     let mut retry_backoffs: Vec<_> = owner
         .retry_backoffs
         .par_iter()
-        .filter(|row| row.until > context.tick)
+        .filter(|row| row.until > now)
         .cloned()
         .collect();
     let new_backoffs: Vec<_> = automatic
@@ -416,9 +450,8 @@ pub fn prepare(
         .map(|&(_, person, delay)| {
             Ok(RetryBackoff {
                 person,
-                until: context
-                    .tick
-                    .checked_add(delay)
+                until: duration(delay)
+                    .and_then(|millis| now.checked_add(millis))
                     .ok_or("cultivation retry overflow")?,
             })
         })
@@ -433,7 +466,7 @@ pub fn prepare(
         retry_backoffs
             .binary_search_by_key(&person, |row| row.person)
             .ok()
-            .is_some_and(|i| retry_backoffs[i].until > context.tick)
+            .is_some_and(|i| retry_backoffs[i].until > now)
     };
     enum Evaluation {
         Event(Event),
@@ -459,7 +492,7 @@ pub fn prepare(
                         request: request.id,
                         outcome: Outcome::Withdrawn,
                     })
-                } else if context.tick > request.expires {
+                } else if now > request.expires {
                     Evaluation::Event(Event {
                         request: request.id,
                         outcome: Outcome::Expired,
@@ -474,7 +507,7 @@ pub fn prepare(
                         request: request.id,
                         outcome: Outcome::Stale,
                     })
-                } else if context.tick <= request.created_at
+                } else if now <= request.created_at
                     || (worker.controlled && response.is_none())
                     || worker.health == 0
                     || worker.region != Some(f.region)
@@ -482,6 +515,7 @@ pub fn prepare(
                     || (withdrawal_actors.binary_search(&worker.id).is_ok() && response.is_none())
                     || context.manual.is_some_and(|(_, id)| id == f.id)
                     || context.reserved_field == Some(f.id)
+                    || selected_fields.binary_search(&f.id).is_ok()
                 {
                     Evaluation::Retained(request.clone())
                 } else if response.is_some() {
@@ -608,7 +642,7 @@ pub fn prepare(
             let asker = person(a.person)?;
             let worker = person(a.worker)?;
             let f = field(a.field)?;
-            if !context.tick.is_multiple_of(a.interval)
+            if !due(a.interval)
                 || already.binary_search(&a.person).is_ok()
                 || waiting(a.person)
                 || asker.controlled
@@ -655,7 +689,7 @@ pub fn prepare(
         proposals.par_extend(owner.discoverers.par_iter().filter_map(|a| {
             let asker = person(a.person)?;
             let region = asker.region?;
-            if !context.tick.is_multiple_of(a.interval)
+            if !due(a.interval)
                 || already.binary_search(&a.person).is_ok()
                 || waiting(a.person)
                 || asker.controlled
@@ -671,10 +705,7 @@ pub fn prepare(
             if nearby.len() < 2 {
                 return None;
             }
-            let hash = a
-                .person
-                .wrapping_mul(0x9e3779b97f4a7c15)
-                .wrapping_add(context.tick);
+            let hash = a.person.wrapping_mul(0x9e3779b97f4a7c15).wrapping_add(now);
             let mut index = (hash % nearby.len() as u64) as usize;
             if nearby[index].1 == a.person {
                 index = (index + 1) % nearby.len();
@@ -705,10 +736,9 @@ pub fn prepare(
                 worker,
                 field,
                 phase,
-                created_at: context.tick,
-                expires: context
-                    .tick
-                    .checked_add(lifetime)
+                created_at: now,
+                expires: duration(lifetime)
+                    .and_then(|millis| now.checked_add(millis))
                     .ok_or("cultivation request expiry overflow")?,
             })
         })

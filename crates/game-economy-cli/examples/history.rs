@@ -122,6 +122,7 @@ fn observation(event: &CoreRunEvent, current_tick: &mut u64) -> Option<Value> {
         CoreRunEvent::ElapsedWatering { at_millis, events } => Some(json!({"kind":"elapsed_watering","at_millis":at_millis,"events":events})),
         CoreRunEvent::ElapsedCultivation { at_millis, fields } => Some(json!({"kind":"elapsed_cultivation","at_millis":at_millis,"events":fields})),
         CoreRunEvent::SoilAmendment { at_millis, events } => Some(json!({"kind":"soil_amendments","at_millis":at_millis,"events":events})),
+        CoreRunEvent::FarmReview { at_millis, review } => Some(json!({"kind":"farm_review","at_millis":at_millis,"events":review.work,"requests":review.requests})),
         CoreRunEvent::ElapsedGathering { at_millis, events } => Some(json!({"kind":"gathered_resources","at_millis":at_millis,"events":events})),
         CoreRunEvent::PersonalChoices(rows) if !rows.is_empty() => Some(json!({"kind":"personal_choices","events":rows})),
         CoreRunEvent::PersonalStrikes { events, harm } if !events.is_empty() => Some(json!({"kind":"personal_strikes","tick":*current_tick,"events":events,"harm":harm})),

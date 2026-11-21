@@ -903,6 +903,8 @@ struct MedicalPolicyConfig {
 struct Cultivation {
     max_hunger: u32,
     #[serde(default)]
+    action_clock: Option<game_economy_agriculture::elapsed_actions::Clock>,
+    #[serde(default)]
     growth_unit_millis: Option<u64>,
     #[serde(default)]
     track_seed_batches: bool,
@@ -2656,6 +2658,7 @@ fn build_scenario(
                 })
                 .collect::<Result<Vec<_>, String>>()?;
             Ok(Agriculture {
+                action_clock: state.action_clock,
                 growth_clock: state.growth_unit_millis.map(|unit_millis| {
                     game_economy_agriculture::elapsed_growth::GrowthClock {
                         unit_millis,
