@@ -1,10 +1,8 @@
 //! Individual gathering from finite or renewable local physical resources.
 use game_economy_person::Person;
-use game_lot_content::Catalog;
 use game_lot_runtime::Events;
-use game_lots::{Place, Transaction, View};
+use game_lots::{Place, View};
 use game_opinions::Opinions;
-use game_production_model::Good;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
@@ -207,7 +205,6 @@ impl Gathering {
 }
 pub struct Plan {
     pub actors: Vec<u64>,
-    pub actions: Vec<Transaction>,
     records: Vec<(u64, u64, u64, u64)>,
     elapsed_millis: u64,
 }
@@ -225,14 +222,11 @@ pub struct Context<'a> {
     pub people: &'a [Person],
     pub opinions: Option<&'a Opinions>,
     pub busy: &'a [u64],
-    pub goods: &'a [Good],
     pub view: &'a View,
     pub tick_millis: u64,
     pub seed: u64,
     pub tick: u64,
     pub manual: Option<(u64, u64)>,
-    /// Place outputs in the gatherer's own custody instead of regional stock.
-    pub personal_output: bool,
 }
 impl Context<'_> {
     /// Expose individual alternatives without reserving a shared resource.
@@ -254,17 +248,14 @@ impl Context<'_> {
                     .binary_search_by_key(&policy.node, |node| node.id)
                     .ok()
                     .map(|index| nodes[index])?;
-                let stock = self.view.container(Place::Stock {
+                self.view.container(Place::Stock {
                     region: resource.region,
                     good: resource.good,
                 })?;
-                let capacity = if self.personal_output {
-                    self.view
-                        .container(Place::Person(person.id))
-                        .map_or(0, |holder| holder.capacity.saturating_sub(holder.used))
-                } else {
-                    stock.capacity.saturating_sub(stock.used)
-                };
+                let capacity = self
+                    .view
+                    .container(Place::Person(person.id))
+                    .map_or(0, |holder| holder.capacity.saturating_sub(holder.used));
                 let pressured = policy
                     .pressured_by
                     .zip(policy.pressure_threshold)
@@ -292,10 +283,6 @@ impl Context<'_> {
             .collect();
         opportunities.par_sort_unstable_by_key(|row| (row.person, row.node));
         opportunities
-    }
-
-    pub fn prepare(&self, base: u64) -> Result<Plan, String> {
-        self.prepare_selected(base, &[], &[])
     }
 
     /// Only exact, previously selected intentions may act for profiled people.
@@ -394,41 +381,20 @@ impl Context<'_> {
             .collect();
         let count = u64::try_from(selected.len()).map_err(|_| "gathering action overflow")?;
         base.checked_add(count).ok_or("gathering action overflow")?;
-        let catalog = (!self.personal_output)
-            .then(|| Catalog::from_tick_millis(self.goods, self.tick_millis))
-            .transpose()?;
-        let results: Vec<_> = selected
+        let records = selected
             .par_iter()
             .enumerate()
-            .map(|(i, (resource, actor))| -> Result<_, String> {
-                let id = base + i as u64;
-                let action = catalog
-                    .as_ref()
-                    .map(|catalog| -> Result<_, String> {
-                        Ok(Transaction {
-                            id,
-                            movements: vec![],
-                            creations: vec![catalog.creation(
-                                id,
-                                Place::Stock {
-                                    region: resource.region,
-                                    good: resource.good,
-                                },
-                                resource.good,
-                                resource.yield_per_action,
-                                self.tick,
-                            )?],
-                        })
-                    })
-                    .transpose()?;
-                Ok(((resource.id, id, resource.yield_per_action, *actor), action))
+            .map(|(i, (resource, actor))| {
+                (
+                    resource.id,
+                    base + i as u64,
+                    resource.yield_per_action,
+                    *actor,
+                )
             })
-            .collect::<Result<_, _>>()?;
-        let records = results.par_iter().map(|row| row.0).collect();
-        let actions = results.into_par_iter().filter_map(|row| row.1).collect();
+            .collect();
         Ok(Plan {
             actors,
-            actions,
             records,
             elapsed_millis: self.tick_millis,
         })
@@ -475,30 +441,6 @@ impl Plan {
                 })
             })
             .collect()
-    }
-    pub fn outputs(&self, owner: &Gathering) -> Vec<(u64, u64, u64, u32)> {
-        let mut nodes: Vec<_> = owner.nodes.par_iter().collect();
-        nodes.par_sort_unstable_by_key(|n| n.id);
-        self.records
-            .par_iter()
-            .filter_map(|&(id, action, _, actor)| {
-                nodes
-                    .binary_search_by_key(&id, |n| n.id)
-                    .ok()
-                    .map(|i| (action, actor, nodes[i].region, nodes[i].good))
-            })
-            .collect()
-    }
-    pub fn admitted(&self, actor: u64, events: &Events) -> bool {
-        self.records
-            .iter()
-            .find(|row| row.3 == actor)
-            .is_some_and(|row| {
-                events
-                    .physical_actions
-                    .iter()
-                    .any(|decision| decision.id == row.1 && decision.accepted)
-            })
     }
     pub fn publish(
         mut self,

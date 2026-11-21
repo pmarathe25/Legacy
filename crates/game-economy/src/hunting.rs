@@ -491,9 +491,4 @@ impl Plan {
         animals.par_sort_unstable();
         animals
     }
-    pub fn caught(&self, hunter: u64, animals: &[u64]) -> bool {
-        self.yields
-            .iter()
-            .any(|yield_| yield_.hunter == hunter && animals.binary_search(&yield_.animal).is_ok())
-    }
 }

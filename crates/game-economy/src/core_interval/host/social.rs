@@ -693,7 +693,7 @@ impl CoreHost {
         {
             let current = opinions.get_or_insert_with(|| self.opinions.clone());
             if let Some(opinions) = current {
-                crate::teaching::interpret(opinions, &frame.lessons, tick);
+                opinions.learn_teaching_pairs(&frame.lessons, tick);
             }
         }
         let route_reports = self

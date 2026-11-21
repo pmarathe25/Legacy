@@ -239,8 +239,6 @@ struct Candidate {
     priority: u64,
 }
 pub struct Plan {
-    pub actors: Vec<u64>,
-    pub reserved: Vec<u64>,
     pub yields: Vec<AnimalProduct>,
     events: Vec<Event>,
     pub handling: Vec<handling::Event>,
@@ -265,8 +263,6 @@ impl Context<'_> {
                 return Err("animal products are disabled".into());
             }
             return Ok(Plan {
-                actors: vec![],
-                reserved: vec![],
                 yields: vec![],
                 events: vec![],
                 handling: vec![],
@@ -274,8 +270,6 @@ impl Context<'_> {
         };
         if owner.policies.is_empty() && self.manual.is_none() {
             return Ok(Plan {
-                actors: vec![],
-                reserved: vec![],
                 yields: vec![],
                 events: vec![],
                 handling: vec![],
@@ -365,12 +359,6 @@ impl Context<'_> {
                 });
             }
         }
-        let mut actors: Vec<_> = candidates.par_iter().map(|c| c.person).collect();
-        actors.extend(self.manual.map(|m| m.0));
-        if actors.par_windows(2).any(|w| w[0] > w[1]) {
-            actors.par_sort_unstable();
-        }
-        actors.dedup();
         let order = |c: &Candidate| (c.animal, !c.manual, c.priority, c.person);
         if candidates
             .par_windows(2)
@@ -482,14 +470,7 @@ impl Context<'_> {
             .into_par_iter()
             .map(|(event, _, _)| event)
             .collect();
-        let reserved = events
-            .par_iter()
-            .filter(|e| e.outcome != Outcome::Unavailable)
-            .map(|e| e.animal)
-            .collect();
         Ok(Plan {
-            actors,
-            reserved,
             yields,
             events,
             handling: handling_events,
@@ -546,8 +527,6 @@ mod tests {
 
     fn plan() -> Plan {
         Plan {
-            actors: vec![1, 2],
-            reserved: vec![1, 2],
             yields: vec![
                 AnimalProduct {
                     action: 10,

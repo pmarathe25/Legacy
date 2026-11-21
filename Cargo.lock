@@ -318,7 +318,6 @@ dependencies = [
  "game-economy",
  "game-economy-agriculture",
  "game-economy-building",
- "game-economy-cli-commands",
  "game-economy-combat",
  "game-economy-dynamics",
  "game-economy-knowledge",
@@ -338,7 +337,6 @@ dependencies = [
  "game-market",
  "game-mechanics",
  "game-opinions",
- "game-persistence",
  "game-personal-choice",
  "game-production",
  "game-signals",
@@ -349,15 +347,6 @@ dependencies = [
  "serde",
  "serde_json",
  "toml",
-]
-
-[[package]]
-name = "game-economy-cli-commands"
-version = "0.2.0"
-dependencies = [
- "game-economy",
- "game-economy-combat",
- "game-economy-player",
 ]
 
 [[package]]
@@ -553,18 +542,8 @@ dependencies = [
 name = "game-economy-player"
 version = "0.2.0"
 dependencies = [
- "game-agreements",
- "game-autowork",
  "game-economy",
- "game-economy-campaign",
- "game-economy-combat",
- "game-economy-knowledge",
  "game-language",
- "game-lot-runtime",
- "game-lots",
- "game-missions",
- "game-production-model",
- "rayon",
 ]
 
 [[package]]

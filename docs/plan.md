@@ -6,7 +6,7 @@ The goal is a complete, playable sandbox simulation of people, societies, and a 
 
 ## Start here
 
-Read the current workspace and its executable tests for implemented behavior, then consult the relevant domain document when extending a mechanic. The [implementation stages](design/implementation.md#1-deterministic-concurrent-simulation-kernel) and [open questions](design/decisions.md#when-to-ask) provide historical design context. The workspace still contains both the older whole-boundary engine and the interval host; removing the older engine remains unfinished.
+Read the current workspace and its executable tests for implemented behavior, then consult the relevant domain document when extending a mechanic. The [implementation stages](design/implementation.md#1-deterministic-concurrent-simulation-kernel) and [open questions](design/decisions.md#when-to-ask) provide historical design context. The CLI, player and history runner share the elapsed simulation host. The [feature restoration inventory](research/legacy-feature-audit.md) tracks gaps against the historical engine.
 
 The [long-running history design](design/history.md) describes the intended ability to follow individuals, emergent collective patterns, knowledge, technology, and evolving populations over centuries.
 
