@@ -57,6 +57,11 @@ to track rates, deadlines, and behavior under different advance sizes. The
   fertility when its material leaves physical custody. The player's action
   and ordinary personal choices are exercised across worker counts and
   different physical intervals.
+- Watering draws from reachable stock and arbitrates by field on the decision
+  clock. Ordinary cultivation and requests have an independent elapsed
+  review. An individual can refuse a request. The review still records the
+  refusal when it consumes no material. Focused tests cover exact review
+  times, conservation, saved rounds, and different worker counts.
 - Private lexicons support remembered acquaintances. A speaker can name
   someone from their own experience. A listener needs their own grounding
   and can decline or adapt the form. Annual reports count the living people
@@ -80,6 +85,9 @@ to track rates, deadlines, and behavior under different advance sizes. The
 - Annual histories follow the calendar even when the annual checkpoint falls
   inside a physical interval. The resumed state matches the uninterrupted
   run when the caller partitions time differently and changes worker count.
+- Two 31-day histories with minute-sized advances and one and six workers
+  produced byte-identical checkpoint state. The same experiment still needs
+  timed measurements under controlled CPU load and on larger mixed worlds.
 - The 5,100-person benchmarks give identical ordered receipts across worker
   counts. The original minute observation test staged 306,000 rows per
   physiology owner. The sparse fatigue stage now skips every unchanged

@@ -94,7 +94,7 @@ scalar_meal = [0, 0, 0, 0, 0, 0]
 
 [[regions]]
 id = 1
-stock = { timber = 3000, barley = 3000, bread = 800, grain-seed = 200, fresh-water = 300, paper = 100, ink = 100 }
+stock = { timber = 3000, barley = 3000, bread = 800, grain-seed = 200, fresh-water = 300, paper = 100, ink = 100, bark = 10 }
 
 [[regions]]
 id = 2
@@ -2085,6 +2085,7 @@ harvest_allowed = true
 
 [cultivation]
 growth_unit_millis = 3600000
+action_clock = { period_millis = 3600000, request_unit_millis = 3600000 }
 max_hunger = 120
 inherit_births = true
 track_seed_batches = true
@@ -2113,6 +2114,18 @@ recovery_per_fallow = 10
 recovery_clock = { period_millis = 3600000 }
 fields = [{ field = 1, fertility = 90 }]
 
+[soil_amendment]
+good = "bark"
+quantity = 1
+fertility_gain = 10
+elapsed_actions = true
+choices = [{ person = 13, field = 1, willing = true }]
+
+[cultivation.requests]
+next_id = 1
+askers = [{ person = 6, worker = 12, field = 1, interval = 24, lifetime = 12 }]
+preferences = [{ person = 12, help_value = 1, effort = 2, affinity_weight = 1 }]
+
 [cultivation.seed_genetics]
 growth_weight = 0
 min_factor = 500
@@ -2135,6 +2148,7 @@ recombine = true
 cross_field_pollen = true
 [irrigation]
 water = "fresh-water"
+elapsed_actions = true
 capacity = 2
 minimum_growth = 1
 evaporation = 1
