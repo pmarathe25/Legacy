@@ -1,441 +1,75 @@
-# Economic scenario runner
-
-Run `cargo run -p game-economy-cli -- --player` for the elapsed campaign.
-Use `campaign` to inspect the lineage, `look` for the character's local view,
-and `wait MILLISECONDS` to advance by an explicit duration. `--person ID`
-plays a particular authored character. Either mode accepts a scenario path,
-`--seed`, and `--population`. The command examples below that use
-`--whole-boundary-player` refer to the older interface during migration.
-
-Run `cargo run -p game-economy-cli`, optionally passing a scenario TOML path,
-for an unattended elapsed world. `step` advances a simulated minute and
-`step MILLISECONDS` advances the requested duration. `help` lists diagnostic
-commands. `status` shows absolute simulated time, and `save` and `load` use
-elapsed checkpoints compatible with the history runner. Characters remain
-autonomous during observation, including the active campaign incarnation.
-
-The earlier administrative commands and examples that use `step` with a tick
-count are available through `--whole-boundary` during migration.
-
-This runner currently exposes the composed economic slice, not the complete campaign simulation.
-
-`remember-people on|off` changes whether the current person records new local encounters; `known-people` displays their own bounded memories of who they met, where, and when. A memory is not a live location. The administrative forms take a person ID; scenarios can set `remember_people` on an individual knowledge mind.
-
-An individual can choose to share their firsthand encounter memories with `people-reporting on|off PRESSURE|none`, or disable such reports with `people-reporting off`. `people-reports` shows the current person's bounded secondhand reports, including speaker and observation time, separately from direct memories. A listener applies their own existing report-reception judgment. Scenarios can set `people_reporting = { willing = true }` or configure a personal `pressure_threshold`; omitted settings leave encounter reporting disabled.
-
-Run `cargo run -p game-economy-cli -- content/scenarios/economy-project.toml --whole-boundary-player` for a small personal project. Another person independently plans to build a workshop, fetch timber from a local store, and make a tool; each step consumes or moves the actual materials.
-
-`content/scenarios/economy-conflict-project.toml` adds a third person and tactical combat to the same project. A person in a fight cannot simultaneously work, while the other person's project and the rest of the world continue.
-
-`content/scenarios/economy-care-project.toml` adds an infectious illness and a caregiver with real medicine. The caregiver may choose to treat the worker; contact can transmit the illness, and successful treatment consumes the medicine.
-
-`content/scenarios/economy-succession.toml` starts with a dying ruler and an existing pregnancy. Time continues through the succession gap; a successor can arise only from an actual eligible birth, and the embodied guardians must travel to them. Once the successor exists, `invoke 1` invokes the deceased ruler, `past-knowledge 1` accesses that life's remembered food reports, and `dismiss-invocation` ends access. Invocation can pause time with a warning before imposing a cost; the player can accept the warning or dismiss it.
-
-`content/scenarios/economy-past-testimony.toml` gives the previous life a remembered food report for region 2. While invoking that life, `tell-past-food 1 2 2 remembered` attempts a real meeting with person 2 and states the remembered quantity; replace `remembered` with a number to make a different claim. The listener independently applies their report-reception policy, and an accepted bounded memory can persist after dismissal. The command reports whether contact occurred, not the listener's private assessment.
-
-`content/scenarios/economy-community.toml` lets two neighbors encounter shortages and actual help while the player observes as a third person. A neighbor may construct a food-aid proposal from personal experience; the other independently evaluates it and chooses later actions. The proposal itself creates no goods or binding institution.
-
-`content/scenarios/economy-personal-credit.toml` lets the player give food to a neighbor who may later offer a revocable promise in response. The offer and its eventual fulfillment are separate personal choices; the gift is not automatically repaid.
-
-`content/scenarios/economy-cultivation-offer.toml` illustrates a person offering bread they do not possess before asking for cultivation help. A `[[cultivation_offer_values]]` entry names the person and good and specifies a signed `value_per_unit` and `max_quantity`. The helper evaluates the promise personally; neither the work nor delivery follows automatically.
-
-`content/scenarios/economy-cultivation-thanks.toml` illustrates the opposite sequence: a person asks for help, observes cultivation, and may later offer a future gift according to their own work-offering inclination.
-
-`content/scenarios/economy-cultivation-soil.toml` configures field fertility, harvest depletion, and fallow recovery in content; harvest quantities depend on the field's opening fertility.
-
-`content/scenarios/economy-soil-improvement.toml` adds an individual's inclination to consume actual locally stored material to improve a field. Its `[soil_amendment]` names the material in the content catalog.
-
-In player mode, `amend-field FIELD respect|disregard` attempts to apply the configured soil material to a local field. It consumes material only when the physical transaction succeeds.
-
-`content/scenarios/economy-maintenance.toml` has a workshop that wears out after one completed batch. Local `view` shows its wear, limit, repair good, and quantity; `repair-site 1` spends a boundary and consumes the required carried timber if the physical transaction succeeds. A worn-out site does not admit new jobs, but existing work may finish. Repairs require an idle site and exclude competing demolition and new work during the attempt.
-
-In `content/scenarios/economy-shared-work.toml`, person 3 chooses to assist person 2's workshop job. Use `step 3` and `view` to see a local shared-work receipt. The same job owns its inputs and output throughout.
-
-Once a local job is active, `assist-work LEAD RECIPE respect|disregard` lets the controlled person attempt to help for one boundary. Admission is subject to the job's crew limit; the claim option expresses that person's own choice. In the shared-work scenario, use `step 2`, then `assist-work 2 66 respect` (or check the recipe ID with `catalog`).
-
-For authored personal text, `text-choice` shows the controlled person's available text, `write-text SCRIPT TEMPLATE` writes it using carried paper and ink, and `page-text ITEM` displays a held page they wrote or read, or a text they retained in memory. `give-page` physically transfers a page and `read-page` spends a boundary reading one in a known script. `text-memories` shows the controlled person's own retained texts; `remember-text on|off` changes whether they retain future experiences when they have a configured retention preference. Text by itself does not impose an agreement or compel an action. The `economy-written-text` scenario contains an example.
-
-When an enabled succession rule leaves unfinished work vacant, `view` lists local `vacant-work` entries with their job, recipe, site and expiry boundary. `take-over-work JOB respect|disregard` attempts to take one over, competing fairly with other candidates and spending a boundary even if the attempt is denied. A successful takeover preserves the site's reserved inputs; the controlled character uses `continue-work` to make further progress. See `content/scenarios/economy-work-succession.toml` for the data schema.
-
-With local walking enabled, `walk-store STORE` and `walk-stock` each spend a boundary advancing the chosen leg. `view` shows the controlled person's local position and whether each store's contents are currently observed. Nearby people and bodies must be at the same endpoint or the same recorded point on a walking leg; live stock-endpoint sites, resources, fields and animals are shown from that endpoint. Picking up or depositing requires being at the relevant endpoint at the start of a later boundary. See `content/scenarios/economy-local-walking.toml`.
-
-In `content/scenarios/economy-fear-retreat.toml`, use `attack 3` and advance the combat. The other fighter can gain personal fear from an actual strike and choose to retreat in a later round; another person's fear or a fighter without that inclination does not compel retreat.
-
-In `content/scenarios/economy-intervention.toml`, use `attack 3` and advance the combat. Person 2 can independently interrupt their work and enter the encounter on person 3's side after the current round, provided both combatants remain and a visible tactical entry is available.
-
-In `content/scenarios/economy-player-reinforcement.toml`, use `step` to let two other people start a fight, then `reinforce 3 2` to join person 3's side against person 2. Joining selects an open visible entry position without advancing time; subsequent combat rounds interrupt the player's other work and advance the world normally.
-
-The player battle view includes fighter positions and structures only when the tactical map has an unobstructed line of sight from the controlled person.
-
-In `content/scenarios/economy-wounds.toml`, use `attack 3` and advance until the fight ends. `view` shows local wounded people. Use `catalog` to find the healing-herbs good ID, then `treat-other 3 GOOD 1` to consume one carried herb and treat that person's wound, or `treat-wound GOOD 1` to treat your own. Wounds otherwise recover over time; the example wound pauses continuing work but does not prevent movement. `go 2` is unavailable while the player is still fighting and becomes available after the encounter ends.
-
-In `content/scenarios/economy-autonomous-wound-care.toml`, person 3 carries herbs and has an individual preference to treat their own wound. After `attack 3`, advance until the fight ends and then another boundary; their own choice can consume their herbs and clear their wound.
-
-In `content/scenarios/economy-combat-site.toml`, use `attack 2`, then `combat-order site 1` and `step`. The workshop's visible wear increases; it cannot admit later jobs until repaired. The attack uses the same map, reach, line of sight, and shared combat round as other strikes.
-
-In `content/scenarios/economy-combat-collapse.toml`, the same attack collapses the workshop at its wear limit and removes its associated tactical barrier. Active jobs are interrupted; any real materials retained by a built site become salvageable debris.
-
-In `content/scenarios/economy-route-closure.toml`, `go 2` reports a blocked departure until tick 2; after `step 2`, the same attempt succeeds. A closure blocks new departures only. The player's `view` shows their bounded, dated observations of routes they tried.
-
-`content/scenarios/economy-personal-routes.toml` gives two food seekers different route reports. On the first `step`, one takes a known indirect route while the other discovers that their supposedly open direct route is closed.
-
-In `content/scenarios/economy-route-testimony.toml`, `tell-route 2 1 2 remembered remembered` relays the ruler's report during a meeting. `tell-route 2 1 2 open 1` instead claims the road is open and takes one tick. The result reports contact; the listener's own reception preference governs whether they believe the statement. Route testimony currently uses the existing `food-report-reception` setting.
-
-In `content/scenarios/economy-autonomous-route-testimony.toml`, person 2 independently tells person 3 that a closed road is open. Person 3 can later act on the report and encounter the actual closure.
-
-In `content/scenarios/economy-autonomous-site-attack.toml`, person 2 has an individual preference to strike the workshop while fighting. Use `attack 2` and `step` to observe their independent choice.
-
-`content/scenarios/economy-testimony.toml` starts with a person inclined to take a neighbor's bread. In player mode, advance two ticks and use `meet 2` followed by `taking-reports` to hear that neighbor's account. The neighbor deliberately reports resistance; the player's initial stance is to doubt the statement, and `taking-belief` can change that personal judgment. The actual taking, account, and judgment remain separate.
-
-`content/scenarios/economy-recovery.toml` starts with a person choosing whether to recover real bread from an incapacitated holder. The controlled observer can witness the attempt; no inheritance or transfer occurs merely because a person has died.
-
-`content/scenarios/economy-judgment.toml` adds a person's own assessment-conditioned response to the testimony setting. A prior assessment may influence that person's chosen taking attempt, which still requires real goods and can be refused or resisted.
-
-After receiving an account, `taking-inquiry RECIPIENT WITNESS ACTOR LIFETIME` records a request for another person to consider that specific remembered or reported account. It snapshots the account and proposed witness; the recipient can accept or decline only after an actual meeting, using their own `taking-inquiry-choice on|off PRESSURE|none` preference. `taking-inquiry-choice clear` leaves requests unanswered and `taking-inquiries` shows the player's own requests and decisions. At most one pending request is retained per recipient. If the named witness later chooses to share a report about the same event before expiry, the recipient privately retains that report and whether its details match the original account. A witness can repeat a previously shared statement without repeating its social reactions. Acceptance and comparison do not establish guilt or compel any action.
-
-`taking-assessment` configures a person's optional signed interpretations of future statements, and `taking-assessment-now` revises their current judgment. `taking-precedent DELTA any|believed|doubted|unassessed` optionally lets an earlier personally received account about the same actor adjust a future interpretation; `taking-precedent off` disables that choice. The answer retains the earlier account actually used as its basis. Other people's undisclosed knowledge and universal legal rules do not enter the calculation.
-
-`taking-case-memory` shows the current person's one retained earlier assessed case. `taking-case-precedent SCALE` optionally weights that earlier personal assessment when judging a later event by the same actor; `off` disables it. The previous case is private, and a new request by someone else does not disclose it to them.
-
-`taking-inquiry-seek on|off` independently controls whether this person seeks nearby contacts for their own pending requests or accepted inquiries. It does not change whether they accept a request or agree to testify. Targeted meetings compete with mission meetings for each person's time; both participants' social choices, pressure, availability, and physical access still apply. A controlled player chooses meetings directly, and pursuit does not automatically travel to another region.
-
-The `mixed_campaign_benchmark` example runs the playable campaign with the authored population profile, scaled by `LEGACY_PEOPLE` (default 10,000), `LEGACY_WORKERS` (default 1), and `LEGACY_TICKS` (default 12). `LEGACY_REPRODUCTION` changes the generated population's reproduction percentage (default 80); the campaign's existing pregnancy remains. `LEGACY_GRAIN_PER_PERSON` sets finite starting grain in each region per initial person (default 20; zero retains the unmodified campaign stocks). It reports jobs started and delivered, final population, a final-state fingerprint, and the minimum, median, and maximum of three timed advances after a warm-up. Scenario loading, compilation, and fingerprinting are outside the timed interval. Compare fingerprints as well as timing across worker counts; this is a short workload, not a mature campaign or large-battle benchmark.
-
-`LEGACY_PLAYER_VIEW=1` also times a player view separately and fingerprints its visible people, bodies and work sites. In one 10,000-person mixed run with local visits, market and work requests, the view took 0.409 ms with one worker and 0.244 ms with six; both exposed 3,450 nearby people and produced the same view fingerprint.
-
-`LEGACY_PLAYER_COMMAND=1` separately times the controlled person's `set_remember_people(false)` command after the state snapshot. With encounter reports enabled, a single instrumented sample in the 24-boundary workload took about 0.001 ms at both one and six workers; this is one inexpensive preference command, not a bound for all commands.
-
-For example, run `LEGACY_PEOPLE=10000 LEGACY_WORKERS=4 LEGACY_REPRODUCTION=0 cargo run -p game-economy-cli --profile simulation --example mixed_campaign_benchmark`. With `--features profile` and `LEGACY_PROFILE=1`, it also prints wall-clock spans; spans can be nested and should not be summed as exclusive CPU time. The example avoids rebuilding the full CLI test harness for benchmark changes.
-
-Set `LEGACY_MARKET=1` to seed personal goods and gift-request preferences into the same campaign. The output counts generated and still-pending offers, and the run requires actual completed exchanges. With `LEGACY_LOCAL_VISITS=1`, both requesters and holders visit stores; 10,000 initial people over 12 ticks produced 12,994 offers, 1,824 pending, and identical state fingerprints at one and six workers. Median times were 379 ms and 278 ms on the measured machine. This is a short mixed workload with sublinear scaling, not a general performance guarantee.
-
-Set `LEGACY_WORK_REQUESTS=1` for a denser set of individual work goals and askers; the output counts requests created. With local visits, 10,000 initial people over 12 ticks created 35,310 requests and produced matching fingerprints at one and six workers. Median times were 367 ms and 261 ms on the measured machine.
-
-Set `LEGACY_ENCOUNTER_REPORTS=1` to give every initial person a knowledge mind that remembers encounters and willingly shares them. The benchmark prints the resulting numbers of memories and statements, which verifies that the communication path was active. This alters the initial scenario and therefore has a different state fingerprint from the default workload.
-
-With local visits, market, work requests and encounter reports enabled, a 24-boundary run with 10,000 initial people and reproduction set to zero produced 3,885 delivered jobs, 20,622 offers, 4,691 relationships, 2,213 remembered encounters and 1,562 statements. Median advance times were 636, 513, 446 and 462 ms with one, two, four and six workers, with matching world fingerprints. The separately measured player view took 0.292, 0.249, 0.192 and 0.192 ms. This workload is sublinear and includes one existing pregnancy despite disabling generated reproduction.
-
-On the same machine, a separately sampled one-worker process reached about 118 MB working set across setup, warm-up and one timed advance; this is a process-level measurement rather than live world-state size.
-
-With generated reproduction restored to 80 percent and the same 24-boundary mixed workload, the population grew from 10,000 to 19,401, with 3,791 deliveries and 14,298 relationships. An instrumented run measured medians of 1,006, 759, 644 and 618 ms at one, two, four and six workers, with matching fingerprints. Instrumentation adds overhead, so these timings should be compared with other instrumented runs.
-
-For this mixed workload, the profile feature breaks market acceptance into setup, candidate evaluation, feasibility, selection and decision staging. A person-index fast path in local trade reduced six-worker candidate evaluation from 0.352 to 0.323 ms per boundary in one repeated comparison, with matching fingerprints. Whole-run timings varied, so this is not evidence of linear whole-world scaling.
-
-Set `LEGACY_TAKING_INQUIRIES=1` to stage a boundary of real takings, create personal requests only from noticed accounts, and let the selected individuals choose to seek relevant contacts during subsequent mixed campaign boundaries. The output distinguishes accepted, declined, and expired requests as well as witness answers. A pending request count alone does not measure active decision or testimony throughput. This option changes the initial state and fingerprint.
-
-With inquiries enabled, `LEGACY_INQUIRY_ASSESSMENTS=1` also gives each recipient an individual interpretation for matching, unassessed testimony. The output counts completed personal assessments; this option changes the initial state and fingerprint.
-
-For a sparse-update comparison, also set `LEGACY_DISABLE_INQUIRY_PURSUIT=1`; people then do not deliberately seek these contacts, though incidental encounters can still occur. The benchmark reports whether pursuit is enabled.
-
-`LEGACY_SOCIAL_HISTORY_STRESS=1` creates an artificial longevity workload by extending lifespans and disabling hunger growth, exposure damage, purpose damage, and exhaustion damage. It reports living people, retained social relationships, directed opinions, and taking reports. This isolates growing history costs; it is not a balanced or mature economy. `LEGACY_SAMPLES` sets the number of timed samples after one warm-up (default three).
-
-`content/scenarios/economy-regional-project.toml` moves the timber to a second region. Use `catalog` to find its good ID, then `ask-haul 2 2 1 GOOD 40` to request ongoing help for forty ticks. The carrier's own choices govern the journey and transfer; the request creates neither a contract nor goods. After finding the source empty, this person chooses to return and wait before retrying, leaving time to pursue their own project.
-
-A hauling policy can set `empty_backoff` to a positive number of ticks. When that person actually finds their source empty, they may return toward the destination and wait before another attempt. Omit it to leave that response unconfigured. `haul-empty off|TICKS` changes the current person's preference; the administrative form is `haul-empty PERSON off|TICKS`. An already-started physical journey continues.
-
-`observe-expedition ID` sets a personal goal to observe food at the destination before departure. The traveler must have a knowledge mind and must actually observe there; an old report is insufficient. The administrative form is `observe-expedition PERSON ID`.
-
-`food-reporting on|off PRESSURE|none` sets the current person's willingness to send remembered food reports and their optional fear-plus-obligation threshold. `food-reporting default` restores the default. The administrative runner adds a person ID after the command. Scenario knowledge minds may set the same `reporting` fields; listeners still decide independently whether to accept a statement.
-
-Use `deliver-expedition ID PERSON GOOD QUANTITY` before departure to set a personal delivery objective. Give real goods to that person at the destination; accepted partial gifts and fulfilled promise transfers accumulate toward the target. The objective does not compel the traveler or create goods.
-
-In player mode, `delivery-choice ID on|off RESERVE PRESSURE|none` sets the person's own delivery preference, and `delivery-choice ID clear` removes it. The administrative forms are `deliver-expedition PERSON ID RECIPIENT GOOD QUANTITY` and `expedition-delivery-choice PERSON ID on|off RESERVE PRESSURE|none` (or `clear`). A configured autonomous person gives only what remains above their reserve and may act from their own fear or felt obligation toward the recipient; willingness can change while traveling.
-
-`delivery-acquisition ID on|off respect|ignore PRESSURE|none [STORE|none]` sets a separate choice to seek missing goods locally; use `clear` to remove it. An optional store ID identifies a known local store to visit when visible supplies are missing. The administrative form is `expedition-acquisition PERSON ID ...`. Acquisition uses actual stock and custody capacity, and the person's ordinary claim preference still applies when `respect` is selected.
-
-`[[taking.policies]]` gives an individual a target, named good, quantity, willingness, interval, optional social pressure, and a choice to escalate resistance. `[[taking.responses]]` gives the target independent `notices` and `resist` preferences, with optional fear or affinity conditions. `[[taking.reactions]]` supplies optional signed `as_actor` or `as_target` interpretations for `transferred`, `unavailable`, `resisted`, or `conflict`; `other` makes a person-specific override. The player can use `take-from PERSON GOOD QUANTITY escalate|withdraw` and set a standing preference with `taking-response notice|unaware resist|no-default`. `no-default` leaves any separately configured conditional resistance intact. In administrative mode, these commands take the acting person's ID, and `taking-choice PERSON on|off` changes an autonomous person's willingness. A failed transfer does not move goods; a resisted attempt creates combat only when escalation is chosen and a local tactical encounter can start.
-
-Run `cargo run -p game-economy-cli -- content/scenarios/economy-wildlife.toml --whole-boundary-player` to see local animals grazing a shared finite patch. Species use named food goods in the scenario; the player view shows only locally observable animals. Use `feed-animal ANIMAL GOOD QUANTITY` to give an animal real carried food or `hunt-animal ANIMAL` to hunt for raw meat. Another person may hunt when hungry and short of their own reserve.
-
-`content/scenarios/economy-fleece.toml` adds renewable fleece to those animals. Local `view` shows the product good and growth; after it reaches its limit, `collect-animal-product 1 willing` attempts collection. `force-held` lets the current handler proceed despite refusal, using a pre-existing physical hold. A successful collection produces real wool and resets that animal's growth; a refusal or full inventory leaves the fleece intact. A person with an authored automatic preference can change their own willingness with `animal-product-choice on|off`; their separately configured pressure may still motivate them.
-
-`content/scenarios/economy-fleece-workshop.toml` connects collection to an independently chosen production goal. Collect fleece, use `catalog` to find its good ID, and `store GOOD 2` to put it in regional stock. The neighbor can then consume the wool to make yarn using the authored recipe.
-
-`content/scenarios/economy-autonomous-fleece.toml` gives that neighbor separate inclinations to collect fleece, deposit it, and pursue the yarn goal. The whole chain can unfold while the player observes; each step remains subject to the person's choices and actual physical conditions.
-
-`handle-animal ANIMAL` attempts to handle a local living animal and advances one boundary whether the animal accepts or refuses. Optional `[[animal_handling.policies]]` entries let individual NPCs attempt handling from their own willingness, affinity, or fear and felt obligation toward another person. `animal-handle PERSON on|off` changes an NPC's willingness in administrative mode. Each animal's own `handling_response` determines its response and signed reaction; feeding, prior handling, and memory capacity can influence later responses without creating ownership or obedience. A person's animal-feeling mind may independently set signed `on_handle_accepted` and `on_handle_refused` reactions. With `animal_handling.inherit_births`, newborn people can acquire a parent's general inclination, never their particular target or pressure. Species can separately define `newborn_social_response` and `newborn_handling_response` templates; each newborn animal begins with no personal opinions.
-
-`capture-animal ANIMAL` attempts a live physical hold, and `release-animal ANIMAL` releases one. `animal_restraints` supplies a default effort, per-person capacity, and optional individual capture policies; `animal-capture PERSON on|off` changes a person's willingness. An animal's optional `restraint_response` separately sets willingness to yield, physical resistance, escape effort, and its own signed reactions. The visible `held_by` field identifies a physical handler, not an owner. A handler who departs or becomes unavailable lets go; the animal remains in its real region and continues to graze, age, and reproduce.
-
-An animal's `on_yielded`, `on_forced`, `on_resisted`, and `on_released` settings are signed changes to its own affinity. A person's animal-feeling mind independently specifies `on_capture_yielded`, `on_capture_forced`, `on_capture_resisted`, and `on_animal_released`; either participant can react positively, negatively, or not at all.
-
-`animal_restraints.release_policies` contains independent personal choices to release held animals, including someone else's hold. A policy can target one animal or choose a local held animal, condition willingness on the person's own affinity, or describe fear or obligation toward another person. `animal_restraints.defense_policies` lets a handler independently oppose one release attempt with their own effort, willingness, or social pressure. A stronger release effort succeeds regardless of the handler's choice. The animal's `on_release_blocked` and the releaser's `on_animal_release_blocked` are independently signed personal reactions.
-
-Each contested release event identifies its defender. That person can independently set signed `on_defense_succeeded` and `on_defense_overcome` reactions toward the animal, including positive or negative feelings after either outcome.
-
-Administrative commands `animal-release-choice PERSON on|off` and `animal-defense PERSON on|off` change individual willingness without erasing their pressure settings. A controlled handler can choose `defend-animal ANIMAL` to spend a boundary protecting their hold; the result reports whether a release was blocked and the hold remained intact.
-
-With `animal_restraints.inherit_births` and family birth enrollment enabled, newborns may acquire a parent's general capture and release inclinations. Specific animals, relationships, and pressure are not copied; capture effort starts at `default_effort`.
-
-A `[[gathering.nodes]]` patch may set `seasonal = true` to scale its renewal by the current season's food-growth factor. Fractional rates are distributed deterministically over ticks. Unmarked patches retain their configured constant renewal; humans and wildlife consume the same finite remaining patch.
-
-Optional `[[animal_care.policies]]` records define individual preferences using `person`, an optional `animal`, a named `good`, `quantity`, `willing`, and `health_at_most`. Without a fixed animal, a person selects a living animal in their own region. Optional `pressured_by` and `pressure_threshold` let fear or felt obligation toward another person motivate an unwilling caregiver. A caregiver must be available, local, and possess the goods; the preference does not grant knowledge of an animal's diet or enforce a role. With `animal_care.inherit_births` and family birth enrollment enabled, a newborn may acquire a parent's general preference without inheriting a particular target, pressure, or feelings.
-
-An animal species can define `[fauna.species.hunting]` with a named `good`, `quantity`, and `success_per_thousand`. `[[hunting.policies]]` gives a person a `willing` preference and an optional `animal` target, with optional `pressured_by` and `pressure_threshold`. Without a fixed target, the person selects a living animal they can observe in their own region, without knowing its yield. A controlled person can use `hunt-animal ANIMAL`; success places actual fresh yield in their possessions and kills the animal before its next biological update. Feeding the same animal takes precedence that boundary.
-
-An individual hunting preference may also specify `hunger_at_least` and a named `reserve_good` with `reserve_below`. These conditions guide willing hunting; configured fear or felt obligation can motivate action even when the person's ordinary preferences are not met. The reserve is measured from the person's actual carried goods, and the selected animal's yield need not match that good.
-An optional `request_response` on a hunting preference lets that person independently hunt after a food request addressed to them. It has its own `willing` setting, optional `minimum_trust`, signed `affinity_at_least` or `affinity_at_most`, and optional `pressure_threshold` toward the requester. Hunting does not transfer the yield or oblige the person to give it away; a later gift is a separate choice and physical action.
-
-A `[[giving.responses]]` preference may list up to 15 named food `alternatives` after its primary `good`. When responding, the person considers these foods in order and can only give a food they actually carry. Their own willingness, relationships, and any felt pressure still govern whether they respond.
-When `hunting.inherit_births` and family birth enrollment are enabled, an actual newborn may acquire a parent's general hunting inclination and thresholds. The child does not inherit a specific target, fear, felt obligation, or memories.
-
-Optional `[[animal_feelings.minds]]` records define a person's private animal affinities. Each mind has `person`, `minimum`, `maximum`, `capacity` (at most 64), and signed `on_feed` and `on_hunt` changes; its optional `opinions` identify individual animals and affinities. Only that person's own accepted actions change their feelings, and either reaction may be positive, negative, or zero. Care and hunting preferences may set `affinity_at_least` and `affinity_at_most`; pressure can motivate action outside those preferences. A controlled person's view includes only their own affinity, not the animal's private feelings.
-
-When a person's optional work-practice mind is configured, `work-practice-choice PERSON FIELD on|off` changes their `invent`, `approve`, `ask`, or `willing` preference, and `work-practice-reserve PERSON AMOUNT` sets their retained stock preference. `work-practice-decide PERSON AUTHOR SEQUENCE accept|decline` changes that person's assessment of terms they received. A controlled person can propose terms during an actual meeting with `work-practice-propose AUTHOR WORKER RECIPE GOOD QUANTITY LIFETIME`; communicating them does not require possession of the offered good. The player interface uses the same commands without the controlled person's ID; it exposes only that person's choices. A controlled person chooses actual work and gifts explicitly.
-
-Run `cargo run -p game-economy-cli -- content/scenarios/economy-work-practices.toml --whole-boundary-player` to try these choices in an authored campaign. `catalog` and `view` show the recipe, food and nearby person IDs.
-
-`work-practice-evaluation PERSON BASE AFFINITY TRUST THRESHOLD` sets an individual's signed relationship weights for work-proposal approval; `off` returns to their fixed approval setting. The player form omits `PERSON`. Setting the `approve` choice explicitly also clears the evaluation.
-
-`work-outcome PERSON WAIT TRUST AFFINITY` configures a worker's wait and signed personal reactions if their expected gifts do not arrive; `off` disables this personal expectation. The player form omits `PERSON`.
-
-`[[medical.acquaintances]]` can define a person's `person`, `medicine`, `quantity`, `patient_health_at_most`, and `willing` preference. Optional signed `urgency_weight` and `affinity_weight` rank people they have met and can reach; optional `pressure_threshold` permits care motivated by that person's fear or felt obligation toward the patient. Zero weights leave identity as the deterministic tie-breaker. The person still needs medicine and an available patient, and the medicine may be ineffective.
-
-Fresh scenarios can add `[[population]]` profiles alongside explicitly authored `[[people]]`. Each profile specifies `start_id`, `count`, eligible `regions`, starting `health` and `hunger`, `work_percent`, `meal_percent`, an optional recipe name, and optional starting goods. The scenario seed deterministically selects each person's location and choices; generated people are not controlled and receive no assumed institution or agreement. Profiles must use distinct IDs and known regions. See `content/scenarios/economy-generated.toml` and run `cargo run -p game-economy-cli -- content/scenarios/economy-generated.toml --seed 42`. The optional override also seeds subsequent simulation choices. Saved worlds contain the resulting individuals, so loading does not regenerate them.
-
-An optional `[population.sensitivity]` table gives each person in that profile individual interpretations of events and dispositions toward feeling obligations; `opinions` must be enabled in the scenario, including `opinions.rules.affinity` for affinity changes. Signed affinity effects may be positive, negative, or zero, and a zero obligation gain means the person does not acquire that feeling from the corresponding experience. An explicitly authored `opinions.sensitivities` record for a generated person takes precedence over their profile. These dispositions create no relationships or duties on their own.
-
-Optional `farm_percent` and `food_search_percent` independently seed personal farming and food-search choices when the scenario enables cultivation and food search. Individually authored preferences take precedence. Search still depends on each person's own observations and known routes, and farming still requires an available field, actual seed, and physical work.
-
-An optional `[population.social]` table seeds willingness, individual ranges of sociability and diligence, and an optional fraction of people who may respond to fear or felt obligation. It requires the scenario's social and personality owners; it does not create relationships, fear, or obligations. Individually authored preferences take precedence. Social needs, when enabled, start at zero for new participants.
-
-An optional `[population.claims]` table independently seeds preferences for asserting delivered outputs, disregarding others' assertions, and asserting sites the person builds; it can also set a personal hunger threshold for considering claimed food. The scenario must enable personal claims. No assertion exists until an individual actually makes it, and individually authored preferences take precedence.
-
-An optional `[population.help]` table seeds individual responses to food requests, using a named carried good, optional ordered food `alternatives`, and independent willingness, trust, affinity, and pressure settings. Optional `[population.help.learning]` settings allow a seeded fraction to develop reciprocal inclinations from their own experiences. The scenario must enable giving. These profiles create neither requests nor obligations, and individually authored choices take precedence.
-
-Both `[[giving.responses]]` and `[population.help]` may set `affinity_threshold` to motivate responses above a signed value, `affinity_at_most` to motivate responses below one, and a signed `affinity_weight` to rank requesters. Omitted weight preserves the default preference for higher affinity; zero disregards affinity in ranking.
-
-An individual `[[giving.acquaintance_asking]]` or `[population.help.acquaintance_asking]` can set `max_affinity`, a signed `affinity_weight`, and `avoid_last = false` to choose among known people in their own way. If omitted, existing `prefer_affinity` and previous-target avoidance remain in effect.
-
-Optional `[population.help.acquaintance_asking]` settings let people ask someone they have actually met when hungry. They can set a minimum familiarity or affinity and choose to prefer those they like; the recipient remains free to refuse. No remote locations or unobserved acquaintances are revealed.
-
-Optional `[population.work_support]` settings seed individual aspirations, inclinations to ask for help, and personal evaluations of requested work. A signed `affinity_weight` specifies how each person's own affinity affects that evaluation. The scenario must enable work requests, and aspirations use the profile's named recipe. Requests, refusals, and actual work emerge during simulation; these settings create no employment, institution, or binding agreement.
-
-The same profile accepts a signed `trust_weight` for each person's evaluation of the requester. Experienced promise outcomes can change trust and thereby affect later requests, but each person may weight trust positively, negatively, or not at all.
-
-An optional `[[work_offer_values]]` entry sets a person's signed value per unit of a named good and a maximum considered quantity. A pending personal promise of that good can influence the person's work decision, without binding either party. The administrative command `work-value PERSON GOOD VALUE MAX` changes the preference; `work-value PERSON off` removes it.
-
-The optional `learning_percent` and `learning_max` settings give selected individuals a bounded inclination to develop new aspirations from successful work they personally observe. They do not grant advance knowledge of a recipe or create an aspiration until the person witnesses work.
-
-Construction blueprints may specify `salvage` up to the kit `quantity`. Destroyed sites with surviving material appear as local debris; `salvage-site SITE GOOD QUANTITY` attempts to recover it into the ruler's inventory. Optional `[[construction.salvaging]]` policies configure individuals' own recovery choices.
-
-Try this in `cargo run -p game-economy-cli -- --whole-boundary-player content/scenarios/economy-salvage.toml`: use `build-site 1`, `destroy-site 1`, then `view` to inspect the local debris and its good ID. Another person may independently try to recover the same material.
-
-The same scenario includes two named local stores. `view` shows their contents; `take-store STORE GOOD QUANTITY` and `put-store STORE GOOD QUANTITY` move goods through the ruler's own inventory on separate ticks. Scenario `[[local_transport.stores]]` entries define the stores, while optional `[[local_transport.policies]]` entries define individual carriers and their source and destination. In the administrative runner, `carry-local PERSON on|off` changes a person's carrying willingness. Optional `[[local_transport.walking.preferences]]` entries express a person's independent inclination to visit an endpoint; `visit-local PERSON on|off` changes that inclination in the administrative runner.
-
-Optional `[[local_transport.goal_fetchers]]` entries enable individuals to fetch locally observed supplies for their own current work goals. The administrative command `fetch-goal PERSON on|off` changes that individual preference; it does not create a goal or guarantee the person acts.
-
-Optional `[[work_promise_offering]]` entries give individuals an inclination to offer a future delivery to someone whose requested work they personally witnessed. Set `after_refusal = true` to respond to a personally observed refusal instead. An individual's work asker can set `retry_after_offer = true` to reconsider asking a person to whom they have made an outstanding offer. `work-offer PERSON on|off` changes the offering inclination in the administrative runner. The recipient may accept or decline, and the maker may later choose whether to deliver real goods.
-
-An authored `[[aspirations]]` entry can set `recognize_help = true` so newly created goals count personally witnessed requested work. Work requests need a nonzero memory limit. A goal owner can change their own preference with `goal-help RECIPE on|off` in player mode; the administrative form is `goal-help PERSON RECIPE on|off`. The player view shows only the ruler's goals.
-
-Scenarios may add `[[giving.practices.minds]]` for individual social invention. Each entry supplies `person`, `invent`, `approve`, `willing`, `ask_willing`, `shortage_threshold`, `minimum_shortages`, `review_interval`, and `proposal_lifetime`; optional `reserve_portions`, signed `quantity_weight`, `reserve_weight`, `giving_experience_weight`, `shortage_experience_weight`, `acceptance_threshold`, `adjust_after_failure`, and `pressure_threshold` shape that person's choices. Cases and proposals arise from actual events. The player view shows only the ruler's mind, and `practice-decide AUTHOR SEQUENCE accept|decline`, `practice-withdraw AUTHOR SEQUENCE`, and the `practice-willing`, `practice-ask`, `practice-invent`, and `practice-approve` commands change their own choices. The administrative runner offers `practices PERSON`, `practice-choice PERSON FIELD on|off`, `practice-withdraw PERSON AUTHOR SEQUENCE`, and `practice-decide PERSON AUTHOR SEQUENCE accept|decline`.
-
-Optional `reporting = "truthful" | "lie" | "ready" | "unready"` controls an individual's readiness statements; it defaults to `"silent"`. `"lie"` reverses the speaker's own assessment of their present goods and reserve. The recipient's `report_attitude = "ignore" | "trust" | "doubt"` is independent, and `require_believed_ready = true` makes that person's practice requests depend on a believed readiness claim. In player mode, `practice-report PERSON SEQUENCE ready|unready` attempts a meeting and communicates the chosen claim only if contact occurs; `practice-belief PERSON SEQUENCE believe|doubt|unassessed` changes the ruler's own assessment. These statements do not create goods or compel delivery.
-
-An individual can instead set `report_attitude = { trust_at_least = 3 }` to assess each speaker using their own directed trust. The administrative command is `practice-attitude PERSON min 3`; an absent relationship uses the opinion rules' initial trust.
-
-An individual can optionally set `unanswered_report_belief = "believes" | "disbelieves" | "unassessed"` to reassess an earlier readiness statement after their own request to that speaker goes unanswered. The default keeps their existing belief. The player can change this choice with `practice-unanswered retain|believe|doubt|unassessed`; the administrative form includes the person's ID. An unanswered request is not treated as proof of dishonesty, and remembered statements remain bounded personal history after a proposal expires.
-
-A practice mind can opt into personal value learning with `value_learning = { value = 0, minimum = -10, maximum = 10, received = 2, gave = -1, unanswered = 0 }`. The signed changes reflect that person's interpretation of their own related experiences; the resulting value affects later proposal evaluations. Player mode can set `practice-value VALUE MIN MAX RECEIVED GAVE UNANSWERED` or `practice-value off`; the administrative form takes the person's ID first. Learning does not create an obligation or force later cooperation.
-
-`proposal_affinity_weight` optionally gives a recipient's own affinity toward a proposal's author a signed influence on private approval. It defaults to zero; pressure and later actions remain separate choices.
-
-For bounded reasoning from personal cases, a mind can set `precedent = { same_person = 3, same_good = 2, quantity_difference = -1, received = 4, gave = -2, unanswered = 0, shortage = 0 }`. The first three signed weights select a remembered case and the remaining values interpret its type. Player mode uses `practice-precedent PERSON_WEIGHT GOOD_WEIGHT DISTANCE_WEIGHT RECEIVED GAVE UNANSWERED SHORTAGE` or `practice-precedent off`; administrative mode takes the person's ID first. The selected case is personal and no one is bound by the resulting decision.
-
-For ordinary regional food reports, a person's knowledge mind may contain `misreport = { food_delta = 50, target = 1 }`. The target is optional; a negative offset understates remembered food. Player mode can set `food-misreport DELTA [TARGET]` or `food-misreport off`, and administrative mode takes the person's ID first. Only reports at actual encounters change; the speaker's memory and physical stock do not. A recipient can independently disregard reports based on directed trust.
-
-Each person's opinion sensitivity can choose `report_reception = "always"`, `"never"`, or `{ trust_at_least = 0 }`; an absent choice uses the scenario's default threshold. Player mode changes the ruler's own choice with `food-report-reception default|all|none|MIN`, and administrative mode takes the person's ID first. This policy applies to ordinary food and encounter reports and does not reveal whether a speaker is honest.
-
-Scenarios can also use `[[aspiration_learning]]` to specify an individual's inclination directly; authored entries override generated ones. With `inherit_aspiration_learning = true` and family birth enrollment enabled, actual newborns can acquire a parent's general inclination, without inheriting their aspirations or experiences.
-
-When family rules are enabled, each generated population profile also supplies `[population.family]`: inclusive `min_age` and `max_age`, inclusive `min_allele` and `max_allele` in 0–1000, `reproduction_percent`, and optional `reconsider_partnership_percent`. Seeded founders have individual genomes and choices but no preassigned partner. Explicit family members override generated founder records; the next birth identity is advanced beyond the generated people. Later partnerships, conceptions, and births use the ordinary family simulation.
-
-Profiles can also live in a separate TOML file. For example, `cargo run -p game-economy-cli -- --whole-boundary-player content/scenarios/economy-campaign.toml --population content/scenarios/campaign-population.toml --seed 42` adds generated people to the authored ruler campaign. The ordinary ruler view still exposes only locally observed people.
-
-To measure three complete campaign boundaries with generated individuals, set `LEGACY_PEOPLE` and `LEGACY_WORKERS`, then run `cargo test --release -p game-economy-cli generated_campaign_benchmark -- --ignored --nocapture`. The timed interval excludes scenario loading and reports the median of three warmed samples. It is a concentrated two-region scenario, not a claim about every possible campaign.
-
-For separate phase attribution, enable the `profile` feature and set `LEGACY_PROFILE=1` when running that benchmark. Phase timings include instrumentation and should not be compared directly with ordinary throughput measurements.
-
-`generated_acquaintance_requests_benchmark` uses the same environment variables and measures one boundary after a large generated population has met others and become hungry. It checks that a substantial number of actual requests were made. With `--features profile` and `LEGACY_PROFILE=1`, its phase means exclude the initial campaign boundary but include the warm-up sample; nested phase times overlap.
-
-`cargo run -p game-economy-cli -- --whole-boundary-player content/scenarios/economy-written-food.toml` starts a scenario with paper, ink, and a known script. `write-food SCRIPT REGION current|LIFE remembered|FOOD` attempts to create a physical page from a current or actively invoked memory; supplying a quantity can deliberately alter the statement. `pages` lists held page IDs without revealing their contents, `give-page PERSON ITEM` attempts a physical handover, and `read-page ITEM` reads a held page in a known script. The scenario's second person may read a received page independently. Reading does not imply accepting its statement. Separately configured study can teach reading through encounters; `practice-writing SCRIPT` attempts a configured writing-practice session using carried materials.
-
-`content/scenarios/economy-writing-practice.toml` configures two people who can read but are learning to write. The `writing` command displays the controlled person's literacy and practice progress; `practice-writing 1` uses one session's paper and ink.
-
-For a ruler and guardians in the same dated-goods world, run `cargo run -p game-economy-cli -- content/scenarios/economy-campaign.toml`. `ruler` shows the current incarnation, guardians and any pending invocation warning. `invoke`, `dismiss-invocation`, `accept-warning`, and `guardian-release` operate those personal abilities and choices. A pending warning leaves the simulation time unchanged until it is accepted or invocation is dismissed.
-
-`[[campaign.embodied_guardians.guardians]]` identifies actual immortal people and their individual `mentorship_required` judgments. They use ordinary travel, possessions, combat, and social encounters. The campaign includes guardians who may disagree about when to accept a release request; their assessments reset for each new incarnation.
-
-`cargo run -p game-economy-cli -- --whole-boundary-player content/scenarios/economy-confinement.toml` includes an existing physical cell and an individual who may attempt to capture the ruler. `build-site 1` can create another cell using an actual shelter kit. `confine PERSON SITE` attempts to place a local person behind its intact barrier; a conscious target can yield, resist, or be overpowered. `capture-yield on|off` changes the ruler's own willingness to yield; personally felt pressure may still influence the decision if configured. `release-held PERSON` attempts to open the cell, `guard SITE` spends a boundary opposing escape and opening, and `escape` spends a boundary on the ruler's own attempt. `meet PERSON` can also reach someone through a supply opening; the other person's willingness or personal pressure still determines their response. Captives' independent escape preferences can damage a shared barrier, freeing everyone when it breaks. A captured guardian recovers while held. The administrative commands `capture-choice PERSON on|off` and `guard-choice PERSON on|off` change an individual's inclinations without removing their personal pressure; `guard-opening PERSON on|off` changes whether an individual guard also resists opening.
-
-An opinion sensitivity may define `confinement_reaction` with separate `captured`, `resisted`, and `released` signed reactions. Trust, affinity, fear, and felt obligation can increase, decrease, or stay unchanged according to the observer; a relationship case can override the reaction for a particular actor. `confinement-feeling` displays the ruler's own reactions, and `confinement-feeling captured|resisted|released TRUST AFFINITY FEAR OBLIGATION` changes one; use `off` after the event name to clear it. An unconscious person does not automatically learn who captured them.
-
-An authored person can have `immortal = { recovery_per_tick = 1 }` with zero hunger. This makes their ordinary body recover from incapacitation without hunger, nutritional depletion, or mortal family death. Their goods, combat, and travel use the same physical systems as other people.
-
-`start-work PERSON RECIPE UNITS` and `continue-work PERSON` let a controlled person spend time starting and working on a real job; `catalog` lists recipe IDs. `meet PERSON TARGET` attempts an actual encounter. `knowledge PERSON` displays that person's bounded food observations and reports, and `past-knowledge LIFE` requires that life to be actively invoked. The default runner is an administrative interface and can inspect other individuals.
-
-In player mode, `teach PERSON RECIPE` offers a lesson and `learn PERSON RECIPE` asks another person to teach. Both advance time through a real meeting; `learned=false` can mean the meeting or lesson did not occur. `skills` shows the current person's own work and lesson credits, personal rate, and effective rate while invoking a past life. The administrative forms include the acting person before the other participant.
-
-`teaching-feeling` displays the current person's lesson reactions. `teaching-feeling given|received TRUST AFFINITY FEAR OBLIGATION` sets a signed reaction, and `teaching-feeling given|received off` clears it. Zero explicitly leaves a feeling unchanged.
-
-Run `cargo run -p game-economy-cli -- --whole-boundary-player` for a ruler-bound view of the authored campaign. `view` shows the current person's local surroundings, resources, possessions, job, health, fatigue, isolation, purpose, seasonal conditions, personal food reports and current fight. `catalog` lists data-defined goods and production recipes. `eat`, `treat`, `treat-other`, `farm`, `gather`, `give`, `take`, `store`, and `recover` use physical local resources, carried goods, and stocks; travelers can eat carried food while their journey advances. `rest` advances time and recovers fatigue. A player can request food or work, make or fulfill personal promises, or initiate and direct a tactical fight; other individuals choose their own responses. `step` advances a shared round along with the rest of the world. `guardians` is the explicit search-spectating view. Player mode is still an incomplete game interface.
-
-`step N` advances up to N whole boundaries. If a warning or error stops it early, the message reports how many boundaries completed; those committed boundaries remain in the world. Partial-boundary advancement is not yet supported.
-
-Use `taking-watch ACTOR on|off` to set personal attention, `taking-report RECIPIENT ACTOR OUTCOME` to share a remembered taking, or `taking-relay` to forward an earlier account. `taking-details RECIPIENT ACTOR TARGET GOOD QUANTITY` changes the claimed details; use `same` for any detail to repeat the memory. `taking-belief` sets the listener's own stance, and `taking-reports` shows their received accounts. The actual event and the witness's memory are not rewritten by a statement.
-
-`taking-compare match|different TRUST AFFINITY FEAR OBLIGATION` sets the current person's reaction toward a speaker when the account matches or differs from their own memory of that event. Use `off` in place of the four changes to clear one reaction. The comparison does not decide whether the speaker intended to mislead.
-
-`work-outcome WAIT MISSING_TRUST MISSING_AFFINITY RECEIVED_TRUST RECEIVED_AFFINITY PARTIAL_TRUST PARTIAL_AFFINITY` sets a worker's signed reactions to their own work expectations. Use `default` for either partial reaction to reuse the corresponding missing reaction. The shorter existing form still sets only the missing reactions.
-
-`work-outcome-feelings missing|received|partial FEAR OBLIGATION` sets the current person's signed fear and obligation changes for those experiences. For a partial response, `default` reuses that person's missing value; a zero value explicitly suppresses it.
-
-Try `cargo run -p game-economy-cli -- content/scenarios/economy-tool-wear.toml`, then `tool-condition`, `step 1`, and `tool-condition` to see a willing person use carried timber to repair an identified tool before starting a job. Tool wear and personal repair choices are opt-in scenario data; the same item keeps its damage when physically transferred.
-
-Try `cargo run -p game-economy-cli -- content/scenarios/economy-irrigation.toml`; use `step 3`, `irrigation`, `fields`, and `stock 1` to inspect individual watering attempts and the finite regional water supply. Field growth sees the moisture committed at the beginning of each boundary.
-
-Run `cargo run -p game-economy-cli -- content/scenarios/economy-active-tool-repair.toml` and use `step 1` and `tool-condition` repeatedly to follow a worker who repairs a broken tool while retaining the current job.
-
-Run `cargo run -p game-economy-cli -- --whole-boundary-player content/scenarios/economy-player-tool-repair.toml`; `view` lists the condition and identity of carried tools, and `repair-tool 1001` attempts repair using the ruler's carried material. Repair consumes a boundary and may fail if the material is unavailable.
-
-Run `cargo run -p game-economy-cli -- content/scenarios/economy-tool-production.toml`, then `step 6` and `tool-condition` to see a newly produced tool receive its own identity and undamaged condition. It is delivered as a physical item on the usual following boundary.
-
-Run `cargo run -p game-economy-cli -- --whole-boundary-player content/scenarios/economy-player-irrigation.toml`; `view` shows local field moisture. Use `farm 1` to plant, then `water-field 1 1 respect` to attempt watering from the finite regional supply; `disregard` allows an attempt despite a claim.
-
-Set `LEGACY_LOCAL_VISITS=1` on the mixed campaign benchmark to add an authored visit preference for one quarter of initially autonomous regional residents and a local store in each region. The reported position count confirms that walking occurred; this option changes the scenario and fingerprint.
-
-On a Ryzen 5 7600, the 10,000-person, 12-tick local-visit workload with reproduction disabled moved 2,500 people and started 12,406 jobs. One and six workers had median times of 299 ms and 194 ms respectively, with identical state fingerprints. This is a short, workload-specific measurement.
-
-After grouping social encounters by local endpoint, two repeat runs of the same workload measured 303 ms with one worker and 218–223 ms with six. Each run produced the same fingerprint across worker counts. This mixed workload scales sublinearly and its times vary between runs.
-
-`economy-goal-search` demonstrates a personal project with a bounded search of a known store; `economy-goal-multistore` searches an ordered sequence of two stores. The administrative runner can change that person's inclination with `search-goal PERSON on|off`.
-
-`economy-local-food-search` demonstrates a hungry person choosing to visit a known store and then acquiring and eating actual food. The existing local visit choice can be changed with `visit-local PERSON on|off`.
-
-The normal CLI and history runner load fresh authored scenarios through
-`game_economy_cli::core_scenario` and `core_scenario_with_options`. The latter
-supports seed and population overlays. `content/scenarios/economy-core.toml`
-exercises family birth, dependent care, gathering, and wildlife. Import names
-unsupported owner combinations in the error so authors can correct them.
-
-The interval scenario also contains renewable animal-product rules and a personal collection policy. Collection depends on the animal's handling response and an accepted physical transfer.
-
-Scenarios may author `[goals]` directly, with `[[goals.people]]` entries naming a person, a recipe by content key, priority, and target. Optional retry and planning settings control the individual goal owner. A failed eligible goal-work attempt is recorded and can delay retry; it does not compel anyone to work.
-
-The interval scenario loads a personal medical preference and a data-defined disease and remedy. A caregiver needs an actual accepted transfer of their medicine for treatment or contact to occur; their willingness and any social pressure remain personal choices.
-
-The interval scenario also authors a food request and a personal response. The responder may refuse, and its independent willingness, affinity, fear, or felt obligation can affect its choice. Food-sharing practices and personal readiness reports are available; work practices are rejected until their related owners are integrated.
-
-`content/scenarios/economy-core-practices.toml` demonstrates a private adopted food-sharing proposal and a false readiness report with no corresponding goods. Practice good references may use content names, including inside proposals and experiences.
-
-`economy-history-pilot.toml` is a deliberately coarse annual demographic pilot: one tick is one 365-day year, and hunger and animal food scarcity are disabled. It exercises modeled family life, animal reproduction and genomes, some work, and founder social encounters. It is not a calibrated economy or civilization; newborn social participation, scientific invention, artificial selection, and institutional history are not implemented for this run.
-
-To stream annual snapshots and selected observed events without replacing an existing file, run `cargo run -p game-economy-cli --example history -- content/scenarios/economy-history-pilot.toml target/history/pilot.ndjson 300 6`. The final two arguments are years and worker count. The runner writes a metadata record, initial snapshot, annual records, explicit completion or failure, and separate checkpoints every 50 years. Git metadata describes the checkout at run time, including whether tracked files differ from HEAD; it does not verify which revision built the executable. The complete snapshots include personal family and genetic state; animals born during the simulation retain parent IDs, while founder ancestry may be unspecified. The tick duration must divide a 365-day year exactly; the runner preserves family events from intermediate ticks and stores an annual snapshot. The timings do not establish performance for a detailed hourly world.
-
-A saved annual checkpoint can be continued into a new history file with `cargo run -p game-economy-cli --example history -- --resume target/history/pilot.year-50.json target/history/resumed.ndjson 50 6`; the year count is additional years. Keep the source history and its metadata for the original scenario and its limitations. Reproducible continuation requires the same simulation revision and content; a newer executable can deserialize a checkpoint but produce different future decisions.
-
-For durable local archives, prefer an output under `runs/history/`; this directory is ignored by Git so large simulation histories are not accidentally committed. Preserve the NDJSON file together with its checkpoints. The initial 300-year pilot is archived under `runs/history/pilot-300-seed-1701/` when present.
-
-Inspect a saved NDJSON history without loading the whole file at once:
-
-- `cargo run -p game-economy-cli --example inspect_history -- summary runs/history/pilot-300-seed-1701/pilot-300.ndjson`
-- `cargo run -p game-economy-cli --example inspect_history -- person runs/history/pilot-300-seed-1701/pilot-300.ndjson 75`
-- `cargo run -p game-economy-cli --example inspect_history -- animal runs/history/pilot-300-seed-1701/pilot-300.ndjson 37`
-
-Append `--narrative` to produce Markdown prose from the same records. A person's
-account includes recorded family milestones, exact elapsed incapacitation times
-where present, and examples of observed mechanical experiments. The world
-account reports population peaks and the first snapshots with no living members.
-
-The inspector reports observed population changes, sample genome means by species, intermediate animal population events, selected family events, and recorded meetings. Meeting counts do not establish leadership, and changes in genome averages do not establish selection or causation. It preserves the run metadata and indicates whether a completion record was present.
-
-A controlled-person interface is available with
-`cargo run -p game-economy-cli -- --person 1`. It uses
-`economy-core-player.toml` by default, or accepts another interval-compatible
-scenario containing that controlled person. Enter `help` for its limited
-observation, time, travel, eating, work, leaving shared work, voluntary rest,
-self-treatment, personal written forms, and save/load commands. In
-`content/scenarios/economy-core-player-language.toml`, `look` shows the
-controlled person's own words, remembered observations, and carried marked
-pages; `word person 2 2,1` associates phonemes with a nearby person,
-`form 0,1 7,8` chooses marks for a known sound sequence, `inscribe 0,1`
-uses carried materials, `read 1` interprets a carried page, and `recall 1`
-adopts a remembered observation. Saving requires a new path. The campaign also
-supports actual succession and invocation warnings through `--player`.
-
-The history runner archives opinion-change events in annual observations and removes those events from active state after each tick; directed opinions continue to influence decisions. The person inspector reports archived opinion changes separately from family events. Events already present in a resumed checkpoint remain in the initial snapshot. Hourly runs also write a checkpoint each year.
-
-History schema 2 streams observations in batches of at most 24 simulation
-ticks between annual snapshots. The inspector accepts both schema 2 batches
-and earlier annual observation arrays. The runner reads latest events through
-a borrowed host view instead of cloning the entire world every tick.
-
-For shorter diagnostics, `cargo run -p game-economy-cli --example history_probe -- content/scenarios/economy-history-integrated-hourly.toml runs/history/probe.ndjson 48 24 1` advances 48 hourly ticks, writes summaries and a checkpoint every 24 ticks, and leaves scarcity and individual decisions active. To continue, use `history_probe --resume CHECKPOINT NEW_OUTPUT TICKS INTERVAL WORKERS`. These reports are exploratory, not evidence that the world is calibrated or feature complete. See `docs/research/integrated-history-milestone.md` for the unfinished chains and long-run plan.
-
-The annual history runner accepts an optional final argument for the requested
-advance size in milliseconds. For minute calls with annual snapshots and
-checkpoints, use `cargo run -p game-economy-cli --profile simulation --example history -- content/scenarios/economy-history-integrated-hourly.toml runs/history/integrated-minute.ndjson 300 1 60000`.
-The scenario's action cadences and physical deadlines remain configured in
-the content. Use `inspect_history summary FILE --narrative` or
-`inspect_history person FILE ID --narrative` for population context, attributed
-actions, observed experiments, and recurring deliveries reflected in the
-archive.
-
-Personal strikes are archived as simultaneous events alongside target-grouped health changes. The person inspector shows strikes involving that individual and, when they were the target, the group's actual health loss. Individual strike harm is potential harm before health is capped; it does not identify which attacker caused a death.
-
-`content/scenarios/economy-history-monthly.toml` is an exploratory monthly scenario with subjective mating, inherited mate desire, food and animal scarcity, gathering, caregiving, social participation, directed opinions, recovery, animal products, and disease definitions. Ages and lifecycle durations are expressed in monthly ticks. It is not calibrated, and not every implemented owner is configured or supported by the interval host. Run it with `cargo run -p game-economy-cli --example history -- content/scenarios/economy-history-monthly.toml runs/history/monthly/history.ndjson 300 6`. Inspect intermediate family events with the history inspector; annual population and animal observations can miss births and deaths that both occur within the same year.
-
-`economy-history-monthly-expanded.toml` expands the monthly setup to 60 people and two regions. It additionally configures seasons and exposure, cultivation and irrigation, hunting, a seeded disease, hauling, construction and maintenance, personal claims and agreements, animal handling and care, fatigue, goals, skills, exchange, writing, and local transport. These are individual policies and physical resources; their presence does not imply that every possible interaction occurs. Every optional owner exposed by the interval host is configured, though some policies may never be triggered; the interval host still does not support every owner in the workspace. The setup remains experimental: dedicated care visits occupy a whole monthly tick when scheduled, and the scenario staggers each child’s visits three ticks apart.
-
-The expanded monthly scenario includes two animal species in distinct food niches. One species has inherited climate tolerance, so genome distributions can affect survival under seasonal exposure. The scenario uses a staggered three-month care cadence and an exploratory conception rate; neither is calibrated as a real-world demographic estimate. Both species can consume enough surplus food to reduce accumulated hunger after scarcity, while forage remains finite.
-
-`content/scenarios/economy-history-hourly.toml` is an experimental hourly variant of the expanded scenario. It uses 8,760 ticks per 365-day year, hourly ages and gestation, hourly hunger, a larger food relief per portion, seasonal resource renewal, daily care visits and food-search retries, and shorter disease episodes. Hunting remains active, and the initial browser climate setting avoids lethal hourly exposure; it does not demonstrate climate selection. The rates are illustrative, not empirically calibrated, and individual work, social activity, and other decisions still occur at hourly boundaries. Integer per-tick rates and rounding prevent this scenario from being an exact conversion of the monthly one. Use the same history command with the hourly scenario; hourly histories can take much longer and produce much larger records than monthly ones. Unsupported interval-host features remain unavailable.
-
-The hourly scenario also enables experimental personal vocabularies with a data-defined sound inventory. During actual social encounters, a person may choose to coin or communicate a form for the current shared location; a listener may independently decline, copy or modify it. These events are included in the streamed history. This is only an initial language slice: the host does not yet ground speech in other observations, and names, grammar, nonverbal communication and the broader system of personal motives are unfinished. The older whole-boundary scenario loader rejects language configuration rather than silently discarding it.
-
-`economy-core-personal-choices.toml` demonstrates an opt-in competition between construction and local carrying. Each `[[personal_choices]]` row contains a person's `id`, `idle` value, and sorted `preferences` over domain 1 (construction), domain 2 (carrying), domain 3 (site maintenance), and domain 4 (starting work), with an `enabled` choice, signed `bias`, and optional per-thousand signed `weight`. An explicit maintenance or work preference, including a disabled one, moves that person's corresponding decision out of the earlier phase into the choice round. The current candidate value is the physical quantity or work units involved, interpreted through that person's weight and bias. Selected intentions are saved and revalidated before execution; changes are reported as stale rather than silently replaced. Work stores its base rate and applies skill effects at admission. Physical contention between domains uses a deterministic per-round order. Requests, takeovers, other domains and people without a choice profile retain their existing scheduler behavior: this fixture does not establish global autonomy or feature completeness.
-
-`economy-core-meal-choice.toml` adds domain 7 (eating) to this comparison. A person who explicitly lists that domain, even disabled, does not automatically eat in the earlier meal phase. Their carried, unexpired foods are individual opportunities; observed hunger is interpreted through their own signed weight and bias, so hunger does not force eating and eating need not require hunger. A saved choice retains its exact food and portion. People without the domain retain the existing meal behavior. Optional `[[meal_preferences]]` entries use a person, a named edible good, `enabled`, and a signed `bias` to express tastes or refusal. The loader resolves names to runtime IDs; lower-level `actions` entries can refine any domain by action key. Earlier activity phases still have scheduler priority.
-
-`economy-core-tool-choice.toml` uses domain 8 to compare repairing a carried, identified tool with other opportunities. A person's signed weight and bias interpret the observed damage; hunger does not categorically prevent a personally chosen repair. Explicitly listing the domain, including disabling it, defers that person's earlier automatic repair. The exact tool, observed condition, and required material are saved and revalidated; a chosen repair can still be denied when the material is unavailable. Other earlier activity phases retain their current priority.
-
-Interval scenarios may set `on_site_meals = true` to make a local stock
-portion available for domain 7 even when it cannot fit in the person's cargo.
-People evaluate it using their meal preferences and their own judgment about
-claims. The food is consumed at the source. Actual stock decides which
-competing attempts succeed, and only successful consumption relieves hunger.
-
-`economy-core-food-pickup-choice.toml` adds domain 9 for acquiring locally visible food. Explicitly listing it defers automatic provision, and individual signed preferences compare available food against other activities and idleness without an imposed hunger threshold. `[[meal_preferences]]` may specify `domain = 9` and a named food to refine pickup choices. The selected source and portion are revalidated; simultaneous attempts still compete for actual stock, and accepted uses publish claim observations. This covers regional stock only; travel and other earlier activities still retain their existing scheduling.
-
-`economy-core-treatment-choice.toml` adds domain 10 for using one's own medicine. An explicit personal health threshold remains meaningful, but without one a person may choose medicine even at full health. Medicine is physically consumed and only actual matching disease episodes are affected. This covers self-treatment; care provided to others and several earlier activity phases still follow their existing paths.
-
-`economy-core-language-topics.toml` demonstrates optional `[[language_topic_profiles]]`. A profile contains `person`, an `idle` value, optional `act_on_tie`, and `preferences` naming either an `object` from content or a `place`, with an `enabled` flag and signed `value`. An empty profile can choose silence. Each participant independently proposes a topic; choosing an object means voluntarily demonstrating an object they actually carry. The listener can separately hear, learn, decline, or modify the sound. Without a topic profile the earlier place-only behavior remains.
-
-`economy-core-signals.toml` demonstrates voluntary nonverbal signaling using forms and possible meanings named in `content/signals/basic.toml`. Each mind has personal expression inclinations and a separate attention and interpretation policy. An expression may be directed at a physically nearby person without either person agreeing to a social meeting; the observer can fail to notice or infer a different meaning. A retained observation contains the observed form and that observer's interpretation, never the sender's private intention. Observers may have personal relationship reactions or value a physical gift after an interpretation. `economy-core-signal-learning.toml` adds an optional personal inference from a noticed form and a later received gift; this association can be mistaken and does not expose the sender's intention.
-
-`economy-core-work-capabilities.toml` defines a growth curve, genetic vigor scaling, and named recipe requirements for the optional physical capability model. In the interval host it applies to personally chosen production starts. It does not choose work, govern carrying, or replace age gates in other activities.
-
-`economy-core-birth-choices.toml` illustrates an optional `birth_choices` profile. When family birth enrollment is enabled, actual newborns receive general domain inclinations adjusted by their own expressed genes; no other person's targets or memories are copied. A meal-domain profile enables meal consideration without a caregiver owner, while the person's own score can still select idleness.
-
-`economy-core-birth-signals.toml` adds an optional newborn signal profile. A child may choose to direct a configured expression at their actual mother without requiring a social meeting; the observer interprets it through their own mind. Newborns do not inherit listener mappings or memories.
-
-`economy-core-person-names.toml` shows a personal language topic for a person. A speaker can coin and share a phonetic form for themselves or the other participant in a real encounter; the listener can refuse it, and no globally binding name is created.
-
-An optional domain 5 preference lets a person reconsider an ordinary active job at each decision. It compares the person's value for continuing, using remaining work as the current candidate value, with their idle value. A disabled preference expresses a decision to stop. The worker can choose another activity at a later decision; reserved inputs remain in the job until physically returned. Shared sessions, succession and direct same-round switching are not yet covered.
-
-The ignored `concentrated_work_continuation_benchmark` measures a decision with half of 10,000 active workers stopping. On one development machine it measured 14.0, 8.74, 5.80 and 5.16 ms with one, two, four and six workers. The benchmark verifies complete saved-state equality across worker counts.
-
-`economy-core-mechanics.toml` loads an apparatus catalog from content and maps its components to identified carried goods. A person's willing experiment policies can compete with other opt-in activities using domain 6; each policy has a signed personal `value`, and multiple settings for the same apparatus can be considered separately. Changing their policy or losing a part makes a saved intention stale. The host checks possession and effort limits, history records actual experiments, and an individual can choose to retain a bounded memory of their own results. Numeric loads do not yet move real objects or spend fatigue, and memories do not yet create inventions or inferences.
-
-The ignored `independent_physical_mechanics_benchmark` includes host-level item and capability checks. On one development machine, 100,000 experiments took 32.8, 19.5, 13.1 and 11.5 ms with one, two, four and six workers, and produced identical observations and saved state. Smaller runs varied substantially, so these are workload measurements rather than whole-simulation guarantees.
-
-The ignored `concentrated_personal_choice_benchmark` measures opportunity preparation, selection, revalidation, and physical arbitration over shared stock; it also compares complete saved state across worker counts. Set `LEGACY_CHOICE_PEOPLE` to choose the population. On one development machine, a 20,000-person run measured medians of 58.4, 38.1, 26.4, and 23.7 ms with one, two, four, and six workers respectively. These numbers describe this concentrated workload and machine, not a guarantee of linear scaling or whole-world performance.
-
-Set `LEGACY_CHOICE_MAINTENANCE=1` to add competing repair intentions for one shared worn site. A 20,000-person run on the same machine measured 61.6, 42.4, 34.3, and 27.1 ms with one, two, four, and six workers. This deliberately concentrated case includes decisions that lose contention for the site.
-
-Set `LEGACY_CHOICE_WORK=1` to include work starts alongside construction and carrying. A 20,000-person run on that machine measured 75.1, 47.6, 35.9, and 31.0 ms with one, two, four, and six workers. The measurement includes job admission and checks complete saved state, but does not represent every work policy or a whole-world run.
-
-An optional personal `act_on_tie` setting lets an individual choose an opportunity valued equally with doing neither of these local activities.
-
-The current candidate and stale checks use the host's current local physical view. They do not yet model a person acting on an inaccurate memory of available materials; a stale intention may be rejected before that person could observe the change. Restoring subjective knowledge and attempted-failure learning is still required.
+# Legacy command line
+
+Run Cargo commands from the repository root.
+
+## Play
+
+```text
+cargo run -p game-economy-cli -- --player
+cargo run -p game-economy-cli -- --person 1 content/scenarios/economy-core-player.toml
+```
+
+`--player` starts the campaign. `--person ID` starts from the perspective
+of a controlled character in an authored scenario. Pass a scenario path to
+choose a different world and provide `--seed N` or
+`--population PATH` to apply either override at creation.
+
+Use `help` for available actions and `look` for the character's view.
+`wait MILLISECONDS` advances time. `work`, `eat`, `rest`, `walk`,
+and `move` are choices checked against actual supplies and reach. A traveler
+can review or abandon their own `trip`. Invited travelers make separate
+choices about whether to join and whether to return.
+
+Through `word` and `form`, a character can choose personal spoken sounds
+and written marks. `inscribe`, `read`, and `recall` work with real held
+pages. Other people have their own vocabulary, interpretations, and
+willingness to learn.
+
+`campaign` shows the current incarnation and elapsed invocation state.
+`invoke` and `recall-life` make selected past-life memories available.
+`dismiss` ends the invocation. If a cost requires a choice, time stops at
+its deadline until the player accepts or dismisses it.
+
+## Observe
+
+```text
+cargo run -p game-economy-cli
+```
+
+Without a player option, the characters make their own choices while you
+observe their world. `step` requests one simulated minute. Give `step` a
+duration in milliseconds to request a different elapsed step. Use
+`status`, `people`, `catalog`, `stock REGION`, and `goods PERSON` to
+inspect the world. `help` lists the other available observations. Both
+modes use the same elapsed checkpoints for `save PATH` and `load PATH`.
+
+## Record a history
+
+```text
+cargo run -p game-economy-cli --profile simulation --example history -- content/scenarios/economy-history-integrated-hourly.toml runs/history/world.ndjson 300 1 60000
+cargo run -p game-economy-cli --example inspect_history -- summary runs/history/world.ndjson --narrative
+cargo run -p game-economy-cli --example inspect_history -- person runs/history/world.ndjson 61 --narrative
+```
+
+The final history arguments are simulated years, workers, and milliseconds
+per advance. The example writes a fresh archive, selected observations, and
+annual checkpoints. An hour remains the physical settlement quantum for
+the integrated scenario. Independent deadlines and rates retain elapsed
+precision within that quantum. Use `history --resume CHECKPOINT OUTPUT`
+with additional years and worker arguments to continue into a fresh file.
+
+Use `history_probe SOURCE OUTPUT STEPS INTERVAL WORKERS STEP_MILLIS` for
+shorter runs and more frequent checkpoints. The inspector accepts
+`summary`, `person FILE ID`, and `animal FILE ID`. Without
+`--narrative`, it returns structured JSON.
+
+## Content and implementation
+
+Scenario TOML files live in `content/scenarios`. Object and recipe content
+can use namespaced packs with stable identifiers. The normal CLI and history
+examples compile authored data directly into the elapsed host. Game state
+and validation live with the feature owners.
+
+See the [feature restoration audit](../../docs/research/legacy-feature-audit.md)
+for current coverage and the [elapsed-time notes](../../docs/research/elapsed-time-migration.md)
+for owner clocks.
