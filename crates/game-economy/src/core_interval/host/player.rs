@@ -56,6 +56,12 @@ pub struct CorePlayerResource {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CorePlayerField {
+    pub id: u64,
+    pub phase: game_economy_agriculture::Phase,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CorePromiseReply {
     Accept,
     Decline,
@@ -78,6 +84,7 @@ pub struct CorePlayerView {
     pub nearby: Vec<CoreSeenPerson>,
     pub accessible_sites: Vec<CorePlayerSite>,
     pub accessible_resources: Vec<CorePlayerResource>,
+    pub accessible_fields: Vec<CorePlayerField>,
     pub carried_apparatus: Vec<game_mechanics::Apparatus>,
     pub promises: Vec<game_agreements::Contract>,
     pub wound: Option<CorePlayerWound>,
@@ -369,6 +376,7 @@ impl CoreHost {
             .map_or_else(Vec::new, |holder| holder.lots.clone());
         let mut accessible_sites = Vec::new();
         let mut accessible_resources = Vec::new();
+        let mut accessible_fields = Vec::new();
         if let Some(region) = person
             .region
             .filter(|&region| self.regional_stock_reachable(id, region))
@@ -425,6 +433,22 @@ impl CoreHost {
                     })
                     .collect();
                 accessible_resources.par_sort_unstable_by_key(|node| node.id);
+            }
+            if let Some(farm) = self
+                .agriculture
+                .as_ref()
+                .filter(|farm| farm.growth_clock.is_some())
+            {
+                accessible_fields = farm
+                    .fields
+                    .par_iter()
+                    .filter(|field| field.region == region)
+                    .map(|field| CorePlayerField {
+                        id: field.id,
+                        phase: field.phase,
+                    })
+                    .collect();
+                accessible_fields.par_sort_unstable_by_key(|field| field.id);
             }
         }
         let wound = self
@@ -518,6 +542,7 @@ impl CoreHost {
             nearby,
             accessible_sites,
             accessible_resources,
+            accessible_fields,
             carried_apparatus: self.carried_apparatus(id),
             promises: self.agreements.as_ref().map_or_else(Vec::new, |owner| {
                 let mut promises: Vec<_> = owner

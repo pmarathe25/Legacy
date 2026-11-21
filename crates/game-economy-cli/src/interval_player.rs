@@ -53,7 +53,7 @@ fn command(host: &mut CoreHost, person: u64, words: &[&str]) -> Result<bool, Str
     match words {
         [] => {}
         ["help"] => println!(
-            "look | wait MILLISECONDS | move REGION | walk stock|store ID | pause-walk | resume-walk | trip REGION VISIT_MILLISECONDS [food] | trip go|survey|back|cancel | trip leave-in MILLISECONDS | fight PERSON | join-fight BENEFICIARY OPPONENT | tactic wait|defend|retreat | tactic attack PERSON | tactic attack-site SITE | tactic move X Y | confine PERSON SITE | guard SITE | release PERSON | escape | build BLUEPRINT | demolish SITE | salvage SITE GOOD QUANTITY | gather NODE | assemble APPARATUS PART... | experiment APPARATUS OUTPUT FORCE DISTANCE LOAD | promise PERSON GOOD QUANTITY DUE_IN_MILLISECONDS | respond PROMISE accept|decline|withdraw | deliver PROMISE QUANTITY | eat GOOD | treat GOOD | wear GOOD | unwear | work RECIPE UNITS | stop JOB | stop-assist | rest on|off | word place|person|object ID SOUNDS | form SOUNDS MARKS | inscribe SOUNDS | read PAGE | recall PAGE | save PATH | load PATH | quit (SOUNDS and MARKS are comma-separated numbers)"
+            "look | wait MILLISECONDS | move REGION | walk stock|store ID | pause-walk | resume-walk | trip REGION VISIT_MILLISECONDS [food] | trip go|survey|back|cancel | trip leave-in MILLISECONDS | fight PERSON | join-fight BENEFICIARY OPPONENT | tactic wait|defend|retreat | tactic attack PERSON | tactic attack-site SITE | tactic move X Y | confine PERSON SITE | guard SITE | release PERSON | escape | build BLUEPRINT | demolish SITE | salvage SITE GOOD QUANTITY | gather NODE | cultivate FIELD [CARRIED_SEED_BATCH] | assemble APPARATUS PART... | experiment APPARATUS OUTPUT FORCE DISTANCE LOAD | promise PERSON GOOD QUANTITY DUE_IN_MILLISECONDS | respond PROMISE accept|decline|withdraw | deliver PROMISE QUANTITY | eat GOOD | treat GOOD | wear GOOD | unwear | work RECIPE UNITS | stop JOB | stop-assist | rest on|off | word place|person|object ID SOUNDS | form SOUNDS MARKS | inscribe SOUNDS | read PAGE | recall PAGE | save PATH | load PATH | quit (SOUNDS and MARKS are comma-separated numbers)"
         ),
         ["quit"] | ["exit"] => return Ok(false),
         ["look"] => {
@@ -73,6 +73,11 @@ fn command(host: &mut CoreHost, person: u64, words: &[&str]) -> Result<bool, Str
             for lot in &view.possessions {
                 if let Some(item) = lot.item {
                     println!("carried_item={item} good={}", lot.good);
+                } else if let Some(batch) = lot.batch {
+                    println!(
+                        "carried_good={} quantity={} batch={batch}",
+                        lot.good, lot.quantity
+                    );
                 } else {
                     println!("carried_good={} quantity={}", lot.good, lot.quantity);
                 }
@@ -93,6 +98,9 @@ fn command(host: &mut CoreHost, person: u64, words: &[&str]) -> Result<bool, Str
                     "resource={} good={} available={} yield={}",
                     node.id, node.good, node.available, node.yield_per_action
                 );
+            }
+            for field in &view.accessible_fields {
+                println!("field={} phase={:?}", field.id, field.phase);
             }
             for apparatus in &view.carried_apparatus {
                 println!("apparatus={}", apparatus.id);
@@ -444,6 +452,15 @@ fn command(host: &mut CoreHost, person: u64, words: &[&str]) -> Result<bool, Str
                 println!("gathered={} quantity={}", yielded.good, yielded.quantity);
             } else {
                 println!("nothing gathered");
+            }
+        }
+        ["cultivate", field, seeds @ ..] if seeds.len() <= 1 => {
+            let field = number(field)?;
+            let batch = seeds.first().map(|batch| number(batch)).transpose()?;
+            if let Some(phase) = Player::new(host, person)?.cultivate(field, batch)? {
+                println!("field={field} phase={phase:?}");
+            } else {
+                println!("field={field} cultivation denied");
             }
         }
         ["work", recipe, units] => {

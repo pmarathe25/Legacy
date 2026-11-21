@@ -19,6 +19,7 @@ use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 mod host;
+pub use game_economy_agriculture::Phase as CoreCropPhase;
 pub use game_economy_campaign::InvocationWarningKind;
 pub use game_economy_combat::Point as TacticalPoint;
 pub use game_economy_combat::elapsed::{
@@ -39,7 +40,7 @@ pub use host::{
     CoreDeliveryResults, CoreDynamicsResults, CoreFoodProvision, CoreFoodSearch,
     CoreHaulingResults, CoreHealth, CoreHistoryView, CoreHost, CoreHostSnapshot,
     CoreLocalTransportResults, CoreMarkInscription, CoreMarkObservation, CoreMarketResults,
-    CoreMechanics, CorePersonalConflict, CorePlayerFatigue, CorePlayerJob, CorePlayerLanguage,
+    CoreMechanics, CorePersonalConflict, CorePlayerFatigue, CorePlayerField, CorePlayerJob, CorePlayerLanguage,
     CorePlayerMarkedPage, CorePlayerResource, CorePlayerSite, CorePlayerView, CorePlayerWound,
     CorePracticeWorkEvidence, CorePromiseReply, CorePurpose, CoreRepairResults, CoreRequestResults,
     CoreRun, CoreRunEvent, CoreSchedule, CoreSeenPerson, CoreSharedWork, CoreSiteChanges,

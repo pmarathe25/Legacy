@@ -67,41 +67,7 @@ impl CoreHost {
                 season: self.current_season(tick),
             }
             .prepare_elapsed(&selected, &selected_people)?;
-            if !plan.changes.is_empty() {
-                let actions = plan
-                    .plant
-                    .par_iter()
-                    .chain(plan.harvest.par_iter())
-                    .cloned()
-                    .collect();
-                let seed = self.core.seed ^ self.core.decision_time_key();
-                let (draft, events) = self
-                    .core
-                    .physical
-                    .prepare_interval_cultivation(actions, seed)?;
-                outcomes = plan
-                    .actors
-                    .par_iter()
-                    .zip(plan.changes.par_iter())
-                    .map(|(&actor, &(_, action, _, _))| {
-                        let accepted = events
-                            .physical_actions
-                            .binary_search_by_key(&action, |row| row.id)
-                            .is_ok_and(|index| events.physical_actions[index].accepted);
-                        (actor, accepted)
-                    })
-                    .collect();
-                outcomes.par_sort_unstable_by_key(|row| row.0);
-                if outcomes.par_iter().any(|row| row.1) {
-                    let (farm, claims) = self.stage_cultivation(Some(plan), &events, &[])?;
-                    self.core.physical.commit_interval_consumption(draft)?;
-                    self.agriculture = farm;
-                    if let Some((claims, opinions)) = claims {
-                        self.claims = Some(claims);
-                        self.opinions = opinions;
-                    }
-                }
-            }
+            outcomes = self.commit_elapsed_cultivation(plan)?;
         }
         let choices: Vec<_> = resolved
             .par_iter()
@@ -140,6 +106,97 @@ impl CoreHost {
             choices,
             fields,
         })
+    }
+
+    pub fn cultivate_controlled(
+        &mut self,
+        person: u64,
+        field: u64,
+        carried_batch: Option<u64>,
+    ) -> Result<Option<game_economy_agriculture::Phase>, String> {
+        let actor = self.controlled_person(person)?;
+        let region = actor.region.ok_or("field is outside physical reach")?;
+        if !self.regional_stock_reachable(person, region) {
+            return Err("field is outside physical reach".into());
+        }
+        let busy = self.choice_busy(&[]);
+        if busy.binary_search(&person).is_ok()
+            || self.assisting_people().binary_search(&person).is_ok()
+        {
+            return Err("the controlled person is occupied".into());
+        }
+        if self.core.next_deadline(None)?.after_millis == 0 {
+            return Err("settle the current event before cultivating".into());
+        }
+        let owner = self
+            .agriculture
+            .as_ref()
+            .filter(|farm| farm.growth_clock.is_some())
+            .ok_or("elapsed cultivation is disabled")?;
+        let tick = self.core.physical.tick();
+        let view = self.core.physical.view(tick)?;
+        let claims = self.claims.as_ref().map(game_economy_claims::Claims::index);
+        let plan = game_economy_agriculture::Context {
+            agriculture: owner,
+            agreements: self.agreements.as_ref(),
+            people: &self.core.people,
+            opinions: self.opinions.as_ref(),
+            claims: claims.as_ref(),
+            busy: &busy,
+            contact_blocked: &[],
+            catalog: self.core.physical.catalog(),
+            view: &view,
+            lot_instant: self.core.physical.lot_instant(tick),
+            tick,
+            manual: Some((person, field)),
+            manual_response: None,
+            manual_withdrawal: None,
+            reserved_field: None,
+            season: self.current_season(tick),
+        }
+        .prepare_controlled_elapsed(carried_batch)?;
+        let phase = plan.changes.first().map(|change| change.2);
+        let outcomes = self.commit_elapsed_cultivation(plan)?;
+        Ok(phase.filter(|_| outcomes.first() == Some(&(person, true))))
+    }
+
+    fn commit_elapsed_cultivation(
+        &mut self,
+        mut plan: game_economy_agriculture::Plan,
+    ) -> Result<Vec<(u64, bool)>, String> {
+        if plan.changes.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut actions = std::mem::take(&mut plan.plant);
+        actions.append(&mut plan.harvest);
+        let seed = self.core.seed ^ self.core.decision_time_key();
+        let (draft, events) = self
+            .core
+            .physical
+            .prepare_interval_cultivation(actions, seed)?;
+        let mut outcomes: Vec<_> = plan
+            .actors
+            .par_iter()
+            .zip(plan.changes.par_iter())
+            .map(|(&actor, &(_, action, _, _))| {
+                let accepted = events
+                    .physical_actions
+                    .binary_search_by_key(&action, |row| row.id)
+                    .is_ok_and(|index| events.physical_actions[index].accepted);
+                (actor, accepted)
+            })
+            .collect();
+        outcomes.par_sort_unstable_by_key(|row| row.0);
+        if outcomes.par_iter().any(|row| row.1) {
+            let (farm, claims) = self.stage_cultivation(Some(plan), &events, &[])?;
+            self.core.physical.commit_interval_consumption(draft)?;
+            self.agriculture = farm;
+            if let Some((claims, opinions)) = claims {
+                self.claims = Some(claims);
+                self.opinions = opinions;
+            }
+        }
+        Ok(outcomes)
     }
 
     pub(super) fn next_dry_field(&self) -> Option<u64> {

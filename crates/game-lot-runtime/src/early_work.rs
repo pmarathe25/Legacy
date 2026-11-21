@@ -551,7 +551,8 @@ impl Runtime {
                     instant,
                 ),
                 [seed]
-                    if matches!(seed.from, Place::Stock { good, .. } if good == seed.good)
+                    if (matches!(seed.from, Place::Stock { good, .. } if good == seed.good)
+                        || (matches!(seed.from, Place::Person(_)) && seed.batch.is_some()))
                         && seed.to.is_none() =>
                 {
                     game_lot_work::validate_actions(&self.catalog, std::slice::from_ref(action))

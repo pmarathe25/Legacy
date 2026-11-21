@@ -189,3 +189,71 @@ fn planting_harvest_and_seed_provenance_publish_at_the_personal_decision() {
     };
     assert_eq!(run(1, 800, &[735]), run(6, 400, &[81, 300, 125, 229]));
 }
+
+#[test]
+fn a_player_can_plant_a_carried_seed_batch_and_harvest_the_field() {
+    use game_economy_player::interval::Player;
+    use game_lots::Container;
+
+    let mut state = farm(800).snapshot();
+    state.core.people[0].controlled = true;
+    let owner = state.agriculture.as_ref().unwrap();
+    let crop = owner
+        .crops
+        .iter()
+        .find(|crop| crop.id == owner.fields[0].crop)
+        .unwrap();
+    let seed_stock = Place::Stock {
+        region: 1,
+        good: crop.seed,
+    };
+    let stock = state
+        .core
+        .physical
+        .custody
+        .containers
+        .iter_mut()
+        .find(|row| row.place == seed_stock)
+        .unwrap();
+    let mut lots = stock.lots.clone();
+    let index = lots.iter().position(|lot| lot.batch == Some(12)).unwrap();
+    let seed = lots.remove(index);
+    *stock = Container::new(stock.place, stock.capacity, lots).unwrap();
+    let cargo = state
+        .core
+        .physical
+        .custody
+        .containers
+        .iter_mut()
+        .find(|row| row.place == Place::Person(1))
+        .unwrap();
+    *cargo = Container::new(cargo.place, cargo.capacity, vec![seed]).unwrap();
+    let mut host = CoreHost::resume(state).unwrap();
+
+    let mut player = Player::new(&mut host, 1).unwrap();
+    assert_eq!(
+        player.view().unwrap().accessible_fields[0].phase,
+        Phase::Fallow
+    );
+    assert!(player.cultivate(1234, Some(12)).is_err());
+    assert_eq!(player.cultivate(1, Some(11)).unwrap(), None);
+    assert_eq!(player.cultivate(1, Some(12)).unwrap(), Some(Phase::Growing));
+    assert!(player.view().unwrap().possessions.is_empty());
+    let planted = host.snapshot().agriculture.unwrap().provenance.unwrap();
+    assert_eq!(planted.plantings[0].seeds[0].batch, Some(12));
+    assert_eq!(planted.plantings[0].planter, Some(1));
+    assert_eq!(host.advance_continuous(301, &[]).unwrap().failure, None);
+
+    let mut player = Player::new(&mut host, 1).unwrap();
+    assert!(player.cultivate(1, Some(12)).is_err());
+    assert_eq!(player.cultivate(1, None).unwrap(), Some(Phase::Fallow));
+    assert!(
+        host.snapshot()
+            .agriculture
+            .unwrap()
+            .provenance
+            .unwrap()
+            .plantings
+            .is_empty()
+    );
+}

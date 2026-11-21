@@ -421,7 +421,7 @@ impl Context<'_> {
         choice_people: &[u64],
         selected_blocked: &[u64],
     ) -> Result<Plan, String> {
-        self.prepare_work(base, selected, choice_people, selected_blocked, true)
+        self.prepare_work(base, selected, choice_people, selected_blocked, true, None)
     }
 
     /// Stage the competing intentions that actually won their personal decision round.
@@ -430,7 +430,15 @@ impl Context<'_> {
         selected: &[opportunities::Opportunity],
         actors: &[u64],
     ) -> Result<Plan, String> {
-        self.prepare_work(1, selected, actors, self.busy, false)
+        self.prepare_work(1, selected, actors, self.busy, false, None)
+    }
+
+    /// A controlled character may plant a specifically chosen batch from their own cargo.
+    pub fn prepare_controlled_elapsed(&self, carried_batch: Option<u64>) -> Result<Plan, String> {
+        if self.manual.is_none() || carried_batch == Some(0) {
+            return Err("invalid controlled cultivation choice".into());
+        }
+        self.prepare_work(1, &[], &[], self.busy, false, carried_batch)
     }
 
     fn prepare_work(
@@ -440,6 +448,7 @@ impl Context<'_> {
         choice_people: &[u64],
         selected_blocked: &[u64],
         boundary: bool,
+        carried_batch: Option<u64>,
     ) -> Result<Plan, String> {
         if selected.par_windows(2).any(|p| p[0].person >= p[1].person)
             || choice_people.par_windows(2).any(|p| p[0] >= p[1])
@@ -471,6 +480,7 @@ impl Context<'_> {
                 || person.health == 0
                 || person.region != Some(field.region)
                 || field.phase == Phase::Growing
+                || (carried_batch.is_some() && field.phase != Phase::Fallow)
                 || self.season.is_some_and(|season| match field.phase {
                     Phase::Fallow => !season.planting_allowed,
                     Phase::Ripe => !season.harvest_allowed,
@@ -774,24 +784,31 @@ impl Context<'_> {
                 let crop = crops[crops
                     .binary_search_by_key(&field.crop, |row| row.id)
                     .map_err(|_| "unknown crop")?];
+                let chosen_batch =
+                    carried_batch.filter(|_| manual.is_some_and(|(_, person)| person == worker));
                 let (plant, harvest, phase, remaining) = match field.phase {
                     Phase::Fallow => (
                         Some(Transaction {
                             id: action,
                             movements: vec![Movement {
-                                batch: selected
-                                    .binary_search_by_key(&worker, |row| row.person)
-                                    .ok()
-                                    .map(|index| {
-                                        selected[index].planting.and_then(|seed| seed.batch)
-                                    })
-                                    .unwrap_or_else(|| seed_choice(field, worker).flatten()),
+                                batch: chosen_batch.or_else(|| {
+                                    selected
+                                        .binary_search_by_key(&worker, |row| row.person)
+                                        .ok()
+                                        .map(|index| {
+                                            selected[index].planting.and_then(|seed| seed.batch)
+                                        })
+                                        .unwrap_or_else(|| seed_choice(field, worker).flatten())
+                                }),
                                 item: None,
                                 id: action,
-                                from: Place::Stock {
-                                    region: field.region,
-                                    good: crop.seed,
-                                },
+                                from: chosen_batch.map_or(
+                                    Place::Stock {
+                                        region: field.region,
+                                        good: crop.seed,
+                                    },
+                                    |_| Place::Person(worker),
+                                ),
                                 to: None,
                                 good: crop.seed,
                                 quantity: crop.seed_quantity,

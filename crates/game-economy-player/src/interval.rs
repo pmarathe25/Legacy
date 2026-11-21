@@ -55,6 +55,15 @@ impl<'a> Player<'a> {
         self.host.gather_controlled(self.person, node)
     }
 
+    pub fn cultivate(
+        &mut self,
+        field: u64,
+        carried_batch: Option<u64>,
+    ) -> Result<Option<game_economy::core_interval::CoreCropPhase>, String> {
+        self.host
+            .cultivate_controlled(self.person, field, carried_batch)
+    }
+
     pub fn promise(
         &mut self,
         recipient: u64,

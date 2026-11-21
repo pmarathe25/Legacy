@@ -96,6 +96,11 @@ mapping for someone outside the encounter, the listener needs their own
 remembered contact with that person and must choose to adopt the form.
 
 With elapsed gathering enabled, `look` lists reachable resource nodes.
+`cultivate FIELD` plants from accessible regional stock or harvests a ripe
+field. To plant from an identified seed batch in the character's own cargo,
+use `cultivate FIELD CARRIED_SEED_BATCH`. `look` shows accessible fields and
+the batch identities of carried seed.
+
 `gather NODE` takes one yield into personal custody if stock and carrying space
 permit. For an engineering scenario, `look` lists carried items and apparatus.
 `assemble 7 1001:1:0:1000 1002:2:1001:1000` connects item 1002 to item
