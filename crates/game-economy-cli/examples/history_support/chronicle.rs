@@ -250,6 +250,7 @@ impl Chronicle {
                 | "maturation"
                 | "recipe_learning"
                 | "written_explanations"
+                | "farm_review"
                 | "personal_practices"
                 | "agreement_expiry"
         ) {
@@ -525,6 +526,11 @@ fn classify(kind: &str, row: &Value) -> Option<Receipt> {
             "moved" => "mechanical tests that moved a load",
             "stalled" => "mechanical tests that stalled",
             "broke" => "mechanical tests that broke a part",
+            _ => return None,
+        },
+        ("farm_review", _) => match row["resulting_phase"].as_str()? {
+            "growing" => "fields planted",
+            "fallow" => "fields harvested",
             _ => return None,
         },
         ("agreement_expiry", "defaulted") => "unfulfilled agreements that expired",

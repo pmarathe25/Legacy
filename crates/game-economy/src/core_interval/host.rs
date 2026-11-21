@@ -56,6 +56,7 @@ mod tools;
 mod treatment;
 mod writing;
 mod written_social;
+pub use agriculture::FarmReview;
 pub use campaign::CoreCampaignView;
 pub use confinement::{BarrierAction, CoreConfinement};
 pub use conflict::{
@@ -1101,6 +1102,11 @@ impl CoreHost {
             )?;
         }
         if let Some(owner) = &agriculture {
+            if owner.action_clock.and_then(|clock| clock.last_review_millis)
+                .is_some_and(|at| u128::from(at) > core.simulated_millis())
+            {
+                return Err("cultivation review is in the future".into());
+            }
             if owner.provenance.as_ref().is_some_and(|provenance| {
                 provenance.plantings.par_iter().any(|record| {
                     record

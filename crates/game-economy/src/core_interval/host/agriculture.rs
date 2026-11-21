@@ -8,9 +8,25 @@ pub(super) struct CultivatedNow {
     pub actors: Vec<u64>,
     pub choices: Vec<CoreChoiceEvent>,
     pub fields: Vec<game_economy_agriculture::opportunities::Opportunity>,
+    pub review: Option<FarmReview>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FarmReview {
+    pub work: Vec<game_economy_agriculture::elapsed_actions::FieldWork>,
+    pub requests: Vec<game_economy_agriculture::requests::Event>,
 }
 
 impl CoreHost {
+    fn elapsed_farm_review(&self) -> Option<game_economy_agriculture::elapsed_actions::Review> {
+        self.agriculture.as_ref()?.action_clock?
+            .review(u64::try_from(self.core.simulated_millis()).ok()?)
+    }
+
+    pub(super) fn farm_review_due(&self) -> bool {
+        self.elapsed_farm_review().is_some()
+    }
+
     pub(super) fn cultivated_at_decisions(&self) -> bool {
         self.agriculture
             .as_ref()
@@ -24,7 +40,7 @@ impl CoreHost {
         intents: &[CoreChoiceIntent],
     ) -> Result<CultivatedNow, String> {
         let resolved = self.resolve_cultivation_fields(intents);
-        let actors = resolved
+        let mut actors: Vec<_> = resolved
             .par_iter()
             .map(|(choice, _)| choice.person)
             .collect();
@@ -33,28 +49,38 @@ impl CoreHost {
             .filter_map(|(choice, won)| won.then_some(*choice))
             .collect();
         let mut outcomes = Vec::new();
+        let mut recorded_review = None;
         let tick = self.core.physical.tick();
         let offset_millis = self
             .core
             .elapsed_millis()
             .ok_or("no cultivation interval")?;
-        if !selected.is_empty() {
+        let review = self.elapsed_farm_review();
+        if !selected.is_empty() || review.is_some() {
             let owner = self
                 .agriculture
                 .as_ref()
                 .expect("elapsed cultivation owner");
             let busy = self.choice_busy(blocked);
             let away = self.block_away_from_stock(&busy);
+            let personal_busy = away.as_deref().unwrap_or(&busy);
+            let mut activity_busy = Vec::new();
+            if review.is_some() {
+                activity_busy.extend_from_slice(personal_busy);
+                activity_busy.par_extend(intents.par_iter().map(|intent| intent.actor));
+                activity_busy.par_sort_unstable();
+                activity_busy.dedup();
+            }
             let view = self.core.physical.view(tick)?;
             let claims = self.claims.as_ref().map(game_economy_claims::Claims::index);
-            let selected_people: Vec<_> = selected.par_iter().map(|choice| choice.person).collect();
-            let plan = game_economy_agriculture::Context {
+            let agreement_evidence = self.farm_agreement_evidence(tick)?;
+            let context = game_economy_agriculture::Context {
                 agriculture: owner,
-                agreements: self.agreements.as_ref(),
+                agreement_evidence,
                 people: &self.core.people,
                 opinions: self.opinions.as_ref(),
                 claims: claims.as_ref(),
-                busy: away.as_deref().unwrap_or(&busy),
+                busy: if review.is_some() { &activity_busy } else { personal_busy },
                 contact_blocked: blocked,
                 catalog: self.core.physical.catalog(),
                 view: &view,
@@ -65,9 +91,39 @@ impl CoreHost {
                 manual_withdrawal: None,
                 reserved_field: None,
                 season: self.current_season(tick),
-            }
-            .prepare_elapsed(&selected, &selected_people)?;
+            };
+            let plan = if let Some(review) = review {
+                let profiled: Vec<_> = self.schedule.as_ref()
+                    .and_then(|schedule| schedule.personal_choices.as_ref())
+                    .map_or_else(Vec::new, |profiles| profiles.par_iter().map(|p| p.id).collect());
+                context.prepare_elapsed_review(&selected, &profiled, personal_busy, review)?
+            } else {
+                let selected_people: Vec<_> = selected.par_iter().map(|choice| choice.person).collect();
+                context.prepare_elapsed(&selected, &selected_people)?
+            };
+            actors.par_extend(plan.actors.par_iter().chain(plan.requesters.par_iter()).copied());
+            actors.par_sort_unstable();
+            actors.dedup();
+            let work: Vec<_> = if review.is_some() {
+                plan.actors.par_iter().zip(plan.changes.par_iter())
+                    .map(|(&person, &(field, _, resulting_phase, _))| {
+                        game_economy_agriculture::elapsed_actions::FieldWork {
+                            person, field, resulting_phase,
+                        }
+                    }).collect()
+            } else {
+                Vec::new()
+            };
             outcomes = self.commit_elapsed_cultivation(plan)?;
+            if review.is_some() {
+                let work = work.into_par_iter().filter(|row| {
+                    outcomes.binary_search_by_key(&row.person, |outcome| outcome.0)
+                        .is_ok_and(|slot| outcomes[slot].1)
+                }).collect();
+                let requests = self.agriculture.as_ref().and_then(|farm| farm.requests.as_ref())
+                    .map_or_else(Vec::new, |owner| owner.events.clone());
+                recorded_review = Some(FarmReview { work, requests });
+            }
         }
         let choices: Vec<_> = resolved
             .par_iter()
@@ -105,6 +161,7 @@ impl CoreHost {
             actors,
             choices,
             fields,
+            review: recorded_review,
         })
     }
 
@@ -138,7 +195,7 @@ impl CoreHost {
         let claims = self.claims.as_ref().map(game_economy_claims::Claims::index);
         let plan = game_economy_agriculture::Context {
             agriculture: owner,
-            agreements: self.agreements.as_ref(),
+            agreement_evidence: None,
             people: &self.core.people,
             opinions: self.opinions.as_ref(),
             claims: claims.as_ref(),
@@ -164,7 +221,7 @@ impl CoreHost {
         &mut self,
         mut plan: game_economy_agriculture::Plan,
     ) -> Result<Vec<(u64, bool)>, String> {
-        if plan.changes.is_empty() {
+        if plan.changes.is_empty() && !plan.advances_review() {
             return Ok(Vec::new());
         }
         let mut actions = std::mem::take(&mut plan.plant);
@@ -187,9 +244,12 @@ impl CoreHost {
             })
             .collect();
         outcomes.par_sort_unstable_by_key(|row| row.0);
-        if outcomes.par_iter().any(|row| row.1) {
+        let moved_material = outcomes.par_iter().any(|row| row.1);
+        if plan.advances_review() || moved_material {
             let (farm, claims) = self.stage_cultivation(Some(plan), &events, &[])?;
-            self.core.physical.commit_interval_consumption(draft)?;
+            if moved_material {
+                self.core.physical.commit_interval_consumption(draft)?;
+            }
             self.agriculture = farm;
             if let Some((claims, opinions)) = claims {
                 self.claims = Some(claims);
@@ -197,6 +257,16 @@ impl CoreHost {
             }
         }
         Ok(outcomes)
+    }
+
+    fn farm_agreement_evidence(
+        &self,
+        evidence_tick: u64,
+    ) -> Result<Option<(&game_agreements::Agreements, u64)>, String> {
+        self.agreements.as_ref().map(|owner| {
+            owner.instant(self.core.simulated_millis(), evidence_tick)
+                .map(|instant| (owner, instant.now))
+        }).transpose().map_err(str::to_owned)
     }
 
     pub(super) fn next_dry_field(&self) -> Option<u64> {
@@ -644,9 +714,10 @@ impl CoreHost {
             .ok_or("tick overflow")?;
         let view = self.core.physical.view(tick)?;
         let claims = self.claims.as_ref().map(game_economy_claims::Claims::index);
+        let agreement_evidence = self.farm_agreement_evidence(tick)?;
         let context = game_economy_agriculture::Context {
             agriculture: owner,
-            agreements: self.agreements.as_ref(),
+            agreement_evidence,
             people: &self.core.people,
             opinions: self.opinions.as_ref(),
             claims: claims.as_ref(),

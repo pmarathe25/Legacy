@@ -58,6 +58,7 @@ pub use host::{
 pub use host::{CoreCampaignView, CorePastLifeView};
 pub use host::{CoreCareVisit, CoreExpeditionOffer};
 pub use host::{CoreFaunaTransitions, CoreTacticalResult, EncounterClock};
+pub use host::FarmReview;
 pub use host::{ExpeditionEvent, ExpeditionEventKind, ExpeditionItinerary, ExpeditionStage};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

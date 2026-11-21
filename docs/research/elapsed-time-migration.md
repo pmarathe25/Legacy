@@ -86,8 +86,12 @@ Ripening and descendant batch allocation commit together. The optional
 growth at the exact drying deadline. In these worlds, people with a
 cultivation choice profile can plant or harvest at their personal decision
 instant. The field changes only when the dated seed withdrawal or harvest
-output is accepted. Boundary cultivation still handles ordinary policies,
-requests and actors adding water.
+output is accepted. Set `cultivation.action_clock` with
+`period_millis` and `request_unit_millis` to give ordinary policies and
+requests an elapsed review. People reconsider at the first decision round in a
+new elapsed review window. Explicit choices and willing ordinary work share
+custody arbitration. Request intervals, lifetimes, and retry delays use the
+request unit. Offer valuation uses the agreement's own clock.
 Soil can author `cultivation.soil.recovery_clock.period_millis` as a duration
 for each `recovery_per_fallow` quantity. Only time spent fallow restores
 fertility. Fractional recovery survives save/reload and planting; harvest
