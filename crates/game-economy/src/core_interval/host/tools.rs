@@ -17,6 +17,10 @@ impl CoreHost {
             && self.fatigue.is_none()
             && self.health.is_none()
             && self.personal_conflict.is_none()
+            && self
+                .dependent_care
+                .as_ref()
+                .is_none_or(|owner| owner.elapsed.is_none())
             && self.shared_work.as_ref().is_none_or(|owner| {
                 owner
                     .sessions

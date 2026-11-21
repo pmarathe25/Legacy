@@ -1556,6 +1556,14 @@ fn scenario_with_options_inner(
     if scenario.on_site_meals && !interval_features {
         return Err("on-site meals require the interval simulation host".into());
     }
+    if !interval_features
+        && scenario
+            .care
+            .as_ref()
+            .is_some_and(|owner| owner.elapsed.is_some())
+    {
+        return Err("elapsed dependent care requires the interval simulation host".into());
+    }
     if scenario.rules.hunger_rate.is_some() {
         if !interval_features {
             return Err("elapsed hunger rates require the interval simulation host".into());

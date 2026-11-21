@@ -703,6 +703,7 @@ pub enum CoreRunEvent {
         people: Vec<u64>,
     },
     Campaign(Vec<game_economy_campaign::elapsed::Event>),
+    Care(CoreCareVisit),
     InvocationWarning {
         at_millis: u128,
         warning: game_economy_campaign::InvocationWarning,
@@ -1091,6 +1092,14 @@ impl CoreHost {
                 {
                     run.events.push(CoreRunEvent::Tactical(result));
                     rest_dirty = true;
+                    handled = true;
+                }
+                if deadline.care {
+                    let visit = attempt!('run, self.publish_elapsed_care(blocked));
+                    if !visit.events.is_empty() {
+                        run.events.push(CoreRunEvent::Care(visit));
+                        rest_dirty = true;
+                    }
                     handled = true;
                 }
                 if !handled {

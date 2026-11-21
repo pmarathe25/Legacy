@@ -56,6 +56,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .map(|id| (id, Some(1), 100, 0))
         .collect();
     let care = DependentCare {
+        elapsed: None,
         inherit_births: false,
         preferences: vec![],
         rules: Rules {

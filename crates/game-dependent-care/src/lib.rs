@@ -43,10 +43,42 @@ pub struct Event {
     pub child: u64,
     pub caregiver: Option<u64>,
 }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ElapsedCare {
+    pub period_millis: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_millis: Option<u128>,
+}
+
+impl ElapsedCare {
+    pub fn validate(self, now: u128) -> Result<(), &'static str> {
+        let period = u128::from(self.period_millis);
+        if period == 0
+            || self
+                .last_millis
+                .is_some_and(|last| last == 0 || !last.is_multiple_of(period) || last > now)
+            || self.last_millis.unwrap_or(0).saturating_add(period) < now
+        {
+            return Err("invalid elapsed care clock");
+        }
+        Ok(())
+    }
+
+    pub fn next_millis(self) -> Option<u128> {
+        self.last_millis
+            .unwrap_or(0)
+            .checked_add(u128::from(self.period_millis))
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DependentCare {
     pub rules: Rules,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub elapsed: Option<ElapsedCare>,
     /// Newborns can inherit a caregiver preference from one parent.
     #[serde(default)]
     pub inherit_births: bool,
@@ -156,6 +188,41 @@ impl DependentCare {
             impl Fn(u64, u64) -> Feelings + Sync,
         ),
     ) -> Draft {
+        let interval = self.rules.care_interval.max(1);
+        self.choose_visits(family, adult_age, people, busy, clock, context, |child| {
+            clock.1 % interval == child % interval
+        })
+    }
+
+    pub fn prepare_elapsed_visits(
+        &self,
+        family: &impl CareFamily,
+        adult_age: u64,
+        people: &[PersonSnapshot],
+        busy: &[u64],
+        clock: (u64, u64),
+        context: (
+            impl Fn(usize, usize) -> bool + Sync,
+            impl Fn(u64, u64) -> Feelings + Sync,
+        ),
+    ) -> Draft {
+        self.choose_visits(family, adult_age, people, busy, clock, context, |_| true)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn choose_visits(
+        &self,
+        family: &impl CareFamily,
+        adult_age: u64,
+        people: &[PersonSnapshot],
+        busy: &[u64],
+        clock: (u64, u64),
+        context: (
+            impl Fn(usize, usize) -> bool + Sync,
+            impl Fn(u64, u64) -> Feelings + Sync,
+        ),
+        due: impl Fn(u64) -> bool + Sync,
+    ) -> Draft {
         let (colocated, feelings) = context;
         let (seed, tick) = clock;
         let directed: HashSet<_> = self.preferences.par_iter().map(|row| row.person).collect();
@@ -183,11 +250,7 @@ impl DependentCare {
             .into_par_iter()
             .filter_map(|slot| {
                 let child = family.member(slot);
-                if !child.alive
-                    || child.age >= self.rules.dependent_until
-                    || tick % self.rules.care_interval.max(1)
-                        != child.id % self.rules.care_interval.max(1)
-                {
+                if !child.alive || child.age >= self.rules.dependent_until || !due(child.id) {
                     return None;
                 }
                 let index = person_index(people, child.id)?;
@@ -548,6 +611,7 @@ mod tests {
             (4, Some(1), 100, 0),
         ];
         let care = DependentCare {
+            elapsed: None,
             inherit_births: false,
             rules: Rules {
                 dependent_until: 5,
@@ -662,6 +726,7 @@ mod tests {
         .unwrap();
         let people = (1..=5).map(|id| (id, Some(1), 100, 0)).collect::<Vec<_>>();
         let care = DependentCare {
+            elapsed: None,
             inherit_births: false,
             rules: Rules {
                 dependent_until: 5,

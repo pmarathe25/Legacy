@@ -107,6 +107,10 @@ and maternal recovery independently. Delivery events carry exact elapsed times
 in the history stream. `conception_period_millis` gives subjective conception
 opportunities their own configured cadence. Partnership decisions, most family
 history, and succession still use physical settlement.
+`care.elapsed.period_millis` schedules visits and neglect at independent elapsed
+deadlines. Each visit reevaluates personal preferences, current age, and physical
+reach. Food moves through custody when the transfer succeeds. Saves retain the
+last visit deadline. Scenarios without this clock retain their settlement cadence.
 Purpose can set `purpose.rules.elapsed_period_millis`. Deprivation and its
 physical consequences then apply at multiples of that period. A physical
 settlement applies work outcomes without charging for elapsed time again.
