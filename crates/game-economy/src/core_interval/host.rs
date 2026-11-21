@@ -47,6 +47,7 @@ mod sites;
 mod skills;
 mod social;
 mod tactical;
+mod tactical_reinforcements;
 mod tactical_sites;
 mod taking;
 mod tools;

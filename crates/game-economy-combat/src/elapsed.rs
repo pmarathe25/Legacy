@@ -1,6 +1,7 @@
 //! Local tactical engagements with independent elapsed round deadlines.
 use crate::elapsed_structures::{SiteStrike, Structures};
 use crate::{Combat, Map, Point, Protection, Reaction, Response, Weapon};
+use crate::{elapsed_reinforcements, intervention};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
@@ -24,7 +25,7 @@ pub enum Choice {
     Retreat,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Participant {
     pub person: u64,
@@ -47,6 +48,8 @@ pub struct Engagement {
 #[serde(rename_all = "snake_case")]
 pub enum EventKind {
     Started,
+    Entered,
+    EntryBlocked,
     Moved,
     MovementBlocked,
     Defended,
@@ -80,6 +83,8 @@ pub struct Tactical {
     pub structures: Structures,
     pub engagements: Vec<Engagement>,
     pub reactions: Vec<Reaction>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub interventions: Vec<intervention::Preference>,
     pub protection: Vec<Protection>,
     pub weapons: Vec<Weapon>,
     pub membership: Vec<(u64, u64)>,
@@ -162,6 +167,8 @@ impl Tactical {
         maps.par_sort_unstable_by_key(|row| row.region);
         let mut reactions = combat.reactions;
         reactions.par_sort_unstable_by_key(|row| row.person);
+        let mut interventions = combat.interventions;
+        interventions.par_sort_unstable_by_key(|row| row.person);
         Ok(Self {
             round_millis,
             base_force: combat.conflict.damage,
@@ -170,6 +177,7 @@ impl Tactical {
             structures: Structures::new(combat.structures, combat.structure_preferences),
             engagements: Vec::new(),
             reactions,
+            interventions,
             weapons: combat.weapons,
             protection: combat.protection,
             membership: Vec::new(),
@@ -214,7 +222,8 @@ impl Tactical {
         {
             return Err("invalid elapsed tactical state".into());
         }
-        self.structures.validate(&self.maps, people)
+        self.structures.validate(&self.maps, people)?;
+        intervention::validate(&self.interventions, people)
     }
 
     pub fn map(&self, region: u64) -> Option<&Map> {
@@ -510,6 +519,56 @@ impl Tactical {
                 }
             }
         });
+    }
+
+    /// Arbitrate real map positions within each active engagement, then publish
+    /// only successful entries. Reinforcements first act at its next round.
+    pub fn reinforce(
+        &mut self,
+        requests: &[elapsed_reinforcements::Request],
+        now: u128,
+        seed: u64,
+    ) -> Result<Vec<Event>, String> {
+        let mut actors: Vec<_> = requests.par_iter().map(|request| request.person).collect();
+        actors.par_sort_unstable();
+        if actors.par_windows(2).any(|pair| pair[0] == pair[1]) {
+            return Err("a person can attempt one tactical entry at a time".into());
+        }
+        let mut admissions = elapsed_reinforcements::prepare(self, requests, seed, now);
+        admissions.par_sort_unstable_by_key(|row| (row.engagement, row.person));
+        let events = admissions
+            .par_iter()
+            .map(|admission| {
+                let index = self
+                    .engagements
+                    .binary_search_by_key(&admission.engagement, |row| row.id)
+                    .expect("staged engagement");
+                let fight = &self.engagements[index];
+                let mut event = fight.event(now, Some(admission.person), EventKind::EntryBlocked);
+                event.target = Some(admission.opponent);
+                if let Some(participant) = admission.placement {
+                    event.kind = EventKind::Entered;
+                    event.position = Some(participant.position);
+                }
+                event
+            })
+            .collect();
+        if admissions.par_iter().any(|row| row.placement.is_some()) {
+            self.engagements.par_iter_mut().for_each(|fight| {
+                let start = admissions.partition_point(|row| row.engagement < fight.id);
+                let end = admissions.partition_point(|row| row.engagement <= fight.id);
+                if start != end {
+                    fight.people.extend(
+                        admissions[start..end]
+                            .iter()
+                            .filter_map(|row| row.placement),
+                    );
+                    fight.people.par_sort_unstable_by_key(|row| row.person);
+                }
+            });
+            self.membership = self.index_membership();
+        }
+        Ok(events)
     }
 }
 

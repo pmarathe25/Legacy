@@ -218,6 +218,7 @@ fn classify(kind: &str, row: &Value) -> Option<Receipt> {
         ("expeditions", "reached_origin") => "expedition returns",
         ("expeditions", "abandoned") => "abandoned expeditions",
         ("tactical", "started") => "tactical encounters started",
+        ("tactical", "entered") => "tactical interventions",
         ("tactical", "withdrew") => "tactical withdrawals",
         ("confinement", "confined") => "captures",
         ("confinement", "released") => "releases from holds",
