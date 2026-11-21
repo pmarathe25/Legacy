@@ -1,4 +1,4 @@
-//! Import an authored, fresh whole-boundary scenario into the interval host.
+//! Initialize the interval owners from a fresh authored scenario.
 use super::*;
 
 impl CoreHostSnapshot {
@@ -10,6 +10,24 @@ impl CoreHostSnapshot {
         {
             return Err("interval scenario import requires a fresh world".into());
         }
+        state.people.par_sort_unstable_by_key(|person| person.id);
+        state
+            .work_tools
+            .par_sort_unstable_by_key(|row| (row.recipe, row.good));
+        if let Some(wear) = &mut state.tool_wear
+            && let Some(highest) = state
+                .physical
+                .custody
+                .containers
+                .par_iter()
+                .flat_map_iter(|holder| holder.lots.iter().filter_map(|lot| lot.item))
+                .max()
+        {
+            wear.next_item = wear
+                .next_item
+                .max(highest.checked_add(1).ok_or("item identity overflow")?);
+        }
+        validate_authored_links(&state)?;
         let mut unsupported = Vec::new();
         if state
             .dynamics
@@ -65,14 +83,20 @@ impl CoreHostSnapshot {
             conflict.wounds = wounds;
         }
         let mut construction = state.construction.take();
-        let maintenance = construction
+        let mut maintenance = construction
             .as_mut()
             .and_then(|owner| owner.maintenance.take());
+        if let Some(owner) = &mut maintenance {
+            owner.normalize();
+        }
         let sites = match (state.work_sites.take(), maintenance) {
-            (Some(facilities), maintenance) => Some(CoreSites {
-                facilities,
-                maintenance,
-            }),
+            (Some(mut facilities), maintenance) => {
+                facilities.normalize()?;
+                Some(CoreSites {
+                    facilities,
+                    maintenance,
+                })
+            }
             (None, Some(_)) => return Err("site maintenance requires facilities".into()),
             (None, None) => None,
         };
@@ -183,4 +207,75 @@ impl CoreHostSnapshot {
             schedule: None,
         })
     }
+}
+
+fn validate_authored_links(state: &crate::State) -> Result<(), String> {
+    use game_lots::Place;
+
+    let people = &state.people;
+    if state
+        .physical
+        .custody
+        .containers
+        .par_iter()
+        .any(|holder| match holder.place {
+            Place::Person(id) => people
+                .binary_search_by_key(&id, |person| person.id)
+                .is_err(),
+            Place::Inventory(_) => state.local_transport.is_none(),
+            Place::Site(_) => state.construction.is_none(),
+            _ => false,
+        })
+    {
+        return Err("authored custody requires a known owner".into());
+    }
+    if state.fauna.as_ref().is_some_and(|fauna| {
+        fauna.animals.par_iter().any(|animal| {
+            animal.opinions.iter().any(|opinion| {
+                people
+                    .binary_search_by_key(&opinion.person, |person| person.id)
+                    .is_err()
+            })
+        })
+    }) {
+        return Err("animal opinion references an unknown person".into());
+    }
+    if let Some(agreements) = &state.agreements
+        && agreements
+            .offering
+            .par_iter()
+            .any(|row| row.after_work_recipe.is_some())
+    {
+        let recipes: HashSet<_> = state
+            .physical
+            .recipes
+            .par_iter()
+            .map(|recipe| recipe.id)
+            .collect();
+        if agreements.offering.par_iter().any(|row| {
+            row.after_work_recipe
+                .is_some_and(|id| !recipes.contains(&id))
+        }) {
+            return Err("unknown remembered-work recipe".into());
+        }
+    }
+    if let Some(missions) = &state.missions {
+        let stores: HashSet<_> = state
+            .local_transport
+            .as_ref()
+            .filter(|local| local.walking.is_some())
+            .into_iter()
+            .flat_map(|local| local.stores.iter().map(|store| store.id))
+            .collect();
+        if missions.entries.par_iter().any(|mission| {
+            mission
+                .delivery_preference
+                .and_then(|value| value.acquisition)
+                .and_then(|choice| choice.known_store)
+                .is_some_and(|id| !stores.contains(&id))
+        }) {
+            return Err("delivery acquisition references an unknown local store".into());
+        }
+    }
+    Ok(())
 }
