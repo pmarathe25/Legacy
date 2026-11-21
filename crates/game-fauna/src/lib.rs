@@ -1,9 +1,11 @@
 //! Independent animals, local grazing and inherited life histories.
 pub mod content;
 pub mod handling;
+mod mating;
 mod mortality;
 pub mod restraint;
 use game_genetics::{Genome, Sex, inherit, random};
+pub use mating::MateChoice;
 pub use mortality::{AnimalDeath, DeathCause};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -29,6 +31,8 @@ pub struct Species {
     pub conception_one_in: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mate_desire: Option<MateDesire>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mate_choice: Option<MateChoice>,
     pub breeding_max_hunger: u32,
     pub newborn_health: u32,
     #[serde(default)]
@@ -713,13 +717,17 @@ impl Fauna {
                         males.partition_point(|m| (m.region, m.species) < (a.region, a.species));
                     let end =
                         males.partition_point(|m| (m.region, m.species) <= (a.region, a.species));
-                    if first == end {
-                        return Ok(None);
-                    }
-                    let offset =
-                        (random(seed ^ 0x6d617465, a.id, tick) % (end - first) as u64) as usize;
-                    let father = males[first + offset];
                     let s = lookup(a.species).ok_or("unknown animal species")?;
+                    let Some(father) = mating::select(
+                        a,
+                        &males[first..end],
+                        |father| (&father.genome, father.id),
+                        s.mate_choice,
+                        seed,
+                        tick,
+                    ) else {
+                        return Ok(None);
+                    };
                     Ok(Some((
                         index,
                         Pregnancy {
@@ -895,6 +903,7 @@ impl Fauna {
                     || s.gestation == 0
                     || s.conception_one_in == 0
                     || s.mate_desire.is_some_and(|desire| desire.base > 1000)
+                    || s.mate_choice.is_some_and(|choice| !choice.valid())
                     || s.newborn_health == 0
                     || s.newborn_health > s.max_health
                     || s.mutation_per_million > 1_000_000
@@ -1321,12 +1330,16 @@ impl Fauna {
                     }
                     let first = males.partition_point(|m| (m.0, m.1) < (a.region, a.species));
                     let end = males.partition_point(|m| (m.0, m.1) <= (a.region, a.species));
-                    if first == end {
+                    let Some(father) = mating::select(
+                        a,
+                        &males[first..end],
+                        |row| (&row.3, row.2),
+                        s.mate_choice,
+                        seed,
+                        tick,
+                    ) else {
                         return Ok(());
-                    }
-                    let offset =
-                        (random(seed ^ 0x6d617465, a.id, tick) % (end - first) as u64) as usize;
-                    let father = &males[first + offset];
+                    };
                     a.pregnancy = Some(Pregnancy {
                         father: father.2,
                         father_genome: father.3.clone(),
