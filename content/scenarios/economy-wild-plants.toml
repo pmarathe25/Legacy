@@ -12,7 +12,7 @@ meal_threshold = 5
 starvation_threshold = 50
 starvation_damage = 1
 max_health = 100
-carrying_capacity = 1
+carrying_capacity = 20
 max_work_hunger = 20
 
 [[regions]]
@@ -79,3 +79,19 @@ cohorts = [
     { strain = { batch = 150, alleles = [0, 0] }, adults = 50, seeds = 100 },
     { strain = { batch = 151, alleles = [1000, 1000] }, adults = 50, seeds = 100 }
 ]
+
+[cultivation]
+max_hunger = 30
+growth_unit_millis = 3600000
+track_seed_batches = true
+policies = []
+
+[[cultivation.fields]]
+id = 1
+region = 1
+crop = "grain"
+
+[cultivation.seed_genetics]
+growth_weight = 1000
+min_factor = 500
+max_factor = 1500

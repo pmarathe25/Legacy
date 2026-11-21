@@ -67,7 +67,18 @@ fn wild_population_and_seed_banks_follow_elapsed_deadlines_across_save_and_worke
 
 #[test]
 fn a_real_wild_seed_withdrawal_preserves_its_source_batch_and_a_failed_one_does_not_deplete_it() {
-    let mut host = meadow(5000);
+    let mut state = meadow(5000).snapshot();
+    state.core.rules.carrying_capacity = 1;
+    state
+        .core
+        .physical
+        .custody
+        .containers
+        .iter_mut()
+        .find(|row| row.place == Place::Person(1))
+        .unwrap()
+        .capacity = 1;
+    let mut host = CoreHost::resume(state).unwrap();
     let mut player = Player::new(&mut host, 1).unwrap();
     let receipt = player.gather(10).unwrap().unwrap();
     let batch = receipt.batch.expect("wild seed provenance");
@@ -97,4 +108,28 @@ fn a_real_wild_seed_withdrawal_preserves_its_source_batch_and_a_failed_one_does_
             }
         );
     }
+}
+
+#[test]
+fn a_gathered_wild_strain_affects_the_crop_that_uses_its_actual_seeds() {
+    use game_economy::core_interval::CoreCropPhase;
+    use std::collections::BTreeMap;
+
+    let mut host = meadow(5000);
+    let mut player = Player::new(&mut host, 1).unwrap();
+    let mut collected = BTreeMap::new();
+    for _ in 0..20 {
+        let seed = player.gather(10).unwrap().unwrap();
+        *collected.entry(seed.batch.unwrap()).or_insert(0) += seed.quantity;
+    }
+    let batch = collected.into_iter().find(|row| row.1 >= 10).unwrap().0;
+    assert_eq!(
+        player.cultivate(1, Some(batch)).unwrap(),
+        Some(CoreCropPhase::Growing)
+    );
+    let farm = host.snapshot().agriculture.unwrap();
+    let germination = &farm.provenance.unwrap().plantings[0];
+    assert_eq!(germination.planter, Some(1));
+    assert_eq!(germination.seeds[0].batch, Some(batch));
+    assert_eq!(farm.fields[0].remaining, if batch == 150 { 12 } else { 36 });
 }
