@@ -1,5 +1,5 @@
 //! Conditional comparisons over one person's own recorded trials.
-use crate::{Observation, Outcome};
+use crate::{Experiment, Observation, Outcome};
 use serde::{Deserialize, Serialize};
 
 pub const MAX_RECENT_TRIALS: usize = 64;
@@ -31,8 +31,27 @@ pub struct Study {
     pub activity: u32,
     pub trial_limit: usize,
     pub capacity: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assessment: Option<Assessment>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub comparisons: Vec<Comparison>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Assessment {
+    pub likely_moved: i64,
+    pub likely_stalled: i64,
+    pub uncertain: i64,
+    pub contradictory: i64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Forecast {
+    LikelyMoved,
+    LikelyStalled,
+    Uncertain,
+    Contradictory,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -58,6 +77,43 @@ impl Comparison {
 }
 
 impl Study {
+    pub fn forecast(&self, trial: &Experiment) -> Forecast {
+        let conditions = Conditions {
+            apparatus: trial.apparatus,
+            output_part: trial.output_part,
+            input_force: trial.input_force,
+            input_distance: trial.input_distance,
+        };
+        let Ok(index) = self
+            .comparisons
+            .binary_search_by_key(&conditions, |row| row.conditions)
+        else {
+            return Forecast::Uncertain;
+        };
+        let evidence = self.comparisons[index];
+        if evidence.contradicted() {
+            Forecast::Contradictory
+        } else if trial.load_force <= evidence.largest_load_moved {
+            Forecast::LikelyMoved
+        } else if trial.load_force >= evidence.smallest_load_stalled {
+            Forecast::LikelyStalled
+        } else {
+            Forecast::Uncertain
+        }
+    }
+
+    pub fn appeal(&self, trial: &Experiment) -> i64 {
+        let Some(assessment) = self.assessment else {
+            return 0;
+        };
+        match self.forecast(trial) {
+            Forecast::LikelyMoved => assessment.likely_moved,
+            Forecast::LikelyStalled => assessment.likely_stalled,
+            Forecast::Uncertain => assessment.uncertain,
+            Forecast::Contradictory => assessment.contradictory,
+        }
+    }
+
     pub fn validate(&self, now: u128) -> bool {
         self.activity > 0
             && (2..=MAX_RECENT_TRIALS).contains(&self.trial_limit)

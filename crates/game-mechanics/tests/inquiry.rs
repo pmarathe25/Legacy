@@ -33,6 +33,7 @@ fn inquiry_holds_observed_conditions_and_preserves_counterexamples() {
         activity: 3,
         trial_limit: 16,
         capacity: 1,
+        assessment: None,
         comparisons: Vec::new(),
     };
     let estimate = study.reflect(1, &observations, 30)[0];
