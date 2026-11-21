@@ -40,4 +40,11 @@ using their own `expedition_invitation_preferences` or responds to directed
 fear and obligation if the scenario configures an invitation pressure
 threshold. A response creates an independent trip for the recipient. The
 recipient may have their own return preference and can abandon the trip.
-Synchronized departures and expedition-specific sourcing are follow-ups.
+Synchronized departures remain a follow-up.
+
+An individual delivery plan can include a goal to collect the missing cargo
+from reachable regional stock or from a personally known store. The traveler
+chooses whether to pursue the detour. Local arrival and physical transfer are
+separate events, and other commitments or missing stock can interrupt them.
+The same store is tried once per itinerary. Delivery counts only actual
+transfers, and the traveler can still choose to leave with incomplete cargo.

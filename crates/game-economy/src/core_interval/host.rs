@@ -15,6 +15,7 @@ mod construction;
 mod dependent_care;
 mod dreams;
 mod expedition_invitations;
+mod expedition_supply;
 mod expeditions;
 mod family;
 mod fatigue;

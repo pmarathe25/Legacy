@@ -1,6 +1,6 @@
 //! Personal itineraries driven by accepted travel, observations, and elapsed time.
 use crate::elapsed_invitations::Invitations;
-use crate::{DeliveryPreference, Missions, Objective};
+use crate::{DeliveryAcquisition, DeliveryPreference, Missions, Objective};
 use game_economy_person::{Person, travel};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -46,6 +46,8 @@ pub struct Itinerary {
     pub objective_met: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub delivery_preference: Option<DeliveryPreference>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub visited_supply_store: Option<u64>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -61,6 +63,11 @@ pub enum EventKind {
     Abandoned,
     Died,
     ObjectiveMet,
+    SuppliesAcquired {
+        good: u32,
+        quantity: u64,
+        from: game_lots::Place,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -94,6 +101,23 @@ pub struct Delivery {
     pub quantity: u64,
 }
 
+#[derive(Clone, Copy)]
+pub struct SupplyNeed {
+    pub recipient: u64,
+    pub good: u32,
+    pub desired: u64,
+    pub choice: DeliveryAcquisition,
+}
+
+#[derive(Clone, Copy)]
+pub struct SupplyAcquisition {
+    pub itinerary: u64,
+    pub region: u64,
+    pub good: u32,
+    pub quantity: u64,
+    pub from: game_lots::Place,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Expeditions {
@@ -116,6 +140,40 @@ pub struct TravelContext<'a> {
 }
 
 impl Itinerary {
+    pub fn supply_need(&self) -> Option<SupplyNeed> {
+        if !self.go_on
+            || !matches!(
+                self.stage,
+                Stage::Ready | Stage::Outbound | Stage::Visiting { .. } | Stage::ReadyToReturn
+            )
+        {
+            return None;
+        }
+        let preference = self.delivery_preference?;
+        let choice = preference.acquisition?;
+        let Objective::Deliver {
+            person,
+            good,
+            quantity,
+            delivered,
+        } = self.objective?
+        else {
+            return None;
+        };
+        Some(SupplyNeed {
+            recipient: person,
+            good,
+            desired: if self.objective_met {
+                0
+            } else {
+                quantity
+                    .saturating_sub(delivered)
+                    .saturating_add(preference.reserve)
+            },
+            choice,
+        })
+    }
+
     fn event(&self, at_millis: u128, region: u64, kind: EventKind) -> Event {
         Event {
             at_millis,
@@ -167,6 +225,7 @@ impl Expeditions {
                     objective: row.objective,
                     objective_met: false,
                     delivery_preference: row.delivery_preference,
+                    visited_supply_store: None,
                 })
             })
             .collect::<Result<_, _>>()?;
@@ -216,6 +275,7 @@ impl Expeditions {
                             || preference.pressure_threshold == Some(0)
                             || preference.acquisition.is_some_and(|choice| choice.pressure_threshold == Some(0))
                     })
+                    || row.visited_supply_store.is_some_and(|id| id == 0 || row.delivery_preference.and_then(|preference| preference.acquisition).and_then(|choice| choice.known_store) != Some(id))
                     || matches!(row.stage, Stage::Visiting { until_millis } if until_millis < now || until_millis - now > u128::from(row.visit_millis))
                     || match row.objective {
                         None => row.objective_met,
@@ -260,10 +320,41 @@ impl Expeditions {
             objective: plan.objective,
             objective_met: false,
             delivery_preference: None,
+            visited_supply_store: None,
         };
         let event = itinerary.event(now, plan.origin, EventKind::Planned);
         self.itineraries.push(itinerary);
         Ok(event)
+    }
+
+    pub fn record_supply_store_attempts(&mut self, attempts: &mut [(u64, u64)]) {
+        attempts.par_sort_unstable_by_key(|&(itinerary, _)| itinerary);
+        self.itineraries.par_iter_mut().for_each(|row| {
+            if let Ok(index) = attempts.binary_search_by_key(&row.id, |&(itinerary, _)| itinerary) {
+                row.visited_supply_store = Some(attempts[index].1);
+            }
+        });
+    }
+
+    pub fn supply_events(&self, receipts: &[SupplyAcquisition], now: u128) -> Vec<Event> {
+        receipts
+            .par_iter()
+            .filter_map(|row| {
+                let index = self
+                    .itineraries
+                    .binary_search_by_key(&row.itinerary, |itinerary| itinerary.id)
+                    .ok()?;
+                Some(self.itineraries[index].event(
+                    now,
+                    row.region,
+                    EventKind::SuppliesAcquired {
+                        good: row.good,
+                        quantity: row.quantity,
+                        from: row.from,
+                    },
+                ))
+            })
+            .collect()
     }
 
     pub fn abandon(&mut self, person: u64, region: u64, now: u128) -> Result<Event, String> {
