@@ -1,5 +1,12 @@
 # Economic scenario runner
 
+Run `cargo run -p game-economy-cli -- --player` for the elapsed campaign.
+Use `campaign` to inspect the lineage, `look` for the character's local view,
+and `wait MILLISECONDS` to advance by an explicit duration. `--person ID`
+plays a particular authored character. Either mode accepts a scenario path,
+`--seed`, and `--population`. The command examples below that use
+`--whole-boundary-player` refer to the older interface during migration.
+
 Run `cargo run -p game-economy-cli`, optionally passing a scenario TOML path. The default scenario loads goods and recipes from `content/objects` and `content/workshop`. `help` lists commands; `work`, `social`, `yield` and `treat` change an individual's future choices and `go` starts a journey along an authored route. `expedition`, `invite-expedition`, `meet-expedition` and `cancel-expedition` operate personal journeys and goals. `claims`, `claim`, `unclaim`, `take-claimed` and `claim-output` expose individual assertions and preferences. `health` displays current infections and meetings. `promise`, `decide`, and `honor` expose personal promises and choices; `catalog` lists good IDs. Scenarios can supply family, dependent-care, agreement, route, personal dynamics and named aspiration data. Save files contain exact physical lots, deadlines, journeys and disease state, and are validated before loading.
 
 This runner currently exposes the composed economic slice, not the complete campaign simulation.
@@ -8,7 +15,7 @@ This runner currently exposes the composed economic slice, not the complete camp
 
 An individual can choose to share their firsthand encounter memories with `people-reporting on|off PRESSURE|none`, or disable such reports with `people-reporting off`. `people-reports` shows the current person's bounded secondhand reports, including speaker and observation time, separately from direct memories. A listener applies their own existing report-reception judgment. Scenarios can set `people_reporting = { willing = true }` or configure a personal `pressure_threshold`; omitted settings leave encounter reporting disabled.
 
-Run `cargo run -p game-economy-cli -- content/scenarios/economy-project.toml --player` for a small personal project. Another person independently plans to build a workshop, fetch timber from a local store, and make a tool; each step consumes or moves the actual materials.
+Run `cargo run -p game-economy-cli -- content/scenarios/economy-project.toml --whole-boundary-player` for a small personal project. Another person independently plans to build a workshop, fetch timber from a local store, and make a tool; each step consumes or moves the actual materials.
 
 `content/scenarios/economy-conflict-project.toml` adds a third person and tactical combat to the same project. A person in a fight cannot simultaneously work, while the other person's project and the rest of the world continue.
 
@@ -130,7 +137,7 @@ In player mode, `delivery-choice ID on|off RESERVE PRESSURE|none` sets the perso
 
 `[[taking.policies]]` gives an individual a target, named good, quantity, willingness, interval, optional social pressure, and a choice to escalate resistance. `[[taking.responses]]` gives the target independent `notices` and `resist` preferences, with optional fear or affinity conditions. `[[taking.reactions]]` supplies optional signed `as_actor` or `as_target` interpretations for `transferred`, `unavailable`, `resisted`, or `conflict`; `other` makes a person-specific override. The player can use `take-from PERSON GOOD QUANTITY escalate|withdraw` and set a standing preference with `taking-response notice|unaware resist|no-default`. `no-default` leaves any separately configured conditional resistance intact. In administrative mode, these commands take the acting person's ID, and `taking-choice PERSON on|off` changes an autonomous person's willingness. A failed transfer does not move goods; a resisted attempt creates combat only when escalation is chosen and a local tactical encounter can start.
 
-Run `cargo run -p game-economy-cli -- content/scenarios/economy-wildlife.toml --player` to see local animals grazing a shared finite patch. Species use named food goods in the scenario; the player view shows only locally observable animals. Use `feed-animal ANIMAL GOOD QUANTITY` to give an animal real carried food or `hunt-animal ANIMAL` to hunt for raw meat. Another person may hunt when hungry and short of their own reserve.
+Run `cargo run -p game-economy-cli -- content/scenarios/economy-wildlife.toml --whole-boundary-player` to see local animals grazing a shared finite patch. Species use named food goods in the scenario; the player view shows only locally observable animals. Use `feed-animal ANIMAL GOOD QUANTITY` to give an animal real carried food or `hunt-animal ANIMAL` to hunt for raw meat. Another person may hunt when hungry and short of their own reserve.
 
 `content/scenarios/economy-fleece.toml` adds renewable fleece to those animals. Local `view` shows the product good and growth; after it reaches its limit, `collect-animal-product 1 willing` attempts collection. `force-held` lets the current handler proceed despite refusal, using a pre-existing physical hold. A successful collection produces real wool and resets that animal's growth; a refusal or full inventory leaves the fleece intact. A person with an authored automatic preference can change their own willingness with `animal-product-choice on|off`; their separately configured pressure may still motivate them.
 
@@ -168,7 +175,7 @@ Optional `[[animal_feelings.minds]]` records define a person's private animal af
 
 When a person's optional work-practice mind is configured, `work-practice-choice PERSON FIELD on|off` changes their `invent`, `approve`, `ask`, or `willing` preference, and `work-practice-reserve PERSON AMOUNT` sets their retained stock preference. `work-practice-decide PERSON AUTHOR SEQUENCE accept|decline` changes that person's assessment of terms they received. A controlled person can propose terms during an actual meeting with `work-practice-propose AUTHOR WORKER RECIPE GOOD QUANTITY LIFETIME`; communicating them does not require possession of the offered good. The player interface uses the same commands without the controlled person's ID; it exposes only that person's choices. A controlled person chooses actual work and gifts explicitly.
 
-Run `cargo run -p game-economy-cli -- content/scenarios/economy-work-practices.toml --player` to try these choices in an authored campaign. `catalog` and `view` show the recipe, food and nearby person IDs.
+Run `cargo run -p game-economy-cli -- content/scenarios/economy-work-practices.toml --whole-boundary-player` to try these choices in an authored campaign. `catalog` and `view` show the recipe, food and nearby person IDs.
 
 `work-practice-evaluation PERSON BASE AFFINITY TRUST THRESHOLD` sets an individual's signed relationship weights for work-proposal approval; `off` returns to their fixed approval setting. The player form omits `PERSON`. Setting the `approve` choice explicitly also clears the evaluation.
 
@@ -204,7 +211,7 @@ The optional `learning_percent` and `learning_max` settings give selected indivi
 
 Construction blueprints may specify `salvage` up to the kit `quantity`. Destroyed sites with surviving material appear as local debris; `salvage-site SITE GOOD QUANTITY` attempts to recover it into the ruler's inventory. Optional `[[construction.salvaging]]` policies configure individuals' own recovery choices.
 
-Try this in `cargo run -p game-economy-cli -- --player content/scenarios/economy-salvage.toml`: use `build-site 1`, `destroy-site 1`, then `view` to inspect the local debris and its good ID. Another person may independently try to recover the same material.
+Try this in `cargo run -p game-economy-cli -- --whole-boundary-player content/scenarios/economy-salvage.toml`: use `build-site 1`, `destroy-site 1`, then `view` to inspect the local debris and its good ID. Another person may independently try to recover the same material.
 
 The same scenario includes two named local stores. `view` shows their contents; `take-store STORE GOOD QUANTITY` and `put-store STORE GOOD QUANTITY` move goods through the ruler's own inventory on separate ticks. Scenario `[[local_transport.stores]]` entries define the stores, while optional `[[local_transport.policies]]` entries define individual carriers and their source and destination. In the administrative runner, `carry-local PERSON on|off` changes a person's carrying willingness. Optional `[[local_transport.walking.preferences]]` entries express a person's independent inclination to visit an endpoint; `visit-local PERSON on|off` changes that inclination in the administrative runner.
 
@@ -236,7 +243,7 @@ Scenarios can also use `[[aspiration_learning]]` to specify an individual's incl
 
 When family rules are enabled, each generated population profile also supplies `[population.family]`: inclusive `min_age` and `max_age`, inclusive `min_allele` and `max_allele` in 0–1000, `reproduction_percent`, and optional `reconsider_partnership_percent`. Seeded founders have individual genomes and choices but no preassigned partner. Explicit family members override generated founder records; the next birth identity is advanced beyond the generated people. Later partnerships, conceptions, and births use the ordinary family simulation.
 
-Profiles can also live in a separate TOML file. For example, `cargo run -p game-economy-cli -- --player content/scenarios/economy-campaign.toml --population content/scenarios/campaign-population.toml --seed 42` adds generated people to the authored ruler campaign. The ordinary ruler view still exposes only locally observed people.
+Profiles can also live in a separate TOML file. For example, `cargo run -p game-economy-cli -- --whole-boundary-player content/scenarios/economy-campaign.toml --population content/scenarios/campaign-population.toml --seed 42` adds generated people to the authored ruler campaign. The ordinary ruler view still exposes only locally observed people.
 
 To measure three complete campaign boundaries with generated individuals, set `LEGACY_PEOPLE` and `LEGACY_WORKERS`, then run `cargo test --release -p game-economy-cli generated_campaign_benchmark -- --ignored --nocapture`. The timed interval excludes scenario loading and reports the median of three warmed samples. It is a concentrated two-region scenario, not a claim about every possible campaign.
 
@@ -244,7 +251,7 @@ For separate phase attribution, enable the `profile` feature and set `LEGACY_PRO
 
 `generated_acquaintance_requests_benchmark` uses the same environment variables and measures one boundary after a large generated population has met others and become hungry. It checks that a substantial number of actual requests were made. With `--features profile` and `LEGACY_PROFILE=1`, its phase means exclude the initial campaign boundary but include the warm-up sample; nested phase times overlap.
 
-`cargo run -p game-economy-cli -- --player content/scenarios/economy-written-food.toml` starts a scenario with paper, ink, and a known script. `write-food SCRIPT REGION current|LIFE remembered|FOOD` attempts to create a physical page from a current or actively invoked memory; supplying a quantity can deliberately alter the statement. `pages` lists held page IDs without revealing their contents, `give-page PERSON ITEM` attempts a physical handover, and `read-page ITEM` reads a held page in a known script. The scenario's second person may read a received page independently. Reading does not imply accepting its statement. Separately configured study can teach reading through encounters; `practice-writing SCRIPT` attempts a configured writing-practice session using carried materials.
+`cargo run -p game-economy-cli -- --whole-boundary-player content/scenarios/economy-written-food.toml` starts a scenario with paper, ink, and a known script. `write-food SCRIPT REGION current|LIFE remembered|FOOD` attempts to create a physical page from a current or actively invoked memory; supplying a quantity can deliberately alter the statement. `pages` lists held page IDs without revealing their contents, `give-page PERSON ITEM` attempts a physical handover, and `read-page ITEM` reads a held page in a known script. The scenario's second person may read a received page independently. Reading does not imply accepting its statement. Separately configured study can teach reading through encounters; `practice-writing SCRIPT` attempts a configured writing-practice session using carried materials.
 
 `content/scenarios/economy-writing-practice.toml` configures two people who can read but are learning to write. The `writing` command displays the controlled person's literacy and practice progress; `practice-writing 1` uses one session's paper and ink.
 
@@ -252,7 +259,7 @@ For a ruler and guardians in the same dated-goods world, run `cargo run -p game-
 
 `[[campaign.embodied_guardians.guardians]]` identifies actual immortal people and their individual `mentorship_required` judgments. They use ordinary travel, possessions, combat, and social encounters. The campaign includes guardians who may disagree about when to accept a release request; their assessments reset for each new incarnation.
 
-`cargo run -p game-economy-cli -- --player content/scenarios/economy-confinement.toml` includes an existing physical cell and an individual who may attempt to capture the ruler. `build-site 1` can create another cell using an actual shelter kit. `confine PERSON SITE` attempts to place a local person behind its intact barrier; a conscious target can yield, resist, or be overpowered. `capture-yield on|off` changes the ruler's own willingness to yield; personally felt pressure may still influence the decision if configured. `release-held PERSON` attempts to open the cell, `guard SITE` spends a boundary opposing escape and opening, and `escape` spends a boundary on the ruler's own attempt. `meet PERSON` can also reach someone through a supply opening; the other person's willingness or personal pressure still determines their response. Captives' independent escape preferences can damage a shared barrier, freeing everyone when it breaks. A captured guardian recovers while held. The administrative commands `capture-choice PERSON on|off` and `guard-choice PERSON on|off` change an individual's inclinations without removing their personal pressure; `guard-opening PERSON on|off` changes whether an individual guard also resists opening.
+`cargo run -p game-economy-cli -- --whole-boundary-player content/scenarios/economy-confinement.toml` includes an existing physical cell and an individual who may attempt to capture the ruler. `build-site 1` can create another cell using an actual shelter kit. `confine PERSON SITE` attempts to place a local person behind its intact barrier; a conscious target can yield, resist, or be overpowered. `capture-yield on|off` changes the ruler's own willingness to yield; personally felt pressure may still influence the decision if configured. `release-held PERSON` attempts to open the cell, `guard SITE` spends a boundary opposing escape and opening, and `escape` spends a boundary on the ruler's own attempt. `meet PERSON` can also reach someone through a supply opening; the other person's willingness or personal pressure still determines their response. Captives' independent escape preferences can damage a shared barrier, freeing everyone when it breaks. A captured guardian recovers while held. The administrative commands `capture-choice PERSON on|off` and `guard-choice PERSON on|off` change an individual's inclinations without removing their personal pressure; `guard-opening PERSON on|off` changes whether an individual guard also resists opening.
 
 An opinion sensitivity may define `confinement_reaction` with separate `captured`, `resisted`, and `released` signed reactions. Trust, affinity, fear, and felt obligation can increase, decrease, or stay unchanged according to the observer; a relationship case can override the reaction for a particular actor. `confinement-feeling` displays the ruler's own reactions, and `confinement-feeling captured|resisted|released TRUST AFFINITY FEAR OBLIGATION` changes one; use `off` after the event name to clear it. An unconscious person does not automatically learn who captured them.
 
@@ -264,7 +271,7 @@ In player mode, `teach PERSON RECIPE` offers a lesson and `learn PERSON RECIPE` 
 
 `teaching-feeling` displays the current person's lesson reactions. `teaching-feeling given|received TRUST AFFINITY FEAR OBLIGATION` sets a signed reaction, and `teaching-feeling given|received off` clears it. Zero explicitly leaves a feeling unchanged.
 
-Run `cargo run -p game-economy-cli -- --player` for a ruler-bound view of the authored campaign. `view` shows the current person's local surroundings, resources, possessions, job, health, fatigue, isolation, purpose, seasonal conditions, personal food reports and current fight. `catalog` lists data-defined goods and production recipes. `eat`, `treat`, `treat-other`, `farm`, `gather`, `give`, `take`, `store`, and `recover` use physical local resources, carried goods, and stocks; travelers can eat carried food while their journey advances. `rest` advances time and recovers fatigue. A player can request food or work, make or fulfill personal promises, or initiate and direct a tactical fight; other individuals choose their own responses. `step` advances a shared round along with the rest of the world. `guardians` is the explicit search-spectating view. Player mode is still an incomplete game interface.
+Run `cargo run -p game-economy-cli -- --whole-boundary-player` for a ruler-bound view of the authored campaign. `view` shows the current person's local surroundings, resources, possessions, job, health, fatigue, isolation, purpose, seasonal conditions, personal food reports and current fight. `catalog` lists data-defined goods and production recipes. `eat`, `treat`, `treat-other`, `farm`, `gather`, `give`, `take`, `store`, and `recover` use physical local resources, carried goods, and stocks; travelers can eat carried food while their journey advances. `rest` advances time and recovers fatigue. A player can request food or work, make or fulfill personal promises, or initiate and direct a tactical fight; other individuals choose their own responses. `step` advances a shared round along with the rest of the world. `guardians` is the explicit search-spectating view. Player mode is still an incomplete game interface.
 
 `step N` advances up to N whole boundaries. If a warning or error stops it early, the message reports how many boundaries completed; those committed boundaries remain in the world. Partial-boundary advancement is not yet supported.
 
@@ -282,11 +289,11 @@ Try `cargo run -p game-economy-cli -- content/scenarios/economy-irrigation.toml`
 
 Run `cargo run -p game-economy-cli -- content/scenarios/economy-active-tool-repair.toml` and use `step 1` and `tool-condition` repeatedly to follow a worker who repairs a broken tool while retaining the current job.
 
-Run `cargo run -p game-economy-cli -- --player content/scenarios/economy-player-tool-repair.toml`; `view` lists the condition and identity of carried tools, and `repair-tool 1001` attempts repair using the ruler's carried material. Repair consumes a boundary and may fail if the material is unavailable.
+Run `cargo run -p game-economy-cli -- --whole-boundary-player content/scenarios/economy-player-tool-repair.toml`; `view` lists the condition and identity of carried tools, and `repair-tool 1001` attempts repair using the ruler's carried material. Repair consumes a boundary and may fail if the material is unavailable.
 
 Run `cargo run -p game-economy-cli -- content/scenarios/economy-tool-production.toml`, then `step 6` and `tool-condition` to see a newly produced tool receive its own identity and undamaged condition. It is delivered as a physical item on the usual following boundary.
 
-Run `cargo run -p game-economy-cli -- --player content/scenarios/economy-player-irrigation.toml`; `view` shows local field moisture. Use `farm 1` to plant, then `water-field 1 1 respect` to attempt watering from the finite regional supply; `disregard` allows an attempt despite a claim.
+Run `cargo run -p game-economy-cli -- --whole-boundary-player content/scenarios/economy-player-irrigation.toml`; `view` shows local field moisture. Use `farm 1` to plant, then `water-field 1 1 respect` to attempt watering from the finite regional supply; `disregard` allows an attempt despite a claim.
 
 Set `LEGACY_LOCAL_VISITS=1` on the mixed campaign benchmark to add an authored visit preference for one quarter of initially autonomous regional residents and a local store in each region. The reported position count confirms that walking occurred; this option changes the scenario and fingerprint.
 
@@ -331,8 +338,8 @@ account reports population peaks and the first snapshots with no living members.
 
 The inspector reports observed population changes, sample genome means by species, intermediate animal population events, selected family events, and recorded meetings. Meeting counts do not establish leadership, and changes in genome averages do not establish selection or causation. It preserves the run metadata and indicates whether a completion record was present.
 
-An initial controlled-person interface for the interval host is available with
-`cargo run -p game-economy-cli -- --interval-player 1`. It uses
+A controlled-person interface is available with
+`cargo run -p game-economy-cli -- --person 1`. It uses
 `economy-core-player.toml` by default, or accepts another interval-compatible
 scenario containing that controlled person. Enter `help` for its limited
 observation, time, travel, eating, work, leaving shared work, voluntary rest,
@@ -342,10 +349,8 @@ controlled person's own words, remembered observations, and carried marked
 pages; `word person 2 2,1` associates phonemes with a nearby person,
 `form 0,1 7,8` chooses marks for a known sound sequence, `inscribe 0,1`
 uses carried materials, `read 1` interprets a carried page, and `recall 1`
-adopts a remembered observation. Saving
-requires a new path and does not overwrite an existing file. This path does not
-yet provide campaign succession or the full command set; the ordinary `--player`
-command still uses the separate whole-boundary host.
+adopts a remembered observation. Saving requires a new path. The campaign also
+supports actual succession and invocation warnings through `--player`.
 
 The history runner archives opinion-change events in annual observations and removes those events from active state after each tick; directed opinions continue to influence decisions. The person inspector reports archived opinion changes separately from family events. Events already present in a resumed checkpoint remain in the initial snapshot. Hourly runs also write a checkpoint each year.
 

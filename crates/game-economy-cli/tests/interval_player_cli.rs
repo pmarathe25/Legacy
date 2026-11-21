@@ -37,7 +37,7 @@ fn interval_player_can_observe_travel_and_reload() {
         .id;
     let mut child = Command::new(env!("CARGO_BIN_EXE_game-economy-cli"))
         .current_dir(&root)
-        .args(["--interval-player", "1"])
+        .args(["--person", "1"])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -72,6 +72,42 @@ fn interval_player_can_observe_travel_and_reload() {
         "{stdout}"
     );
     std::fs::remove_file(save).unwrap();
+}
+
+#[test]
+fn normal_player_entry_advances_the_elapsed_campaign() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let mut child = Command::new(env!("CARGO_BIN_EXE_game-economy-cli"))
+        .current_dir(&root)
+        .args([
+            "--player",
+            "content/scenarios/economy-succession.toml",
+            "--seed",
+            "7",
+        ])
+        .env("RAYON_NUM_THREADS", "2")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(b"campaign\nwait 10800000\ncampaign\nquit\n")
+        .unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.is_empty(), "{stderr}");
+    assert!(stdout.contains("elapsed_millis=10800000"), "{stdout}");
+    assert!(stdout.contains("past_life=1"), "{stdout}");
+    assert!(
+        stdout.contains("incarnation=Some(101) controlled=Some(101)"),
+        "{stdout}"
+    );
 }
 
 #[test]
