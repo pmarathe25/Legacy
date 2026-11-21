@@ -100,6 +100,11 @@ impl CoreHost {
         busy.par_extend(observers.par_iter().map(|&(person, _)| person));
         busy.par_sort_unstable();
         busy.dedup();
+        let (gatherers, acquisitions) = self.acquire_expedition_supplies(&busy)?;
+        events.extend(acquisitions);
+        busy.par_extend(gatherers.par_iter().copied());
+        busy.par_sort_unstable();
+        busy.dedup();
         let (couriers, delivered) = self.deliver_expedition_goods(&busy)?;
         events.extend(delivered);
         busy.par_extend(couriers.par_iter().copied());
@@ -107,6 +112,7 @@ impl CoreHost {
         busy.dedup();
         let (mut actors, departures) = self.expedition_departures(&busy, None)?;
         actors.par_extend(observers.par_iter().map(|&(person, _)| person));
+        actors.par_extend(gatherers);
         actors.par_extend(couriers);
         actors.par_sort_unstable();
         events.extend(departures);

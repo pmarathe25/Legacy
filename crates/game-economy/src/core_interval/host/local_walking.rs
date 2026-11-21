@@ -210,6 +210,17 @@ impl CoreHost {
             self.opinions.as_ref(),
             (u32::MAX, self.core.physical.goods(), claims.as_ref()),
         );
+        let mut attempts = Vec::new();
+        if self.has_expedition_supply_walks() {
+            let mut occupied = busy.clone();
+            occupied.par_extend(choices.par_iter().map(|option| option.person));
+            occupied.par_sort_unstable();
+            occupied.dedup();
+            let supply = self.expedition_supply_walks(&occupied);
+            attempts.par_extend(supply.par_iter().filter_map(|row| row.first_attempt));
+            choices.par_extend(supply.into_par_iter().map(|row| row.request));
+            choices.par_sort_unstable_by_key(|request| request.person);
+        }
         let goals = if owner.goal_fetchers.is_empty() {
             None
         } else {
@@ -259,6 +270,12 @@ impl CoreHost {
         clock.paused.par_sort_unstable();
         clock.paused.dedup();
         let events = next.events.par_iter().cloned().collect();
+        if !attempts.is_empty() {
+            self.expeditions
+                .as_mut()
+                .expect("supply itineraries")
+                .record_supply_store_attempts(&mut attempts);
+        }
         let owner = self.local_transport.as_mut().expect("local transport");
         owner.walking = Some(next);
         if let Some(plan) = goals {
