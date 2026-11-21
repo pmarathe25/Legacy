@@ -1,6 +1,6 @@
 use game_fauna::{
-    Animal, AnimalDeath, AnimalOpinion, Climate, DeathCause, Exposure, Fauna, Feeding, MateDesire,
-    Patch, Pregnancy, SocialResponse, Species,
+    Animal, AnimalDeath, AnimalOpinion, Climate, DeathCause, Exposure, Fauna, Feeding, MateChoice,
+    MateDesire, Patch, Pregnancy, SocialResponse, Species,
 };
 use game_genetics::{Genome, Sex};
 use std::collections::HashSet;
@@ -29,6 +29,7 @@ fn species() -> Species {
         gestation: 1,
         conception_one_in: 1,
         mate_desire: None,
+        mate_choice: None,
         breeding_max_hunger: 5,
         newborn_health: 8,
         mutation_per_million: 0,
@@ -65,6 +66,58 @@ fn initial() -> Fauna {
         last_tick: 0,
         recent_deaths: vec![],
     }
+}
+
+#[test]
+fn wildlife_mates_evaluate_the_same_encounter_through_their_own_inherited_preferences() {
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut fauna = initial();
+                fauna.animals.push(animal(3, Sex::Male, 100));
+                fauna.animals.push(animal(4, Sex::Female, 500));
+                fauna.next_id = 5;
+                fauna.animals[0].genome.alleles[1] = [900; 2];
+                fauna.animals[1].genome.alleles[1] = [100; 2];
+                fauna.animals[3].genome.alleles[1] = [900; 2];
+                fauna.species[0].mate_choice = Some(MateChoice {
+                    trait_locus: 0,
+                    preference_locus: 1,
+                    minimum_fit: 900,
+                    sample_size: 2,
+                });
+                assert!(
+                    fauna
+                        .validate(&HashSet::from([1]), &HashSet::from([1]), 0)
+                        .is_ok()
+                );
+                let material = fauna
+                    .advance_with_hunts(&[], &[], &[], &[], 7, 1)
+                    .unwrap()
+                    .fauna;
+                let draft = fauna.prepare_quiet(&[], 7, 1).unwrap().unwrap();
+                fauna.publish_quiet_validated(draft);
+                assert_eq!(fauna, material);
+                assert_eq!(fauna.animals[0].pregnancy.as_ref().unwrap().father, 2);
+                assert!(fauna.animals[3].pregnancy.is_none());
+                let mut restored: Fauna =
+                    serde_json::from_value(serde_json::to_value(&fauna).unwrap()).unwrap();
+                let draft = restored.prepare_quiet(&[], 7, 2).unwrap().unwrap();
+                restored.publish_quiet_validated(draft);
+                let newborn = restored
+                    .animals
+                    .iter()
+                    .find(|animal| animal.id == 5)
+                    .unwrap();
+                assert_eq!(newborn.parents, Some([1, 2]));
+                assert_eq!(newborn.genome.alleles[0], [100, 900]);
+                restored
+            })
+    };
+    assert_eq!(run(1), run(4));
 }
 
 #[test]

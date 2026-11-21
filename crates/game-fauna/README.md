@@ -26,6 +26,14 @@ expressed inherited mate desire and current hunger. Signed weights allow either
 factor to increase or reduce inclination. Conception then uses the separate
 species fertility chance. The same selection works in both lifecycle paths.
 
+The optional `mate_choice` table lets both animals evaluate a potential mate
+using their own inherited preferences. `preference_locus` supplies the actor's
+preferred expression, and `trait_locus` supplies the expression they notice in
+the other animal. The genetic loci range from 0 to 3. The two scores can differ.
+Each animal can decline below `minimum_fit`, and only `sample_size` local
+candidates are considered per choice. Offspring inherit the underlying traits
+through the existing reproduction model.
+
 New deaths record the actual fatal effect at the last wildlife boundary. The
 history runners stream those receipts before the next wildlife phase replaces
 them. A hunt, natural lifespan, starvation, or exposure can be the fatal effect

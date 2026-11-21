@@ -1,6 +1,7 @@
 //! Data-file conversion for species with named food goods.
 use crate::{
-    Animal, Climate, Fauna, HuntYield, MateDesire, SocialResponse, Species, handling, restraint,
+    Animal, Climate, Fauna, HuntYield, MateChoice, MateDesire, SocialResponse, Species, handling,
+    restraint,
 };
 use serde::Deserialize;
 
@@ -32,6 +33,8 @@ struct SpeciesConfig {
     conception_one_in: u64,
     #[serde(default)]
     mate_desire: Option<MateDesire>,
+    #[serde(default)]
+    mate_choice: Option<MateChoice>,
     breeding_max_hunger: u32,
     newborn_health: u32,
     #[serde(default)]
@@ -80,6 +83,7 @@ impl Config {
                     gestation: s.gestation,
                     conception_one_in: s.conception_one_in,
                     mate_desire: s.mate_desire,
+                    mate_choice: s.mate_choice,
                     breeding_max_hunger: s.breeding_max_hunger,
                     newborn_health: s.newborn_health,
                     mutation_per_million: s.mutation_per_million,
