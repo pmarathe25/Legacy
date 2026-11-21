@@ -88,6 +88,10 @@ cultivation choice profile can plant or harvest at their personal decision
 instant. The field changes only when the dated seed withdrawal or harvest
 output is accepted. Boundary cultivation still handles ordinary policies,
 requests and actors adding water.
+Soil can author `cultivation.soil.recovery_clock.period_millis` as a duration
+for each `recovery_per_fallow` quantity. Only time spent fallow restores
+fertility. Fractional recovery survives save/reload and planting; harvest
+still depletes fertility when it succeeds.
 
 `fauna.lifecycle_period_millis` gives wildlife a fixed ecological cadence.
 At each deadline the wildlife owner stages age, hunger, finite grazing, climate

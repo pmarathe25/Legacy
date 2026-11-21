@@ -266,6 +266,20 @@ impl CoreHost {
         Ok((Some(growth), allocation))
     }
 
+    pub(super) fn publish_soil_recovery(
+        &mut self,
+        recovery: Option<game_economy_agriculture::soil::Recovery>,
+    ) {
+        if let Some(recovery) = recovery {
+            let soil = self
+                .agriculture
+                .as_mut()
+                .and_then(|farm| farm.soil.as_mut())
+                .expect("prepared soil recovery");
+            recovery.publish(soil);
+        }
+    }
+
     pub(super) fn publish_crop_growth(&mut self, growth: Option<Growth>) {
         if let Some(growth) = growth {
             growth.publish_validated(self.agriculture.as_mut().expect("staged crop growth"));

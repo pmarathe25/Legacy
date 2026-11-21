@@ -573,6 +573,9 @@ impl CoreHost {
         };
         let local_progress = self.stage_local_progress(consumed);
         let (growth, batches) = self.stage_crop_growth(crop_rates, consumed)?;
+        let soil = self.agriculture.as_ref().and_then(|farm| {
+            farm.soil.as_ref()?.prepare_recovery(&farm.fields, consumed)
+        });
         let interrupted_preparation = consumed != requested
             || has_injuries
             || recovery_due
@@ -602,6 +605,7 @@ impl CoreHost {
                 self.publish_elapsed_fauna(fauna, fauna_transitions.as_ref());
                 self.relax_due_fear(limits.fear_relaxation == Some(advanced));
                 self.publish_crop_growth(growth);
+                self.publish_soil_recovery(soil);
                 if let Some(moisture) = moisture {
                     self.irrigation
                         .as_mut()
@@ -806,6 +810,7 @@ impl CoreHost {
         self.relax_due_fear(limits.fear_relaxation == Some(advanced));
         let local_arrivals = self.publish_local_progress(local_progress);
         self.publish_crop_growth(growth);
+        self.publish_soil_recovery(soil);
         if let Some(moisture) = moisture {
             self.irrigation
                 .as_mut()
