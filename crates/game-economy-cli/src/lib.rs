@@ -1033,30 +1033,27 @@ pub fn core_scenario_with_options(
     seed: Option<u64>,
     population_path: Option<&Path>,
 ) -> Result<game_economy::core_interval::CoreHost, String> {
-    let text = std::fs::read_to_string(path).map_err(|error| error.to_string())?;
-    let authored: Scenario = toml::from_str(&text).map_err(|error| error.to_string())?;
-    let language = authored.language;
-    let language_topic_profiles = authored.language_topic_profiles;
-    let signals = authored.signals;
+    let mut authored = read_scenario(path)?;
+    let language = authored.language.take();
+    let language_topic_profiles = std::mem::take(&mut authored.language_topic_profiles);
+    let signals = authored.signals.take();
     let decision_period_millis = authored.decision_period_millis;
     let combat_round_millis = authored.combat_round_millis;
     let invocation_period_millis = authored.invocation_period_millis;
-    let mut expedition_invitation_preferences = authored.expedition_invitation_preferences;
+    let mut expedition_invitation_preferences =
+        std::mem::take(&mut authored.expedition_invitation_preferences);
     let on_site_meals = authored.on_site_meals;
     let fatigue_rate_period_millis = authored.fatigue_rate_period_millis;
     let elapsed_fatigue = authored.elapsed_fatigue;
-    let hunger_rate = authored.rules.hunger_rate;
-    let work_capabilities = authored.work_capabilities;
+    let work_capabilities = authored.work_capabilities.take();
     let regions: HashSet<_> = authored.regions.iter().map(|region| region.id).collect();
-    let mechanics = authored.mechanics;
-    let mut personal_conflict = authored.personal_conflict;
-    let mut personal_choices = authored.personal_choices;
-    let birth_choices = authored.birth_choices;
-    let meal_preferences = authored.meal_preferences;
-    let scenario = scenario_with_options_inner(path, content, seed, population_path, true)?;
-    let mut snapshot =
-        game_economy::core_interval::CoreHostSnapshot::from_scenario(scenario.snapshot())?;
-    snapshot.core.rules.hunger_rate = hunger_rate;
+    let mechanics = authored.mechanics.take();
+    let mut personal_conflict = authored.personal_conflict.take();
+    let mut personal_choices = std::mem::take(&mut authored.personal_choices);
+    let birth_choices = authored.birth_choices.take();
+    let meal_preferences = std::mem::take(&mut authored.meal_preferences);
+    let scenario = build_scenario(authored, content, seed, population_path, true)?;
+    let mut snapshot = game_economy::core_interval::CoreHostSnapshot::from_scenario(scenario)?;
     if let Some(period) = fatigue_rate_period_millis {
         snapshot
             .fatigue
@@ -1521,18 +1518,28 @@ pub fn scenario_with_options(
     seed: Option<u64>,
     population_path: Option<&Path>,
 ) -> Result<Economy, String> {
-    scenario_with_options_inner(path, content, seed, population_path, false)
+    let authored = read_scenario(path)?;
+    Economy::compile(build_scenario(
+        authored,
+        content,
+        seed,
+        population_path,
+        false,
+    )?)
 }
 
-fn scenario_with_options_inner(
-    path: &Path,
+fn read_scenario(path: &Path) -> Result<Scenario, String> {
+    let source = std::fs::read_to_string(path).map_err(|error| error.to_string())?;
+    toml::from_str(&source).map_err(|error: toml::de::Error| error.to_string())
+}
+
+fn build_scenario(
+    mut scenario: Scenario,
     content: &Path,
     seed: Option<u64>,
     population_path: Option<&Path>,
     interval_features: bool,
-) -> Result<Economy, String> {
-    let source = std::fs::read_to_string(path).map_err(|error| error.to_string())?;
-    let mut scenario: Scenario = toml::from_str(&source).map_err(|error| error.to_string())?;
+) -> Result<State, String> {
     if (scenario.decision_period_millis.is_some()
         || scenario.fatigue_rate_period_millis.is_some()
         || scenario.elapsed_fatigue)
@@ -1564,13 +1571,8 @@ fn scenario_with_options_inner(
     {
         return Err("elapsed dependent care requires the interval simulation host".into());
     }
-    if scenario.rules.hunger_rate.is_some() {
-        if !interval_features {
-            return Err("elapsed hunger rates require the interval simulation host".into());
-        }
-        // The legacy loader constructs an Economy as a content bridge; the
-        // explicit elapsed-time rule is attached only to the interval host.
-        scenario.rules.hunger_rate = None;
+    if scenario.rules.hunger_rate.is_some() && !interval_features {
+        return Err("elapsed hunger rates require the interval simulation host".into());
     }
     if !interval_features
         && scenario
@@ -2916,7 +2918,7 @@ fn scenario_with_options_inner(
             id.checked_add(1).ok_or("batch identity overflow")
         })?);
     }
-    Economy::compile(State {
+    Ok(State {
         seed: scenario.seed,
         physical: Snapshot {
             custody,
