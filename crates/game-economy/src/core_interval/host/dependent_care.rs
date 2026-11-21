@@ -137,6 +137,7 @@ impl CoreHost {
             .as_mut()
             .expect("checked elapsed clock")
             .last_millis = Some(at);
+        self.develop_after_care();
         self.work_checked_revision = None;
         Ok(CoreCareVisit {
             at_millis: at,
@@ -144,6 +145,32 @@ impl CoreHost {
             transfers,
             incapacitated,
         })
+    }
+
+    /// Each child interprets an actual visit or an unattended care period at their current age.
+    pub(super) fn develop_after_care(&mut self) {
+        let (Some(care), Some(family), Some(opinions)) =
+            (&self.dependent_care, &self.family, &mut self.opinions)
+        else {
+            return;
+        };
+        if care.events.is_empty() || !opinions.tracks_obligation_development() {
+            return;
+        }
+        let now = self.core.simulated_millis();
+        let experiences: Vec<_> = care
+            .events
+            .par_iter()
+            .filter_map(|event| {
+                let index = family
+                    .members
+                    .binary_search_by_key(&event.child, |row| row.id)
+                    .ok()?;
+                let age = family.age_at(&family.members[index], now);
+                Some((event.child, age, event.caregiver.is_some()))
+            })
+            .collect();
+        opinions.develop_obligation(&experiences);
     }
 
     pub(super) fn stage_care_health(

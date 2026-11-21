@@ -40,6 +40,15 @@ fetch_local_food = true
 
 [care.elapsed]
 period_millis = 83
+
+[opinions.rules]
+minimum = -10
+maximum = 10
+initial = 0
+fulfilled_gain = 0
+default_loss = 0
+gratitude_gain = 2
+newborn_obligation_development = { until_age = 10, minimum = 0, maximum = 10, cared_change = -2, unattended_change = 3, cared_promise_change = 0, unattended_promise_change = 2 }
 "#,
     );
     let path =
@@ -85,6 +94,18 @@ period_millis = 83
                     assert!(visit.transfers.is_empty());
                     assert_eq!(state.core.people[2].health, 97);
                 }
+                let opinions = state.opinions.as_ref().unwrap();
+                let child = opinions
+                    .sensitivities
+                    .iter()
+                    .find(|row| row.person == 3)
+                    .unwrap();
+                assert_eq!(child.gratitude_gain, Some(if willing { 0 } else { 5 }));
+                assert_eq!(
+                    child.promise_obligation_gain,
+                    Some(if willing { 0 } else { 2 })
+                );
+                assert!(opinions.records.iter().all(|row| row.observer != 3));
                 (visits, state)
             })
     };

@@ -3417,6 +3417,7 @@ impl CoreHost {
         if let Some(frame) = taking {
             self.taking = Some(frame.owner);
         }
+        let committed_care = dependent.is_some();
         if let Some(plan) = dependent {
             plan.publish(self.dependent_care.as_mut().expect("care owner"));
         }
@@ -3456,6 +3457,9 @@ impl CoreHost {
             self.opinions = Some(opinions);
         }
         self.inherit_birth_preferences(&newborns, events.tick);
+        if committed_care {
+            self.develop_after_care();
+        }
         if let Some(fatigue) = fatigue {
             self.fatigue = Some(fatigue);
             self.activity = self
