@@ -12,3 +12,9 @@ Interval scenarios can set `season_unit_millis` for the elapsed calendar and
 `exposure_period_millis` for regional damage and shelter rotation. At a due
 exposure the host uses the season in effect just before that instant and the
 available shelter. Health changes commit alongside physical progress.
+
+An authored clothing definition gives a good an insulation value. Personal clothing
+choices weigh the available protection, hunger, and effort at each exposure event.
+A person can choose a garment they carry or leave it unworn. The exposure owner
+deducts the selected garment's protection from the physical damage. Named goods
+are resolved through the scenario catalog, including garments made by recipes.
