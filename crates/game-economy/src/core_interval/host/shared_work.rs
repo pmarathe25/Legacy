@@ -1,6 +1,14 @@
 //! Personal helper assignments to real, reserved work.
 use super::*;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+pub struct CoreCrewStart {
+    pub helper: u64,
+    pub lead: u64,
+    pub job: u64,
+    pub recipe: u32,
+}
+
 type FatalAssistanceStage = (Vec<(u64, u64)>, Option<CoreSharedWork>);
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -170,6 +178,28 @@ impl CoreSharedWork {
 }
 
 impl CoreHost {
+    pub(super) fn record_crew_starts(&self, run: &mut CoreRun, helpers: Vec<u64>) {
+        let Some(owner) = &self.shared_work else {
+            return;
+        };
+        let crew = owner
+            .sessions
+            .par_iter()
+            .filter(|session| helpers.binary_search(&session.event.person).is_ok())
+            .map(|session| CoreCrewStart {
+                helper: session.event.person,
+                lead: session.event.lead,
+                job: session.event.job,
+                recipe: session.event.recipe,
+            })
+            .collect();
+        run.events.push(CoreRunEvent::Assists(helpers));
+        run.events.push(CoreRunEvent::CrewStarts {
+            at_millis: self.core.simulated_millis(),
+            crew,
+        });
+    }
+
     pub(super) fn assisting_people(&self) -> Vec<u64> {
         let mut people: Vec<_> = self.shared_work.as_ref().map_or_else(Vec::new, |owner| {
             owner.sessions.par_iter().map(|s| s.event.person).collect()

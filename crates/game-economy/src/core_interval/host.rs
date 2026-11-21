@@ -96,7 +96,7 @@ pub use requests::{CoreDeliveryResults, CoreRequestResults};
 pub use scheduler::{
     CoreRun, CoreRunEvent, CoreSchedule, CoreStepper, DecisionPhase, Incapacitation,
 };
-pub use shared_work::{CoreAssistRecord, CoreAssistSession, CoreSharedWork};
+pub use shared_work::{CoreAssistRecord, CoreAssistSession, CoreCrewStart, CoreSharedWork};
 pub use site_lifecycle::CoreSiteChanges;
 pub use sites::{CoreRepairResults, CoreSites};
 pub use skills::{CoreSkillCredit, CoreSkills};

@@ -22,6 +22,13 @@ struct ExpeditionParticipation {
     joined_under_pressure: u64,
 }
 
+struct CrewParticipation {
+    first_year: u64,
+    last_year: u64,
+    helpers: BTreeSet<u64>,
+    starts: u64,
+}
+
 struct RecipeTransmission {
     first_year: u64,
     last_year: u64,
@@ -34,6 +41,7 @@ pub(super) struct Chronicle {
     recipes: BTreeMap<u64, String>,
     lexicon: super::lexicon::LexiconHistory,
     recipe_learning: BTreeMap<u64, RecipeTransmission>,
+    crews: BTreeMap<u64, CrewParticipation>,
     counts: BTreeMap<&'static str, u64>,
     people: BTreeMap<u64, BTreeMap<&'static str, u64>>,
     selected: Vec<Value>,
@@ -134,6 +142,36 @@ impl Chronicle {
                     .counts
                     .entry("wildlife corridor crossings")
                     .or_default() += count;
+            }
+            return;
+        }
+        if kind == "crew_starts" {
+            for row in event["events"].as_array().into_iter().flatten() {
+                let (Some(helper), Some(lead)) = (row["helper"].as_u64(), row["lead"].as_u64())
+                else {
+                    continue;
+                };
+                let observed = self.crews.entry(lead).or_insert_with(|| CrewParticipation {
+                    first_year: year,
+                    last_year: year,
+                    helpers: BTreeSet::new(),
+                    starts: 0,
+                });
+                observed.first_year = observed.first_year.min(year);
+                observed.last_year = observed.last_year.max(year);
+                observed.helpers.insert(helper);
+                observed.starts = observed.starts.saturating_add(1);
+                self.record(
+                    event,
+                    row,
+                    year,
+                    focus,
+                    Receipt {
+                        label: "decisions to join another person's work",
+                        actor: Some(helper),
+                        other: Some(lead),
+                    },
+                );
             }
             return;
         }
@@ -336,7 +374,20 @@ impl Chronicle {
             (std::cmp::Reverse(learning.learners.len()), *recipe)
         });
         transmissions.truncate(10);
+        let mut crews: Vec<_> = self.crews.iter().collect();
+        crews.sort_unstable_by_key(|&(lead, crew)| {
+            (
+                std::cmp::Reverse(crew.helpers.len()),
+                std::cmp::Reverse(crew.starts),
+                *lead,
+            )
+        });
+        crews.truncate(10);
         json!({
+            "shared_crews": crews.iter().map(|&(lead, crew)| json!({
+                "lead":lead, "helpers":crew.helpers, "starts":crew.starts,
+                "first_year":crew.first_year, "last_year":crew.last_year
+            })).collect::<Vec<_>>(),
             "counts": self.counts,
             "lexicon": self.lexicon.summary(),
             "recipe_transmission": transmissions.iter().map(|&(&id, learning)| json!({
@@ -517,6 +568,22 @@ pub(super) fn write_world(text: &mut String, chronicle: &Value) {
         }
         text.push('\n');
     }
+    if let Some(rows) = chronicle["shared_crews"]
+        .as_array()
+        .filter(|rows| !rows.is_empty())
+    {
+        text.push_str(
+            "## Shared work
+
+",
+        );
+        for row in rows.iter().take(5) {
+            let helpers = row["helpers"].as_array().map_or(0, |rows| rows.len());
+            writeln!(text, "- From year {} through {}, {helpers} people chose to help with person {}'s jobs. The archive records {} starts.",
+                row["first_year"], row["last_year"], row["lead"], row["starts"]).unwrap();
+        }
+        text.push('\n');
+    }
     if let Some(rows) = chronicle["recipe_transmission"]
         .as_array()
         .filter(|rows| !rows.is_empty())
@@ -613,6 +680,22 @@ pub(super) fn write_person(text: &mut String, rows: &Value, time_name: fn(u64) -
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn crew_counts_come_from_attributed_accepted_starts() {
+        let mut history = Chronicle::default();
+        let join = |person| json!({"kind":"crew_starts","at_millis":120,"events":[{"helper":person,"lead":1,"job":7,"recipe":1}]});
+        history.observe(&join(2), 3, Some(2));
+        history.observe(&join(3), 4, None);
+        history.observe(&join(2), 4, None);
+        let summary = history.summary();
+        let crew = &summary["shared_crews"][0];
+        assert_eq!(crew["helpers"], json!([2, 3]));
+        assert_eq!(crew["starts"], 3);
+        assert_eq!(crew["first_year"], 3);
+        assert_eq!(crew["last_year"], 4);
+        assert_eq!(history.selected()[0]["other"], 1);
+    }
 
     #[test]
     fn summarizes_consecutive_deliveries_and_attributes_only_accepted_recovery() {

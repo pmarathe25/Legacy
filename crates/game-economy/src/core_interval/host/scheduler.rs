@@ -727,6 +727,10 @@ pub enum CoreRunEvent {
     Requests(Vec<game_autowork::requests::Event>),
     Starts(Vec<(u64, bool)>),
     Assists(Vec<u64>),
+    CrewStarts {
+        at_millis: u128,
+        crew: Vec<CoreCrewStart>,
+    },
     Adoptions(Vec<game_lot_runtime::Adoption>),
     Exchanges(Vec<u64>),
     ExchangeOffers(Vec<u64>),
@@ -1906,7 +1910,7 @@ impl CoreHost {
                             meal_people.extend(helpers.iter().copied());
                             meal_people.par_sort_unstable();
                             meal_people.dedup();
-                            run.events.push(CoreRunEvent::Assists(helpers));
+                            self.record_crew_starts(&mut run, helpers);
                         }
                         let next = self.after_assisting(meal_people);
                         self.schedule.as_mut().expect("active schedule").phase = next;
@@ -2170,7 +2174,7 @@ impl CoreHost {
                                 meal_people.par_extend(admitted.par_iter().copied());
                                 meal_people.par_sort_unstable();
                                 meal_people.dedup();
-                                run.events.push(CoreRunEvent::Assists(admitted));
+                                self.record_crew_starts(&mut run, admitted);
                             }
                             self.schedule.as_mut().expect("active schedule").phase =
                                 self.after_selected_batch(meal_people, intents, remaining);

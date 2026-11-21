@@ -16764,6 +16764,26 @@ fn personal_assistance_competes_with_idleness_and_uses_only_free_crew_slots() {
                     .collect();
                 let state = host.snapshot();
                 let sessions = &state.shared_work.as_ref().unwrap().sessions;
+                let crew: Vec<_> = run
+                    .events
+                    .iter()
+                    .filter_map(|row| match row {
+                        CoreRunEvent::CrewStarts { at_millis, crew } => {
+                            assert_eq!(*at_millis, 0);
+                            Some(crew.as_slice())
+                        }
+                        _ => None,
+                    })
+                    .flatten()
+                    .collect();
+                assert_eq!(crew.len(), sessions.len());
+                assert!(
+                    crew.iter()
+                        .zip(sessions)
+                        .all(|(receipt, session)| receipt.helper == session.event.person
+                            && receipt.lead == 1
+                            && receipt.job == 1)
+                );
                 assert_eq!(sessions[0].event.person, 2);
                 assert!(
                     sessions

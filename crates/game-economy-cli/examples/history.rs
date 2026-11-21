@@ -116,6 +116,7 @@ fn observation(event: &CoreRunEvent, current_tick: &mut u64) -> Option<Value> {
         CoreRunEvent::Work(row) => Some(json!({"kind":"early_work","tick":row.tick,"finished":row.finished,"delivered":row.delivered,"interrupted":row.interrupted})),
         CoreRunEvent::Construction(rows) if !rows.is_empty() => Some(json!({"kind":"construction","events":rows})),
         CoreRunEvent::LocalCarries(rows) if !rows.is_empty() => Some(json!({"kind":"local_carrying","events":rows})),
+        CoreRunEvent::CrewStarts { at_millis, crew } => Some(json!({"kind":"crew_starts","at_millis":at_millis,"events":crew})),
         CoreRunEvent::ElapsedGathering { at_millis, events } => Some(json!({"kind":"gathered_resources","at_millis":at_millis,"events":events})),
         CoreRunEvent::PersonalChoices(rows) if !rows.is_empty() => Some(json!({"kind":"personal_choices","events":rows})),
         CoreRunEvent::PersonalStrikes { events, harm } if !events.is_empty() => Some(json!({"kind":"personal_strikes","tick":*current_tick,"events":events,"harm":harm})),
