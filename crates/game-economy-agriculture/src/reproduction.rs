@@ -431,6 +431,7 @@ mod tests {
                 quantity: 10,
                 batch: Some(11),
                 item: None,
+                freshness: Default::default(),
                 expires_at: None,
             },
             Lot {
@@ -438,6 +439,7 @@ mod tests {
                 quantity: 4,
                 batch: Some(99),
                 item: None,
+                freshness: Default::default(),
                 expires_at: None,
             },
         ];
@@ -489,6 +491,7 @@ mod tests {
                 quantity: 1,
                 batch: Some(11),
                 item: None,
+                freshness: Default::default(),
                 expires_at: None,
             },
             Lot {
@@ -496,6 +499,7 @@ mod tests {
                 quantity: 9,
                 batch: Some(12),
                 item: None,
+                freshness: Default::default(),
                 expires_at: None,
             },
         ];
@@ -587,6 +591,7 @@ mod tests {
                     quantity: 10,
                     batch: Some(field + 10),
                     item: None,
+                    freshness: Default::default(),
                     expires_at: None,
                 }],
                 offspring: None,
@@ -672,6 +677,7 @@ mod tests {
                 quantity: 1,
                 batch: Some(batch),
                 item: None,
+                freshness: Default::default(),
                 expires_at: None,
             })
             .collect();

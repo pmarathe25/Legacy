@@ -3,9 +3,11 @@ use serde::{Deserialize, Serialize};
 mod lot_list;
 mod outcome_batch;
 mod place_index;
+mod thermal;
 pub use lot_list::LotList;
 pub use outcome_batch::{OutcomeBatch, OutcomeChunk, OutcomeHeader, OutcomeRef};
 pub use place_index::PlaceIndex;
+pub use thermal::{AgingRate, Freshness};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(tag = "kind", content = "id", rename_all = "snake_case")]
@@ -55,12 +57,26 @@ pub struct Lot {
     pub item: Option<u64>,
     /// Unusable at or after this instant, in the time unit of the owning state.
     pub expires_at: Option<u64>,
+    #[serde(default, skip_serializing_if = "Freshness::is_standard")]
+    pub freshness: Freshness,
 }
-pub fn key(lot: &Lot) -> (u32, bool, u64, Option<u64>, Option<u64>) {
+pub fn key(
+    lot: &Lot,
+) -> (
+    u32,
+    bool,
+    u64,
+    std::cmp::Reverse<u16>,
+    bool,
+    Option<u64>,
+    Option<u64>,
+) {
     (
         lot.good,
         lot.expires_at.is_none(),
         lot.expires_at.unwrap_or(0),
+        std::cmp::Reverse(lot.freshness.slack()),
+        lot.freshness == Freshness::Preparation,
         lot.item,
         lot.batch,
     )
@@ -101,6 +117,7 @@ impl Container {
             || self.lots.iter().any(|lot| {
                 !self.place.accepts(lot.good)
                     || lot.quantity == 0
+                    || !lot.freshness.valid(lot.expires_at)
                     || lot.batch == Some(0)
                     || (lot.batch.is_some() && lot.item.is_some())
                     || lot
@@ -229,6 +246,9 @@ pub struct StorageClimate {
     pub ambient_celsius: i16,
     #[serde(default)]
     pub places: Vec<StorageTemperature>,
+    /// Stepwise temperature-dependent food aging; otherwise the standard rate applies.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub aging_rates: Vec<AgingRate>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -236,4 +256,92 @@ pub struct StorageClimate {
 pub struct StorageTemperature {
     pub place: Place,
     pub celsius: i16,
+}
+
+impl StorageClimate {
+    pub fn temperature(&self, place: Place) -> i16 {
+        self.places
+            .binary_search_by_key(&place, |row| row.place)
+            .map_or(self.ambient_celsius, |index| self.places[index].celsius)
+    }
+
+    fn rate(&self, place: Place) -> u16 {
+        let celsius = self.temperature(place);
+        let index = self
+            .aging_rates
+            .partition_point(|row| row.from_celsius <= celsius);
+        self.aging_rates[..index]
+            .last()
+            .map_or(thermal::NORMAL_RATE, |row| row.per_thousand)
+    }
+}
+
+impl State {
+    pub fn ages_with_temperature(&self) -> bool {
+        self.storage_climate
+            .as_ref()
+            .is_some_and(|climate| !climate.aging_rates.is_empty())
+    }
+
+    pub fn thermal_move(&self, movement: &Movement) -> bool {
+        self.storage_climate.as_ref().is_some_and(|climate| {
+            movement
+                .to
+                .is_some_and(|to| climate.rate(movement.from) != climate.rate(to))
+        })
+    }
+
+    pub fn thermal_transaction(&self, action: &Transaction) -> bool {
+        self.storage_climate.as_ref().is_some_and(|climate| {
+            action
+                .movements
+                .iter()
+                .any(|movement| self.thermal_move(movement))
+                || action.creations.iter().any(|creation| {
+                    creation.lot.expires_at.is_some()
+                        && creation.lot.freshness != Freshness::Preparation
+                        && climate.rate(creation.to) != thermal::NORMAL_RATE
+                })
+        })
+    }
+
+    pub fn valid_age(&self, place: Place, lot: &Lot) -> bool {
+        match lot.freshness {
+            Freshness::Thermal { slack } => self
+                .storage_climate
+                .as_ref()
+                .is_some_and(|climate| slack < climate.rate(place)),
+            Freshness::Preparation => self.expiry_millis.is_some(),
+            Freshness::Standard => true,
+        }
+    }
+
+    /// Reproject an already dated lot after a physical move, keeping its exact remaining age.
+    /// A newly produced lot starts at the standard rate before entering its first holder.
+    pub fn date_lot(
+        &self,
+        lot: &mut Lot,
+        from: Option<Place>,
+        to: Place,
+        at: u64,
+    ) -> Result<(), String> {
+        let Some(climate) = &self.storage_climate else {
+            return Ok(());
+        };
+        let Some(expiry) = lot.expires_at else {
+            return Ok(());
+        };
+        if climate.aging_rates.is_empty() || lot.freshness == Freshness::Preparation {
+            return Ok(());
+        }
+        let from = from.map_or(thermal::NORMAL_RATE, |place| climate.rate(place));
+        let to = climate.rate(to);
+        if from != to {
+            let (deadline, freshness) =
+                thermal::rescale(expiry, lot.freshness.slack(), at, from, to)?;
+            lot.expires_at = Some(deadline);
+            lot.freshness = freshness;
+        }
+        Ok(())
+    }
 }

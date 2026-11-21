@@ -152,6 +152,7 @@ fn fixture(perishable: bool, output_quantity: u64) -> Runtime {
                     item: None,
                     good,
                     quantity,
+                    freshness: Default::default(),
                     expires_at: None,
                 }]
             },
@@ -611,6 +612,7 @@ fn staged_boundary_allocation_skips_existing_item_identities() {
                 item: Some(10),
                 good: 2,
                 quantity: 1,
+                freshness: Default::default(),
                 expires_at: None,
             }],
         )
@@ -794,6 +796,7 @@ fn interval_consumption_draft_expires_when_time_moves_without_work_rates() {
                 item: None,
                 good: 1,
                 quantity: 1,
+                freshness: Default::default(),
                 expires_at: None,
             }],
         )
@@ -871,6 +874,7 @@ fn packed_interval_starts_fall_back_for_identified_source_items() {
                 item: Some(41),
                 good: 1,
                 quantity: 1,
+                freshness: Default::default(),
                 expires_at: None,
             },
             Lot {
@@ -878,6 +882,7 @@ fn packed_interval_starts_fall_back_for_identified_source_items() {
                 item: Some(42),
                 good: 1,
                 quantity: 1,
+                freshness: Default::default(),
                 expires_at: None,
             },
         ],
@@ -1013,6 +1018,7 @@ fn early_completion_can_use_input_expiring_at_the_next_boundary() {
             item: None,
             good: 1,
             quantity: 2,
+            freshness: Default::default(),
             expires_at: Some(1),
         }],
     )
@@ -1043,6 +1049,7 @@ fn expired_lots_are_rejected_before_early_work() {
             item: None,
             good: 2,
             quantity: 1,
+            freshness: Default::default(),
             expires_at: Some(0),
         }],
     )
@@ -1121,6 +1128,7 @@ fn early_work_completion_benchmark() {
             item: None,
             good: 1,
             quantity: count * 2,
+            freshness: Default::default(),
             expires_at: None,
         }],
     )

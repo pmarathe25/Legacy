@@ -11,6 +11,7 @@ fn fixture() -> (State, Vec<Transaction>) {
                     item: None,
                     good: 1,
                     quantity: 1,
+                    freshness: Default::default(),
                     expires_at: None,
                 }],
             )
@@ -103,6 +104,7 @@ fn total_incoming_capacity_is_checked_without_overflow() {
                 item: None,
                 good: 1,
                 quantity: u64::MAX,
+                freshness: Default::default(),
                 expires_at: None,
             }],
         )
@@ -128,6 +130,7 @@ fn interleaved_but_disjoint_source_and_destination_ranges_are_supported() {
                 item: None,
                 good: 1,
                 quantity: 1,
+                freshness: Default::default(),
                 expires_at: None,
             }],
         )

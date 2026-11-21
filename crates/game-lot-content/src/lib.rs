@@ -335,6 +335,11 @@ impl Catalog {
             item: None,
             good,
             quantity,
+            freshness: if self.maturation.contains_key(&good) {
+                game_lot_model::Freshness::Preparation
+            } else {
+                game_lot_model::Freshness::Standard
+            },
             expires_at,
         })
     }

@@ -12,6 +12,7 @@ fn fixture() -> (State, Vec<Transaction>) {
                 item: None,
                 good: 1,
                 quantity: 64,
+                freshness: Default::default(),
                 expires_at: None,
             }],
         )
@@ -121,6 +122,7 @@ fn new_empty_destinations_match_general_arbitration_and_expiry() {
                         item: None,
                         good: 1,
                         quantity: 40,
+                        freshness: Default::default(),
                         expires_at: Some(1),
                     },
                     Lot {
@@ -128,6 +130,7 @@ fn new_empty_destinations_match_general_arbitration_and_expiry() {
                         item: None,
                         good: 1,
                         quantity: 180,
+                        freshness: Default::default(),
                         expires_at: Some(4),
                     },
                 ],
@@ -141,6 +144,7 @@ fn new_empty_destinations_match_general_arbitration_and_expiry() {
                     item: None,
                     good: 1,
                     quantity: 2,
+                    freshness: Default::default(),
                     expires_at: Some(1),
                 }],
             )
@@ -222,6 +226,7 @@ fn added_destinations_can_sort_before_the_existing_source() {
                     item: None,
                     good: 1,
                     quantity: 128,
+                    freshness: Default::default(),
                     expires_at: None,
                 }],
             )

@@ -148,6 +148,7 @@ pub fn prepare(
                                     good: creation.lot.good,
                                     quantity: 1,
                                     item: Some(item),
+                                    freshness: Default::default(),
                                     expires_at: None,
                                 },
                             },

@@ -172,6 +172,7 @@ pub fn prepare(
                             item: lot.item,
                             good,
                             quantity,
+                            freshness: lot.freshness,
                             expires_at: lot.expires_at,
                         });
                         remaining -= quantity;

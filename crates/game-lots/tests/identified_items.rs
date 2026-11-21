@@ -8,6 +8,7 @@ fn item(id: u64) -> Lot {
         good: 1,
         quantity: 1,
         item: Some(id),
+        freshness: Default::default(),
         expires_at: None,
     }
 }
@@ -272,6 +273,7 @@ fn duplicate_identity_and_invalid_items_are_rejected() {
             Place::Person(1),
             4,
             vec![Lot {
+                freshness: Default::default(),
                 expires_at: Some(2),
                 ..item(1)
             }]
@@ -467,6 +469,7 @@ fn unrelated_fungible_transfers_keep_the_fast_path_in_a_world_with_items() {
                     good: 2,
                     quantity: 1,
                     item: None,
+                    freshness: Default::default(),
                     expires_at: None,
                 }],
             )

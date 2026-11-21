@@ -269,6 +269,7 @@ mod tests {
                             good: 1,
                             quantity: 1,
                             item: None,
+                            freshness: Default::default(),
                             expires_at: Some(10),
                         },
                         Lot {
@@ -276,6 +277,7 @@ mod tests {
                             good: 1,
                             quantity: 2,
                             item: None,
+                            freshness: Default::default(),
                             expires_at: None,
                         },
                     ],
@@ -301,6 +303,7 @@ mod tests {
                         good: 2,
                         quantity: if id % 4 == 1 { 5 } else { 1 },
                         item: None,
+                        freshness: Default::default(),
                         expires_at: None,
                     },
                 }],
@@ -316,6 +319,7 @@ mod tests {
                         good: 2,
                         quantity: 1,
                         item: None,
+                        freshness: Default::default(),
                         expires_at: None,
                     }],
                 )
@@ -436,6 +440,7 @@ mod tests {
                 good: 1,
                 quantity: 1,
                 item: Some(5),
+                freshness: Default::default(),
                 expires_at: None,
             }],
         )

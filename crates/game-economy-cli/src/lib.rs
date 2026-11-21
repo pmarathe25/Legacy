@@ -2812,6 +2812,7 @@ fn build_scenario(
                 good,
                 quantity: 1,
                 item: Some(item.id),
+                freshness: Default::default(),
                 expires_at: None,
             });
         }
@@ -2868,6 +2869,7 @@ fn build_scenario(
             id.checked_add(1).ok_or("batch identity overflow")
         })?);
     }
+    game_lots::Store::date_authored_custody(&mut custody)?;
     Ok(State {
         seed: scenario.seed,
         physical: Snapshot {

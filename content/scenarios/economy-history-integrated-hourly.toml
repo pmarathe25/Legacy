@@ -6,11 +6,17 @@ work_rate_period_millis = 3600000
 travel_unit_millis = 3600000
 fatigue_rate_period_millis = 3600000
 elapsed_fatigue = true
+elapsed_spoilage = true
 decision_period_millis = 3600000
 combat_round_millis = 60000
 on_site_meals = true
 stock_capacity = 100000
 food_relief_divisor = 1
+
+[storage_climate]
+ambient_celsius = 18
+aging_rates = [{ from_celsius = -50, per_thousand = 500 }, { from_celsius = 12, per_thousand = 1000 }, { from_celsius = 30, per_thousand = 1800 }]
+places = [{ place = { kind = "inventory", id = 1 }, celsius = 8 }]
 
 [language.rules]
 sounds = ["a", "i", "u", "k", "m", "t", "n"]
@@ -92,7 +98,7 @@ hunger = 0
 willing_to_work = true
 seek_meals = true
 items = [{ id = 1001, good = "tool" }]
-goods = { paper = 4, ink = 4, timber = 2 }
+goods = { paper = 4, ink = 4, timber = 2, quilted-coat = 1 }
 recipe = "fixture-tool"
 
 [[people]]
@@ -103,7 +109,7 @@ hunger = 0
 willing_to_work = true
 seek_meals = true
 items = [{ id = 1002, good = "tool" }]
-goods = { paper = 4, ink = 4 }
+goods = { paper = 4, ink = 4, quilted-coat = 1 }
 recipe = "fixture-tool"
 
 [[people]]
@@ -1560,6 +1566,10 @@ willing = true
 person = 60
 willing = true
 
+[opinions.fear_decay]
+period_millis = 86400000
+amount = 1
+
 [opinions.rules]
 minimum = -100
 maximum = 100
@@ -1836,6 +1846,7 @@ id = 1
 region = 1
 name = "Food store"
 capacity = 500
+goods = { curing-root-batch = 24 }
 
 [local_transport.walking.elapsed]
 unit_millis = 60000
@@ -1939,6 +1950,11 @@ minds = []
 [environment]
 season_unit_millis = 3600000
 exposure_period_millis = 3600000
+clothing = [{ good = "quilted-coat", insulation = 1 }]
+clothing_choices = [
+    { person = 1, good = "quilted-coat", protection_weight = 1 },
+    { person = 2, good = "quilted-coat", protection_weight = -1 },
+]
 [[environment.regions]]
 region = 1
 damage = 1

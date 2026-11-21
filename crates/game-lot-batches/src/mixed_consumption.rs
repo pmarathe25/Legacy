@@ -159,6 +159,7 @@ mod tests {
                             item: None,
                             good: 1,
                             quantity: 1,
+                            freshness: Default::default(),
                             expires_at: Some(1),
                         },
                         Lot {
@@ -166,6 +167,7 @@ mod tests {
                             item: None,
                             good: 1,
                             quantity: 2,
+                            freshness: Default::default(),
                             expires_at: Some(3),
                         },
                         Lot {
@@ -173,6 +175,7 @@ mod tests {
                             item: None,
                             good: 2,
                             quantity: 1,
+                            freshness: Default::default(),
                             expires_at: None,
                         },
                     ],
@@ -230,6 +233,7 @@ mod tests {
                     item: None,
                     good: 1,
                     quantity: 1,
+                    freshness: Default::default(),
                     expires_at: Some(3),
                 },
             }],

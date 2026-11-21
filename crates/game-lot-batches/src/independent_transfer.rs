@@ -47,6 +47,7 @@ fn after_selected(
             item: lot.item,
             good: lot.good,
             quantity: lot.quantity - consumed,
+            freshness: lot.freshness,
             expires_at: lot.expires_at,
         })
     });
@@ -401,6 +402,7 @@ fn prepare_rows(
                             item: lot.item,
                             good: lot.good,
                             quantity,
+                            freshness: lot.freshness,
                             expires_at: lot.expires_at,
                         });
                         remaining -= quantity;
