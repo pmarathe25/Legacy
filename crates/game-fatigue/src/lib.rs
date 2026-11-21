@@ -4,7 +4,9 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 mod elapsed;
 mod timed;
-pub use elapsed::{ElapsedActivity, ElapsedFatigue, ElapsedFatigueDraft, Exertion};
+pub use elapsed::{
+    ElapsedActivity, ElapsedFatigue, ElapsedFatigueDraft, ElapsedFatigueView, Exertion,
+};
 pub use timed::{TimedActivity, TimedDraft, TimedFatigue};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

@@ -203,10 +203,7 @@ impl CoreHost {
         }
         let (crop_rates, crop_limit) = self.plan_crop_segment(consumed)?;
         consumed = crop_limit;
-        let elapsed_owner = self
-            .fatigue
-            .as_ref()
-            .and_then(|owner| owner.elapsed_owner());
+        let elapsed_owner = self.fatigue.as_ref().and_then(|owner| owner.elapsed_view());
         let mut elapsed_draft = None;
         if let Some(owner) = elapsed_owner {
             // Each elapsed segment ends before an activity transition is published.
@@ -249,7 +246,7 @@ impl CoreHost {
             });
             traveling.par_extend(self.local_travelers());
             traveling.par_sort_unstable();
-            let resting = owner.fatigue.resting();
+            let resting = owner.resting();
             let people: std::collections::HashSet<_> = self
                 .core
                 .people
@@ -288,10 +285,9 @@ impl CoreHost {
                     })
                 })
                 .collect::<Result<Vec<_>, String>>()?;
-            if let Some(deadline) = owner.next_damage_deadline(&activity, &people)? {
-                consumed = deadline.min(u128::from(consumed)) as u64;
-            }
-            elapsed_draft = Some(owner.prepare(&activity, consumed, &people)?);
+            let (millis, draft) = owner.prepare_segment(&activity, consumed, &people)?;
+            consumed = millis;
+            elapsed_draft = Some(draft);
         }
         let ordinary_recovery_due = ordinary_recovery == Some(consumed);
         let recovery_due = ordinary_recovery_due
