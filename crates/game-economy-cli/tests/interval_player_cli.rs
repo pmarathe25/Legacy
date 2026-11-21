@@ -241,7 +241,7 @@ fn a_player_can_assemble_and_test_their_own_carried_parts() {
     );
     assert!(
         stderr.contains(
-            "experiment requires an available person with capable effort and carried matching parts"
+            "experiment requires an available person with capable effort and reachable matching parts"
         ),
         "{stderr}"
     );

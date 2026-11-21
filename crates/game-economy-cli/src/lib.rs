@@ -394,6 +394,8 @@ struct LocalStoreConfig {
     capacity: u64,
     #[serde(default)]
     goods: BTreeMap<String, u64>,
+    #[serde(default)]
+    items: Vec<AuthoredItem>,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -982,14 +984,28 @@ struct Resident {
     #[serde(default)]
     goods: BTreeMap<String, u64>,
     #[serde(default)]
-    items: Vec<ResidentItem>,
+    items: Vec<AuthoredItem>,
 }
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct ResidentItem {
+struct AuthoredItem {
     id: u64,
     good: String,
+}
+
+impl AuthoredItem {
+    fn lot(self, goods: &BTreeMap<&str, u32>, catalog: &Catalog) -> Result<game_lots::Lot, String> {
+        let good = *goods
+            .get(self.good.as_str())
+            .ok_or_else(|| format!("unknown identified good {}", self.good))?;
+        let mut lot = catalog.fresh(good, 1, 0)?;
+        if lot.expires_at.is_some() {
+            return Err("identified items must not be perishable".into());
+        }
+        lot.item = Some(self.id);
+        Ok(lot)
+    }
 }
 
 #[derive(Deserialize)]
@@ -2696,7 +2712,7 @@ fn build_scenario(
                 .stores
                 .into_iter()
                 .map(|store| {
-                    let lots = store
+                    let mut lots = store
                         .goods
                         .into_iter()
                         .map(|(name, quantity)| {
@@ -2706,6 +2722,9 @@ fn build_scenario(
                             catalog.fresh(good, quantity, 0)
                         })
                         .collect::<Result<Vec<_>, String>>()?;
+                    for item in store.items {
+                        lots.push(item.lot(&goods, &catalog)?);
+                    }
                     custody.containers.push(Container::new(
                         Place::Inventory(store.id),
                         store.capacity,
@@ -2878,20 +2897,7 @@ fn build_scenario(
             lots.push(catalog.fresh(good, quantity, 0)?);
         }
         for item in resident.items {
-            let good = *goods
-                .get(item.good.as_str())
-                .ok_or_else(|| format!("unknown identified good {}", item.good))?;
-            if catalog.fresh(good, 1, 0)?.expires_at.is_some() {
-                return Err("identified items must not be perishable".into());
-            }
-            lots.push(game_lots::Lot {
-                batch: None,
-                good,
-                quantity: 1,
-                item: Some(item.id),
-                freshness: Default::default(),
-                expires_at: None,
-            });
+            lots.push(item.lot(&goods, &catalog)?);
         }
         custody.containers.push(Container::new(
             Place::Person(resident.id),

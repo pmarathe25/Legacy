@@ -77,7 +77,7 @@ pub use hauling::CoreHaulingResults;
 pub use local_transport::CoreLocalTransportResults;
 pub use market::CoreMarketResults;
 pub use mechanics::{
-    CoreMechanics, MechanicalCapability, MechanicalCommunication, MechanicalDesignInput,
+    CoreMechanics, CoreSharedApparatus, MechanicalCapability, MechanicalCommunication, MechanicalDesignInput,
     MechanicalDesignPreferences, MechanicalExploration, MechanicalLoadMaterial,
     MechanicalLoadOutcome, MechanicalLoadPolicy, MechanicalLoadRequest, MechanicalLoadResult,
     MechanicalMaterial, MechanicalMemory, MechanicalPolicy, MechanicalReactions,

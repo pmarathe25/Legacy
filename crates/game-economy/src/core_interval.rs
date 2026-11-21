@@ -43,7 +43,7 @@ pub use host::{
     CoreMechanics, CorePersonalConflict, CorePlayerFatigue, CorePlayerField, CorePlayerJob, CorePlayerLanguage,
     CorePlayerMarkedPage, CorePlayerResource, CorePlayerSite, CorePlayerView, CorePlayerWound,
     CorePracticeWorkEvidence, CorePromiseReply, CorePurpose, CoreRepairResults, CoreRequestResults,
-    CoreRun, CoreRunEvent, CoreSchedule, CoreSeenPerson, CoreSharedWork, CoreSiteChanges,
+    CoreRun, CoreRunEvent, CoreSchedule, CoreSeenPerson, CoreSharedApparatus, CoreSharedWork, CoreSiteChanges,
     CoreSites, CoreSkillCredit, CoreSkills, CoreSocial, CoreSocialResults, CoreStepper,
     CoreToolRepairResults, CoreTreatmentResults, CoreWorkIntent, CoreWritingPracticeResults,
     CoreWritingResults, DecisionPhase, Incapacitation, MechanicalCapability,

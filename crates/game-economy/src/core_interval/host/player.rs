@@ -86,6 +86,7 @@ pub struct CorePlayerView {
     pub accessible_resources: Vec<CorePlayerResource>,
     pub accessible_fields: Vec<CorePlayerField>,
     pub carried_apparatus: Vec<game_mechanics::Apparatus>,
+    pub shared_apparatus: Vec<CoreSharedApparatus>,
     pub promises: Vec<game_agreements::Contract>,
     pub wound: Option<CorePlayerWound>,
     pub job: Option<CorePlayerJob>,
@@ -544,6 +545,7 @@ impl CoreHost {
             accessible_resources,
             accessible_fields,
             carried_apparatus: self.carried_apparatus(id),
+            shared_apparatus: self.shared_apparatus(id),
             promises: self.agreements.as_ref().map_or_else(Vec::new, |owner| {
                 let mut promises: Vec<_> = owner
                     .contracts
