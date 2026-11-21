@@ -71,7 +71,7 @@ pub struct CorePlayerView {
 
 impl CoreHost {
     /// A controlled person may choose a spoken form for a personally visible
-    /// referent. The association remains private until they communicate it.
+    /// or remembered referent. The association remains private until they communicate it.
     pub fn choose_controlled_word(
         &mut self,
         id: u64,
@@ -81,7 +81,19 @@ impl CoreHost {
         let grounded = match word.meaning {
             game_language::Meaning::Place(region) => view.person.region == Some(region),
             game_language::Meaning::Person(other) => {
-                other == id || view.nearby.iter().any(|person| person.id == other)
+                other == id
+                    || view.nearby.iter().any(|person| person.id == other)
+                    || self.social.as_ref().is_some_and(|social| {
+                        let pair = (id.min(other), id.max(other));
+                        let round = social
+                            .elapsed
+                            .map_or(self.core.physical.tick(), |clock| clock.completed);
+                        social
+                            .owner
+                            .relationships
+                            .par_iter()
+                            .any(|row| (row.a, row.b) == pair && social.remembers(row, round))
+                    })
             }
             game_language::Meaning::Object(good) => view
                 .possessions
@@ -90,7 +102,7 @@ impl CoreHost {
             _ => false,
         };
         if !grounded {
-            return Err("the referent is not personally visible".into());
+            return Err("the referent is not personally known".into());
         }
         let language = self
             .social

@@ -25,6 +25,17 @@ pub struct CoreSocial {
     pub signals: Option<game_signals::Signals>,
 }
 
+impl CoreSocial {
+    pub(super) fn remembers(&self, row: &game_social::Relationship, round: u64) -> bool {
+        row.encounters > 0
+            && self
+                .owner
+                .rules
+                .relationship_retention
+                .is_none_or(|retention| round.saturating_sub(row.last_met) <= retention)
+    }
+}
+
 /// The authored interval and the last completed opportunity to meet.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -475,6 +486,42 @@ impl CoreHost {
                     })
                     .then(|| self.joint_mechanical_topics())
                     .flatten();
+                let name_preferences = |person| {
+                    language
+                        .minds
+                        .binary_search_by_key(&person, |mind| mind.person)
+                        .ok()
+                        .and_then(|index| language.minds[index].topic_policy.as_ref())
+                        .into_iter()
+                        .flat_map(|policy| &policy.preferences)
+                        .filter_map(|row| match row.meaning {
+                            game_language::Meaning::Person(target) if row.enabled => Some(target),
+                            _ => None,
+                        })
+                };
+                let remembered: HashSet<_> = social
+                    .filter(|_| {
+                        meetings.par_iter().any(|meeting| {
+                            name_preferences(meeting.a)
+                                .chain(name_preferences(meeting.b))
+                                .any(|target| target != meeting.a && target != meeting.b)
+                        })
+                    })
+                    .map(|owner| {
+                        owner
+                            .owner
+                            .relationships
+                            .par_iter()
+                            .filter(|row| {
+                                owner.remembers(
+                                    row,
+                                    social_round.map_or(tick, |clock| clock.completed),
+                                )
+                            })
+                            .map(|row| (row.a, row.b))
+                            .collect()
+                    })
+                    .unwrap_or_default();
                 let topics = |person: u64, other: u64, region: u64| {
                     let mut topics = vec![game_language::Meaning::Place(region)];
                     let mind = language
@@ -511,15 +558,20 @@ impl CoreHost {
                             }
                         }
                     }
+                    topics.extend(
+                        name_preferences(person)
+                            .chain(name_preferences(other))
+                            .filter(|&target| {
+                                target == person
+                                    || target == other
+                                    || remembered
+                                        .contains(&(person.min(target), person.max(target)))
+                            })
+                            .map(game_language::Meaning::Person),
+                    );
                     if let Some(policy) = policy {
                         topics.extend(policy.preferences.iter().filter_map(|preference| {
                             match preference.meaning {
-                                game_language::Meaning::Person(target)
-                                    if preference.enabled
-                                        && (target == person || target == other) =>
-                                {
-                                    Some(preference.meaning)
-                                }
                                 game_language::Meaning::Signal(_)
                                 | game_language::Meaning::Need(_)
                                     if preference.enabled

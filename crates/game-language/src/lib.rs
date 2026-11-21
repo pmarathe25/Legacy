@@ -557,6 +557,18 @@ impl Language {
                     .copied()
                     .find(|meaning| matches!(meaning, Meaning::Place(_)))
                     .expect("validated place");
+                let grounded = selected.is_none_or(|(_, meaning, observed)| {
+                    observed
+                        && match meaning {
+                            Meaning::Person(target)
+                                if target != meeting.a && target != meeting.b =>
+                            {
+                                meeting.a_topics.binary_search(&meaning).is_ok()
+                                    && meeting.b_topics.binary_search(&meaning).is_ok()
+                            }
+                            _ => true,
+                        }
+                });
                 (
                     Meeting {
                         a: meeting.a,
@@ -564,7 +576,7 @@ impl Language {
                         meaning: selected.map_or(place, |row| row.1),
                     },
                     selected.map(|row| row.0),
-                    selected.is_none_or(|row| row.2),
+                    grounded,
                 )
             })
             .collect();

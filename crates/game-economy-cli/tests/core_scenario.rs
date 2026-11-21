@@ -484,6 +484,93 @@ fn language_topics_arise_from_personally_chosen_physical_demonstrations() {
 }
 
 #[test]
+fn absent_names_can_be_coined_privately_and_explained_to_a_familiar_listener() {
+    use game_economy::core_interval::CoreHost;
+    use game_language::{Meaning, TopicPreference};
+    use game_social::{Participant, Relationship};
+    fn run(workers: usize, speaker_knows: bool, listener_knows: bool) -> serde_json::Value {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let root = root();
+                let base = game_economy_cli::core_scenario(
+                    &root.join("content/scenarios/economy-core-language-topics.toml"),
+                    &root.join("content"),
+                )
+                .unwrap();
+                let mut state = base.snapshot();
+                let mut absent = state.core.people[1].clone();
+                absent.id = 3;
+                state.core.people.push(absent);
+                state.core.physical.custody.containers.push(
+                    game_lots::Container::new(game_lots::Place::Person(3), 10, vec![]).unwrap(),
+                );
+                let social = state.social.as_mut().unwrap();
+                social.owner.participants.push(Participant {
+                    person: 3,
+                    willing: false,
+                });
+                let mut remember = |person| {
+                    social.owner.relationships.push(Relationship {
+                        a: person,
+                        b: 3,
+                        encounters: 1,
+                        familiarity: 1,
+                        last_met: 0,
+                    })
+                };
+                if speaker_knows {
+                    remember(1);
+                }
+                if listener_knows {
+                    remember(2);
+                }
+                let language = social.language.as_mut().unwrap();
+                let subject = Meaning::Person(3);
+                language.minds[0].topic_policy.as_mut().unwrap().preferences =
+                    vec![TopicPreference {
+                        meaning: subject,
+                        enabled: true,
+                        value: 10,
+                    }];
+                let mut host = CoreHost::resume(state).unwrap();
+                let run = host.advance_continuous(900_001, &[3]).unwrap();
+                assert_eq!(run.failure, None);
+                let end = host.snapshot();
+                let language = end.social.as_ref().unwrap().language.as_ref().unwrap();
+                assert_eq!(language.events.len(), usize::from(speaker_knows));
+                if let Some(event) = language.events.first() {
+                    assert_eq!(
+                        (event.speaker, event.listener, event.meaning),
+                        (1, 2, subject)
+                    );
+                    assert_eq!(event.interpreted, None);
+                    assert_eq!(event.learned, listener_knows);
+                    assert!(
+                        language.minds[0]
+                            .words
+                            .iter()
+                            .any(|word| word.meaning == subject)
+                    );
+                    assert_eq!(
+                        language.minds[1]
+                            .words
+                            .iter()
+                            .any(|word| word.meaning == subject),
+                        listener_knows
+                    );
+                }
+                serde_json::to_value(end).unwrap()
+            })
+    }
+    for (speaker, listener) in [(false, true), (true, false), (true, true)] {
+        assert_eq!(run(1, speaker, listener), run(4, speaker, listener));
+    }
+}
+
+#[test]
 fn cultivation_is_a_personal_choice_saved_until_physical_settlement() {
     use game_economy::core_interval::{CoreChoiceOutcome, CoreHost, CoreRunEvent};
     use game_economy_agriculture::Phase;

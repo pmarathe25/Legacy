@@ -89,3 +89,8 @@ and validation live with the feature owners.
 See the [feature restoration audit](../../docs/research/legacy-feature-audit.md)
 for current coverage and the [elapsed-time notes](../../docs/research/elapsed-time-migration.md)
 for owner clocks.
+
+A person can coin a name for someone they remember meeting. A spoken name can
+be interpreted using the listener's existing vocabulary. To learn a new
+mapping for someone outside the encounter, the listener needs their own
+remembered contact with that person and must choose to adopt the form.
