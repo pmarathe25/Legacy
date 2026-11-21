@@ -17441,6 +17441,7 @@ fn core_host_personal_exchange_benchmark() {
             request_help: false,
             min_gain: 1,
             help_value: 0,
+            opinion_weights: None,
             values: vec![
                 game_market::Value { good: 1, value: 10 },
                 game_market::Value { good: 2, value: 1 },

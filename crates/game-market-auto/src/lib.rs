@@ -86,9 +86,7 @@ fn prepare_acceptance(
         .collect();
     influences.par_sort_unstable_by_key(|row| row.0);
     let track_help = opinions.is_some_and(|owner| owner.tracks_help());
-    let opinions = opinions
-        .filter(|owner| !owner.records.is_empty())
-        .map(|owner| owner.index());
+    let opinions = opinions.map(game_opinions::Opinions::index);
     #[cfg(feature = "profile")]
     {
         drop(phase);
@@ -118,22 +116,39 @@ fn prepare_acceptance(
                 .binary_search_by_key(&(offer.recipient, offer.proposer), |row| row.0)
                 .ok()
                 .map(|index| influences[index].1);
-            let social = u128::from(if offer.give.is_empty() {
+            let authored = i128::from(if offer.give.is_empty() {
                 policy.help_value
             } else {
                 0
             }) + influence.map_or(0, |row| {
-                u128::from(row.attachment) + u128::from(row.obligation) + u128::from(row.fear)
-            }) + u128::from(
-                opinions
-                    .as_ref()
-                    .map_or(0, |index| index.obligation(offer.recipient, offer.proposer)),
-            ) + u128::from(
-                opinions
-                    .as_ref()
-                    .map_or(0, |index| index.fear(offer.recipient, offer.proposer)),
-            );
-            let Some(surplus) = received.saturating_add(social).checked_sub(required) else {
+                i128::from(row.attachment) + i128::from(row.obligation) + i128::from(row.fear)
+            });
+            let personal = opinions.as_ref().map_or(0, |index| {
+                let (trust, affinity, fear, obligation) =
+                    index.subjective(offer.recipient, offer.proposer);
+                let weights = policy
+                    .opinion_weights
+                    .unwrap_or(game_market::OpinionWeights {
+                        fear: 1,
+                        obligation: 1,
+                        ..Default::default()
+                    });
+                i128::from(weights.affinity) * i128::from(affinity)
+                    + i128::from(weights.trust) * i128::from(trust)
+                    + i128::from(weights.fear) * i128::from(fear)
+                    + i128::from(weights.obligation) * i128::from(obligation)
+            });
+            let appraisal = authored + personal;
+            let surplus = if appraisal >= 0 {
+                received
+                    .saturating_add(appraisal.unsigned_abs())
+                    .checked_sub(required)
+            } else {
+                received
+                    .checked_sub(required)
+                    .and_then(|net| net.checked_sub(appraisal.unsigned_abs()))
+            };
+            let Some(surplus) = surplus else {
                 return Ok(None);
             };
             Ok(Some((
@@ -555,6 +570,7 @@ mod tests {
                 request_help: false,
                 min_gain: 0,
                 help_value: 0,
+                opinion_weights: None,
                 values: vec![Value { good: 1, value: 1 }],
                 influences: vec![],
             }],
@@ -572,6 +588,65 @@ mod tests {
             }],
             events: vec![],
         };
+        let opinions = game_opinions::Opinions {
+            rules: game_opinions::Rules {
+                minimum: -10,
+                maximum: 10,
+                initial: 0,
+                fulfilled_gain: 0,
+                default_loss: 0,
+                theft_loss: 0,
+                encounter_gain: 0,
+                fear_per_damage: 0,
+                fear_decay_per_tick: 0,
+                gratitude_gain: 0,
+                obligation_relief: 0,
+                minimum_report_trust: None,
+                affinity: None,
+                newborn_obligation_development: None,
+            },
+            sensitivities: Default::default(),
+            records: vec![game_opinions::Opinion {
+                observer: 2,
+                target: 1,
+                trust: -2,
+                fear: 4,
+                obligation: 5,
+                affinity: 2,
+            }],
+            events: vec![],
+        };
+        market.policies[0].min_gain = 4;
+        assert_eq!(
+            selected_offers(&market, &cargo, &people, &goods, &[], 1, Some(&opinions))
+                .unwrap()
+                .len(),
+            1
+        );
+        market.policies[0].opinion_weights = Some(Default::default());
+        assert!(
+            selected_offers(&market, &cargo, &people, &goods, &[], 1, Some(&opinions))
+                .unwrap()
+                .is_empty()
+        );
+        market.policies[0].opinion_weights = Some(game_market::OpinionWeights {
+            affinity: 2,
+            ..Default::default()
+        });
+        assert_eq!(
+            selected_offers(&market, &cargo, &people, &goods, &[], 1, Some(&opinions))
+                .unwrap()
+                .len(),
+            1
+        );
+        market.policies[0].opinion_weights.as_mut().unwrap().trust = 1;
+        assert!(
+            selected_offers(&market, &cargo, &people, &goods, &[], 1, Some(&opinions))
+                .unwrap()
+                .is_empty()
+        );
+        market.policies[0].min_gain = 0;
+        market.policies[0].opinion_weights = None;
         let selected = selected_offers(&market, &cargo, &people, &goods, &[], 1, None).unwrap();
         assert_eq!(selected.len(), 1);
         assert_eq!(cargo.holdings[0].person, 1);

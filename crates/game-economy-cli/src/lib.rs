@@ -310,6 +310,8 @@ struct AuthoredMarketPolicy {
     #[serde(default)]
     help_value: u64,
     #[serde(default)]
+    opinion_weights: Option<game_market::OpinionWeights>,
+    #[serde(default)]
     values: BTreeMap<String, u64>,
     #[serde(default)]
     influences: Vec<game_market::Influence>,
@@ -2668,6 +2670,7 @@ fn build_scenario(
                         request_help: policy.request_help,
                         min_gain: policy.min_gain,
                         help_value: policy.help_value,
+                        opinion_weights: policy.opinion_weights,
                         values,
                         influences: policy.influences,
                     })
