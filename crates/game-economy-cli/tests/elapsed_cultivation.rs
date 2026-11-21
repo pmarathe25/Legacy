@@ -49,9 +49,11 @@ seek_meals = false
 
 [cultivation]"#,
     );
+    static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
     let path = std::env::temp_dir().join(format!(
-        "legacy-elapsed-cultivation-{}-{quantum}.toml",
+        "legacy-elapsed-cultivation-{}-{}-{quantum}.toml",
         std::process::id(),
+        NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
     ));
     std::fs::write(&path, source).unwrap();
     let loaded = game_economy_cli::core_scenario(&path, &root.join("content"));
