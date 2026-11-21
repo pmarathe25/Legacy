@@ -42,6 +42,13 @@ pub struct Runtime {
     work: Vec<Work>,
     work_interval: Option<WorkInterval>,
     epoch: u64,
+    elapsed_spoilage: Vec<Spoilage>,
+}
+
+enum CustodyProgress {
+    None,
+    Boundary(game_lots::Draft),
+    Elapsed(game_lots::ExpiryDraft),
 }
 impl Runtime {
     fn ensure_no_work_interval(&self) -> Result<(), String> {
@@ -53,7 +60,11 @@ impl Runtime {
     }
 
     pub fn compile(mut state: Snapshot) -> Result<Self, String> {
-        let catalog = Catalog::from_tick_millis(&state.goods, state.tick_millis)?;
+        let catalog = if state.custody.expiry_millis.is_some() {
+            Catalog::from_elapsed_millis(&state.goods)?
+        } else {
+            Catalog::from_tick_millis(&state.goods, state.tick_millis)?
+        };
         state.work.par_sort_unstable_by_key(|row| row.job.id);
         game_lot_work::validate(&state, &catalog)?;
         let store = Store::compile(state.custody)?;
@@ -102,7 +113,23 @@ impl Runtime {
             work: state.work,
             work_interval: state.work_interval,
             epoch: 0,
+            elapsed_spoilage: Vec::new(),
         })
+    }
+    pub fn elapsed_expiry_time(&self) -> Option<u64> {
+        self.store.elapsed_millis()
+    }
+    pub fn next_expiry_after(&self) -> Option<u64> {
+        self.store
+            .next_expiry()?
+            .checked_sub(self.elapsed_expiry_time()?)
+    }
+    /// Take expiration receipts published together with the most recent elapsed work segment.
+    pub fn take_elapsed_spoilage(&mut self) -> Vec<Spoilage> {
+        std::mem::take(&mut self.elapsed_spoilage)
+    }
+    pub fn lot_instant(&self, boundary: u64) -> u64 {
+        self.elapsed_expiry_time().unwrap_or(boundary)
     }
     pub fn tick(&self) -> u64 {
         self.store.tick()
@@ -145,6 +172,10 @@ impl Runtime {
     pub fn work_rate_period_millis(&self) -> u64 {
         self.work_rate_period_millis.unwrap_or(self.tick_millis)
     }
+    pub fn catalog(&self) -> &Catalog {
+        &self.catalog
+    }
+
     pub fn goods(&self) -> &[Good] {
         &self.goods
     }
@@ -240,6 +271,11 @@ impl Runtime {
 
     /// Consume at most the remaining interval and retain progress for saving.
     pub fn progress_work_interval(&mut self, requested_millis: u64) -> Result<u64, String> {
+        if self.elapsed_expiry_time().is_some() {
+            return self
+                .progress_work_interval_adjusting(requested_millis, &[], &[])
+                .map(|(consumed, _)| consumed);
+        }
         let interval = self
             .work_interval
             .as_ref()
@@ -349,28 +385,33 @@ impl Runtime {
             }
             return Ok((0, Vec::new()));
         }
-        let custody = changes_custody
-            .then(|| {
-                let mut draft = self.store.prepare_transactions_now(0, &[])?;
-                if !draft.spoiled().is_empty() {
-                    return Err("elapsed custody cannot publish pending spoilage".to_string());
-                }
-                if !effects.new_people.is_empty() {
-                    let containers = effects
-                        .new_people
-                        .par_iter()
-                        .map(|&(id, capacity)| {
-                            game_lots::Container::new(Place::Person(id), capacity, vec![])
-                        })
-                        .collect::<Result<Vec<_>, _>>()?;
-                    self.store.add_empty_in(&mut draft, containers)?;
-                }
-                if let Some(allocation) = effects.batches {
-                    self.store.attach_batch_allocation(&mut draft, allocation)?;
-                }
-                Ok(draft)
+        let people = effects
+            .new_people
+            .par_iter()
+            .map(|&(id, capacity)| {
+                game_lots::Container::new(Place::Person(id), capacity, Vec::new())
             })
-            .transpose()?;
+            .collect::<Result<Vec<_>, _>>()?;
+        let custody = if let Some(now) = self.elapsed_expiry_time() {
+            let at = now
+                .checked_add(consumed)
+                .ok_or("elapsed custody clock overflow")?;
+            let mut draft = self.store.prepare_expiry_at(at)?;
+            self.store
+                .stage_expiry_custody(&mut draft, people, effects.batches)?;
+            self.store.validate_expiry_at(&draft)?;
+            CustodyProgress::Elapsed(draft)
+        } else if changes_custody {
+            let mut draft = self.store.prepare_transactions_now(0, &[])?;
+            self.store.add_empty_in(&mut draft, people)?;
+            if let Some(allocation) = effects.batches {
+                self.store.attach_batch_allocation(&mut draft, allocation)?;
+            }
+            self.store.validate_commit(&draft)?;
+            CustodyProgress::Boundary(draft)
+        } else {
+            CustodyProgress::None
+        };
         let period = self.work_rate_period_millis();
         let paused: Vec<_> = interval
             .rates
@@ -394,12 +435,20 @@ impl Runtime {
         let mut interval = self.work_interval.take().expect("checked interval");
         let result = self.apply_work_progress(&interval.rates, consumed);
         if result.is_ok() {
-            if let Some(draft) = custody {
-                self.store
-                    .commit(draft)
-                    .expect("validated custody unchanged by work progress");
-                interval.custody_revision = self.store.revision();
-            }
+            self.elapsed_spoilage = match custody {
+                CustodyProgress::None => Vec::new(),
+                CustodyProgress::Boundary(draft) => {
+                    self.store
+                        .commit(draft)
+                        .expect("validated custody unchanged by work progress")
+                        .1
+                }
+                CustodyProgress::Elapsed(draft) => self
+                    .store
+                    .commit_expiry_at(draft)
+                    .expect("validated expiry unchanged by work progress"),
+            };
+            interval.custody_revision = self.store.revision();
             interval.elapsed_millis += consumed;
             interval.rates.retain(|rate| {
                 paused

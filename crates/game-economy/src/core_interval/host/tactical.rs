@@ -330,7 +330,10 @@ impl CoreHost {
                 let carries = |good| {
                     supplies.is_some_and(|holder| {
                         holder.lots.iter().any(|lot| {
-                            lot.good == good && lot.expires_at.is_none_or(|expiry| expiry > tick)
+                            lot.good == good
+                                && lot.expires_at.is_none_or(|expiry| {
+                                    expiry > self.core.physical.lot_instant(tick)
+                                })
                         })
                     })
                 };

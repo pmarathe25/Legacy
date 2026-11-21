@@ -19,6 +19,7 @@ pub fn prepare(
     } else {
         state.tick
     };
+    let instant = state.expiry_millis.unwrap_or(next);
     state
         .revision
         .checked_add(1)
@@ -27,7 +28,7 @@ pub fn prepare(
     if state
         .containers
         .par_iter()
-        .any(|row| row.next_expiry.is_some_and(|at| at <= next))
+        .any(|row| row.next_expiry.is_some_and(|at| at <= instant))
     {
         return Ok(None);
     }
@@ -307,6 +308,7 @@ mod tests {
         }
         let state = State {
             next_batch: None,
+            expiry_millis: None,
             tick: 0,
             revision: 0,
             containers,
@@ -427,6 +429,7 @@ mod tests {
         containers.sort_unstable_by_key(|row| row.place);
         let state = State {
             next_batch: None,
+            expiry_millis: None,
             tick: 0,
             revision: 0,
             containers,

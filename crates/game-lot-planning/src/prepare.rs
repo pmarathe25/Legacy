@@ -120,7 +120,7 @@ pub fn prepare(
         batch,
         TransactionTime {
             next_tick: tick,
-            at: tick,
+            at: state.expiry_millis.unwrap_or(tick),
         },
     )
 }
@@ -1267,6 +1267,7 @@ mod time_tests {
             tick: 4,
             revision: 12,
             next_batch: Some(8),
+            expiry_millis: None,
             containers: vec![
                 Container::new(
                     Place::Person(1),

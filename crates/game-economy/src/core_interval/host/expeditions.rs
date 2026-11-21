@@ -178,11 +178,11 @@ impl CoreHost {
                     return None;
                 }
                 let holder = self.core.physical.custody(Place::Person(row.person))?;
-                let tick = self.core.physical.tick();
+                let instant = self.core.physical.lot_instant(self.core.physical.tick());
                 let available = holder
                     .lots
                     .iter()
-                    .filter(|lot| lot.good == good && lot.expires_at.is_none_or(|at| at > tick))
+                    .filter(|lot| lot.good == good && lot.expires_at.is_none_or(|at| at > instant))
                     .map(|lot| lot.quantity)
                     .sum::<u64>()
                     .saturating_sub(preference.reserve);

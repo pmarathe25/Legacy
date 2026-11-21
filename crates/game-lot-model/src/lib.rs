@@ -53,7 +53,7 @@ pub struct Lot {
     /// Stable identity of a unique, nonperishable physical item.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub item: Option<u64>,
-    /// An expiry at or before a boundary is unusable at that boundary.
+    /// Unusable at or after this instant, in the time unit of the owning state.
     pub expires_at: Option<u64>,
 }
 pub fn key(lot: &Lot) -> (u32, bool, u64, Option<u64>, Option<u64>) {
@@ -200,6 +200,9 @@ pub struct State {
     /// Persisted high-water mark when generated batch IDs are enabled.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub next_batch: Option<u64>,
+    /// Absolute elapsed milliseconds when dated lots use the elapsed clock.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expiry_millis: Option<u64>,
     pub containers: Vec<Container>,
 }
 

@@ -106,6 +106,7 @@ pub fn prepare(
     } else {
         state.tick
     };
+    let instant = state.expiry_millis.unwrap_or(next);
     state
         .revision
         .checked_add(1)
@@ -133,7 +134,7 @@ pub fn prepare(
     let available: u64 = holder
         .lots
         .iter()
-        .filter(|lot| lot.good == first.good && lot.expires_at.is_none_or(|at| at > next))
+        .filter(|lot| lot.good == first.good && lot.expires_at.is_none_or(|at| at > instant))
         .map(|lot| lot.quantity)
         .sum();
     let quantities: Vec<_> = rows.par_iter().map(|row| row.quantity).collect();
@@ -172,16 +173,18 @@ pub fn prepare(
     let mut spoiled: Vec<_> = state
         .containers
         .par_iter()
-        .filter(|container| container.next_expiry.is_some_and(|at| at <= next))
+        .filter(|container| container.next_expiry.is_some_and(|at| at <= instant))
         .flat_map_iter(|container| {
             container.lots.iter().filter_map(move |lot| {
-                lot.expires_at.filter(|at| *at <= next).map(|at| Spoilage {
-                    place: container.place,
-                    good: lot.good,
-                    quantity: lot.quantity,
-                    expires_at: at,
-                    batch: lot.batch,
-                })
+                lot.expires_at
+                    .filter(|at| *at <= instant)
+                    .map(|at| Spoilage {
+                        place: container.place,
+                        good: lot.good,
+                        quantity: lot.quantity,
+                        expires_at: at,
+                        batch: lot.batch,
+                    })
             })
         })
         .collect();
@@ -192,13 +195,13 @@ pub fn prepare(
         .enumerate()
         .filter_map(|(index, container)| {
             if index == source {
-                (debit > 0 || container.next_expiry.is_some_and(|at| at <= next))
-                    .then(|| (index, after(container, next, first.good, debit)))
+                (debit > 0 || container.next_expiry.is_some_and(|at| at <= instant))
+                    .then(|| (index, after(container, instant, first.good, debit)))
             } else {
                 container
                     .next_expiry
-                    .is_some_and(|at| at <= next)
-                    .then(|| (index, after(container, next, 0, 0)))
+                    .is_some_and(|at| at <= instant)
+                    .then(|| (index, after(container, instant, 0, 0)))
             }
         })
         .collect();

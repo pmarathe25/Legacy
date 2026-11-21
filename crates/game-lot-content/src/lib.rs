@@ -5,7 +5,7 @@ use rayon::prelude::*;
 use std::collections::HashMap;
 
 pub struct Catalog {
-    shelf_ticks: HashMap<u32, Option<u64>>,
+    shelf_life: HashMap<u32, Option<u64>>,
 }
 /// Trusted environmental harvest and consumption whose lot details are unnecessary.
 #[derive(Default)]
@@ -264,32 +264,36 @@ impl Catalog {
                 .map_err(|_| "shelf life overflow".into())
         })
     }
+    /// Preserve authored shelf life at millisecond resolution.
+    pub fn from_elapsed_millis(goods: &[Good]) -> Result<Self, String> {
+        Self::compile(goods, 86_400_000)
+    }
     fn convert(
         goods: &[Good],
         duration: impl Fn(u32) -> Result<u64, String>,
     ) -> Result<Self, String> {
-        let mut shelf_ticks = HashMap::new();
+        let mut shelf_life = HashMap::new();
         for good in goods {
             let shelf = good.food.as_ref().and_then(|food| food.shelf_days);
             if good.id == 0 || shelf == Some(0) {
                 return Err("invalid physical good".into());
             }
             let shelf = shelf.map(&duration).transpose()?;
-            if shelf_ticks.insert(good.id, shelf).is_some() {
+            if shelf_life.insert(good.id, shelf).is_some() {
                 return Err("duplicate physical good".into());
             }
         }
-        Ok(Self { shelf_ticks })
+        Ok(Self { shelf_life })
     }
     pub fn contains(&self, good: u32) -> bool {
-        self.shelf_ticks.contains_key(&good)
+        self.shelf_life.contains_key(&good)
     }
     /// Date genuinely new production at the boundary when it was made.
     pub fn fresh(&self, good: u32, quantity: u64, created_at: u64) -> Result<Lot, String> {
         if quantity == 0 {
             return Err("zero created quantity".into());
         }
-        let shelf = self.shelf_ticks.get(&good).ok_or("unknown physical good")?;
+        let shelf = self.shelf_life.get(&good).ok_or("unknown physical good")?;
         let expires_at = shelf
             .map(|ticks| {
                 created_at
@@ -332,7 +336,7 @@ impl Catalog {
                         region: inventory.region,
                         good: stock.good,
                     };
-                    if !self.shelf_ticks.contains_key(&stock.good) {
+                    if !self.shelf_life.contains_key(&stock.good) {
                         return Err("unknown stock good".to_string());
                     }
                     let lots = if stock.quantity == 0 {
@@ -353,6 +357,7 @@ impl Catalog {
         }
         Ok(State {
             next_batch: None,
+            expiry_millis: None,
             tick,
             revision: 0,
             containers,
