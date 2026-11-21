@@ -14,6 +14,18 @@ pub struct Good {
     /// Authored food properties, when this physical good can be eaten.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub food: Option<FoodProfile>,
+    /// An inedible preparation that becomes a new good after passive aging.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub maturation: Option<MaturationProfile>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MaturationProfile {
+    pub product: u32,
+    pub days: u32,
+    pub min_celsius: i16,
+    pub max_celsius: i16,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

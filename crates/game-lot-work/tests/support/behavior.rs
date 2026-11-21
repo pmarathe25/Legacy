@@ -76,11 +76,13 @@ fn physical_job_reserves_then_produces_and_delivers_without_refreshing_output() 
     let catalog = Catalog::compile(
         &[
             Good {
+                maturation: None,
                 id: 1,
                 name: "grain".into(),
                 food: None,
             },
             Good {
+                maturation: None,
                 id: 2,
                 name: "bread".into(),
                 food: Some(FoodProfile {
@@ -189,11 +191,13 @@ fn blocked_waiting_output_spoils_in_its_job_and_cannot_be_recreated_by_delivery(
     let catalog = Catalog::compile(
         &[
             Good {
+                maturation: None,
                 id: 1,
                 name: "wood".into(),
                 food: None,
             },
             Good {
+                maturation: None,
                 id: 2,
                 name: "food".into(),
                 food: Some(FoodProfile {
@@ -468,11 +472,13 @@ fn missing_or_expiring_inputs_interrupt_work_and_do_not_make_output() {
     let catalog = Catalog::compile(
         &[
             Good {
+                maturation: None,
                 id: 1,
                 name: "ingredient".into(),
                 food: None,
             },
             Good {
+                maturation: None,
                 id: 2,
                 name: "product".into(),
                 food: None,

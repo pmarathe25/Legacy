@@ -9,11 +9,13 @@ use game_production_model::{Good, Recipe, Start};
 fn personal_work_decisions_use_expiry_aware_projection_and_physical_admission() {
     let goods = vec![
         Good {
+            maturation: None,
             id: 1,
             name: "material".into(),
             food: None,
         },
         Good {
+            maturation: None,
             id: 2,
             name: "product".into(),
             food: None,
@@ -135,6 +137,7 @@ fn fear_can_motivate_cooperation_but_only_actual_transfer_resolves_the_offer() {
     use game_lots::{Movement, Transaction};
     use game_market::{Influence, Market, Offer, Outcome, Policy as TradePolicy, Value};
     let goods = vec![Good {
+        maturation: None,
         id: 1,
         name: "food".into(),
         food: None,
@@ -292,6 +295,7 @@ fn promises_do_not_compel_delivery_but_fear_can_change_a_personal_choice() {
     use game_agreements::{Agreements, Contract, Policy as PromisePolicy, Status};
     use game_opinions::{Opinion, Opinions, Rules};
     let goods = vec![Good {
+        maturation: None,
         id: 1,
         name: "food".into(),
         food: None,
@@ -446,6 +450,7 @@ fn many_individual_promises_can_deliver_to_one_busy_recipient() {
     use game_agreements::{Agreements, Contract, Policy as PromisePolicy, Status};
     let count = 1000u64;
     let goods = vec![Good {
+        maturation: None,
         id: 1,
         name: "food".into(),
         food: None,
@@ -590,6 +595,7 @@ fn concentrated_promise_delivery_benchmark() {
             containers,
         },
         goods: vec![Good {
+            maturation: None,
             id: 1,
             name: "food".into(),
             food: None,

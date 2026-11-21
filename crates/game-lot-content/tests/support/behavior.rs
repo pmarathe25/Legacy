@@ -5,6 +5,7 @@ use std::collections::BTreeMap;
 fn goods() -> Vec<Good> {
     vec![
         Good {
+            maturation: None,
             id: 1,
             name: "fresh food".into(),
             food: Some(FoodProfile {
@@ -16,6 +17,7 @@ fn goods() -> Vec<Good> {
             }),
         },
         Good {
+            maturation: None,
             id: 2,
             name: "stone".into(),
             food: None,
