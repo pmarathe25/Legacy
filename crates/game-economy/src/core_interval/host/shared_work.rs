@@ -179,15 +179,52 @@ impl CoreHost {
     }
     /// Each helper makes a personal choice; no institution or agreement assigns them.
     pub fn assist_work_autonomously(&mut self, blocked: &[u64]) -> Result<Vec<u64>, String> {
+        self.assist_unprofiled_work(blocked, |_| true)
+    }
+
+    pub(super) fn assist_unprofiled_work(
+        &mut self,
+        blocked: &[u64],
+        allowed: impl Fn(u64) -> bool + Sync,
+    ) -> Result<Vec<u64>, String> {
+        if self
+            .shared_work
+            .as_ref()
+            .is_some_and(|owner| !owner.sessions.is_empty())
+        {
+            return Err("helper assignments are already active".into());
+        }
+        let candidates = self.assistance_candidates(blocked, |person, _| allowed(person))?;
+        self.admit_assistance(candidates)
+    }
+
+    pub(super) fn assist_selected_work(
+        &mut self,
+        blocked: &[u64],
+        selections: &[(u64, u64)],
+    ) -> Result<(Vec<u64>, Vec<u64>), String> {
+        if selections.is_empty() {
+            return Ok((Vec::new(), Vec::new()));
+        }
+        let candidates = self.assistance_candidates(blocked, |person, job| {
+            selections.binary_search(&(person, job)).is_ok()
+        })?;
+        let mut available: Vec<_> = candidates.par_iter().map(|c| c.person).collect();
+        available.par_sort_unstable();
+        Ok((available, self.admit_assistance(candidates)?))
+    }
+
+    pub(super) fn assistance_candidates(
+        &self,
+        blocked: &[u64],
+        allowed: impl Fn(u64, u64) -> bool + Sync,
+    ) -> Result<Vec<game_economy_work::shared::Candidate>, String> {
         if blocked.par_windows(2).any(|pair| pair[0] >= pair[1]) {
             return Err("invalid occupied people".into());
         }
         let Some(owner) = self.shared_work.as_ref() else {
             return Ok(Vec::new());
         };
-        if !owner.sessions.is_empty() {
-            return Err("helper assignments are already active".into());
-        }
         if owner.owner.preferences.is_empty() {
             return Ok(Vec::new());
         }
@@ -210,6 +247,12 @@ impl CoreHost {
                 .filter(|work| work.phase == game_lot_runtime::Phase::Working)
                 .map(|work| work.job.worker),
         );
+        busy.par_extend(
+            owner
+                .sessions
+                .par_iter()
+                .map(|session| session.event.person),
+        );
         busy.par_sort_unstable();
         busy.dedup();
         let resting = self
@@ -231,7 +274,12 @@ impl CoreHost {
             .work_interval()
             .ok_or("no physical interval")?
             .rates;
-        let mut events = game_economy_work::shared::Context {
+        let occupancies: Vec<_> = owner
+            .sessions
+            .par_chunk_by(|first, second| first.event.job == second.event.job)
+            .map(|crew| (crew[0].event.job, crew.len()))
+            .collect();
+        Ok(game_economy_work::shared::Context {
             owner: &owner.owner,
             people: &self.core.people,
             work: self.core.physical.work(),
@@ -255,45 +303,76 @@ impl CoreHost {
             seed: self.core.seed,
             tick: self.core.physical.tick(),
         }
-        .prepare_interval();
-        events.retain(|event| event.progress > 0);
+        .interval_candidates(&occupancies, allowed))
+    }
+
+    fn admit_assistance(
+        &mut self,
+        candidates: Vec<game_economy_work::shared::Candidate>,
+    ) -> Result<Vec<u64>, String> {
+        use game_economy_work::shared;
+        let events = shared::admit_interval(candidates, self.core.physical.tick());
         if events.is_empty() {
             return Ok(Vec::new());
         }
-        events.par_sort_unstable_by_key(|event| (event.job, event.person));
-        let sessions: Vec<_> = events
-            .par_iter()
-            .map(|event| {
-                let rate = rates
-                    .binary_search_by_key(&event.job, |row| row.0)
-                    .expect("selected active job");
-                CoreAssistSession {
-                    event: event.clone(),
-                    elapsed_millis: 0,
-                    base_rate: rates[rate].1,
-                }
-            })
-            .collect();
-        sessions
-            .par_chunk_by(|a, b| a.event.job == b.event.job)
+        let owner = self.shared_work.as_ref().expect("assistance owner");
+        let rates = &self
+            .core
+            .physical
+            .work_interval()
+            .ok_or("no physical interval")?
+            .rates;
+        events
+            .par_chunk_by(|a, b| a.job == b.job)
             .try_for_each(|group| -> Result<(), String> {
-                let sum = u128::from(group[0].base_rate)
+                let rate = rates
+                    .binary_search_by_key(&group[0].job, |row| row.0)
+                    .map_err(|_| "missing shared job rate")?;
+                let sum = u128::from(rates[rate].1)
                     + group
                         .par_iter()
-                        .map(|row| u128::from(row.event.progress))
+                        .map(|event| u128::from(event.progress))
                         .sum::<u128>();
                 u64::try_from(sum).map_err(|_| "shared work rate overflow")?;
                 Ok(())
             })?;
+        let sessions: Vec<_> = events
+            .par_iter()
+            .map(|event| {
+                let base_rate = owner
+                    .sessions
+                    .binary_search_by_key(&event.job, |session| session.event.job)
+                    .ok()
+                    .map_or_else(
+                        || {
+                            let rate = rates
+                                .binary_search_by_key(&event.job, |row| row.0)
+                                .expect("selected active job");
+                            rates[rate].1
+                        },
+                        |index| owner.sessions[index].base_rate,
+                    );
+                CoreAssistSession {
+                    event: event.clone(),
+                    elapsed_millis: 0,
+                    base_rate,
+                }
+            })
+            .collect();
         let mut effective = rates.clone();
-        game_economy_work::shared::apply_rates(&events, &mut effective);
+        shared::apply_rates(&events, &mut effective);
         self.core.physical.replace_interval_rates(&effective)?;
-        self.shared_work
+        let current = &mut self
+            .shared_work
             .as_mut()
             .expect("checked shared work")
-            .sessions = sessions;
+            .sessions;
+        current.par_extend(sessions);
+        current.par_sort_unstable_by_key(|session| (session.event.job, session.event.person));
         self.work_checked_revision = None;
-        Ok(self.assisting_people())
+        let mut admitted: Vec<_> = events.into_par_iter().map(|row| row.person).collect();
+        admitted.par_sort_unstable();
+        Ok(admitted)
     }
 }
 

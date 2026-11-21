@@ -28,6 +28,7 @@ pub(super) const RESUME: u32 = 22;
 pub(super) const PRACTICE_LESSON: u32 = 23;
 pub(super) const CONFINEMENT: u32 = 24;
 pub(super) const READ_TEXT: u32 = 25;
+pub(super) const ASSIST: u32 = 26;
 
 fn index_by_person<T>(rows: &[T], id: u64, key: impl Fn(&T) -> u64) -> Option<usize> {
     rows.first()
@@ -2194,6 +2195,50 @@ impl CoreHost {
                     fatigue_value: None,
                 },
             ));
+        }
+        if domain.is_none_or(|domain| domain == ASSIST)
+            && self.shared_work.is_some()
+            && let Some(people) = self
+                .schedule
+                .as_ref()
+                .and_then(|schedule| schedule.personal_choices.as_deref())
+        {
+            let preferred = |id| {
+                index_by_person(people, id, |row| row.id).is_some_and(|index| {
+                    let profile = &people[index];
+                    profile
+                        .preferences
+                        .binary_search_by_key(&ASSIST, |row| row.domain)
+                        .ok()
+                        .is_some_and(|row| profile.preferences[row].enabled)
+                })
+            };
+            if people.par_iter().any(|profile| preferred(profile.id)) {
+                let offers = self.assistance_candidates(&busy, |person, _| preferred(person))?;
+                intents.par_extend(offers.into_par_iter().map(|candidate| CoreChoiceIntent {
+                    actor: candidate.person,
+                    key: Key {
+                        domain: ASSIST,
+                        action: candidate.job,
+                    },
+                    fatigue_value: None,
+                    barrier: None,
+                    written_form: None,
+                    strike: None,
+                    watch: None,
+                    assembly: None,
+                    cultivation: None,
+                    mechanical_load: None,
+                    movement: None,
+                    second_movement: None,
+                    work: None,
+                    experiment: None,
+                    experiment_value: Some(1),
+                    meal_value: None,
+                    tool_damage: None,
+                    health_value: None,
+                }));
+            }
         }
         if domain.is_none_or(|domain| domain == READ_TEXT)
             && let Some(owner) = &self.writing

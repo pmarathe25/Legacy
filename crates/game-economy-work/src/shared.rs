@@ -139,9 +139,9 @@ pub struct Context<'a> {
 }
 
 #[derive(Clone)]
-struct Candidate {
-    job: u64,
-    person: u64,
+pub struct Candidate {
+    pub job: u64,
+    pub person: u64,
     lead: u64,
     recipe: u32,
     offered: u64,
@@ -160,13 +160,24 @@ fn priority(seed: u64, tick: u64, job: u64, person: u64) -> u64 {
 
 impl Context<'_> {
     pub fn prepare(&self) -> Vec<Event> {
-        self.prepare_with(false)
+        admit(self.candidates(false, &[], |_, _| true), self.tick, false)
     }
-    /// Admit helper rates for a fractional interval; the physical runtime caps elapsed progress at completion.
-    pub fn prepare_interval(&self) -> Vec<Event> {
-        self.prepare_with(true)
+
+    /// Discover individual offers before deciding which helpers fit the reserved site.
+    pub fn interval_candidates(
+        &self,
+        occupancies: &[(u64, usize)],
+        allowed: impl Fn(u64, u64) -> bool + Sync,
+    ) -> Vec<Candidate> {
+        self.candidates(true, occupancies, allowed)
     }
-    fn prepare_with(&self, interval: bool) -> Vec<Event> {
+
+    fn candidates(
+        &self,
+        interval: bool,
+        occupancies: &[(u64, usize)],
+        allowed: impl Fn(u64, u64) -> bool + Sync,
+    ) -> Vec<Candidate> {
         if (self.owner.preferences.is_empty() && self.manual.is_none()) || self.rates.is_empty() {
             return Vec::new();
         }
@@ -193,8 +204,7 @@ impl Context<'_> {
             .opinions
             .filter(|_| needs_feelings)
             .map(Opinions::index);
-        let mut candidates: Vec<_> = self
-            .owner
+        self.owner
             .preferences
             .par_iter()
             .filter(|preference| {
@@ -230,6 +240,7 @@ impl Context<'_> {
                 if person.region != Some(job.job.region)
                     || job.job.recipe != preference.recipe
                     || job.job.remaining == 0
+                    || !allowed(person.id, job.job.id)
                 {
                     return None;
                 }
@@ -286,7 +297,13 @@ impl Context<'_> {
                     .ok()
                     .map(|i| rules[i].max_helpers)?;
                 let limit = if interval {
-                    limit.min(binding.slots.saturating_sub(1))
+                    let used = occupancies
+                        .binary_search_by_key(&job.job.id, |row| row.0)
+                        .ok()
+                        .map_or(0, |index| occupancies[index].1 as u64);
+                    limit
+                        .min(binding.slots.saturating_sub(1))
+                        .saturating_sub(used)
                 } else {
                     limit
                 };
@@ -322,114 +339,121 @@ impl Context<'_> {
                     priority: priority(self.seed, self.tick, job.job.id, person.id),
                 })
             })
-            .collect();
-        // For a heavily contested small crew, retain only each chunk's best
-        // candidates before the deterministic global arbitration.
-        if let Some(first) = candidates.first() {
-            let limit = usize::try_from(first.limit).unwrap_or(usize::MAX);
-            if limit <= 256
-                && limit.saturating_mul(8) < candidates.len()
-                && candidates
-                    .par_iter()
-                    .all(|candidate| candidate.job == first.job)
-            {
-                candidates = candidates
-                    .par_chunks(1024)
-                    .map(|chunk| {
-                        let mut local = chunk.to_vec();
-                        if local.len() > limit {
-                            local.select_nth_unstable_by_key(limit, |candidate| {
-                                (candidate.priority, candidate.person)
-                            });
-                            local.truncate(limit);
-                        }
-                        local
-                    })
-                    .collect::<Vec<_>>()
-                    .into_par_iter()
-                    .flatten()
-                    .collect();
-            }
-        }
-        candidates.par_sort_unstable_by_key(|c| (c.job, c.priority, c.person));
-        if candidates
-            .par_windows(2)
-            .all(|pair| pair[0].job != pair[1].job)
+            .collect()
+    }
+}
+
+/// Admit selected helpers per reserved job. The physical runtime caps progress at completion.
+pub fn admit_interval(candidates: Vec<Candidate>, tick: u64) -> Vec<Event> {
+    admit(candidates, tick, true)
+}
+
+fn admit(mut candidates: Vec<Candidate>, tick: u64, interval: bool) -> Vec<Event> {
+    // For a heavily contested small crew, retain only each chunk's best
+    // candidates before the deterministic global arbitration.
+    if let Some(first) = candidates.first() {
+        let limit = usize::try_from(first.limit).unwrap_or(usize::MAX);
+        if limit <= 256
+            && limit.saturating_mul(8) < candidates.len()
+            && candidates
+                .par_iter()
+                .all(|candidate| candidate.job == first.job)
         {
-            return candidates
-                .into_par_iter()
-                .map(|candidate| Event {
-                    tick: self.tick,
-                    person: candidate.person,
-                    lead: candidate.lead,
-                    job: candidate.job,
-                    recipe: candidate.recipe,
-                    offered: candidate.offered,
-                    progress: if interval {
-                        candidate.offered
-                    } else {
-                        candidate
-                            .offered
-                            .min(candidate.remaining.saturating_sub(candidate.base))
-                    },
-                    finished: false,
-                    interrupted: false,
+            candidates = candidates
+                .par_chunks(1024)
+                .map(|chunk| {
+                    let mut local = chunk.to_vec();
+                    if local.len() > limit {
+                        local.select_nth_unstable_by_key(limit, |candidate| {
+                            (candidate.priority, candidate.person)
+                        });
+                        local.truncate(limit);
+                    }
+                    local
                 })
+                .collect::<Vec<_>>()
+                .into_par_iter()
+                .flatten()
                 .collect();
         }
-        let mut events: Vec<_> = candidates
-            .par_chunk_by(|a, b| a.job == b.job)
-            .flat_map(|group| {
-                let admitted = &group[..group
-                    .len()
-                    .min(usize::try_from(group[0].limit).unwrap_or(usize::MAX))];
-                let budget = if interval {
-                    u128::MAX
+    }
+    candidates.par_sort_unstable_by_key(|c| (c.job, c.priority, c.person));
+    if candidates
+        .par_windows(2)
+        .all(|pair| pair[0].job != pair[1].job)
+    {
+        return candidates
+            .into_par_iter()
+            .map(|candidate| Event {
+                tick,
+                person: candidate.person,
+                lead: candidate.lead,
+                job: candidate.job,
+                recipe: candidate.recipe,
+                offered: candidate.offered,
+                progress: if interval {
+                    candidate.offered
                 } else {
-                    u128::from(group[0].remaining.saturating_sub(group[0].base))
-                };
-                let totals: Vec<u128> = admitted
-                    .par_chunks(1024)
-                    .map(|chunk| chunk.iter().map(|c| u128::from(c.offered)).sum())
-                    .collect();
-                let mut sum = 0u128;
-                let offsets: Vec<_> = totals
-                    .into_iter()
-                    .map(|amount| {
-                        let before = sum;
-                        sum = sum.saturating_add(amount);
-                        before
-                    })
-                    .collect();
-                admitted
-                    .par_chunks(1024)
-                    .zip(offsets.into_par_iter())
-                    .flat_map_iter(move |(chunk, offset)| {
-                        let mut used = offset;
-                        chunk.iter().map(move |candidate| {
-                            let progress = u128::from(candidate.offered)
-                                .min(budget.saturating_sub(used))
-                                as u64;
-                            used = used.saturating_add(u128::from(candidate.offered));
-                            Event {
-                                tick: self.tick,
-                                person: candidate.person,
-                                lead: candidate.lead,
-                                job: candidate.job,
-                                recipe: candidate.recipe,
-                                offered: candidate.offered,
-                                progress,
-                                finished: false,
-                                interrupted: false,
-                            }
-                        })
-                    })
-                    .collect::<Vec<_>>()
+                    candidate
+                        .offered
+                        .min(candidate.remaining.saturating_sub(candidate.base))
+                },
+                finished: false,
+                interrupted: false,
             })
             .collect();
-        events.par_sort_unstable_by_key(|event| (event.job, event.person));
-        events
     }
+    let mut events: Vec<_> = candidates
+        .par_chunk_by(|a, b| a.job == b.job)
+        .flat_map(|group| {
+            let admitted = &group[..group
+                .len()
+                .min(usize::try_from(group[0].limit).unwrap_or(usize::MAX))];
+            let budget = if interval {
+                u128::MAX
+            } else {
+                u128::from(group[0].remaining.saturating_sub(group[0].base))
+            };
+            let totals: Vec<u128> = admitted
+                .par_chunks(1024)
+                .map(|chunk| chunk.iter().map(|c| u128::from(c.offered)).sum())
+                .collect();
+            let mut sum = 0u128;
+            let offsets: Vec<_> = totals
+                .into_iter()
+                .map(|amount| {
+                    let before = sum;
+                    sum = sum.saturating_add(amount);
+                    before
+                })
+                .collect();
+            admitted
+                .par_chunks(1024)
+                .zip(offsets.into_par_iter())
+                .flat_map_iter(move |(chunk, offset)| {
+                    let mut used = offset;
+                    chunk.iter().map(move |candidate| {
+                        let progress =
+                            u128::from(candidate.offered).min(budget.saturating_sub(used)) as u64;
+                        used = used.saturating_add(u128::from(candidate.offered));
+                        Event {
+                            tick,
+                            person: candidate.person,
+                            lead: candidate.lead,
+                            job: candidate.job,
+                            recipe: candidate.recipe,
+                            offered: candidate.offered,
+                            progress,
+                            finished: false,
+                            interrupted: false,
+                        }
+                    })
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    events.par_sort_unstable_by_key(|event| (event.job, event.person));
+    events
 }
 
 /// Add only effective helper progress to the lead's existing rate.

@@ -16713,6 +16713,87 @@ fn one_resting_helper_does_not_release_a_hungry_coworker() {
 }
 
 #[test]
+fn personal_assistance_competes_with_idleness_and_uses_only_free_crew_slots() {
+    fn run(workers: usize, bias: i64) -> serde_json::Value {
+        use game_economy::core_interval::{CoreChoiceOutcome, CoreRunEvent};
+        use game_personal_choice::{Person, Preference};
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut initial = two_helpers_fixture();
+                let mut fourth = initial.core.people[2].clone();
+                fourth.id = 4;
+                initial.core.people.push(fourth);
+                let preferences = &mut initial.shared_work.as_mut().unwrap().owner.preferences;
+                let mut fourth = preferences[1].clone();
+                fourth.person = 4;
+                preferences.push(fourth);
+                let profile = |id, bias| Person {
+                    id,
+                    idle: 0,
+                    act_on_tie: false,
+                    preferences: vec![Preference {
+                        domain: 26,
+                        enabled: true,
+                        bias,
+                        weight: 1000,
+                    }],
+                    actions: Vec::new(),
+                };
+                let mut host = CoreHost::begin(initial, &[(1, 1)]).unwrap();
+                host.enable_schedule(1000, 1).unwrap();
+                host.enable_personal_choices(vec![profile(3, bias), profile(4, bias)])
+                    .unwrap();
+                let run = host.advance_continuous(500, &[]).unwrap();
+                assert_eq!(run.failure, None);
+                let outcomes: Vec<_> = run
+                    .events
+                    .iter()
+                    .filter_map(|event| match event {
+                        CoreRunEvent::PersonalChoices(rows) => Some(rows.iter()),
+                        _ => None,
+                    })
+                    .flatten()
+                    .map(|row| (row.actor, row.outcome))
+                    .collect();
+                let state = host.snapshot();
+                let sessions = &state.shared_work.as_ref().unwrap().sessions;
+                assert_eq!(sessions[0].event.person, 2);
+                assert!(
+                    sessions
+                        .iter()
+                        .all(|session| session.elapsed_millis == 500 && session.base_rate == 1)
+                );
+                let rate = state.core.physical.work_interval.as_ref().unwrap().rates[0].1;
+                if bias > 0 {
+                    assert_eq!(sessions.len(), 2);
+                    assert_eq!(rate, 3);
+                    assert!(
+                        outcomes.contains(&(sessions[1].event.person, CoreChoiceOutcome::Accepted))
+                    );
+                    let denied = if sessions[1].event.person == 3 { 4 } else { 3 };
+                    assert!(outcomes.contains(&(denied, CoreChoiceOutcome::Denied)));
+                } else {
+                    assert_eq!(sessions.len(), 1);
+                    assert_eq!(rate, 2);
+                    assert!(outcomes.contains(&(3, CoreChoiceOutcome::NoLocalAction)));
+                    assert!(outcomes.contains(&(4, CoreChoiceOutcome::NoLocalAction)));
+                }
+                let saved = serde_json::to_value(state).unwrap();
+                let restored =
+                    CoreHost::resume(serde_json::from_value(saved.clone()).unwrap()).unwrap();
+                assert_eq!(serde_json::to_value(restored.snapshot()).unwrap(), saved);
+                saved
+            })
+    }
+    for bias in [-10, 10] {
+        assert_eq!(run(1, bias), run(6, bias));
+    }
+}
+
+#[test]
 fn scheduled_helpers_are_reconsidered_and_do_not_carry_extra_rate_across_boundaries() {
     let run = |workers| {
         rayon::ThreadPoolBuilder::new().num_threads(workers).build().unwrap().install(|| {
