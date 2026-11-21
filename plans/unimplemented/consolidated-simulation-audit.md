@@ -68,6 +68,11 @@ to track rates, deadlines, and behavior under different advance sizes. The
   who share exact spoken or written forms and show competing forms. A
   one-year integrated archive records adoption, adaptation, and explanations
   that did not result in an immediate adoption.
+- Authored pastime catalogs provide song composition, instrument practice,
+  and material-based painting. Characters can take up or stop an activity.
+  Completion is dated by elapsed time and people can assign it different
+  meaning. Tests cover finite material use, retained instruments, interruption,
+  and deterministic decisions for 4,096 individual participants.
 - Reading and joining a reserved crew can compete with other personal
   choices. An individual can decline to help even with free crew space.
   Crew capacity is applied after choices. An accepted helper contributes

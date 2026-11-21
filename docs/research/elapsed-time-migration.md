@@ -213,6 +213,11 @@ last visit deadline. Scenarios without this clock retain their settlement cadenc
 Purpose can set `purpose.rules.elapsed_period_millis`. Deprivation and its
 physical consequences then apply at multiples of that period. A physical
 settlement applies work outcomes without charging for elapsed time again.
+An authored pastime has its own duration in milliseconds. Consumed materials
+leave personal custody when the activity starts. Required instruments remain
+in custody. Only completion produces the signed personal purpose appraisal
+under `actions = [{ domain = 27, completed = ... }]`. An interruption or
+voluntary stop ends the active session.
 Older saves without these explicit rates retain their original quantum-based
 semantics. Interval snapshots also
 retain absolute milliseconds at the current boundary; an older snapshot
