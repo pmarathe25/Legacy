@@ -1168,7 +1168,7 @@ impl CoreHost {
         }
         let draft = owner
             .world
-            .prepare_assemblies(tick, self.core.seed, requests)?;
+            .prepare_assemblies_at(tick, self.core.decision_time_key(), self.core.seed, requests)?;
         let accepted: HashSet<_> = draft
             .outcomes()
             .par_iter()
@@ -1616,7 +1616,7 @@ impl CoreHost {
                 })
                 .collect());
         }
-        let mechanical = owner.world.prepare(tick, self.core.seed, &admitted)?;
+        let mechanical = owner.world.prepare_at(tick, Some(self.core.simulated_millis()), self.core.seed, &admitted)?;
         let mut by_actor: Vec<_> = prepared.par_iter().map(|row| (row.0.actor, row)).collect();
         by_actor.par_sort_unstable_by_key(|row| row.0);
         let moved: Vec<_> = mechanical
@@ -1798,7 +1798,7 @@ impl CoreHost {
         let owner = self.mechanics.as_ref().ok_or("mechanics is not enabled")?;
         let draft = owner
             .world
-            .prepare(self.core.physical.tick(), self.core.seed, requests)?;
+            .prepare_at(self.core.physical.tick(), Some(self.core.simulated_millis()), self.core.seed, requests)?;
         let memories = (!owner.memories.is_empty()).then(|| {
             owner
                 .memories
