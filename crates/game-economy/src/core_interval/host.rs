@@ -65,6 +65,7 @@ pub use conflict::{
 pub use construction::CoreConstructionResults;
 pub use dependent_care::CoreCareVisit;
 pub use expedition_invitations::CoreExpeditionOffer;
+pub use fauna::CoreFaunaTransitions;
 pub use food_search::{CoreFoodProvision, CoreFoodSearch};
 pub use game_economy_expeditions::elapsed::{
     Event as ExpeditionEvent, EventKind as ExpeditionEventKind, Itinerary as ExpeditionItinerary,
@@ -1178,7 +1179,13 @@ impl CoreHost {
                 })
                 .collect();
             owner
-                .validate(&regions, &goods, core.physical.tick())
+                .validate(
+                    &regions,
+                    &goods,
+                    owner
+                        .lifecycle_ordinal(core.simulated_millis(), core.physical.tick())
+                        .map_err(str::to_owned)?,
+                )
                 .map_err(str::to_owned)?;
         }
         if let Some(owner) = &mut animal_feelings {
@@ -1720,6 +1727,7 @@ impl CoreHost {
         let wounds = self.next_wound_deadline();
         let invocation = self.next_invocation_deadline();
         let care = self.next_elapsed_care();
+        let fauna = self.next_fauna_lifecycle();
         let first = [
             recovery,
             exposure,
@@ -1735,6 +1743,7 @@ impl CoreHost {
             wounds,
             invocation,
             care,
+            fauna,
         ]
         .into_iter()
         .flatten()
@@ -1761,6 +1770,7 @@ impl CoreHost {
                     wounds: wounds == Some(after_millis),
                     invocation: invocation == Some(after_millis),
                     care: care == Some(after_millis),
+                    fauna: fauna == Some(after_millis),
                     recovery: recovery == Some(after_millis),
                     exposure: exposure == Some(after_millis),
                 };
@@ -1779,6 +1789,7 @@ impl CoreHost {
                 deadline.wounds = wounds == Some(after_millis);
                 deadline.invocation = invocation == Some(after_millis);
                 deadline.care = care == Some(after_millis);
+                deadline.fauna = fauna == Some(after_millis);
             }
         }
         Ok(PreparedDeadline {
@@ -3201,6 +3212,17 @@ impl CoreHost {
                     draft.events().tick,
                     lifecycle.deaths(),
                 ),
+                fauna::CoreFaunaDraft::Encounters(encounters) => {
+                    let mut deaths: Vec<_> = encounters.deaths().collect();
+                    deaths.par_sort_unstable();
+                    owner.reconcile_with_deaths(
+                        &draft.people.people,
+                        self.fauna.as_ref().expect("staged fauna"),
+                        &available,
+                        draft.events().tick,
+                        &deaths,
+                    );
+                }
                 fauna::CoreFaunaDraft::Complete(fauna) => {
                     owner.reconcile(&draft.people.people, fauna, &available, draft.events().tick)
                 }

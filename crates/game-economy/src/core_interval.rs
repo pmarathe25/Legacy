@@ -29,7 +29,6 @@ pub use game_economy_expeditions::elapsed_invitations::{
     Preference as ExpeditionInvitationPreference, Reply as ExpeditionReply,
     Response as ExpeditionReplyKind,
 };
-pub use host::CoreTacticalResult;
 pub use host::{
     BarrierAction, CoreAssistRecord, CoreAssistSession, CoreChoiceEvent, CoreChoiceIntent,
     CoreChoiceOutcome, CoreConfinement, CoreConstructionResults, CoreDeliveryResults,
@@ -51,6 +50,7 @@ pub use host::{
 };
 pub use host::{CoreCampaignView, CorePastLifeView};
 pub use host::{CoreCareVisit, CoreExpeditionOffer};
+pub use host::{CoreFaunaTransitions, CoreTacticalResult};
 pub use host::{ExpeditionEvent, ExpeditionEventKind, ExpeditionItinerary, ExpeditionStage};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -158,6 +158,7 @@ pub struct CoreDeadline {
     pub wounds: bool,
     pub invocation: bool,
     pub care: bool,
+    pub fauna: bool,
 }
 /// Travelers published at a partial-interval offset.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -471,6 +472,7 @@ impl CoreInterval {
             wounds: false,
             invocation: false,
             care: false,
+            fauna: false,
             food_health: food_health == Some(after),
         })
     }

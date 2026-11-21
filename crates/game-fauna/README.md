@@ -1,5 +1,12 @@
 # Individual wildlife
 
+`fauna.lifecycle_period_millis` gives the elapsed host a wildlife clock. Aging,
+grazing, starvation, seasonal exposure, opportunities to mate, and delivery
+run at those ecological deadlines. Species ages and gestations count these
+periods. Accepted offerings and hunts take effect when they occur. The host
+saves the completed lifecycle ordinal and records births and deaths with
+their simulated millisecond. Saves without the optional period use settlement.
+
 This owner stages individual animals with data-defined species, diploid inherited traits, hunger, health, aging and gestation. Animals graze finite, local patches supplied by the physical resource owner; deterministic parallel allocation prevents competing animals from consuming the same food. Births use actual local parents and deterministic IDs. The host must validate the committed population and atomically publish both the returned animal generation and patch consumption.
 
 The economic host runs wildlife after successfully staged human gathering and patch renewal, then deducts actual grazing from the same remaining patches before the tick commits. People can offer a local animal real carried food, either by a controlled action or an autonomous personal preference. Only consumed food matching its diet affects its hunger and subsequent grazing; the action reports food used, not its nutritional effect. `content/scenarios/economy-wildlife.toml` supplies a playable example using named food content. Physical restraint is modeled separately from handling and does not imply ownership.

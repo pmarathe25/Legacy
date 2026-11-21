@@ -1,7 +1,9 @@
 //! Independent animals, local grazing and inherited life histories.
 pub mod content;
+mod elapsed;
 pub mod handling;
 mod mating;
+pub use elapsed::Encounters;
 mod mortality;
 pub mod restraint;
 use game_genetics::{Genome, Sex, inherit, random};
@@ -11,7 +13,7 @@ use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
-/// Authored biological parameters; all times are simulation boundaries.
+/// Authored biological parameters; ages and gestation count lifecycle periods.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Species {
@@ -177,6 +179,9 @@ pub struct Fauna {
     pub animals: Vec<Animal>,
     pub next_id: u64,
     pub last_tick: u64,
+    /// Milliseconds between ecological events when independent of settlement.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lifecycle_period_millis: Option<u64>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub recent_deaths: Vec<AnimalDeath>,
 }
@@ -187,6 +192,7 @@ impl Clone for Fauna {
             animals: self.animals.par_iter().cloned().collect(),
             next_id: self.next_id,
             last_tick: self.last_tick,
+            lifecycle_period_millis: self.lifecycle_period_millis,
             recent_deaths: self.recent_deaths.clone(),
         }
     }
@@ -226,6 +232,12 @@ struct QuietAnimal {
 impl QuietDraft {
     pub fn deaths(&self) -> &[u64] {
         &self.deaths
+    }
+    pub fn births(&self) -> impl Iterator<Item = u64> + '_ {
+        self.births.iter().map(|animal| animal.id)
+    }
+    pub fn death_receipts(&self) -> &[AnimalDeath] {
+        &self.recent_deaths
     }
     pub fn consumed(&self) -> &[(u64, u64)] {
         &self.consumed
@@ -862,7 +874,7 @@ impl Fauna {
         goods: &HashSet<u32>,
         now: u64,
     ) -> Result<(), &'static str> {
-        if self.last_tick != now || self.next_id == 0 {
+        if self.last_tick != now || self.next_id == 0 || self.lifecycle_period_millis == Some(0) {
             return Err("invalid fauna clock or identity");
         }
         let mut species: Vec<_> = self.species.par_iter().collect();
@@ -1358,6 +1370,7 @@ impl Fauna {
                 animals,
                 next_id,
                 last_tick: tick,
+                lifecycle_period_millis: self.lifecycle_period_millis,
                 recent_deaths,
             },
             consumed,

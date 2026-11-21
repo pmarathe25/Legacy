@@ -6,6 +6,7 @@ pub(super) struct ElapsedProgress {
     pub millis: u64,
     pub incapacitations: Vec<scheduler::Incapacitation>,
     pub family_events: Vec<game_economy_family::FamilyEvent>,
+    pub fauna: Option<CoreFaunaTransitions>,
     pub disease_events: Vec<game_disease::Event>,
     pub local_arrivals: Vec<game_economy_local_transport::walking::Event>,
 }
@@ -24,6 +25,7 @@ struct ElapsedLimits {
     disease: Option<u64>,
     nutrition: Option<u64>,
     food_health: Option<u128>,
+    fauna: Option<u64>,
 }
 
 impl From<PreparedDeadline> for ElapsedLimits {
@@ -43,6 +45,7 @@ impl From<PreparedDeadline> for ElapsedLimits {
             disease: at(deadline.disease),
             nutrition: at(deadline.nutrition),
             food_health: at(deadline.food_health).map(u128::from),
+            fauna: at(deadline.fauna),
         }
     }
 }
@@ -64,6 +67,7 @@ impl ElapsedLimits {
             .next_conception()
             .and_then(|after| u64::try_from(after).ok());
         let disease = host.next_disease_deadline();
+        let fauna = host.next_fauna_lifecycle();
         let mut limit = host.core.progress_limit(requested)?;
         limit = [
             recovery,
@@ -75,6 +79,7 @@ impl ElapsedLimits {
             host.next_dry_field(),
             disease,
             host.next_local_arrival(),
+            fauna,
         ]
         .into_iter()
         .flatten()
@@ -92,6 +97,7 @@ impl ElapsedLimits {
             disease,
             nutrition: host.core.next_metabolism(),
             food_health: host.core.next_food_health(),
+            fauna,
         })
     }
 }
@@ -509,7 +515,13 @@ impl CoreHost {
         let (reductions, staged_shared) =
             self.stage_fatal_assistance(&deaths, &durations, consumed)?;
         let paused_after_deaths = self.pause_incapacitated_rates(&deaths, &reductions, consumed)?;
-        let renewal = self.stage_resource_renewal(consumed)?;
+        let mut renewal = self.stage_resource_renewal(consumed)?;
+        let (fauna, fauna_transitions) = if limits.fauna == Some(consumed) {
+            let (draft, transitions) = self.stage_elapsed_fauna(&mut renewal, event_time)?;
+            (Some(draft), Some(transitions))
+        } else {
+            (None, None)
+        };
         let local_progress = self.stage_local_progress(consumed);
         let (growth, batches) = self.stage_crop_growth(crop_rates, consumed)?;
         let moisture = self
@@ -531,6 +543,7 @@ impl CoreHost {
             if advanced > 0 {
                 local_arrivals = self.publish_local_progress(local_progress);
                 self.publish_resource_renewal(renewal);
+                self.publish_elapsed_fauna(fauna, fauna_transitions.as_ref());
                 self.publish_crop_growth(growth);
                 if let Some(moisture) = moisture {
                     self.irrigation
@@ -578,6 +591,7 @@ impl CoreHost {
                 millis: advanced,
                 incapacitations,
                 family_events,
+                fauna: fauna_transitions,
                 disease_events,
                 local_arrivals,
             });
@@ -721,6 +735,7 @@ impl CoreHost {
             delivery.as_ref().map(|delivery| delivery.physical()),
         )?;
         self.publish_resource_renewal(renewal);
+        self.publish_elapsed_fauna(fauna, fauna_transitions.as_ref());
         let local_arrivals = self.publish_local_progress(local_progress);
         self.publish_crop_growth(growth);
         if let Some(moisture) = moisture {
@@ -775,6 +790,7 @@ impl CoreHost {
             millis: advanced,
             incapacitations,
             family_events,
+            fauna: fauna_transitions,
             disease_events,
             local_arrivals,
         })

@@ -162,6 +162,14 @@ fn run_steps(
                     )?;
                     ("family_events", events.len())
                 }
+                CoreRunEvent::Fauna(row) => {
+                    write_line(
+                        &mut writer,
+                        &json!({"kind":"elapsed_fauna_events","step":step,"at_millis":row.at_millis,"births":row.births,"deaths":row.deaths}),
+                    )?;
+                    *counts.entry("animal_deaths").or_default() += row.deaths.len() as u64;
+                    ("animal_births", row.births.len())
+                }
                 CoreRunEvent::PersonalChoices(rows) => {
                     for row in rows {
                         let domain = row.key.map_or(0, |key| key.domain);
@@ -193,7 +201,10 @@ fn run_steps(
             *counts.entry(kind).or_default() += count as u64;
         }
         let view = host.history_view();
-        if !view.animal_deaths.is_empty() && seen_animal_deaths != Some(view.tick) {
+        if result.boundaries != 0
+            && !view.animal_deaths.is_empty()
+            && seen_animal_deaths != Some(view.tick)
+        {
             *counts.entry("animal_deaths").or_default() += view.animal_deaths.len() as u64;
             write_line(
                 &mut writer,

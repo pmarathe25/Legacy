@@ -61,7 +61,8 @@ with additional years and worker arguments to continue into a fresh file.
 Use `history_probe SOURCE OUTPUT STEPS INTERVAL WORKERS STEP_MILLIS` for
 shorter runs and more frequent checkpoints. The inspector accepts
 `summary`, `person FILE ID`, and `animal FILE ID`. Without
-`--narrative`, it returns structured JSON.
+`--narrative`, it returns structured JSON. Pass `--through-year YEAR` to
+report through a complete annual snapshot while the archive is still growing.
 
 ## Content and implementation
 

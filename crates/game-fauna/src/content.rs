@@ -13,6 +13,8 @@ pub struct Config {
     next_id: u64,
     #[serde(default)]
     last_tick: u64,
+    #[serde(default)]
+    lifecycle_period_millis: Option<u64>,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -111,6 +113,7 @@ impl Config {
             animals: self.animals,
             next_id: self.next_id,
             last_tick: self.last_tick,
+            lifecycle_period_millis: self.lifecycle_period_millis,
             recent_deaths: vec![],
         })
     }

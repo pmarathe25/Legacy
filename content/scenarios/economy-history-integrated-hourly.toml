@@ -963,6 +963,7 @@ genome = { sex = "Male", alleles = [[756,756], [400,600], [400,600], [500,700]],
 mate_preference = { desire = 650, genetic_weight = 150, affinity_weight = 4, attraction_weight = 60, hunger_weight = -1, minimum = -20 }
 
 [fauna]
+lifecycle_period_millis = 3600000
 next_id = 25
 last_tick = 0
 

@@ -713,6 +713,7 @@ pub enum CoreRunEvent {
     },
     Campaign(Vec<game_economy_campaign::elapsed::Event>),
     Care(CoreCareVisit),
+    Fauna(CoreFaunaTransitions),
     InvocationWarning {
         at_millis: u128,
         warning: game_economy_campaign::InvocationWarning,
@@ -3462,6 +3463,11 @@ impl CoreHost {
             if !elapsed.disease_events.is_empty() {
                 run.events
                     .push(CoreRunEvent::Disease(elapsed.disease_events));
+            }
+            if let Some(fauna) = elapsed.fauna
+                && (!fauna.births.is_empty() || !fauna.deaths.is_empty())
+            {
+                run.events.push(CoreRunEvent::Fauna(fauna));
             }
             if !elapsed.local_arrivals.is_empty() {
                 run.events.push(CoreRunEvent::LocalWalking {

@@ -64,8 +64,34 @@ fn initial() -> Fauna {
         animals: vec![animal(1, Sex::Female, 100), animal(2, Sex::Male, 900)],
         next_id: 3,
         last_tick: 0,
+        lifecycle_period_millis: None,
         recent_deaths: vec![],
     }
+}
+
+#[test]
+fn accepted_feeding_and_hunting_do_not_advance_the_wildlife_clock() {
+    let mut fauna = initial();
+    fauna.lifecycle_period_millis = Some(83);
+    fauna.animals[0].hunger = 8;
+    fauna.animals[0].social_response = Some(SocialResponse {
+        feed_affinity: -2,
+        minimum: -10,
+        maximum: 10,
+        capacity: 2,
+    });
+    let feeding = [Feeding { animal: 1, person: Some(5), good: 1, quantity: 3 }];
+    assert!(fauna.prepare_encounters(&[1], &feeding).is_err());
+    assert_eq!(fauna.animals[0].hunger, 8);
+    let draft = fauna.prepare_encounters(&[2], &feeding).unwrap();
+    assert_eq!(draft.deaths().collect::<Vec<_>>(), [2]);
+    fauna.publish_encounters(draft);
+    assert_eq!(fauna.animals[0].hunger, 5);
+    assert_eq!(fauna.animals[0].opinions, [AnimalOpinion { person: 5, affinity: -2 }]);
+    assert_eq!(fauna.animals[1].health, 0);
+    assert_eq!(fauna.animals[0].age, 1);
+    assert_eq!(fauna.last_tick, 0);
+    assert_eq!(fauna.next_lifecycle_after(82), Some(1));
 }
 
 #[test]

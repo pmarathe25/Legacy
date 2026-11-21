@@ -72,7 +72,7 @@ fractions across boundaries. In an interval scenario, `gathering.elapsed_renewal
 credits new stock as time passes, before any withdrawal at the later boundary.
 Renewable nodes then require explicit rates and seasonal rates require an elapsed
 calendar if seasons are configured. Older saves retain settlement-based renewal.
-Gathering and grazing still use boundary actions. Crop scenarios can set
+Gathering still uses boundary actions. Crop scenarios can set
 `cultivation.growth_unit_millis` to separate crop duration from settlement.
 The host integrates fractional growth up to season changes and ripening
 deadlines using the opening moisture and each seed cohort's seasonal traits.
@@ -80,6 +80,17 @@ Ripening and descendant batch allocation commit together. The optional
 `irrigation.evaporation_period_millis` retains fractional water loss and pauses
 growth at the exact drying deadline. Planting, harvest, and actors adding
 water still use boundary actions.
+
+`fauna.lifecycle_period_millis` gives wildlife a fixed ecological cadence.
+At each deadline the wildlife owner stages age, hunger, finite grazing, climate
+damage, mate choice, births, and mortality against the resources available at
+that instant. It saves the completed ecological event ordinal, which provides
+the random trials' input and is independent of the physical settlement index.
+Accepted hunts and offerings affect animals when the physical actions settle.
+When using a seasonal calendar with a wildlife clock, configure
+`season_unit_millis` to give climate an independent elapsed cadence as well.
+The integrated history scenario defines both clocks. The report retains exact
+birth and death times from the wildlife owner.
 An elapsed environment can set `exposure_period_millis` to schedule personal
 hazard damage and shelter rotation at fixed simulated times. The host uses
 the season just before each exposure event and applies it before new choices

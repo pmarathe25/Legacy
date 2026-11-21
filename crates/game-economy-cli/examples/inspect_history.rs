@@ -108,16 +108,35 @@ impl ObservationSink<'_> {
                 };
                 self.chronicle.observe(event, year, person);
             }
-            if event["kind"] == "animal_deaths" {
-                for death in event["events"].as_array().into_iter().flatten() {
+            if matches!(
+                event["kind"].as_str(),
+                Some("animal_deaths" | "elapsed_fauna_events")
+            ) {
+                let deaths = if event["kind"] == "animal_deaths" {
+                    &event["events"]
+                } else {
+                    &event["deaths"]
+                };
+                for death in deaths.as_array().into_iter().flatten() {
                     if let Some(cause) = death["cause"].as_str() {
                         *self.animal_deaths.entry(cause.to_owned()).or_default() += 1;
                     }
                     if let Focus::Animal(animal) = self.focus
                         && death["animal"].as_u64() == Some(animal)
                     {
-                        self.focal_events.push(death.clone());
+                        let mut observation = death.clone();
+                        if let Some(at) = event.get("at_millis") {
+                            observation["at_millis"] = at.clone();
+                        }
+                        self.focal_events.push(observation);
                     }
+                }
+                if let Focus::Animal(animal) = self.focus
+                    && event["births"]
+                        .as_array()
+                        .is_some_and(|rows| rows.iter().any(|row| row.as_u64() == Some(animal)))
+                {
+                    self.focal_events.push(json!({"kind":"animal_birth","animal":animal,"at_millis":event["at_millis"]}));
                 }
                 continue;
             }
@@ -320,7 +339,7 @@ impl ObservationSink<'_> {
     }
 }
 
-fn inspect(path: &Path, focus: Focus) -> Result<Value, String> {
+fn inspect(path: &Path, focus: Focus, through_year: Option<u64>) -> Result<Value, String> {
     let input = BufReader::new(File::open(path).map_err(|e| e.to_string())?);
     let mut metadata = Value::Null;
     let mut metadata_corrections = Vec::new();
@@ -621,6 +640,9 @@ fn inspect(path: &Path, focus: Focus) -> Result<Value, String> {
                     }
                     Focus::Summary => {}
                 }
+                if through_year == Some(year) {
+                    break;
+                }
             }
             Some("failure") => {
                 return Err(format!(
@@ -633,6 +655,11 @@ fn inspect(path: &Path, focus: Focus) -> Result<Value, String> {
     }
     if metadata.is_null() || first_year.is_none() {
         return Err("history has no metadata or initial state".into());
+    }
+    if let Some(year) = through_year
+        && last_year != Some(year)
+    {
+        return Err(format!("history has no snapshot for year {year}"));
     }
     if complete
         && (expected_years.is_some_and(|expected| expected != years)
@@ -825,12 +852,27 @@ fn narrative(report: &Value, focus: Focus) -> String {
         Focus::Animal(animal) => {
             writeln!(text, "# Animal {animal}\n").unwrap();
             observed_life(&mut text, report);
-            for death in report["recorded_population_events"]
+            for event in report["recorded_population_events"]
                 .as_array()
                 .into_iter()
                 .flatten()
             {
-                if let (Some(tick), Some(cause)) = (death["tick"].as_u64(), death["cause"].as_str())
+                if event["kind"] == "animal_birth"
+                    && let Some(at) = event["at_millis"].as_u64()
+                {
+                    writeln!(text, "They were born at {}.\n", simulated_time(at)).unwrap();
+                } else if let (Some(at), Some(cause)) =
+                    (event["at_millis"].as_u64(), event["cause"].as_str())
+                {
+                    writeln!(
+                        text,
+                        "At {}, they died from {}.\n",
+                        simulated_time(at),
+                        death_cause(cause)
+                    )
+                    .unwrap();
+                } else if let (Some(tick), Some(cause)) =
+                    (event["tick"].as_u64(), event["cause"].as_str())
                 {
                     writeln!(
                         text,
@@ -908,7 +950,7 @@ fn observed_life(text: &mut String, report: &Value) {
 fn main() -> Result<(), String> {
     let mut args = std::env::args_os().skip(1);
     let command = args.next().ok_or(
-        "usage: inspect_history (summary FILE | person FILE ID | animal FILE ID) [--narrative]",
+        "usage: inspect_history (summary FILE | person FILE ID | animal FILE ID) [--narrative] [--through-year YEAR]",
     )?;
     let path = args.next().ok_or("missing history file")?;
     let focus = match command.to_str() {
@@ -929,12 +971,22 @@ fn main() -> Result<(), String> {
         ),
         _ => return Err("unknown history inspection command".into()),
     };
-    let narrative_requested = match args.next() {
-        None => false,
-        Some(flag) if flag == "--narrative" && args.next().is_none() => true,
-        Some(_) => return Err("unexpected argument".into()),
-    };
-    let output = inspect(Path::new(&path), focus)?;
+    let mut narrative_requested = false;
+    let mut through_year = None;
+    while let Some(flag) = args.next() {
+        match flag.to_str() {
+            Some("--narrative") if !narrative_requested => narrative_requested = true,
+            Some("--through-year") if through_year.is_none() => {
+                through_year = Some(
+                    args.next()
+                        .and_then(|year| year.to_str()?.parse().ok())
+                        .ok_or("invalid or missing history year")?,
+                );
+            }
+            _ => return Err("unexpected argument".into()),
+        }
+    }
+    let output = inspect(Path::new(&path), focus, through_year)?;
     if narrative_requested {
         print!("{}", narrative(&output, focus));
     } else {
@@ -998,7 +1050,12 @@ mod tests {
             writeln!(file, "{}", row).unwrap();
         }
         drop(file);
-        let summary = inspect(&path, Focus::Summary).unwrap();
+        let summary = inspect(&path, Focus::Summary, None).unwrap();
+        let prefix = inspect(&path, Focus::Summary, Some(1)).unwrap();
+        assert_eq!(prefix["scope"]["last_year"], 1);
+        assert_eq!(prefix["scope"]["annual_records"], 1);
+        assert_eq!(prefix["scope"]["complete"], false);
+        assert!(inspect(&path, Focus::Summary, Some(3)).is_err());
         assert_eq!(summary["scope"]["complete"], true);
         assert_eq!(
             summary["scope"]["metadata_corrections"]
@@ -1024,7 +1081,7 @@ mod tests {
             animal_species_samples(&[], &[json!({"id": 1, "name": "grazer"})])[0]["living"],
             0
         );
-        let person = inspect(&path, Focus::Person(1)).unwrap();
+        let person = inspect(&path, Focus::Person(1), None).unwrap();
         let life = narrative(&person, Focus::Person(1));
         assert!(life.contains("formed a partnership with person 2"));
         assert!(life.contains("died of natural causes"));
@@ -1064,7 +1121,7 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
-        let target = inspect(&path, Focus::Person(2)).unwrap();
+        let target = inspect(&path, Focus::Person(2), None).unwrap();
         assert_eq!(
             target["personal_strikes"][0]["events"]
                 .as_array()
@@ -1077,7 +1134,7 @@ mod tests {
             person["mechanical_experiments"].as_array().unwrap().len(),
             2
         );
-        let animal = inspect(&path, Focus::Animal(1)).unwrap();
+        let animal = inspect(&path, Focus::Animal(1), None).unwrap();
         assert!(
             narrative(&animal, Focus::Animal(1)).contains("At tick 2, they died from starvation")
         );
