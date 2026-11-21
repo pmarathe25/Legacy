@@ -423,25 +423,17 @@ impl CoreInterval {
                     .try_reduce(|| None, |left, right| Ok(earliest(left, right)))
             })
             .map_err(str::to_owned)?;
-        let hunger = hunger_threshold
-            .map(|threshold| {
-                game_economy_person::next_hunger_threshold(
-                    &self.people,
-                    threshold,
-                    self.rules
-                        .hunger_rate
-                        .map_or(self.rules.hunger_per_tick, |rate| rate.units),
-                    self.rules
-                        .hunger_rate
-                        .map_or(quantum, |rate| rate.per_millis),
-                )
-            })
-            .transpose()
-            .map_err(str::to_owned)?
-            .flatten();
-        let death = game_economy_person::next_starvation_death(&self.people, &self.rules, quantum)
-            .map_err(str::to_owned)?;
-        let recovery = game_economy_person::next_recovery(&self.people).map_err(str::to_owned)?;
+        let game_economy_person::PhysiologyDeadlines {
+            hunger,
+            fatal_starvation: death,
+            recovery,
+        } = game_economy_person::next_physiology(
+            &self.people,
+            &self.rules,
+            hunger_threshold,
+            quantum,
+        )
+        .map_err(str::to_owned)?;
         let nutrition = self.next_metabolism().map(u128::from);
         let food_health = self.next_food_health();
         let after = [
@@ -1078,12 +1070,12 @@ impl CoreInterval {
             .checked_sub(elapsed)
             .ok_or("invalid interval elapsed time")?;
         let limit = requested_millis.min(remaining);
-        let death = game_economy_person::next_starvation_death(&self.people, &self.rules, quantum)
-            .map_err(str::to_owned)?;
-        let recovery = game_economy_person::next_recovery(&self.people).map_err(str::to_owned)?;
+        let deadlines =
+            game_economy_person::next_physiology(&self.people, &self.rules, None, quantum)
+                .map_err(str::to_owned)?;
         Ok([
-            death,
-            recovery,
+            deadlines.fatal_starvation,
+            deadlines.recovery,
             self.next_metabolism().map(u128::from),
             self.next_food_health(),
         ]
@@ -1226,35 +1218,16 @@ impl CoreInterval {
             return Err("invalid elapsed injuries".into());
         }
         let quantum = self.physical.tick_millis();
-        let mut people: Vec<_> = self.people.par_iter().cloned().collect();
-        if self.rules.starvation_rate.is_some()
-            || self.people.par_iter().any(|person| {
-                person
-                    .immortal
-                    .as_ref()
-                    .is_some_and(|immortal| immortal.recovery_rate.is_some())
-            })
-        {
-            game_economy_person::progress_vitals(&mut people, &self.rules, consumed, quantum)
+        let mut people =
+            game_economy_person::stage_vitals(&self.people, &self.rules, consumed, quantum)
                 .map_err(str::to_owned)?;
-        } else {
-            game_economy_person::progress_hunger(
-                &mut people,
-                self.rules
-                    .hunger_rate
-                    .map_or(self.rules.hunger_per_tick, |rate| rate.units),
-                consumed,
-                self.rules
-                    .hunger_rate
-                    .map_or(quantum, |rate| rate.per_millis),
-            )
-            .map_err(str::to_owned)?;
+        if !injuries.is_empty() {
+            people.par_iter_mut().for_each(|person| {
+                if let Ok(index) = injuries.binary_search_by_key(&person.id, |injury| injury.id) {
+                    person.health = person.health.saturating_sub(injuries[index].damage);
+                }
+            });
         }
-        people.par_iter_mut().for_each(|person| {
-            if let Ok(index) = injuries.binary_search_by_key(&person.id, |injury| injury.id) {
-                person.health = person.health.saturating_sub(injuries[index].damage);
-            }
-        });
         let nutrition = self.nutrition.as_ref().and_then(|nutrition| {
             (self.next_metabolism() == Some(consumed)).then(|| {
                 let eligible: Vec<_> = self
