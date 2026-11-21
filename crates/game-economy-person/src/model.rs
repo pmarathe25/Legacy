@@ -202,20 +202,29 @@ impl Person {
         elapsed_millis: u64,
         quantum_millis: u64,
     ) -> Result<(), &'static str> {
+        (self.hunger, self.hunger_remainder) =
+            self.hunger_at(rate, elapsed_millis, quantum_millis)?;
+        Ok(())
+    }
+
+    pub(crate) fn hunger_at(
+        &self,
+        rate: u32,
+        elapsed_millis: u64,
+        quantum_millis: u64,
+    ) -> Result<(u32, u64), &'static str> {
         if !self.valid_hunger_progress(quantum_millis) {
             return Err("invalid fractional hunger");
         }
         if self.health == 0 || self.immortal.is_some() {
-            return Ok(());
+            return Ok((self.hunger, self.hunger_remainder));
         }
         let quantum = u128::from(quantum_millis);
         let value = (u128::from(self.hunger) * quantum
             + u128::from(self.hunger_remainder)
             + u128::from(rate) * u128::from(elapsed_millis))
         .min(u128::from(u32::MAX) * quantum);
-        self.hunger = (value / quantum) as u32;
-        self.hunger_remainder = (value % quantum) as u64;
-        Ok(())
+        Ok(((value / quantum) as u32, (value % quantum) as u64))
     }
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

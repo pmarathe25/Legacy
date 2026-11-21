@@ -87,6 +87,62 @@ pub fn next_recovery(people: &[Person]) -> Result<Option<u128>, &'static str> {
     )
 }
 
+#[derive(Default)]
+pub struct PhysiologyDeadlines {
+    pub hunger: Option<u128>,
+    pub fatal_starvation: Option<u128>,
+    pub recovery: Option<u128>,
+}
+
+/// Reduce the actor-owned clocks in a single pass over the same opening bodies.
+pub fn next_physiology(
+    people: &[Person],
+    rules: &Rules,
+    hunger_threshold: Option<u32>,
+    boundary_millis: u64,
+) -> Result<PhysiologyDeadlines, &'static str> {
+    let units = rules
+        .hunger_rate
+        .map_or(rules.hunger_per_tick, |rate| rate.units);
+    let period = rules
+        .hunger_rate
+        .map_or(boundary_millis, |rate| rate.per_millis);
+    if hunger_threshold.is_some() && period == 0 {
+        return Err("invalid fractional hunger batch");
+    }
+    let earliest = |a: Option<u128>, b: Option<u128>| a.into_iter().chain(b).min();
+    people
+        .par_iter()
+        .map(|person| {
+            Ok(PhysiologyDeadlines {
+                hunger: hunger_threshold
+                    .map(|threshold| person.hunger_threshold_after(threshold, units, period))
+                    .transpose()?
+                    .flatten(),
+                fatal_starvation: rules
+                    .starvation_rate
+                    .map(|damage| {
+                        person.starvation_death_after(
+                            rules.starvation_threshold,
+                            units,
+                            period,
+                            damage,
+                        )
+                    })
+                    .transpose()?
+                    .flatten(),
+                recovery: person.recovery_after()?,
+            })
+        })
+        .try_reduce(PhysiologyDeadlines::default, |a, b| {
+            Ok(PhysiologyDeadlines {
+                hunger: earliest(a.hunger, b.hunger),
+                fatal_starvation: earliest(a.fatal_starvation, b.fatal_starvation),
+                recovery: earliest(a.recovery, b.recovery),
+            })
+        })
+}
+
 /// Stage hunger and starvation from the same opening state.
 pub fn progress_vitals(
     people: &mut [Person],
@@ -94,17 +150,31 @@ pub fn progress_vitals(
     elapsed_millis: u64,
     boundary_millis: u64,
 ) -> Result<(), &'static str> {
+    let next = stage_vitals(people, rules, elapsed_millis, boundary_millis)?;
+    people
+        .par_iter_mut()
+        .zip(next)
+        .for_each(|(person, next)| *person = next);
+    Ok(())
+}
+
+/// Prepare an exact elapsed physiology batch without mutating the opening bodies.
+pub fn stage_vitals(
+    people: &[Person],
+    rules: &Rules,
+    elapsed_millis: u64,
+    boundary_millis: u64,
+) -> Result<Vec<Person>, &'static str> {
     let hunger_units = rules
         .hunger_rate
         .map_or(rules.hunger_per_tick, |rate| rate.units);
     let hunger_period = rules
         .hunger_rate
         .map_or(boundary_millis, |rate| rate.per_millis);
-    let next: Vec<_> = people
+    people
         .par_iter()
         .map(|person| {
-            let mut hunger = person.clone();
-            hunger.advance_hunger(hunger_units, elapsed_millis, hunger_period)?;
+            let hunger = person.hunger_at(hunger_units, elapsed_millis, hunger_period)?;
             let mut result = person.clone();
             if let Some(damage) = rules.starvation_rate {
                 result.advance_starvation(
@@ -118,18 +188,10 @@ pub fn progress_vitals(
                 return Err("starvation remainder has no rate");
             }
             result.advance_recovery(elapsed_millis, rules.max_health)?;
-            result.hunger = hunger.hunger;
-            result.hunger_remainder = hunger.hunger_remainder;
+            (result.hunger, result.hunger_remainder) = hunger;
             Ok(result)
         })
-        .collect::<Result<_, &'static str>>()?;
-    people
-        .par_iter_mut()
-        .zip(next.into_par_iter())
-        .for_each(|(person, next)| {
-            *person = next;
-        });
-    Ok(())
+        .collect()
 }
 
 /// People whose fatal starvation deadline falls within the given duration.
