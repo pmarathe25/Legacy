@@ -1566,11 +1566,8 @@ willing = true
 person = 60
 willing = true
 
-[opinions.fear_decay]
-period_millis = 86400000
-amount = 1
-
 [opinions.rules]
+fear_decay = { amount = 1, period_millis = 86400000 }
 minimum = -100
 maximum = 100
 initial = 0
