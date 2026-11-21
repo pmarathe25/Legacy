@@ -267,11 +267,12 @@ fn command(host: &mut CoreHost, person: u64, words: &[&str]) -> Result<bool, Str
         ["trip", "invites"] => {
             for invitation in Player::new(host, person)?.expedition_invitations()? {
                 println!(
-                    "invitation={} from={} destination={} depart_after_millis={:?}",
+                    "invitation={} from={} destination={} depart_after_millis={:?} rendezvous_group={:?}",
                     invitation.id,
                     invitation.inviter,
                     invitation.destination,
-                    invitation.depart_after_millis
+                    invitation.depart_after_millis,
+                    invitation.rendezvous_group
                 );
             }
         }

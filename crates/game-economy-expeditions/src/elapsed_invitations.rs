@@ -1,5 +1,6 @@
 //! An invitation conveys a proposed itinerary between two people.
 use crate::elapsed::Plan;
+use crate::rendezvous::Rendezvous;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashSet};
@@ -16,6 +17,8 @@ pub struct Invitation {
     pub visit_millis: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub depart_after_millis: Option<u128>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rendezvous_group: Option<u64>,
     pub offered_at_millis: u128,
 }
 
@@ -28,6 +31,7 @@ pub struct Offer {
     pub destination: u64,
     pub visit_millis: u64,
     pub depart_after_millis: Option<u128>,
+    pub rendezvous_group: Option<u64>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -39,6 +43,15 @@ pub struct Preference {
     pub willing: bool,
     #[serde(default)]
     pub return_after_visit: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rendezvous: Option<CompanionPreference>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CompanionPreference {
+    pub minimum_companions: u32,
+    pub wait_millis: u64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -166,6 +179,7 @@ impl Invitations {
                     || row.inviter == row.recipient
                     || row.origin == row.destination
                     || row.visit_millis == 0
+                    || row.rendezvous_group == Some(0)
                     || row.offered_at_millis > now
                     || !people.contains(&row.inviter)
                     || !people.contains(&row.recipient)
@@ -224,6 +238,7 @@ impl Invitations {
                 if offer.inviter == offer.recipient
                     || offer.origin == offer.destination
                     || offer.visit_millis == 0
+                    || offer.rendezvous_group == Some(0)
                     || pending.contains(&(offer.itinerary, offer.recipient))
                     || !self.may_offer(offer.inviter, offer.itinerary)
                 {
@@ -238,6 +253,7 @@ impl Invitations {
                     destination: offer.destination,
                     visit_millis: offer.visit_millis,
                     depart_after_millis: offer.depart_after_millis,
+                    rendezvous_group: offer.rendezvous_group,
                     offered_at_millis: now,
                 })
             })
@@ -256,6 +272,7 @@ impl Invitations {
         if offer.inviter == offer.recipient
             || offer.origin == offer.destination
             || offer.visit_millis == 0
+            || offer.rendezvous_group == Some(0)
             || self
                 .pending
                 .par_iter()
@@ -276,6 +293,7 @@ impl Invitations {
             destination: offer.destination,
             visit_millis: offer.visit_millis,
             depart_after_millis: offer.depart_after_millis,
+            rendezvous_group: offer.rendezvous_group,
             offered_at_millis: now,
         };
         self.pending.push(invitation);
@@ -323,6 +341,17 @@ impl Invitations {
 }
 
 impl Invitation {
+    /// Joining an itinerary and choosing to wait for its company are separate.
+    pub fn personal_rendezvous(self, preference: Preference, now: u128) -> Option<Rendezvous> {
+        let preference = preference.rendezvous?;
+        let opening = self.depart_after_millis.unwrap_or(now).max(now);
+        Some(Rendezvous {
+            group: self.rendezvous_group?,
+            minimum_companions: preference.minimum_companions,
+            wait_until_millis: opening.saturating_add(u128::from(preference.wait_millis)),
+        })
+    }
+
     pub fn personal_plan(self, region: u64, head_home: bool) -> Plan {
         Plan {
             person: self.recipient,

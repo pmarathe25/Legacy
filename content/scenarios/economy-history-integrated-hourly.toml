@@ -2299,11 +2299,18 @@ objective = { kind = "observe_food" }
 person = 18
 companions = [{ person = 19, value = 8, affinity_weight = 1 }, { person = 20, value = 5, affinity_weight = 1 }]
 
+[[expedition_rendezvous]]
+person = 18
+group = 18
+minimum_companions = 1
+wait_millis = 21600000
+
 [[expedition_invitation_preferences]]
 person = 19
 destination = 2
 willing = true
 return_after_visit = true
+rendezvous = { minimum_companions = 0, wait_millis = 0 }
 
 [campaign.lineage]
 started = 0
