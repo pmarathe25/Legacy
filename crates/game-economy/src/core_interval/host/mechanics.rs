@@ -1,6 +1,8 @@
-//! Mechanical apparatus tied to real identified personal possessions.
+//! Mechanical apparatus tied to real identified parts and physical access.
 use super::*;
 mod design;
+mod shared;
+pub use shared::CoreSharedApparatus;
 use std::collections::HashMap;
 
 fn indexed<T>(rows: &[T], id: u64, key: impl Fn(&T) -> u64) -> Option<&T> {
@@ -12,7 +14,7 @@ fn indexed<T>(rows: &[T], id: u64, key: impl Fn(&T) -> u64) -> Option<&T> {
         .map(|index| &rows[index])
 }
 
-fn carries_parts(
+fn parts_present(
     container: Option<&game_lots::Container>,
     apparatus: &game_mechanics::Apparatus,
     materials: &[MechanicalMaterial],
@@ -618,11 +620,12 @@ impl Runtime {
 
     fn eligible(
         &self,
-        core: &CoreInterval,
+        host: &CoreHost,
         request: &game_mechanics::Experiment,
         occupied: &[u64],
         active: &HashSet<u64>,
     ) -> bool {
+        let core = &host.core;
         let actor = indexed(&core.people, request.actor, |person| person.id);
         let capability = indexed(&self.capabilities, request.actor, |row| row.person);
         let apparatus = indexed(self.world.apparatus(), request.apparatus, |row| row.id);
@@ -634,9 +637,9 @@ impl Runtime {
                     && request.input_distance <= capability.max_distance
             })
             && apparatus.is_some_and(|apparatus| {
-                carries_parts(
-                    core.physical
-                        .custody(game_lots::Place::Person(request.actor)),
+                parts_present(
+                    host.mechanical_holder(request.actor, apparatus)
+                        .and_then(|place| core.physical.custody(place)),
                     apparatus,
                     &self.materials,
                     core.physical.lot_instant(core.physical.tick()),
@@ -656,7 +659,7 @@ impl CoreHost {
             .world
             .apparatus()
             .par_iter()
-            .filter(|device| carries_parts(custody, device, &owner.materials, now))
+            .filter(|device| parts_present(custody, device, &owner.materials, now))
             .cloned()
             .collect()
     }
@@ -735,6 +738,7 @@ impl CoreHost {
                         locations
                             .region((observer.id, observer.region), (actor.id, actor.region))
                             .is_some()
+                            && self.same_local_endpoint(observer.id, actor.id)
                     })
             })
             .copied()
@@ -1015,9 +1019,17 @@ impl CoreHost {
                         .core
                         .physical
                         .custody(game_lots::Place::Person(actor))?;
+                    let shared = match self.local_location(actor) {
+                        Some(game_economy_local_transport::walking::Location::At {
+                            endpoint: game_economy_local_transport::Endpoint::Store { id },
+                            ..
+                        }) => self.core.physical.custody(game_lots::Place::Inventory(id)),
+                        _ => None,
+                    };
                     let mut trials: Vec<_> = container
                         .lots
                         .iter()
+                        .chain(shared.into_iter().flat_map(|holder| &holder.lots))
                         .filter_map(|lot| parts.get(&lot.item?).copied())
                         .filter_map(|machine| {
                             let mut experiment = game_mechanics::Experiment {
@@ -1089,7 +1101,7 @@ impl CoreHost {
                                 })
                                 .unwrap_or_default();
                             owner
-                                .eligible(&self.core, &experiment, occupied, &active)
+                                .eligible(self, &experiment, occupied, &active)
                                 .then_some(MechanicalPolicy {
                                     id: machine.id,
                                     experiment,
@@ -1143,7 +1155,7 @@ impl CoreHost {
                 .is_none_or(|person| person.health == 0 || person.region.is_none())
                 || occupied.binary_search(&request.actor).is_ok()
                 || active.contains(&request.actor)
-                || !carries_parts(
+                || !parts_present(
                     self.core
                         .physical
                         .custody(game_lots::Place::Person(request.actor)),
@@ -1241,13 +1253,8 @@ impl CoreHost {
                     game_lots::Place::Stock {
                         region: place_region,
                         ..
-                    } => place_region == region,
-                    game_lots::Place::Inventory(id) => {
-                        self.local_transport.as_ref().is_some_and(|transport| {
-                            indexed(&transport.stores, id, |store| store.id)
-                                .is_some_and(|store| store.region == region)
-                        })
-                    }
+                    } => place_region == region && self.regional_stock_reachable(request.actor, region),
+                    game_lots::Place::Inventory(id) => self.mechanical_store_reachable(request.actor, id),
                     _ => false,
                 };
                 let Some(material) = indexed(
@@ -1284,7 +1291,7 @@ impl CoreHost {
                         || claims.as_ref().is_none_or(|index| {
                             index.allows(request.actor, region, request.movement.good)
                         }))
-                    && owner.eligible(&self.core, &experiment, occupied, &active)
+                    && owner.eligible(self, &experiment, occupied, &active)
             })
             .copied()
             .collect())
@@ -1320,7 +1327,7 @@ impl CoreHost {
                         person.id
                     })
                     .is_some_and(|person| !person.controlled)
-                    && owner.eligible(&self.core, &policy.experiment, occupied, &active)
+                    && owner.eligible(self, &policy.experiment, occupied, &active)
             })
             .copied()
             .collect())
@@ -1341,7 +1348,7 @@ impl CoreHost {
     }
 
     /// Execute explicitly selected experiments. Every part must be an actual,
-    /// matching identified item carried by that actor. Callers own the choice.
+    /// matching identified item at the actor's reachable holder. Callers own the choice.
     pub fn experiment_mechanics(
         &mut self,
         requests: &[game_mechanics::Experiment],
@@ -1372,15 +1379,15 @@ impl CoreHost {
             .collect();
         if requests
             .par_iter()
-            .any(|request| !owner.eligible(&self.core, request, occupied, &active))
+            .any(|request| !owner.eligible(self, request, occupied, &active))
         {
-            return Err("experiment requires an available person with capable effort and carried matching parts".into());
+            return Err("experiment requires an available person with capable effort and reachable matching parts".into());
         }
         self.commit_chosen_mechanics(requests)
     }
 
     /// Execute chosen experiments while explicitly chosen observers watch.
-    /// A watcher must be available and in the actor's region; watching does not
+    /// A watcher must be available and at the actor's local endpoint; watching does not
     /// require the actor's consent. Only real, uncontended outcomes can be kept.
     pub fn experiment_mechanics_witnessed(
         &mut self,
@@ -1423,6 +1430,7 @@ impl CoreHost {
                     locations
                         .region((observer.id, observer.region), (actor.id, actor.region))
                         .is_none()
+                        || !self.same_local_endpoint(observer.id, actor.id)
                 })
         }) {
             return Err(
@@ -1505,13 +1513,8 @@ impl CoreHost {
             game_lots::Place::Stock {
                 region: place_region,
                 ..
-            } => place_region == region,
-            game_lots::Place::Inventory(id) => {
-                self.local_transport.as_ref().is_some_and(|transport| {
-                    indexed(&transport.stores, id, |store| store.id)
-                        .is_some_and(|store| store.region == region)
-                })
-            }
+            } => place_region == region && self.regional_stock_reachable(actor, region),
+            game_lots::Place::Inventory(id) => self.mechanical_store_reachable(actor, id),
             _ => false,
         };
         let prepared: Vec<_> = requests
@@ -1556,7 +1559,7 @@ impl CoreHost {
                     input_distance: request.input_distance,
                     load_force: force,
                 };
-                if !owner.eligible(&self.core, &experiment, occupied, &active) {
+                if !owner.eligible(self, &experiment, occupied, &active) {
                     return Err(
                         "mechanical load requires an available capable actor and carried parts"
                             .into(),
@@ -1862,7 +1865,7 @@ mod tests {
         let missing =
             game_lots::Container::new(game_lots::Place::Person(1), 100, (1..40).map(lot).collect())
                 .unwrap();
-        assert!(carries_parts(
+        assert!(parts_present(
             Some(&bag),
             &apparatus,
             &[MechanicalMaterial {
@@ -1871,7 +1874,7 @@ mod tests {
             }],
             0
         ));
-        assert!(!carries_parts(
+        assert!(!parts_present(
             Some(&missing),
             &apparatus,
             &[MechanicalMaterial {
@@ -1880,7 +1883,7 @@ mod tests {
             }],
             0
         ));
-        assert!(!carries_parts(
+        assert!(!parts_present(
             Some(&bag),
             &apparatus,
             &[MechanicalMaterial {
@@ -1889,6 +1892,6 @@ mod tests {
             }],
             0
         ));
-        assert!(!carries_parts(Some(&bag), &apparatus, &[], 0));
+        assert!(!parts_present(Some(&bag), &apparatus, &[], 0));
     }
 }

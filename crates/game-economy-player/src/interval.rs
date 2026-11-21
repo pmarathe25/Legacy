@@ -51,6 +51,16 @@ impl<'a> Player<'a> {
         Ok(result.first().is_some_and(|outcome| outcome.departed))
     }
 
+    pub fn move_apparatus(
+        &mut self,
+        apparatus: u64,
+        store: u64,
+        put_down: bool,
+    ) -> Result<bool, String> {
+        self.host
+            .move_controlled_apparatus(self.person, apparatus, store, put_down)
+    }
+
     pub fn gather(&mut self, node: u64) -> Result<Option<game_economy::GatheredResource>, String> {
         self.host.gather_controlled(self.person, node)
     }
