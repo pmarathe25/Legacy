@@ -6,6 +6,7 @@ use std::collections::HashMap;
 
 pub struct Catalog {
     shelf_life: HashMap<u32, Option<u64>>,
+    maturation: HashMap<u32, game_production_model::MaturationProfile>,
 }
 /// Trusted environmental harvest and consumption whose lot details are unnecessary.
 #[derive(Default)]
@@ -266,7 +267,32 @@ impl Catalog {
     }
     /// Preserve authored shelf life at millisecond resolution.
     pub fn from_elapsed_millis(goods: &[Good]) -> Result<Self, String> {
-        Self::compile(goods, 86_400_000)
+        let mut catalog = Self::compile(goods, 86_400_000)?;
+        let edible: std::collections::HashSet<_> = goods
+            .iter()
+            .filter(|row| row.food.is_some())
+            .map(|row| row.id)
+            .collect();
+        for row in goods {
+            let Some(profile) = row.maturation else {
+                continue;
+            };
+            if profile.days == 0
+                || profile.min_celsius > profile.max_celsius
+                || edible.contains(&row.id)
+                || !edible.contains(&profile.product)
+            {
+                return Err(format!("invalid maturation profile for {}", row.name));
+            }
+            let duration = u64::from(profile.days) * 86_400_000;
+            catalog.shelf_life.insert(row.id, Some(duration));
+            catalog.maturation.insert(row.id, profile);
+        }
+        Ok(catalog)
+    }
+
+    pub fn maturation(&self, good: u32) -> Option<game_production_model::MaturationProfile> {
+        self.maturation.get(&good).copied()
     }
     fn convert(
         goods: &[Good],
@@ -283,7 +309,10 @@ impl Catalog {
                 return Err("duplicate physical good".into());
             }
         }
-        Ok(Self { shelf_life })
+        Ok(Self {
+            shelf_life,
+            maturation: HashMap::new(),
+        })
     }
     pub fn contains(&self, good: u32) -> bool {
         self.shelf_life.contains_key(&good)
@@ -358,6 +387,7 @@ impl Catalog {
         Ok(State {
             next_batch: None,
             expiry_millis: None,
+            storage_climate: None,
             tick,
             revision: 0,
             containers,

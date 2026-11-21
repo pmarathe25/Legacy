@@ -667,6 +667,10 @@ pub enum CoreRunEvent {
         at_millis: u128,
         lots: Vec<game_lots::Spoilage>,
     },
+    Maturation {
+        at_millis: u128,
+        events: Vec<game_lot_runtime::MaturationEvent>,
+    },
     Meals(Vec<(u64, u32)>),
     Treatments(Vec<game_lots::TransactionOutcome>),
     Provisions(Vec<game_lots::TransactionOutcome>),
@@ -3371,11 +3375,17 @@ impl CoreHost {
             }
             let elapsed =
                 attempt!('run, self.progress_with_activity(step, external_blocked, Some(plan)));
-            let spoiled = self.core.physical.take_elapsed_spoilage();
-            if !spoiled.is_empty() {
+            let expiry = self.core.physical.take_elapsed_expiry();
+            if !expiry.spoilage.is_empty() {
                 run.events.push(CoreRunEvent::Spoilage {
                     at_millis: self.core.simulated_millis(),
-                    lots: spoiled,
+                    lots: expiry.spoilage,
+                });
+            }
+            if !expiry.maturation.is_empty() {
+                run.events.push(CoreRunEvent::Maturation {
+                    at_millis: self.core.simulated_millis(),
+                    events: expiry.maturation,
                 });
             }
             if !elapsed.incapacitations.is_empty() {

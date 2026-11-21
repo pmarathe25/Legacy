@@ -36,6 +36,8 @@ struct Scenario {
     /// Date perishables in elapsed milliseconds and remove them at their deadlines.
     #[serde(default)]
     elapsed_spoilage: bool,
+    #[serde(default)]
+    storage_climate: Option<game_lots::StorageClimate>,
     /// Autonomous decision cadence, independent of the physical quantum.
     #[serde(default)]
     decision_period_millis: Option<u64>,
@@ -2595,6 +2597,7 @@ fn build_scenario(
         .transpose()?;
     let mut custody = catalog.fresh_world(&production.inventories, 0)?;
     custody.expiry_millis = scenario.elapsed_spoilage.then_some(0);
+    custody.storage_climate = scenario.storage_climate;
     if !authored_seed_batches.is_empty() {
         let farm = agriculture
             .as_ref()

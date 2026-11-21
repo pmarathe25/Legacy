@@ -30,6 +30,7 @@ fn generic_transfers_preserve_batch_through_split_merge_and_resume() {
     let mut store = Store::compile(State {
         next_batch: None,
         expiry_millis: None,
+        storage_climate: None,
         tick: 0,
         revision: 0,
         containers: vec![
@@ -71,6 +72,7 @@ fn rejected_transfer_and_expiry_do_not_reassign_batches() {
     let initial = State {
         next_batch: None,
         expiry_millis: None,
+        storage_climate: None,
         tick: 0,
         revision: 0,
         containers: vec![
@@ -112,6 +114,7 @@ fn shared_source_arbitration_keeps_actual_cohorts_with_each_winner() {
                 let mut store = Store::compile(State {
                     next_batch: None,
                     expiry_millis: None,
+                    storage_climate: None,
                     tick: 0,
                     revision: 0,
                     containers: vec![
@@ -182,6 +185,7 @@ fn invalid_batch_cannot_be_created_or_combined_with_a_unique_item() {
     let store = Store::compile(State {
         next_batch: None,
         expiry_millis: None,
+        storage_climate: None,
         tick: 0,
         revision: 0,
         containers: vec![Container::new(Place::Person(1), 10, vec![]).unwrap()],
@@ -206,6 +210,7 @@ fn batch_creation_is_published_only_with_the_atomic_physical_action() {
     let initial = State {
         next_batch: None,
         expiry_millis: None,
+        storage_climate: None,
         tick: 0,
         revision: 0,
         containers: vec![
@@ -271,6 +276,7 @@ fn batch_provenance_scaling() {
     let initial = State {
         next_batch: None,
         expiry_millis: None,
+        storage_climate: None,
         tick: 0,
         revision: 0,
         containers,
@@ -311,6 +317,7 @@ fn concurrent_fan_in_keeps_different_batches_separate() {
     let mut store = Store::compile(State {
         next_batch: None,
         expiry_millis: None,
+        storage_climate: None,
         tick: 0,
         revision: 0,
         containers: vec![
@@ -341,6 +348,7 @@ fn exact_batch_selection_draws_only_requested_cohorts_and_can_span_expiries() {
     let initial = State {
         next_batch: None,
         expiry_millis: None,
+        storage_climate: None,
         tick: 0,
         revision: 0,
         containers: vec![
@@ -382,6 +390,7 @@ fn generic_and_targeted_batch_claims_compete_in_seeded_order() {
     let initial = State {
         next_batch: None,
         expiry_millis: None,
+        storage_climate: None,
         tick: 0,
         revision: 0,
         containers: vec![
@@ -441,6 +450,7 @@ fn targeted_batch_rejects_missing_insufficient_or_invalid_requests() {
     let initial = State {
         next_batch: None,
         expiry_millis: None,
+        storage_climate: None,
         tick: 0,
         revision: 0,
         containers: vec![
@@ -510,6 +520,7 @@ fn independent_targeted_fast_path_matches_general_arbiter() {
     let initial = State {
         next_batch: None,
         expiry_millis: None,
+        storage_climate: None,
         tick: 0,
         revision: 0,
         containers,
@@ -568,6 +579,7 @@ fn concentrated_distinct_batch_scaling() {
     let initial = State {
         next_batch: None,
         expiry_millis: None,
+        storage_climate: None,
         tick: 0,
         revision: 0,
         containers,
@@ -632,6 +644,7 @@ fn parallel_batch_groups_match_ordered_reference_for_contested_and_missing_batch
     let initial = State {
         next_batch: None,
         expiry_millis: None,
+        storage_climate: None,
         tick: 0,
         revision: 0,
         containers,
@@ -696,6 +709,7 @@ fn large_exact_source_update_preserves_unselected_and_expires_old_batches() {
     let mut store = Store::compile(State {
         next_batch: None,
         expiry_millis: None,
+        storage_climate: None,
         tick: 0,
         revision: 0,
         containers,
@@ -727,6 +741,7 @@ fn expiry_index_follows_custody_preserves_batch_and_rebuilds_on_load() {
                 let mut store = Store::compile(State {
                     next_batch: Some(9),
                     expiry_millis: None,
+                    storage_climate: None,
                     tick: 0,
                     revision: 0,
                     containers: vec![
@@ -775,6 +790,7 @@ fn elapsed_expiry_is_atomic_and_independent_of_custody_ticks() {
     let state = State {
         next_batch: Some(9),
         expiry_millis: None,
+        storage_climate: None,
         tick: 4,
         revision: 0,
         containers: vec![

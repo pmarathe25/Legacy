@@ -46,12 +46,17 @@ pub(super) fn stage(
                 .binary_search_by_key(&index, |row| row.0)
                 .map_or(&state.containers[index], |position| &changes[position].1);
             let room = u128::from(holder.capacity - holder.used);
-            let quantities: Vec<_> = destination.par_iter().map(|(_, output)| output.lot.quantity).collect();
+            let quantities: Vec<_> = destination
+                .par_iter()
+                .map(|(_, output)| output.lot.quantity)
+                .collect();
             let prefixes = game_lot_allocation::prefixes(&quantities);
             let receipts: Vec<_> = destination
                 .par_iter()
                 .zip(prefixes.into_par_iter())
-                .map(|(&(_, output), prefix)| (output.id, prefix + u128::from(output.lot.quantity) <= room))
+                .map(|(&(_, output), prefix)| {
+                    (output.id, prefix + u128::from(output.lot.quantity) <= room)
+                })
                 .collect();
             let mut lots: Vec<_> = destination
                 .par_iter()

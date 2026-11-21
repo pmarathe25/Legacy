@@ -68,6 +68,7 @@ fn observations(events: &[CoreRunEvent], current_tick: &mut u64) -> Vec<Value> {
         CoreRunEvent::Requests(rows) if !rows.is_empty() => Some(json!({"kind":"work_requests","events":rows})),
         CoreRunEvent::Starts(rows) if !rows.is_empty() => Some(json!({"kind":"work_starts","outcomes":rows})),
         CoreRunEvent::Spoilage { at_millis, lots } => Some(json!({"kind":"spoilage","at_millis":at_millis,"lots":lots})),
+        CoreRunEvent::Maturation { at_millis, events } => Some(json!({"kind":"maturation","at_millis":at_millis,"events":events})),
         CoreRunEvent::Work(row) => Some(json!({"kind":"early_work","tick":row.tick,"finished":row.finished,"interrupted":row.interrupted})),
         CoreRunEvent::Construction(rows) if !rows.is_empty() => Some(json!({"kind":"construction","events":rows})),
         CoreRunEvent::LocalCarries(rows) if !rows.is_empty() => Some(json!({"kind":"local_carrying","events":rows})),
