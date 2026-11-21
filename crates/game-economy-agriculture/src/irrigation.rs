@@ -52,6 +52,8 @@ pub struct Irrigation {
     pub evaporation: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub evaporation_period_millis: Option<u64>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub elapsed_actions: bool,
     pub moisture: Vec<Moisture>,
     #[serde(default)]
     pub choices: Vec<Choice>,
@@ -84,6 +86,7 @@ impl Clone for Irrigation {
             minimum_growth: self.minimum_growth,
             evaporation: self.evaporation,
             evaporation_period_millis: self.evaporation_period_millis,
+            elapsed_actions: self.elapsed_actions,
             moisture: self.moisture.par_iter().cloned().collect(),
             choices: self.choices.par_iter().cloned().collect(),
             events: self.events.par_iter().cloned().collect(),
@@ -111,6 +114,9 @@ impl Irrigation {
             || self.minimum_growth == 0
             || self.minimum_growth > self.capacity
             || self.evaporation_period_millis == Some(0)
+            || (self.elapsed_actions
+                && self.evaporation > 0
+                && self.evaporation_period_millis.is_none())
             || self
                 .moisture
                 .par_windows(2)
@@ -119,7 +125,7 @@ impl Irrigation {
                 .choices
                 .par_windows(2)
                 .any(|p| p[0].person >= p[1].person)
-            || chosen_fields.par_windows(2).any(|p| p[0] == p[1])
+            || (!self.elapsed_actions && chosen_fields.par_windows(2).any(|p| p[0] == p[1]))
             || self.moisture.par_iter().any(|m| {
                 !fields.contains(&m.field)
                     || m.amount > self.capacity
@@ -160,7 +166,20 @@ impl Irrigation {
             .is_some_and(|i| self.moisture[i].amount < self.minimum_growth)
     }
     pub fn prepare(&self, context: Context<'_>, base: u64) -> Result<Plan, String> {
-        if self.choices.is_empty() && context.manual.is_none() {
+        self.prepare_choices(context, base, &self.choices)
+    }
+
+    pub fn prepare_manual(&self, context: Context<'_>) -> Result<Plan, String> {
+        self.prepare_choices(context, 1, &[])
+    }
+
+    fn prepare_choices(
+        &self,
+        context: Context<'_>,
+        base: u64,
+        choices: &[Choice],
+    ) -> Result<Plan, String> {
+        if choices.is_empty() && context.manual.is_none() {
             return Ok(Plan { rows: Vec::new() });
         }
         let Context {
@@ -177,7 +196,7 @@ impl Irrigation {
         } = context;
         let feelings = opinions
             .filter(|_| {
-                self.choices
+                choices
                     .par_iter()
                     .any(|choice| !choice.willing && choice.pressured_by.is_some())
             })
@@ -186,8 +205,7 @@ impl Irrigation {
         if fields.par_windows(2).any(|pair| pair[0].id > pair[1].id) {
             fields.par_sort_unstable_by_key(|field| field.id);
         }
-        let mut selected: Vec<_> = self
-            .choices
+        let mut selected: Vec<_> = choices
             .par_iter()
             .filter(|choice| manual.is_none_or(|selected| selected.person != choice.person))
             .chain(manual.into_par_iter())
@@ -264,28 +282,23 @@ impl Irrigation {
                 ))
             })
             .collect();
-        // A manual choice and an autonomous choice may target the same field.
-        // Both people spend the attempt; deterministic physical arbitration
-        // admits only one so moisture cannot exceed the opening capacity.
-        if let Some(manual) = manual {
-            let contenders: Vec<_> = selected
+        // Each field admits one physically plausible attempt at an instant.
+        if self.elapsed_actions || manual.is_some() {
+            let mut contenders: Vec<_> = selected
                 .par_iter()
-                .enumerate()
-                .filter(|(_, row)| row.1 == manual.field)
-                .map(|(i, _)| i)
+                .filter(|row| row.4)
+                .map(|&(person, field, _, _, _)| {
+                    (field, priority(seed, tick, field, person), person)
+                })
                 .collect();
-            if contenders.len() == 2 {
-                let a = contenders[0];
-                let b = contenders[1];
-                let rank = |i: usize| {
-                    (
-                        priority(seed, tick, manual.field, selected[i].0),
-                        selected[i].0,
-                    )
-                };
-                let loser = if rank(a) <= rank(b) { b } else { a };
-                selected[loser].4 = false;
-            }
+            contenders.par_sort_unstable();
+            let winners: HashSet<_> = contenders
+                .par_chunk_by(|a, b| a.0 == b.0)
+                .map(|group| (group[0].0, group[0].2))
+                .collect();
+            selected.par_iter_mut().for_each(|row| {
+                row.4 &= winners.contains(&(row.1, row.0));
+            });
         }
         base.checked_add(selected.len() as u64)
             .ok_or("action count overflow")?;
@@ -381,6 +394,7 @@ impl Irrigation {
             minimum_growth: self.minimum_growth,
             evaporation: self.evaporation,
             evaporation_period_millis: self.evaporation_period_millis,
+            elapsed_actions: self.elapsed_actions,
             moisture,
             choices: self.choices.par_iter().cloned().collect(),
             events,

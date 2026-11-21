@@ -19,7 +19,9 @@ use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 mod host;
-pub use game_economy_agriculture::Phase as CoreCropPhase;
+pub use game_economy_agriculture::{
+    Phase as CoreCropPhase, irrigation::Event as CoreWateringEvent,
+};
 pub use game_economy_campaign::InvocationWarningKind;
 pub use game_economy_combat::Point as TacticalPoint;
 pub use game_economy_combat::elapsed::{

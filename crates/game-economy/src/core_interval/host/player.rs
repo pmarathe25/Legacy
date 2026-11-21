@@ -60,6 +60,7 @@ pub struct CorePlayerField {
     pub id: u64,
     pub phase: game_economy_agriculture::Phase,
     pub fertility: Option<u64>,
+    pub moisture: Option<u64>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -453,8 +454,15 @@ impl CoreHost {
                         id: field.id,
                         phase: field.phase,
                         fertility: farm.soil.as_ref().and_then(|soil| {
-                            soil.fields.binary_search_by_key(&field.id, |row| row.field)
-                                .ok().map(|slot| soil.fields[slot].fertility)
+                            let slot = soil.fields.binary_search_by_key(&field.id, |row| row.field).ok()?;
+                            Some(soil.fields[slot].fertility)
+                        }),
+                        moisture: self.irrigation.as_ref().and_then(|owner| {
+                            let index = owner
+                                .moisture
+                                .binary_search_by_key(&field.id, |row| row.field)
+                                .ok()?;
+                            Some(owner.moisture[index].amount)
                         }),
                     })
                     .collect();

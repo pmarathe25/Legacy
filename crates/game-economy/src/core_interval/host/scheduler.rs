@@ -67,6 +67,9 @@ pub enum DecisionPhase {
     AmendFields {
         meal_people: Vec<u64>,
     },
+    WaterFields {
+        meal_people: Vec<u64>,
+    },
     Exchange {
         meal_people: Vec<u64>,
     },
@@ -640,6 +643,7 @@ impl CoreSchedule {
         | DecisionPhase::Work { meal_people }
         | DecisionPhase::Assisting { meal_people }
         | DecisionPhase::AmendFields { meal_people }
+        | DecisionPhase::WaterFields { meal_people }
         | DecisionPhase::Exchange { meal_people }
         | DecisionPhase::ExchangeProposals { meal_people }
         | DecisionPhase::ReadPages { meal_people }
@@ -780,6 +784,10 @@ pub enum CoreRunEvent {
         lifespan_loss: u64,
     },
     PersonalChoices(Vec<CoreChoiceEvent>),
+    ElapsedWatering {
+        at_millis: u128,
+        events: Vec<game_economy_agriculture::irrigation::Event>,
+    },
     ElapsedCultivation {
         at_millis: u128,
         fields: Vec<game_economy_agriculture::opportunities::Opportunity>,
@@ -932,12 +940,21 @@ impl CoreHost {
         }
     }
     fn after_assisting(&self, meal_people: Vec<u64>) -> DecisionPhase {
+        if self.has_elapsed_watering() {
+            DecisionPhase::WaterFields { meal_people }
+        } else {
+            self.after_watering(meal_people)
+        }
+    }
+
+    fn after_watering(&self, meal_people: Vec<u64>) -> DecisionPhase {
         if self.has_elapsed_amendment() {
             DecisionPhase::AmendFields { meal_people }
         } else {
             self.after_amending(meal_people)
         }
     }
+
     fn after_amending(&self, meal_people: Vec<u64>) -> DecisionPhase {
         if self
             .schedule
@@ -1965,6 +1982,24 @@ impl CoreHost {
                             });
                         }
                         let next = self.after_amending(meal_people);
+                        self.schedule.as_mut().expect("active schedule").phase = next;
+                    }
+                    DecisionPhase::WaterFields { mut meal_people } => {
+                        let mut busy = blocked.to_vec();
+                        busy.par_extend(meal_people.par_iter().copied());
+                        busy.par_sort_unstable();
+                        busy.dedup();
+                        let events = attempt!('run, self.water_at_decision(&busy));
+                        if !events.is_empty() {
+                            meal_people.par_extend(events.par_iter().map(|row| row.person));
+                            meal_people.par_sort_unstable();
+                            meal_people.dedup();
+                            run.events.push(CoreRunEvent::ElapsedWatering {
+                                at_millis: self.core.simulated_millis(),
+                                events,
+                            });
+                        }
+                        let next = self.after_watering(meal_people);
                         self.schedule.as_mut().expect("active schedule").phase = next;
                     }
                     DecisionPhase::ChooseLocal { mut meal_people } => {

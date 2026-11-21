@@ -447,6 +447,9 @@ impl CoreHost {
             .as_mut()
             .ok_or("irrigation needs a cultivation plan")?;
         farm.gate_dry_growth(agriculture, owner);
+        if owner.elapsed_actions {
+            return Ok(None);
+        }
         let base = farm
             .changes
             .par_iter()

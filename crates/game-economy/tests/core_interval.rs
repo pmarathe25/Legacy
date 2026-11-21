@@ -7632,7 +7632,7 @@ fn irrigation_consumes_contested_water_and_gates_next_growth() {
             inherit_births: false, requests: None, soil: None, crops: vec![Crop {id: 1, seed: 1, seed_quantity: 1, output: 2, output_quantity: 1, growth_ticks: 1}],
             fields: (1..=2).map(|id| Field {id, region: 1, crop: 1, phase: Phase::Growing, remaining: 1}).collect(), policies: vec![], max_hunger: 10,
         };
-        let irrigation = Irrigation {water: 3, capacity: 2, minimum_growth: 1, evaporation: 0,
+        let irrigation = Irrigation { elapsed_actions: false, water: 3, capacity: 2, minimum_growth: 1, evaporation: 0,
             evaporation_period_millis: None,
             moisture: vec![Moisture {field: 1, amount: 0, evaporation_remainder: 0}, Moisture {field: 2, amount: 0, evaporation_remainder: 0}],
             choices: vec![Choice {person: 2, field: 1, quantity: 1, willing: false, hunger_limit: None, pressured_by: Some(1), fear_at_least: Some(1), obligation_at_least: None, disregard_claims: false},
@@ -8883,6 +8883,7 @@ fn core_host_cultivation_benchmark() {
             }],
         }),
         irrigation: watering.then(|| game_economy_agriculture::irrigation::Irrigation {
+            elapsed_actions: false,
             water: 3,
             capacity: 1,
             minimum_growth: 1,

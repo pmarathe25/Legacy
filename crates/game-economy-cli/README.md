@@ -99,9 +99,11 @@ With elapsed gathering enabled, `look` lists reachable resource nodes.
 `cultivate FIELD` plants from accessible regional stock or harvests a ripe
 field. To plant from an identified seed batch in the character's own cargo,
 use `cultivate FIELD CARRIED_SEED_BATCH`. `look` shows accessible fields, their
-known fertility, and the batch identities of carried seed. With elapsed soil
+known fertility and moisture, and the batch identities of carried seed. With elapsed soil
 amendments enabled, `amend FIELD` applies the configured material from
 reachable stock.
+With elapsed irrigation enabled, `water FIELD QUANTITY` draws water
+from reachable regional stock.
 
 `gather NODE` takes one yield into personal custody if stock and carrying space
 permit. For an engineering scenario, `look` lists carried items and apparatus.

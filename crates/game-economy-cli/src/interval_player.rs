@@ -53,7 +53,7 @@ fn command(host: &mut CoreHost, person: u64, words: &[&str]) -> Result<bool, Str
     match words {
         [] => {}
         ["help"] => println!(
-            "look | wait MILLISECONDS | move REGION | walk stock|store ID | pause-walk | resume-walk | trip REGION VISIT_MILLISECONDS [food] | trip go|survey|back|cancel | trip leave-in MILLISECONDS | fight PERSON | join-fight BENEFICIARY OPPONENT | tactic wait|defend|retreat | tactic attack PERSON | tactic attack-site SITE | tactic move X Y | confine PERSON SITE | guard SITE | release PERSON | escape | build BLUEPRINT | demolish SITE | salvage SITE GOOD QUANTITY | gather NODE | cultivate FIELD [CARRIED_SEED_BATCH] | amend FIELD | assemble APPARATUS PART... | mount APPARATUS STORE | unmount APPARATUS STORE | experiment APPARATUS OUTPUT FORCE DISTANCE LOAD | promise PERSON GOOD QUANTITY DUE_IN_MILLISECONDS | respond PROMISE accept|decline|withdraw | deliver PROMISE QUANTITY | eat GOOD | treat GOOD | wear GOOD | unwear | work RECIPE UNITS | stop JOB | stop-assist | rest on|off | word place|person|object ID SOUNDS | form SOUNDS MARKS | inscribe SOUNDS | read PAGE | recall PAGE | save PATH | load PATH | quit (SOUNDS and MARKS are comma-separated numbers)"
+            "look | wait MILLISECONDS | move REGION | walk stock|store ID | pause-walk | resume-walk | trip REGION VISIT_MILLISECONDS [food] | trip go|survey|back|cancel | trip leave-in MILLISECONDS | fight PERSON | join-fight BENEFICIARY OPPONENT | tactic wait|defend|retreat | tactic attack PERSON | tactic attack-site SITE | tactic move X Y | confine PERSON SITE | guard SITE | release PERSON | escape | build BLUEPRINT | demolish SITE | salvage SITE GOOD QUANTITY | gather NODE | cultivate FIELD [CARRIED_SEED_BATCH] | amend FIELD | water FIELD QUANTITY | assemble APPARATUS PART... | mount APPARATUS STORE | unmount APPARATUS STORE | experiment APPARATUS OUTPUT FORCE DISTANCE LOAD | promise PERSON GOOD QUANTITY DUE_IN_MILLISECONDS | respond PROMISE accept|decline|withdraw | deliver PROMISE QUANTITY | eat GOOD | treat GOOD | wear GOOD | unwear | work RECIPE UNITS | stop JOB | stop-assist | rest on|off | word place|person|object ID SOUNDS | form SOUNDS MARKS | inscribe SOUNDS | read PAGE | recall PAGE | save PATH | load PATH | quit (SOUNDS and MARKS are comma-separated numbers)"
         ),
         ["quit"] | ["exit"] => return Ok(false),
         ["look"] => {
@@ -100,11 +100,14 @@ fn command(host: &mut CoreHost, person: u64, words: &[&str]) -> Result<bool, Str
                 );
             }
             for field in &view.accessible_fields {
+                print!("field={} phase={:?}", field.id, field.phase);
                 if let Some(fertility) = field.fertility {
-                    println!("field={} phase={:?} fertility={fertility}", field.id, field.phase);
-                } else {
-                    println!("field={} phase={:?}", field.id, field.phase);
+                    print!(" fertility={fertility}");
                 }
+                if let Some(moisture) = field.moisture {
+                    print!(" moisture={moisture}");
+                }
+                println!();
             }
             let apparatus = view
                 .carried_apparatus
@@ -492,6 +495,14 @@ fn command(host: &mut CoreHost, person: u64, words: &[&str]) -> Result<bool, Str
             let field = number(field)?;
             let amended = Player::new(host, person)?.amend(field)?;
             println!("field={field} amended={amended}");
+        }
+        ["water", field, quantity] => {
+            let field = number(field)?;
+            let attempt = Player::new(host, person)?.water(field, number(quantity)?)?;
+            let added = attempt
+                .filter(|row| row.accepted)
+                .map_or(0, |row| row.quantity);
+            println!("field={field} water_added={added}");
         }
         ["work", recipe, units] => {
             let recipe = recipe.parse::<u32>().map_err(|_| "invalid recipe")?;

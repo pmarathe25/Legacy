@@ -940,6 +940,8 @@ struct IrrigationConfig {
     minimum_growth: u64,
     evaporation: u64,
     evaporation_period_millis: Option<u64>,
+    #[serde(default)]
+    elapsed_actions: bool,
     moisture: Vec<game_economy::FieldMoisture>,
     #[serde(default)]
     choices: Vec<game_economy::WaterChoice>,
@@ -2692,6 +2694,7 @@ fn build_scenario(
                 minimum_growth: config.minimum_growth,
                 evaporation: config.evaporation,
                 evaporation_period_millis: config.evaporation_period_millis,
+                elapsed_actions: config.elapsed_actions,
                 moisture,
                 choices,
                 events: vec![],

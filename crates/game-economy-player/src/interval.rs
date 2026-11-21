@@ -78,6 +78,14 @@ impl<'a> Player<'a> {
         self.host.amend_controlled(self.person, field)
     }
 
+    pub fn water(
+        &mut self,
+        field: u64,
+        quantity: u64,
+    ) -> Result<Option<game_economy::core_interval::CoreWateringEvent>, String> {
+        self.host.water_controlled(self.person, field, quantity)
+    }
+
     pub fn promise(
         &mut self,
         recipient: u64,
