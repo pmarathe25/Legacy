@@ -22,6 +22,7 @@ fn runtime(expiry: u64) -> Runtime {
         custody: State {
             next_batch: None,
             expiry_millis: None,
+            storage_climate: None,
             tick: 0,
             revision: 0,
             containers: vec![
@@ -206,6 +207,7 @@ fn many_dated_meals_produce_the_same_personal_effects_on_one_and_four_workers() 
         custody: State {
             next_batch: None,
             expiry_millis: None,
+            storage_climate: None,
             tick: 0,
             revision: 0,
             containers: (1..=count)

@@ -1268,6 +1268,7 @@ mod time_tests {
             revision: 12,
             next_batch: Some(8),
             expiry_millis: None,
+            storage_climate: None,
             containers: vec![
                 Container::new(
                     Place::Person(1),

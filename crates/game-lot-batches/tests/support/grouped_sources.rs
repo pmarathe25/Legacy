@@ -37,6 +37,7 @@ fn fixture(count: u64) -> (State, Vec<SimpleTransfer>) {
         State {
             next_batch: None,
             expiry_millis: None,
+            storage_climate: None,
             tick: 0,
             revision: 0,
             containers,

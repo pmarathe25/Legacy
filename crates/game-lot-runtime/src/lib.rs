@@ -3,6 +3,7 @@ mod advance;
 mod early_work;
 mod identified_output;
 mod interval_settlement;
+mod maturation;
 mod receipts;
 pub use advance::{Adoption, AdvanceDraft, Events, Suspension, WorkTransitions};
 pub use early_work::{EarlyWorkDraft, EarlyWorkEvents, IntervalConsumptionDraft};
@@ -13,6 +14,7 @@ use game_lots::{Outcome, Place, Spoilage, Store, Transaction, TransactionOutcome
 use game_production_model::{Good, JobPhase, Recipe, Start};
 pub use identified_output::{IdentifiedProduction, ProducedItem};
 pub use interval_settlement::IntervalSettlementDraft;
+pub use maturation::{MaturationEvent, MaturationOutcome};
 use rayon::prelude::*;
 pub use receipts::{
     ExternalReceipt, ExternalReceiptBatch, ExternalReceiptHeader, ExternalReceiptRef,
@@ -32,6 +34,12 @@ pub struct ElapsedCustody<'a> {
     pub batches: Option<game_lots::BatchAllocation>,
 }
 
+#[derive(Default)]
+pub struct ElapsedExpiryEvents {
+    pub spoilage: Vec<Spoilage>,
+    pub maturation: Vec<MaturationEvent>,
+}
+
 pub struct Runtime {
     store: Store,
     catalog: Catalog,
@@ -42,13 +50,13 @@ pub struct Runtime {
     work: Vec<Work>,
     work_interval: Option<WorkInterval>,
     epoch: u64,
-    elapsed_spoilage: Vec<Spoilage>,
+    elapsed_expiry: ElapsedExpiryEvents,
 }
 
 enum CustodyProgress {
     None,
     Boundary(game_lots::Draft),
-    Elapsed(game_lots::ExpiryDraft),
+    Elapsed(game_lots::ExpiryDraft, Vec<MaturationEvent>),
 }
 impl Runtime {
     fn ensure_no_work_interval(&self) -> Result<(), String> {
@@ -113,7 +121,7 @@ impl Runtime {
             work: state.work,
             work_interval: state.work_interval,
             epoch: 0,
-            elapsed_spoilage: Vec::new(),
+            elapsed_expiry: ElapsedExpiryEvents::default(),
         })
     }
     pub fn elapsed_expiry_time(&self) -> Option<u64> {
@@ -124,9 +132,9 @@ impl Runtime {
             .next_expiry()?
             .checked_sub(self.elapsed_expiry_time()?)
     }
-    /// Take expiration receipts published together with the most recent elapsed work segment.
-    pub fn take_elapsed_spoilage(&mut self) -> Vec<Spoilage> {
-        std::mem::take(&mut self.elapsed_spoilage)
+    /// Take deadline receipts published with the most recent elapsed work segment.
+    pub fn take_elapsed_expiry(&mut self) -> ElapsedExpiryEvents {
+        std::mem::take(&mut self.elapsed_expiry)
     }
     pub fn lot_instant(&self, boundary: u64) -> u64 {
         self.elapsed_expiry_time().unwrap_or(boundary)
@@ -397,10 +405,11 @@ impl Runtime {
                 .checked_add(consumed)
                 .ok_or("elapsed custody clock overflow")?;
             let mut draft = self.store.prepare_expiry_at(at)?;
+            let maturation = self.prepare_maturation(&mut draft, at)?;
             self.store
                 .stage_expiry_custody(&mut draft, people, effects.batches)?;
             self.store.validate_expiry_at(&draft)?;
-            CustodyProgress::Elapsed(draft)
+            CustodyProgress::Elapsed(draft, maturation)
         } else if changes_custody {
             let mut draft = self.store.prepare_transactions_now(0, &[])?;
             self.store.add_empty_in(&mut draft, people)?;
@@ -435,18 +444,23 @@ impl Runtime {
         let mut interval = self.work_interval.take().expect("checked interval");
         let result = self.apply_work_progress(&interval.rates, consumed);
         if result.is_ok() {
-            self.elapsed_spoilage = match custody {
-                CustodyProgress::None => Vec::new(),
-                CustodyProgress::Boundary(draft) => {
-                    self.store
+            self.elapsed_expiry = match custody {
+                CustodyProgress::None => ElapsedExpiryEvents::default(),
+                CustodyProgress::Boundary(draft) => ElapsedExpiryEvents {
+                    spoilage: self
+                        .store
                         .commit(draft)
                         .expect("validated custody unchanged by work progress")
-                        .1
-                }
-                CustodyProgress::Elapsed(draft) => self
-                    .store
-                    .commit_expiry_at(draft)
-                    .expect("validated expiry unchanged by work progress"),
+                        .1,
+                    maturation: Vec::new(),
+                },
+                CustodyProgress::Elapsed(draft, maturation) => ElapsedExpiryEvents {
+                    spoilage: self
+                        .store
+                        .commit_expiry_at(draft)
+                        .expect("validated expiry unchanged by work progress"),
+                    maturation,
+                },
             };
             interval.custody_revision = self.store.revision();
             interval.elapsed_millis += consumed;

@@ -203,6 +203,8 @@ pub struct State {
     /// Absolute elapsed milliseconds when dated lots use the elapsed clock.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expiry_millis: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub storage_climate: Option<StorageClimate>,
     pub containers: Vec<Container>,
 }
 
@@ -218,4 +220,20 @@ pub fn deadline(created_at: u64, shelf_days: u32, ticks_per_day: u64) -> Result<
                 .ok_or("shelf life overflow")?,
         )
         .ok_or("shelf life overflow")
+}
+
+/// Storage temperatures measured in degrees Celsius.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StorageClimate {
+    pub ambient_celsius: i16,
+    #[serde(default)]
+    pub places: Vec<StorageTemperature>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StorageTemperature {
+    pub place: Place,
+    pub celsius: i16,
 }

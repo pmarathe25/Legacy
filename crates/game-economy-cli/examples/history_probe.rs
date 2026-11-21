@@ -125,6 +125,13 @@ fn run_steps(
                     )?;
                     ("spoilage_events", lots.len())
                 }
+                CoreRunEvent::Maturation { at_millis, events } => {
+                    write_line(
+                        &mut writer,
+                        &json!({"kind":"maturation","step":step,"at_millis":at_millis,"events":events}),
+                    )?;
+                    ("maturation_events", events.len())
+                }
                 CoreRunEvent::Work(row) => ("work_finished", row.finished.len()),
                 CoreRunEvent::Meetings(rows) => ("meetings", rows.len()),
                 CoreRunEvent::LocalWalking { at_millis, events } => {

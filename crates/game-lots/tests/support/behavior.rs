@@ -17,6 +17,7 @@ fn store(mut containers: Vec<Container>) -> Store {
     Store::compile(State {
         next_batch: None,
         expiry_millis: None,
+        storage_climate: None,
         tick: 0,
         revision: 0,
         containers,
@@ -3734,6 +3735,7 @@ fn disjoint_transform_commit_matches_general_plan_and_rejects_stale_draft() {
     let state = State {
         next_batch: None,
         expiry_millis: None,
+        storage_climate: None,
         tick: 0,
         revision: 0,
         containers,

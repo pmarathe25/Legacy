@@ -31,6 +31,7 @@ fn runtime() -> Runtime {
         custody: State {
             next_batch: None,
             expiry_millis: None,
+            storage_climate: None,
             tick: 0,
             revision: 0,
             containers: vec![stock(1, 4), stock(2, 0)],

@@ -55,6 +55,7 @@ fn runtime(capacity: u64, stock: u64) -> Runtime {
         custody: State {
             next_batch: None,
             expiry_millis: None,
+            storage_climate: None,
             tick: 0,
             revision: 0,
             containers: vec![

@@ -2,12 +2,14 @@
 mod batch_allocation;
 mod compose;
 mod expiry;
+mod maturation;
 mod view;
 pub use batch_allocation::{BatchAllocation, BatchCount, BatchRange};
 pub use compose::{Composed, compose};
 pub use game_lot_model::{
     Container, Creation, Lot, LotList, Movement, Outcome, OutcomeBatch, OutcomeHeader, OutcomeRef,
-    Place, PlaceIndex, SimpleTransfer, Spoilage, State, Transaction, TransactionOutcome, deadline,
+    Place, PlaceIndex, SimpleTransfer, Spoilage, State, StorageClimate, StorageTemperature,
+    Transaction, TransactionOutcome, deadline,
 };
 use rayon::prelude::*;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -134,7 +136,19 @@ impl Draft {
 }
 impl Store {
     /// Validate a saved state once; subsequent mutations go through staged drafts.
-    pub fn compile(state: State) -> Result<Self, String> {
+    pub fn compile(mut state: State) -> Result<Self, String> {
+        if let Some(climate) = &mut state.storage_climate {
+            climate.places.par_sort_unstable_by_key(|row| row.place);
+            if state.expiry_millis.is_none()
+                || climate
+                    .places
+                    .par_windows(2)
+                    .any(|pair| pair[0].place == pair[1].place)
+                || climate.places.par_iter().any(|row| !row.place.valid())
+            {
+                return Err("invalid elapsed storage conditions".into());
+            }
+        }
         let now = state.expiry_millis.unwrap_or(state.tick);
         if state
             .containers
@@ -289,6 +303,21 @@ impl Store {
     pub fn next_expiry(&self) -> Option<u64> {
         self.expiry.next()
     }
+    pub fn storage_celsius(&self, place: Place) -> i16 {
+        const AMBIENT_CELSIUS: i16 = 20;
+        self.state
+            .storage_climate
+            .as_ref()
+            .map_or(AMBIENT_CELSIUS, |climate| {
+                climate
+                    .places
+                    .binary_search_by_key(&place, |row| row.place)
+                    .map_or(climate.ambient_celsius, |index| {
+                        climate.places[index].celsius
+                    })
+            })
+    }
+
     pub fn elapsed_millis(&self) -> Option<u64> {
         self.state.expiry_millis
     }
@@ -319,6 +348,27 @@ impl Store {
             at,
             custody,
         })
+    }
+
+    /// Replace expired preparations at the same instant as their old goods leave custody.
+    pub fn stage_matured(
+        &self,
+        draft: &mut ExpiryDraft,
+        creations: &[Creation],
+        is_prepared: impl Fn(u32) -> bool,
+    ) -> Result<Vec<(u64, bool)>, String> {
+        self.validate_expiry_at(draft)?;
+        let custody = draft
+            .custody
+            .as_mut()
+            .ok_or("no preparations expire here")?;
+        let result = if creations.is_empty() {
+            Vec::new()
+        } else {
+            maturation::stage(&self.state, &mut custody.inner, draft.at, creations)?
+        };
+        custody.inner.spoiled.retain(|row| !is_prepared(row.good));
+        Ok(result)
     }
 
     /// Stage other custody effects from the same elapsed event atomically.
