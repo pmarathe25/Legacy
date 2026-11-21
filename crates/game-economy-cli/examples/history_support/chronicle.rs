@@ -280,6 +280,7 @@ impl Chronicle {
                 | "maturation"
                 | "recipe_learning"
                 | "written_explanations"
+                | "written_works"
                 | "farm_review"
                 | "personal_practices"
                 | "agreement_expiry"
@@ -444,6 +445,9 @@ impl Chronicle {
 }
 
 fn classify(kind: &str, row: &Value) -> Option<Receipt> {
+    if kind == "written_works" {
+        return Some(Receipt { label: "written works composed", actor: Some(row["person"].as_u64()?), other: None });
+    }
     if kind == "care" {
         let child = row["child"].as_u64()?;
         let caregiver = row["caregiver"].as_u64();

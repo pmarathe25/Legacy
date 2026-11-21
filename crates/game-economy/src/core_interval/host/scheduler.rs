@@ -694,6 +694,7 @@ impl CoreSchedule {
 #[derive(Debug, PartialEq, Eq)]
 pub enum CoreRunEvent {
     Pastimes(Vec<game_pastimes::Event>),
+    WrittenWorks(Vec<CoreWorkEdition>),
     AgreementExpiry {
         at_millis: u128,
         events: Vec<game_agreements::Event>,
@@ -3847,6 +3848,13 @@ impl CoreHost {
                         let departures = attempt!('run, self.depart_autonomously(&busy));
                         if !departures.is_empty() {
                             run.events.push(CoreRunEvent::Departures(departures));
+                        }
+                        let works = attempt!('run, self.compose_autonomously(&busy));
+                        if !works.is_empty() {
+                            busy.par_extend(works.par_iter().map(|row| row.person));
+                            busy.par_sort_unstable();
+                            busy.dedup();
+                            run.events.push(CoreRunEvent::WrittenWorks(works));
                         }
                         let pastimes = attempt!('run, self.start_pastimes(&busy));
                         if !pastimes.is_empty() {

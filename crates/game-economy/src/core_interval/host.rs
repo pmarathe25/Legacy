@@ -110,7 +110,8 @@ pub use tactical::{CorePlayerTactics, CoreTacticalResult};
 pub use tools::CoreToolRepairResults;
 pub use treatment::CoreTreatmentResults;
 pub use writing::{
-    CoreMarkInscription, CoreMarkObservation, CoreWritingPracticeResults, CoreWritingResults,
+    CoreMarkInscription, CoreMarkObservation, CoreWorkEdition, CoreWorkInscription, CoreWorkObservation,
+    CoreWritingPracticeResults, CoreWritingResults,
 };
 
 /// Borrowed, latest-boundary observations for external history recorders.
@@ -1443,6 +1444,17 @@ impl CoreHost {
             }
         }
         if let Some(owner) = &mut writing {
+            if !owner.compositions.is_empty()
+                && social.as_ref().and_then(|owner| owner.language.as_ref())
+                    .and_then(|language| language.writing.as_ref()).is_none()
+            {
+                return Err("authored compositions require personal writing forms".into());
+            }
+            if owner.pages.par_iter().any(|page| page.work.as_ref()
+                .is_some_and(|work| work.created_at_millis > core.simulated_millis()))
+            {
+                return Err("written work is ahead of the simulation clock".into());
+            }
             if (!owner.authors.is_empty()
                 || owner.pages.par_iter().any(|page| page.claim.is_some()))
                 && knowledge.is_none()

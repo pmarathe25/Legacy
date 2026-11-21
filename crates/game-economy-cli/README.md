@@ -112,6 +112,13 @@ uses the carried materials when it starts, and leaves reusable instruments in
 custody. The [pastime scenario](../../content/scenarios/economy-pastimes.toml)
 includes song composition, instrument practice, and painting.
 
+`compose SOUNDS SOUNDS ...` writes an ordered sequence of personal forms on
+one carried page. Each form must have marks the character already chose.
+Paper and ink are consumed only when the physical page can be created.
+`read-work PAGE` shows the actual marks and the meanings this character
+can recognize while carrying the page. The same marks can have different
+meanings for different readers.
+
 In a scenario with personal episodes, `memories` recalls the controlled
 character's experiences. `memories PERSON` limits the view to encounters
 with that person. Faint recollections can lose their precise dates.

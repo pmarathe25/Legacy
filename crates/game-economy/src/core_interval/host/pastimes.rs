@@ -15,7 +15,7 @@ impl CoreHost {
             .flat_map(|owner| owner.active.iter().map(|row| row.person))
     }
 
-    fn pastime_ready(&self, person: u64, activity: &Activity, opening: bool) -> bool {
+    pub(super) fn pastime_ready(&self, person: u64, activity: &Activity, opening: bool) -> bool {
         if activity.tools.is_empty() && (!opening || activity.materials.is_empty()) {
             return true;
         }
