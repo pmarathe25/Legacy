@@ -7,6 +7,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 mod names;
+pub mod syntax;
 pub mod writing;
 pub use names::{Namesake, NamingPolicy};
 
@@ -155,6 +156,8 @@ pub struct Mind {
     /// or deliberately offered; this does not supply a word or its meaning.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mechanical_interest: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub syntax: Option<syntax::Mind>,
 }
 
 fn enabled() -> bool {
@@ -181,6 +184,7 @@ impl Mind {
             topic_policy: None,
             naming: None,
             mechanical_interest: None,
+            syntax: None,
         }
     }
 }
@@ -200,6 +204,8 @@ pub struct Event {
     /// The listener's chosen form, which may differ from the heard form.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub adopted_sounds: Option<Vec<u8>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clause: Option<syntax::Clause>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -565,14 +571,16 @@ impl Language {
         let meetings: Vec<_> = selected.par_iter().map(|row| row.0).collect();
         let speakers: Vec<_> = selected.par_iter().map(|row| row.1).collect();
         let grounded: Vec<_> = selected.par_iter().map(|row| row.2).collect();
-        self.prepare_internal(
+        let mut next = self.prepare_internal(
             &meetings,
             Some(&speakers),
             seed,
             tick,
             affinity,
             Some(&grounded),
-        )
+        )?;
+        syntax::extend_grounded_objects(self, &mut next, seed);
+        Ok(next)
     }
 
     pub fn validate(&self, people: &HashSet<u64>, now: u64) -> Result<(), &'static str> {
@@ -616,6 +624,9 @@ impl Language {
                         .any(|sound| usize::from(*sound) >= r.sounds.len())
                     || m.phonemes.windows(2).any(|sounds| sounds[0] >= sounds[1])
                     || m.words.len() > r.capacity
+                    || m.syntax
+                        .as_ref()
+                        .is_some_and(|syntax| !syntax.valid() || !syntax.knows_examples(people))
                     || m.naming.as_ref().is_some_and(|policy| {
                         !policy.valid()
                             || policy
@@ -656,6 +667,9 @@ impl Language {
                     })
                     || e.learned != e.adopted_sounds.is_some()
                     || (!e.heard && (e.interpreted.is_some() || e.learned))
+                    || e.clause
+                        .as_ref()
+                        .is_some_and(|clause| !clause.valid(e, people, r.sounds.len()))
             })
         {
             return Err("invalid personal language state");
@@ -731,6 +745,7 @@ impl Language {
                         .iter()
                         .any(|sound| usize::from(*sound) >= self.rules.sounds.len())
                     || m.words.len() > self.rules.capacity
+                    || m.syntax.as_ref().is_some_and(|syntax| !syntax.valid())
                     || m.naming.as_ref().is_some_and(|policy| !policy.valid())
                     || m.topic_policy.as_ref().is_some_and(|policy| {
                         policy
@@ -933,6 +948,7 @@ impl Language {
                         interpreted,
                         learned,
                         adopted_sounds: learned.then(|| adopted.clone()),
+                        clause: None,
                     },
                     known.is_none(),
                     adopted,

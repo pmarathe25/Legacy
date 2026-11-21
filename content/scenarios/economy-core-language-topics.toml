@@ -22,10 +22,12 @@ capacity = 4
 person = 1
 initiative = 1000
 adoption = 1000
+syntax = { initiative = 1000, demonstrate = true }
 [[language.minds]]
 person = 2
 initiative = 1000
 adoption = 1000
+syntax = { inference = 1000 }
 
 [[language_topic_profiles]]
 person = 1

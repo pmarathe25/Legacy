@@ -793,6 +793,21 @@ fn narrative(report: &Value, focus: Focus) -> String {
             }
             writeln!(text, "The recorded activity includes {} meetings, {} spoken exchanges, {} instances of recipe learning or teaching, and {} mechanical experiments involving them.\n",
                 count("recorded_meetings"), count("language_events"), count("recipe_learning"), count("mechanical_experiments")).unwrap();
+            for exchange in report["language_events"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter(|exchange| exchange["listener"].as_u64() == Some(person))
+            {
+                let order = match exchange["clause"]["adopted_order"].as_str() {
+                    Some("holder_first") => "before the object",
+                    Some("object_first") => "after the object",
+                    _ => continue,
+                };
+                if let Some(speaker) = exchange["speaker"].as_u64() {
+                    writeln!(text, "After hearing Person {speaker} demonstrate what they carried, they adopted a way of speaking that names the holder {order}.\n").unwrap();
+                }
+            }
             for experiment in report["mechanical_experiments"]
                 .as_array()
                 .into_iter()

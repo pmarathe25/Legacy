@@ -77,7 +77,7 @@ weighted by the speaker's directed affinity and their own signed tolerance for
 exact-form confusion. A speaker may instead decline to coin a form. Namesake
 forms must be in that speaker's vocabulary and within their phoneme inventory.
 See `content/scenarios/economy-core-namesake.toml` for an authored example.
-Naming absent people, similarity beyond exact forms, grammar, and transmission
+Naming absent people, similarity beyond exact forms, and transmission
 of general factual claims remain incomplete.
 
 A participant who previously noticed or personally remembers another
@@ -88,3 +88,14 @@ observer's interpretation. The listener independently chooses whether to
 learn. `content/scenarios/economy-core-signal-language.toml` illustrates the
 numeric signal-form topic. A form that the speaker did not notice or remember
 does not become an available topic merely because it exists in a catalog.
+
+People can use their own name and an object word together while showing a
+carried object. An optional `syntax` profile controls whether a person tries
+a two-word construction, demonstrates it, or considers learning one. A
+speaker chooses a personal word order. A listener interprets the words using
+their own vocabulary and word order. A listener without an established order
+may infer one from two distinct, independently understood demonstrations and
+may adopt a modified order. Someone without an explicit syntax profile can
+still learn according to their ordinary speech and adoption inclinations.
+Constructions and their observed examples are personal and survive save/load.
+`content/scenarios/economy-core-language-topics.toml` enables this path.
