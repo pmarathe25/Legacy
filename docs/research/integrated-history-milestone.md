@@ -148,6 +148,13 @@ ordered receipts through all five measured worker counts. The count grows
 with the number of caller horizons even when there is no intermediate read.
 This diagnostic attributes work and does not estimate production throughput.
 
+The sparse elapsed-fatigue stage repeated the minute test and staged zero
+fatigue rows at every worker count. Its constant-activity frame keeps
+people with existing fatigue, rest state or fractional carry, and people
+whose effort can create fatigue. Vitals staging still touched 306,000 rows.
+The saved-state fingerprint and all 14 ordered receipts matched the
+original run at one, two, four, six, and eight workers.
+
 
 ## First thirty years
 

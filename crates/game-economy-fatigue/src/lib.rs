@@ -4,8 +4,8 @@ use game_fatigue::Activity;
 pub use game_fatigue::Draft;
 pub use game_fatigue::Person as FatiguePerson;
 pub use game_fatigue::{
-    Consequence, ElapsedActivity, ElapsedFatigue, Exertion, Fatigue, RestChoice, Rules,
-    TimedActivity, TimedFatigue,
+    Consequence, ElapsedActivity, ElapsedFatigue, ElapsedFatigueView, Exertion, Fatigue,
+    RestChoice, Rules, TimedActivity, TimedFatigue,
 };
 use game_lot_runtime::{Events, Work};
 use game_production_model::Start;

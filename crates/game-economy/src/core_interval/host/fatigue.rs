@@ -267,9 +267,10 @@ impl CoreHost {
 
     fn elapsed_activity_frame(
         &self,
-        resting: &[u64],
+        owner: &game_economy_fatigue::ElapsedFatigueView<'_>,
         externally_busy: &[u64],
     ) -> Result<ActivityFrame, String> {
+        let resting = owner.resting();
         let mut working: Vec<_> = self
             .core
             .physical
@@ -305,12 +306,6 @@ impl CoreHost {
         });
         traveling.par_extend(self.local_travelers());
         traveling.par_sort_unstable();
-        let people: std::collections::HashSet<_> = self
-            .core
-            .people
-            .par_iter()
-            .map(|person| person.id)
-            .collect();
         let activity: Vec<_> = self
             .core
             .people
@@ -344,6 +339,8 @@ impl CoreHost {
             })
             .collect::<Result<Vec<_>, String>>()?;
 
+        let activity = owner.relevant_activity(&activity);
+        let people = activity.par_iter().map(|row| row.id).collect();
         Ok(ActivityFrame { activity, people })
     }
 
@@ -374,13 +371,13 @@ impl CoreHost {
                 return Ok(ElapsedProgress::default());
             }
             if activity.is_none() {
-                activity = Some(self.elapsed_activity_frame(&owner.resting(), externally_busy)?);
+                activity = Some(self.elapsed_activity_frame(&owner, externally_busy)?);
             }
             let frame = activity.as_ref().expect("prepared elapsed activity");
             #[cfg(feature = "profile")]
             let _phase = game_diagnostics::span("elapsed.progress.fatigue");
             #[cfg(feature = "profile")]
-            game_diagnostics::count("elapsed.rows.fatigue", frame.people.len() as u64);
+            game_diagnostics::count("elapsed.rows.fatigue", frame.activity.len() as u64);
             let (millis, draft) =
                 owner.prepare_segment(&frame.activity, consumed, &frame.people)?;
             consumed = millis;
