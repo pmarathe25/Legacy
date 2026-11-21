@@ -73,6 +73,7 @@ impl CoreHost {
             origin: region,
             destination: trip.destination,
             visit_millis: trip.visit_millis,
+            depart_after_millis: trip.depart_after_millis,
         };
         let response = if beneficiary.controlled {
             None
@@ -179,6 +180,7 @@ impl CoreHost {
                     origin: trip.origin,
                     destination: trip.destination,
                     visit_millis: trip.visit_millis,
+                    depart_after_millis: trip.depart_after_millis,
                 };
                 let reply = (!recipient.controlled).then(|| {
                     self.decide_expedition_invitation(

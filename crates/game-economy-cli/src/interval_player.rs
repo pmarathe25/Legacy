@@ -34,7 +34,7 @@ fn command(host: &mut CoreHost, person: u64, words: &[&str]) -> Result<bool, Str
     match words {
         [] => {}
         ["help"] => println!(
-            "look | wait MILLISECONDS | move REGION | walk stock|store ID | pause-walk | resume-walk | trip REGION VISIT_MILLISECONDS [food] | trip go|survey|back|cancel | fight PERSON | join-fight BENEFICIARY OPPONENT | tactic wait|defend|retreat | tactic attack PERSON | tactic attack-site SITE | tactic move X Y | confine PERSON SITE | guard SITE | release PERSON | escape | build BLUEPRINT | demolish SITE | salvage SITE GOOD QUANTITY | eat GOOD | treat GOOD | wear GOOD | unwear | work RECIPE UNITS | stop JOB | stop-assist | rest on|off | word place|person|object ID SOUNDS | form SOUNDS MARKS | inscribe SOUNDS | read PAGE | recall PAGE | save PATH | load PATH | quit (SOUNDS and MARKS are comma-separated numbers)"
+            "look | wait MILLISECONDS | move REGION | walk stock|store ID | pause-walk | resume-walk | trip REGION VISIT_MILLISECONDS [food] | trip go|survey|back|cancel | trip leave-in MILLISECONDS | fight PERSON | join-fight BENEFICIARY OPPONENT | tactic wait|defend|retreat | tactic attack PERSON | tactic attack-site SITE | tactic move X Y | confine PERSON SITE | guard SITE | release PERSON | escape | build BLUEPRINT | demolish SITE | salvage SITE GOOD QUANTITY | eat GOOD | treat GOOD | wear GOOD | unwear | work RECIPE UNITS | stop JOB | stop-assist | rest on|off | word place|person|object ID SOUNDS | form SOUNDS MARKS | inscribe SOUNDS | read PAGE | recall PAGE | save PATH | load PATH | quit (SOUNDS and MARKS are comma-separated numbers)"
         ),
         ["quit"] | ["exit"] => return Ok(false),
         ["look"] => {
@@ -177,8 +177,11 @@ fn command(host: &mut CoreHost, person: u64, words: &[&str]) -> Result<bool, Str
         ["trip", "invites"] => {
             for invitation in Player::new(host, person)?.expedition_invitations()? {
                 println!(
-                    "invitation={} from={} destination={}",
-                    invitation.id, invitation.inviter, invitation.destination
+                    "invitation={} from={} destination={} depart_after_millis={:?}",
+                    invitation.id,
+                    invitation.inviter,
+                    invitation.destination,
+                    invitation.depart_after_millis
                 );
             }
         }
@@ -201,6 +204,11 @@ fn command(host: &mut CoreHost, person: u64, words: &[&str]) -> Result<bool, Str
             let invitation = invitation.parse().map_err(|_| "invalid invitation ID")?;
             Player::new(host, person)?.withdraw_expedition_invitation(invitation)?;
             println!("invitation={} withdrawn=true", invitation);
+        }
+        ["trip", "leave-in", delay] => {
+            let delay = delay.parse().map_err(|_| "invalid departure delay")?;
+            let event = Player::new(host, person)?.schedule_expedition_departure(delay)?;
+            println!("trip={} event={:?}", event.itinerary, event.kind);
         }
         ["trip", "go" | "survey" | "back" | "cancel"] => {
             let mut player = Player::new(host, person)?;

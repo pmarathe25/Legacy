@@ -14,6 +14,8 @@ pub struct Invitation {
     pub origin: u64,
     pub destination: u64,
     pub visit_millis: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub depart_after_millis: Option<u128>,
     pub offered_at_millis: u128,
 }
 
@@ -25,6 +27,7 @@ pub struct Offer {
     pub origin: u64,
     pub destination: u64,
     pub visit_millis: u64,
+    pub depart_after_millis: Option<u128>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -234,6 +237,7 @@ impl Invitations {
                     origin: offer.origin,
                     destination: offer.destination,
                     visit_millis: offer.visit_millis,
+                    depart_after_millis: offer.depart_after_millis,
                     offered_at_millis: now,
                 })
             })
@@ -271,6 +275,7 @@ impl Invitations {
             origin: offer.origin,
             destination: offer.destination,
             visit_millis: offer.visit_millis,
+            depart_after_millis: offer.depart_after_millis,
             offered_at_millis: now,
         };
         self.pending.push(invitation);
@@ -324,6 +329,7 @@ impl Invitation {
             origin: region,
             destination: self.destination,
             visit_millis: self.visit_millis,
+            depart_after_millis: self.depart_after_millis,
             head_home,
             objective: None,
         }

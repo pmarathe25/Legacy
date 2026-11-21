@@ -37,6 +37,8 @@ pub struct Itinerary {
     pub origin: u64,
     pub destination: u64,
     pub visit_millis: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub depart_after_millis: Option<u128>,
     pub go_on: bool,
     pub head_home: bool,
     pub stage: Stage,
@@ -54,6 +56,9 @@ pub struct Itinerary {
 #[serde(rename_all = "snake_case")]
 pub enum EventKind {
     Planned,
+    DepartureScheduled {
+        depart_after_millis: Option<u128>,
+    },
     OutboundLeg,
     ReturnLeg,
     RouteUnavailable,
@@ -94,6 +99,7 @@ pub struct Plan {
     pub origin: u64,
     pub destination: u64,
     pub visit_millis: u64,
+    pub depart_after_millis: Option<u128>,
     pub head_home: bool,
     pub objective: Option<Objective>,
 }
@@ -153,6 +159,7 @@ impl Itinerary {
             origin: plan.origin,
             destination: plan.destination,
             visit_millis: plan.visit_millis,
+            depart_after_millis: plan.depart_after_millis,
             go_on: true,
             head_home: plan.head_home,
             stage: Stage::Ready,
@@ -242,6 +249,7 @@ impl Expeditions {
                     origin: row.origin,
                     destination: row.destination,
                     visit_millis,
+                    depart_after_millis: None,
                     go_on: true,
                     head_home: true,
                     stage: Stage::Ready,
@@ -390,6 +398,7 @@ impl Expeditions {
                     || source.origin != invitation.origin
                     || source.destination != invitation.destination
                     || source.visit_millis != invitation.visit_millis
+                    || source.depart_after_millis != invitation.depart_after_millis
                 {
                     return Err("expedition invitation differs from the sender's itinerary".into());
                 }
@@ -518,6 +527,28 @@ impl Expeditions {
             .collect()
     }
 
+    /// A participant can revise their own appointment until they depart.
+    pub fn schedule_departure(
+        &mut self,
+        person: u64,
+        depart_after_millis: Option<u128>,
+        now: u128,
+    ) -> Result<Event, String> {
+        let row = self
+            .itineraries
+            .iter_mut()
+            .find(|row| row.person == person && row.stage == Stage::Ready)
+            .ok_or("the traveler has no itinerary awaiting departure")?;
+        row.depart_after_millis = depart_after_millis;
+        Ok(row.event(
+            now,
+            row.origin,
+            EventKind::DepartureScheduled {
+                depart_after_millis,
+            },
+        ))
+    }
+
     /// One route proposal per actor. In worlds with personal routing, use only
     /// the actor's reports. Reports may be wrong when physical travel is tried.
     pub fn departures(&self, context: TravelContext<'_>) -> Vec<travel::Departure> {
@@ -550,6 +581,16 @@ impl Expeditions {
             .par_iter()
             .filter_map(|row| {
                 let target = row.route_target()?;
+                if row.stage == Stage::Ready
+                    && row.depart_after_millis.is_some_and(|due| {
+                        review
+                            .elapsed
+                            .map_or(u128::from(review.tick), |(now, _)| now)
+                            < due
+                    })
+                {
+                    return None;
+                }
                 if controlled.is_some_and(|actor| actor != row.person)
                     || busy.binary_search(&row.person).is_ok()
                 {

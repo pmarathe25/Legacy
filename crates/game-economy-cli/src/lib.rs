@@ -16,6 +16,13 @@ use serde::Deserialize;
 use std::collections::{BTreeMap, HashSet};
 use std::path::Path;
 
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ScenarioExpeditionDeparture {
+    person: u64,
+    after_millis: u64,
+}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Scenario {
@@ -50,6 +57,8 @@ struct Scenario {
         Vec<game_economy::core_interval::ExpeditionInvitationInitiative>,
     #[serde(default)]
     on_site_meals: bool,
+    #[serde(default)]
+    expedition_departures: Vec<ScenarioExpeditionDeparture>,
     stock_capacity: u64,
     food_relief_divisor: u32,
     rules: Rules,
@@ -1095,6 +1104,7 @@ pub fn core_scenario_with_options(
         std::mem::take(&mut authored.expedition_invitation_preferences);
     let mut expedition_invitation_initiatives =
         std::mem::take(&mut authored.expedition_invitation_initiatives);
+    let departures = std::mem::take(&mut authored.expedition_departures);
     let on_site_meals = authored.on_site_meals;
     let fatigue_rate_period_millis = authored.fatigue_rate_period_millis;
     let elapsed_fatigue = authored.elapsed_fatigue;
@@ -1210,6 +1220,21 @@ pub fn core_scenario_with_options(
             .ok_or("invitation initiatives require expeditions")?
             .invitations
             .initiatives = expedition_invitation_initiatives;
+    }
+    if !departures.is_empty() {
+        let owner = snapshot
+            .expeditions
+            .as_mut()
+            .ok_or("scheduled departures require expeditions")?;
+        let mut travelers = HashSet::new();
+        for row in departures {
+            if !travelers.insert(row.person) {
+                return Err("duplicate scheduled departure".into());
+            }
+            let event =
+                owner.schedule_departure(row.person, Some(u128::from(row.after_millis)), 0)?;
+            owner.pending_events.push(event);
+        }
     }
     if let Some(config) = work_capabilities {
         let mut requirements = config

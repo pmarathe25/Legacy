@@ -426,11 +426,31 @@ impl CoreHost {
                     origin,
                     destination,
                     visit_millis,
+                    depart_after_millis: None,
                     head_home: false,
                     objective,
                 },
                 self.core.simulated_millis(),
             )
+    }
+
+    pub fn schedule_controlled_departure(
+        &mut self,
+        person: u64,
+        delay: u64,
+    ) -> Result<Event, String> {
+        self.controlled_person(person)?;
+        let now = self.core.simulated_millis();
+        let depart_after_millis = (delay > 0)
+            .then(|| {
+                now.checked_add(u128::from(delay))
+                    .ok_or("departure instant overflow")
+            })
+            .transpose()?;
+        self.expeditions
+            .as_mut()
+            .ok_or("expeditions are disabled")?
+            .schedule_departure(person, depart_after_millis, now)
     }
 
     pub fn continue_controlled_expedition(&mut self, person: u64) -> Result<Vec<Event>, String> {
