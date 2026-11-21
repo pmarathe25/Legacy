@@ -47,6 +47,7 @@ mod site_lifecycle;
 mod sites;
 mod skills;
 mod social;
+mod soil_amendment;
 mod storage;
 mod tactical;
 mod tactical_reinforcements;

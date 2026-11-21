@@ -74,6 +74,66 @@ impl Clone for Soil {
     }
 }
 impl Soil {
+    pub fn apply_amendments(&mut self, events: Vec<crate::amendment::Event>) {
+        let owner = self
+            .amendment
+            .as_mut()
+            .expect("prepared soil amendment owner");
+        let gain = owner.fertility_gain;
+        let capacity = self.capacity;
+        let update = |row: &mut FieldSoil| {
+            row.fertility = row.fertility.saturating_add(gain).min(capacity);
+        };
+        let mut slots: Vec<_> = events
+            .par_iter()
+            .filter(|row| row.accepted)
+            .map(|row| {
+                self.fields
+                    .binary_search_by_key(&row.field, |field| field.field)
+                    .expect("prepared amended field")
+            })
+            .collect();
+        slots.par_sort_unstable();
+        if slots.len() <= 64 {
+            for &slot in &slots {
+                update(&mut self.fields[slot]);
+            }
+        } else {
+            const FIELDS_PER_SHARD: usize = 256;
+            let first = slots[0];
+            let last = slots[slots.len() - 1];
+            self.fields[first..=last]
+                .par_chunks_mut(FIELDS_PER_SHARD)
+                .enumerate()
+                .for_each(|(shard, fields)| {
+                    let base = first + shard * FIELDS_PER_SHARD;
+                    let start = slots.partition_point(|slot| *slot < base);
+                    let end = slots.partition_point(|slot| *slot < base + fields.len());
+                    for &slot in &slots[start..end] {
+                        update(&mut fields[slot - base]);
+                    }
+                });
+        }
+        if let Some(clock) = &mut self.recovery_clock
+            && !clock.remainders.is_empty()
+            && !slots.is_empty()
+        {
+            let filled: Vec<_> = slots
+                .into_iter()
+                .filter_map(|slot| {
+                    let field = &self.fields[slot];
+                    (field.fertility == capacity).then_some(field.field)
+                })
+                .collect();
+            if !filled.is_empty() {
+                clock
+                    .remainders
+                    .retain(|row| filled.binary_search(&row.0).is_err());
+            }
+        }
+        owner.events = events;
+    }
+
     pub fn validate(&self, fields: &[u64]) -> Result<(), String> {
         if self.capacity == 0
             || self.fields.par_windows(2).any(|p| p[0].field >= p[1].field)
