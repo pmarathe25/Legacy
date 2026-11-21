@@ -32,6 +32,7 @@ struct RecipeTransmission {
 #[derive(Default)]
 pub(super) struct Chronicle {
     recipes: BTreeMap<u64, String>,
+    lexicon: super::lexicon::LexiconHistory,
     recipe_learning: BTreeMap<u64, RecipeTransmission>,
     counts: BTreeMap<&'static str, u64>,
     people: BTreeMap<u64, BTreeMap<&'static str, u64>>,
@@ -52,6 +53,7 @@ struct Receipt {
 
 impl Chronicle {
     pub(super) fn snapshot(&mut self, state: &Value, year: u64, opening: bool) {
+        self.lexicon.observe(state, year);
         if opening {
             self.recipes = state
                 .pointer("/core/physical/recipes")
@@ -326,6 +328,7 @@ impl Chronicle {
         transmissions.truncate(10);
         json!({
             "counts": self.counts,
+            "lexicon": self.lexicon.summary(),
             "recipe_transmission": transmissions.iter().map(|&(&id, learning)| json!({
                 "recipe": id, "name": self.recipes.get(&id),
                 "first_year": learning.first_year, "last_year": learning.last_year,
