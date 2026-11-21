@@ -91,7 +91,9 @@ pub use player::{
 };
 pub use purpose::CorePurpose;
 pub use requests::{CoreDeliveryResults, CoreRequestResults};
-pub use scheduler::{CoreRun, CoreRunEvent, CoreSchedule, DecisionPhase, Incapacitation};
+pub use scheduler::{
+    CoreRun, CoreRunEvent, CoreSchedule, CoreStepper, DecisionPhase, Incapacitation,
+};
 pub use shared_work::{CoreAssistRecord, CoreAssistSession, CoreSharedWork};
 pub use site_lifecycle::CoreSiteChanges;
 pub use sites::{CoreRepairResults, CoreSites};
@@ -229,6 +231,7 @@ pub struct CoreHostSnapshot {
 }
 
 /// Due owners for a segment whose opening state has already been checked.
+#[derive(Clone, Copy)]
 struct PreparedDeadline {
     deadline: CoreDeadline,
     ordinary_recovery: bool,
@@ -1702,7 +1705,7 @@ impl CoreHost {
         {
             self.sync_work_rates(&[])?;
         }
-        Ok(self.progress_with_activity(millis, &[], None)?.millis)
+        Ok(self.progress_with_activity(millis, &[], None, None)?.millis)
     }
     pub fn next_deadline(&mut self, hunger: Option<u32>) -> Result<CoreDeadline, String> {
         if self

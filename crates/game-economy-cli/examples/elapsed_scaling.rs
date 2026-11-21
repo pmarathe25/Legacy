@@ -1,5 +1,5 @@
 //! Compare the same elapsed world across worker pools, excluding loading and reporting.
-use game_economy::core_interval::{CoreHost, CoreHostSnapshot};
+use game_economy::core_interval::{CoreHost, CoreHostSnapshot, CoreRun, CoreRunEvent};
 use rayon::ThreadPoolBuilder;
 use std::hash::{DefaultHasher, Hasher};
 use std::path::{Path, PathBuf};
@@ -16,24 +16,17 @@ fn sample(
     opening: &CoreHostSnapshot,
     duration: u64,
     step_millis: u64,
+    retain_preparation: bool,
 ) -> Result<(Duration, Outcome), String> {
     let mut host = CoreHost::resume(opening.clone())?;
-    let mut remaining = duration;
-    let mut observations = Vec::new();
-    let start = Instant::now();
-    while remaining > 0 {
-        let requested = remaining.min(step_millis);
-        let run = host.advance_continuous(requested, &[])?;
-        if let Some(error) = run.failure {
-            return Err(error);
-        }
-        if run.elapsed_millis != requested {
-            return Err("world stopped before advancing the requested duration".into());
-        }
-        remaining -= requested;
-        observations.extend(run.events);
-    }
-    let elapsed = start.elapsed();
+    let (elapsed, observations) = if retain_preparation {
+        let mut stepper = host.stepper(&[]);
+        observe(duration, step_millis, |duration| stepper.advance(duration))?
+    } else {
+        observe(duration, step_millis, |duration| {
+            host.advance_continuous(duration, &[])
+        })?
+    };
     let saved = serde_json::to_vec(&host.snapshot()).map_err(|error| error.to_string())?;
     let hash = |bytes: &[u8]| {
         let mut hash = DefaultHasher::new();
@@ -48,6 +41,31 @@ fn sample(
             event_count: observations.len(),
         },
     ))
+}
+
+fn observe(
+    duration: u64,
+    step_millis: u64,
+    mut advance: impl FnMut(u64) -> Result<CoreRun, String>,
+) -> Result<(Duration, Vec<CoreRunEvent>), String> {
+    let mut remaining = duration;
+    let mut observations = Vec::new();
+    let start = Instant::now();
+    while remaining > 0 {
+        let requested = remaining.min(step_millis);
+        let run = advance(requested)?;
+        if let Some(error) = run.failure {
+            return Err(error);
+        }
+        if run.elapsed_millis != requested {
+            return Err("world stopped before advancing the requested duration".into());
+        }
+        remaining -= requested;
+        observations.extend(run.events);
+    }
+    let elapsed = start.elapsed();
+
+    Ok((elapsed, observations))
 }
 
 fn main() -> Result<(), String> {
@@ -77,6 +95,7 @@ fn main() -> Result<(), String> {
                 .filter(|&value| value > 0)
                 .ok_or("invalid LEGACY_BENCH_ADVANCE_MILLIS")
         })?;
+    let retain_preparation = std::env::var_os("LEGACY_BENCH_REPLAN").is_none();
     let scenario = Path::new(&values[0]);
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let mut host = game_economy_cli::core_scenario_with_options(
@@ -91,7 +110,7 @@ fn main() -> Result<(), String> {
     let mut expected = None;
     let mut first = None;
     println!(
-        "people={} duration_millis={duration} advance_millis={step_millis} repeats={repeats}",
+        "people={} duration_millis={duration} advance_millis={step_millis} repeats={repeats} retain_preparation={retain_preparation}",
         opening.core.people.len()
     );
     for workers in [1, 2, 4, 6, 8]
@@ -104,7 +123,8 @@ fn main() -> Result<(), String> {
             .map_err(|error| error.to_string())?;
         let mut timings = Vec::new();
         for _ in 0..repeats {
-            let (elapsed, outcome) = pool.install(|| sample(&opening, duration, step_millis))?;
+            let (elapsed, outcome) =
+                pool.install(|| sample(&opening, duration, step_millis, retain_preparation))?;
             if outcome != *expected.get_or_insert(outcome) {
                 return Err(format!("simulation diverged at {workers} workers"));
             }

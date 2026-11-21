@@ -190,6 +190,10 @@ impl Runtime {
     pub fn work(&self) -> &[Work] {
         &self.work
     }
+    pub fn work_revision(&self) -> u64 {
+        self.epoch
+    }
+
     pub fn work_interval(&self) -> Option<&WorkInterval> {
         self.work_interval.as_ref()
     }

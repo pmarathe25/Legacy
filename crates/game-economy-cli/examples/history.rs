@@ -183,6 +183,7 @@ fn run(
     host.take_opinion_events();
     let mut observation_tick = initial.core.physical.custody.tick;
     let mut previous_animals = animals(&host);
+    let mut advancing = host.stepper(&[]);
     for year in start_year + 1..=end_year {
         // Bound in-memory history even for hourly or finer simulations.
         let mut observation_batch = Vec::new();
@@ -191,7 +192,7 @@ fn run(
             let mut remaining = tick_millis;
             while remaining > 0 {
                 let elapsed = remaining.min(step_millis);
-                let result = host.advance_continuous(elapsed, &[]).and_then(|result| {
+                let result = advancing.advance(elapsed).and_then(|result| {
                     if let Some(error) = result.failure {
                         return Err(error);
                     }
@@ -216,11 +217,11 @@ fn run(
                 }
                 remaining -= elapsed;
             }
-            let opinion_events = host.take_opinion_events();
+            let opinion_events = advancing.take_opinion_events();
             if !opinion_events.is_empty() {
                 observation_batch.push(json!({"kind":"opinion_changes", "events":opinion_events}));
             }
-            let history = host.history_view();
+            let history = advancing.host().history_view();
             if !history.animal_deaths.is_empty() {
                 observation_batch
                     .push(json!({"kind":"animal_deaths","events":history.animal_deaths}));
@@ -291,7 +292,7 @@ fn run(
                 observation_batch.clear();
             }
         }
-        let snapshot = host.snapshot();
+        let snapshot = advancing.host().snapshot();
         if snapshot.core.physical.custody.tick
             != year
                 .checked_mul(ticks_per_year)
@@ -340,7 +341,7 @@ fn run(
                 .open(&checkpoint)
                 .map_err(|e| e.to_string())?;
             let mut checkpoint_writer = BufWriter::new(file);
-            serde_json::to_writer(&mut checkpoint_writer, &host.snapshot())
+            serde_json::to_writer(&mut checkpoint_writer, &advancing.host().snapshot())
                 .map_err(|e| e.to_string())?;
             checkpoint_writer.flush().map_err(|e| e.to_string())?;
             println!(
