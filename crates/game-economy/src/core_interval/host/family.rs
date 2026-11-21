@@ -222,6 +222,9 @@ impl CoreHost {
         else {
             return;
         };
+        if let Some(opinions) = &mut self.opinions {
+            opinions.enroll_newborn_development(newborns);
+        }
         let needs_members = self.schedule.as_ref().is_some_and(|schedule| {
             schedule.birth_choices.is_some() && schedule.personal_choices.is_some()
         }) || self
