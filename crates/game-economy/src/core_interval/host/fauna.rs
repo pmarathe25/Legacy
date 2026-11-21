@@ -12,6 +12,8 @@ pub struct CoreFaunaTransitions {
     pub at_millis: u128,
     pub births: Vec<u64>,
     pub deaths: Vec<game_fauna::AnimalDeath>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub migrations: Vec<game_fauna::dispersal::Migration>,
 }
 
 impl CoreHost {
@@ -64,8 +66,20 @@ impl CoreHost {
         {
             *renewal = Some(gathering.nodes.par_iter().cloned().collect());
         }
-        let draft =
+        let mut draft =
             self.stage_fauna_lifecycle(owner, renewal.as_deref_mut(), &[], &[], season, ordinal)?;
+        let restrained = |animal| {
+            self.animal_restraints
+                .as_ref()
+                .is_some_and(|state| state.held(animal))
+        };
+        let migrations = match &mut draft {
+            CoreFaunaDraft::Quiet(quiet) => owner.disperse_quiet(quiet, self.core.seed, restrained),
+            CoreFaunaDraft::Complete(next) => {
+                next.disperse_living(owner.next_id, self.core.seed, restrained)
+            }
+            CoreFaunaDraft::Encounters(_) => unreachable!("ecological event without lifecycle"),
+        };
         let (births, deaths) = match &draft {
             CoreFaunaDraft::Quiet(quiet) => {
                 (quiet.births().collect(), quiet.death_receipts().to_vec())
@@ -86,6 +100,7 @@ impl CoreHost {
                 at_millis,
                 births,
                 deaths,
+                migrations,
             },
         ))
     }

@@ -198,9 +198,10 @@ fn run_steps(
                 CoreRunEvent::Fauna(row) => {
                     write_line(
                         &mut writer,
-                        &json!({"kind":"elapsed_fauna_events","step":step,"at_millis":row.at_millis,"births":row.births,"deaths":row.deaths}),
+                        &json!({"kind":"elapsed_fauna_events","step":step,"at_millis":row.at_millis,"births":row.births,"deaths":row.deaths,"migrations":row.migrations}),
                     )?;
                     *counts.entry("animal_deaths").or_default() += row.deaths.len() as u64;
+                    *counts.entry("animal_migrations").or_default() += row.migrations.len() as u64;
                     ("animal_births", row.births.len())
                 }
                 CoreRunEvent::ElapsedGathering { events, .. } => {

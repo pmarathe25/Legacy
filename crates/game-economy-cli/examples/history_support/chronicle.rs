@@ -127,6 +127,16 @@ impl Chronicle {
         let Some(kind) = event["kind"].as_str() else {
             return;
         };
+        if kind == "elapsed_fauna_events" {
+            let count = event["migrations"].as_array().map_or(0, |rows| rows.len()) as u64;
+            if count != 0 {
+                *self
+                    .counts
+                    .entry("wildlife corridor crossings")
+                    .or_default() += count;
+            }
+            return;
+        }
         if kind == "site_changes" {
             for (field, label, accepted) in [
                 (

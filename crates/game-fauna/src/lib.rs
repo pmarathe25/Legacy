@@ -1,5 +1,6 @@
 //! Independent animals, local grazing and inherited life histories.
 pub mod content;
+pub mod dispersal;
 mod elapsed;
 pub mod handling;
 mod mating;
@@ -182,6 +183,8 @@ pub struct Fauna {
     /// Milliseconds between ecological events when independent of settlement.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lifecycle_period_millis: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dispersal: Option<dispersal::Dispersal>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub recent_deaths: Vec<AnimalDeath>,
 }
@@ -193,6 +196,7 @@ impl Clone for Fauna {
             next_id: self.next_id,
             last_tick: self.last_tick,
             lifecycle_period_millis: self.lifecycle_period_millis,
+            dispersal: self.dispersal.clone(),
             recent_deaths: self.recent_deaths.clone(),
         }
     }
@@ -217,6 +221,7 @@ pub struct QuietDraft {
     next_id: u64,
     feed_meetings: Vec<(usize, u64, u64)>,
     consumed: Vec<(u64, u64)>,
+    migrations: Vec<(usize, u64)>,
 }
 
 #[derive(Clone, Copy)]
@@ -775,6 +780,7 @@ impl Fauna {
             next_id,
             feed_meetings,
             consumed,
+            migrations: Vec::new(),
         }))
     }
 
@@ -806,6 +812,22 @@ impl Fauna {
                     animal.pregnancy = None;
                 }
             });
+        if !draft.migrations.is_empty() {
+            const CHUNK: usize = 1024;
+            self.animals
+                .par_chunks_mut(CHUNK)
+                .enumerate()
+                .for_each(|(chunk, animals)| {
+                    let first = chunk * CHUNK;
+                    let start = draft.migrations.partition_point(|row| row.0 < first);
+                    let end = draft
+                        .migrations
+                        .partition_point(|row| row.0 < first + animals.len());
+                    for &(index, region) in &draft.migrations[start..end] {
+                        animals[index - first].region = region;
+                    }
+                });
+        }
         if !draft.feed_meetings.is_empty() {
             const CHUNK: usize = 1024;
             self.animals
@@ -879,6 +901,12 @@ impl Fauna {
         }
         let mut species: Vec<_> = self.species.par_iter().collect();
         species.par_sort_unstable_by_key(|s| s.id);
+        if let Some(dispersal) = &self.dispersal {
+            if self.lifecycle_period_millis.is_none() {
+                return Err("wildlife dispersal requires elapsed lifecycle timing");
+            }
+            dispersal.validate(regions, &species)?;
+        }
         let mut ids: Vec<_> = self.animals.par_iter().map(|a| a.id).collect();
         ids.par_sort_unstable();
         let mut pedigree: Vec<_> = if !self.recent_deaths.is_empty()
@@ -1371,6 +1399,7 @@ impl Fauna {
                 next_id,
                 last_tick: tick,
                 lifecycle_period_millis: self.lifecycle_period_millis,
+                dispersal: self.dispersal.clone(),
                 recent_deaths,
             },
             consumed,

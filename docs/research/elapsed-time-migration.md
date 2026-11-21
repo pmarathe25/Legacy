@@ -96,6 +96,14 @@ When using a seasonal calendar with a wildlife clock, configure
 `season_unit_millis` to give climate an independent elapsed cadence as well.
 The integrated history scenario defines both clocks. The report retains exact
 birth and death times from the wildlife owner.
+
+An optional `fauna.dispersal` defines directed wildlife corridors and policies
+by species. At each lifecycle event, a surviving animal can explore one
+corridor after grazing and reproduction. Its hunger, age, inherited drive,
+and perceived effort affect that decision. A restrained animal stays where
+it is, and newborns stay at their delivery site. Crossing adds the authored
+hunger cost. The animal can graze and mate in the destination at subsequent
+opportunities. The history includes crossings with the actual elapsed time.
 Set `elapsed_spoilage = true` to date newly created physical lots in elapsed
 milliseconds. Preparation, travel, or storage transfer retains an existing lot\'s
 deadline. Spoilage wakes from an index of active deadlines and removes the due

@@ -7865,6 +7865,7 @@ fn gathering_depletes_resources_into_real_personal_custody() {
                     next_id: 3,
                     last_tick: 0,
                     lifecycle_period_millis: None,
+                    dispersal: None,
                     recent_deaths: vec![],
                 };
                 let mut with_animals = snapshot.clone();
@@ -8852,6 +8853,7 @@ fn core_host_cultivation_benchmark() {
                 next_id: count + 1,
                 last_tick: 0,
                 lifecycle_period_millis: None,
+                dispersal: None,
                 recent_deaths: vec![],
             }
         }),

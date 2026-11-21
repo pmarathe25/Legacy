@@ -3773,7 +3773,9 @@ impl CoreHost {
                     .push(CoreRunEvent::Disease(elapsed.disease_events));
             }
             if let Some(fauna) = elapsed.fauna
-                && (!fauna.births.is_empty() || !fauna.deaths.is_empty())
+                && (!fauna.births.is_empty()
+                    || !fauna.deaths.is_empty()
+                    || !fauna.migrations.is_empty())
             {
                 run.events.push(CoreRunEvent::Fauna(fauna));
             }

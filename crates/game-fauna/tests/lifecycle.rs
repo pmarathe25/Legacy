@@ -65,6 +65,7 @@ fn initial() -> Fauna {
         next_id: 3,
         last_tick: 0,
         lifecycle_period_millis: None,
+        dispersal: None,
         recent_deaths: vec![],
     }
 }
@@ -1603,4 +1604,50 @@ fn inherited_selectivity_changes_each_animals_own_response() {
     assert_eq!(run(4, 500), None);
     assert_eq!(run(1, 1000), Some(2));
     assert_eq!(run(4, 1000), Some(2));
+}
+
+#[test]
+fn held_animals_stay_and_quiet_dispersal_matches_the_full_lifecycle() {
+    use game_fauna::dispersal::{Corridor, Dispersal, Policy};
+    let mut fauna = initial();
+    fauna.lifecycle_period_millis = Some(83);
+    fauna.dispersal = Some(Dispersal {
+        corridors: vec![Corridor {
+            from: 1,
+            to: 2,
+            hunger_cost: 2,
+        }],
+        policies: vec![Policy {
+            species: 1,
+            minimum_hunger: 2,
+            minimum_age: 2,
+            initiative: 1000,
+            locus: 0,
+            inherited_drive: 0,
+            effort_weight: 1,
+        }],
+    });
+    fauna
+        .validate(&HashSet::from([1, 2]), &HashSet::from([1]), 0)
+        .unwrap();
+    let mut quiet = fauna
+        .prepare_compact(&[], &[], &[], &[], 3, 1)
+        .unwrap()
+        .unwrap();
+    let mut full = fauna
+        .advance_with_hunts(&[], &[], &[], &[], 3, 1)
+        .unwrap()
+        .fauna;
+    let held = |animal| animal == 1;
+    let quiet_moves = fauna.disperse_quiet(&mut quiet, 3, held);
+    let full_moves = full.disperse_living(fauna.next_id, 3, held);
+    assert_eq!(quiet_moves, full_moves);
+    assert_eq!(quiet_moves.len(), 1);
+    assert_eq!(quiet_moves[0].animal, 2);
+    fauna.validate_quiet(&quiet).unwrap();
+    fauna.publish_quiet_validated(quiet);
+    assert_eq!(fauna, full);
+    assert_eq!(fauna.animals[0].region, 1);
+    assert_eq!(fauna.animals[1].region, 2);
+    assert_eq!(fauna.animals[1].hunger, 4);
 }

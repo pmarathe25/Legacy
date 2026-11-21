@@ -15,6 +15,8 @@ pub struct Config {
     last_tick: u64,
     #[serde(default)]
     lifecycle_period_millis: Option<u64>,
+    #[serde(default)]
+    dispersal: Option<crate::dispersal::Dispersal>,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -63,7 +65,7 @@ struct HuntYieldConfig {
     success_per_thousand: u32,
 }
 impl Config {
-    pub fn build(self, lookup: impl Fn(&str) -> Option<u32>) -> Result<Fauna, String> {
+    pub fn build(mut self, lookup: impl Fn(&str) -> Option<u32>) -> Result<Fauna, String> {
         let species = self
             .species
             .into_iter()
@@ -108,12 +110,16 @@ impl Config {
                 })
             })
             .collect::<Result<Vec<_>, String>>()?;
+        if let Some(dispersal) = &mut self.dispersal {
+            dispersal.normalize();
+        }
         Ok(Fauna {
             species,
             animals: self.animals,
             next_id: self.next_id,
             last_tick: self.last_tick,
             lifecycle_period_millis: self.lifecycle_period_millis,
+            dispersal: self.dispersal,
             recent_deaths: vec![],
         })
     }
