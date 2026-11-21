@@ -272,7 +272,7 @@ impl ElapsedCampaign {
             return Ok(Some(Dose::Warning(warning)));
         }
         let before = next.owner.control_until.is_some();
-        next.owner.advance(next.elapsed_periods)?;
+        next.owner.apply_at_deadline(next.elapsed_periods)?;
         next.elapsed_periods = next
             .elapsed_periods
             .checked_add(1)

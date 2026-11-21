@@ -19,6 +19,7 @@ use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 mod host;
+pub use game_economy_campaign::InvocationWarningKind;
 pub use game_economy_combat::Point as TacticalPoint;
 pub use game_economy_combat::elapsed::{
     Choice as TacticalChoice, Event as TacticalEvent, EventKind as TacticalEventKind,
@@ -27,7 +28,6 @@ pub use game_economy_expeditions::elapsed_invitations::{
     Invitation as ExpeditionInvitation, Preference as ExpeditionInvitationPreference,
     Reply as ExpeditionReply, Response as ExpeditionReplyKind,
 };
-pub use host::CoreCampaignView;
 pub use host::CoreExpeditionOffer;
 pub use host::CoreTacticalResult;
 pub use host::{
@@ -49,6 +49,7 @@ pub use host::{
     PersonalHarm, PersonalStrikeReaction, StrikeCapability, StrikeFeeling, StrikeInterpretation,
     WitnessedMechanicalResult, WoundCarePolicy, WoundTreatment,
 };
+pub use host::{CoreCampaignView, CorePastLifeView};
 pub use host::{ExpeditionEvent, ExpeditionEventKind, ExpeditionItinerary, ExpeditionStage};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

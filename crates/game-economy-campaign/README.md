@@ -11,6 +11,8 @@ own mentorship judgments.
 
 Start a headless session with `cargo run -p game-economy-cli -- --interval-campaign SCENARIO`.
 Use `campaign` to inspect the lineage, `invoke PAST_LIVES` to invoke recorded
-lives, and `accept-cost REVISION` or `dismiss` to respond to a warning. Past-life
-knowledge and capability projection, and the abstract guardian model, still
-need interval integration.
+lives, and `accept-cost REVISION` or `dismiss` to respond to a warning.
+`recall-life LIFE` shows the invoked predecessor's retained observations,
+techniques, and language without transferring them into the current person's
+memory. Practiced capability projection and abstract guardians still need
+interval integration.
