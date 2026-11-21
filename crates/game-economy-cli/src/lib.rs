@@ -1005,6 +1005,8 @@ struct LanguageTopic {
     person: Option<u64>,
     #[serde(default)]
     signal: Option<u32>,
+    #[serde(default)]
+    need: Option<u32>,
     enabled: bool,
     value: i64,
 }
@@ -1304,24 +1306,28 @@ pub fn core_scenario_with_options(
                     topic.place,
                     topic.person,
                     topic.signal,
+                    topic.need,
                 ) {
-                    (Some(name), None, None, None) => game_language::Meaning::Object(
+                    (Some(name), None, None, None, None) => game_language::Meaning::Object(
                         *goods
                             .get(name)
                             .ok_or_else(|| format!("unknown language topic object {name}"))?,
                     ),
-                    (None, Some(region), None, None) if regions.contains(&region) => {
+                    (None, Some(region), None, None, None) if regions.contains(&region) => {
                         game_language::Meaning::Place(region)
                     }
-                    (None, None, Some(person), None) if people.contains(&person) => {
+                    (None, None, Some(person), None, None) if people.contains(&person) => {
                         game_language::Meaning::Person(person)
                     }
-                    (None, None, None, Some(form)) if form != 0 => {
+                    (None, None, None, Some(form), None) if form != 0 => {
                         game_language::Meaning::Signal(form)
+                    }
+                    (None, None, None, None, Some(need)) if need != 0 => {
+                        game_language::Meaning::Need(need)
                     }
                     _ => {
                         return Err(
-                            "language topic requires one known object, place, person or signal form".into()
+                            "language topic requires one known object, place, person, signal form or interpreted need".into()
                         );
                     }
                 };

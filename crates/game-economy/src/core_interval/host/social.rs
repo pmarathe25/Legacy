@@ -317,8 +317,8 @@ impl CoreHost {
                         .prepare(&rows, self.core.seed, tick)
                         .map_err(str::to_owned);
                 }
-                // Only a person's own noticed or remembered form is available;
-                // an interpretation or the signaler's private intention is not shared.
+                // Topics use a person's own observations and interpretations. An
+                // interpretation can differ from the signaler's private intention.
                 let signal_topics = language
                     .minds
                     .par_iter()
@@ -326,7 +326,11 @@ impl CoreHost {
                         mind.topic_policy.as_ref().is_some_and(|policy| {
                             policy.preferences.iter().any(|row| {
                                 row.enabled
-                                    && matches!(row.meaning, game_language::Meaning::Signal(_))
+                                    && matches!(
+                                        row.meaning,
+                                        game_language::Meaning::Signal(_)
+                                            | game_language::Meaning::Need(_)
+                                    )
                             })
                         })
                     })
@@ -340,12 +344,40 @@ impl CoreHost {
                                     .filter(|event| {
                                         event.noticed && event.tick.checked_add(1) == Some(tick)
                                     })
-                                    .map(|event| (event.observer, event.actor, event.form)),
+                                    .flat_map_iter(|event| {
+                                        std::iter::once((
+                                            event.observer,
+                                            event.actor,
+                                            game_language::Meaning::Signal(event.form),
+                                        ))
+                                        .chain(
+                                            event.interpreted.map(|need| {
+                                                (
+                                                    event.observer,
+                                                    event.actor,
+                                                    game_language::Meaning::Need(need),
+                                                )
+                                            }),
+                                        )
+                                    }),
                             );
                             rows.par_extend(signals.minds.par_iter().flat_map_iter(|mind| {
-                                mind.observations
-                                    .iter()
-                                    .map(move |event| (mind.person, event.actor, event.form))
+                                mind.observations.iter().flat_map(move |event| {
+                                    std::iter::once((
+                                        mind.person,
+                                        event.actor,
+                                        game_language::Meaning::Signal(event.form),
+                                    ))
+                                    .chain(
+                                        event.interpreted.map(|need| {
+                                            (
+                                                mind.person,
+                                                event.actor,
+                                                game_language::Meaning::Need(need),
+                                            )
+                                        }),
+                                    )
+                                })
                             }));
                             rows.par_sort_unstable();
                             rows.dedup();
@@ -410,10 +442,12 @@ impl CoreHost {
                                 {
                                     Some(preference.meaning)
                                 }
-                                game_language::Meaning::Signal(form)
+                                game_language::Meaning::Signal(_)
+                                | game_language::Meaning::Need(_)
                                     if preference.enabled
                                         && signal_topics.as_ref().is_some_and(|rows| {
-                                            rows.binary_search(&(person, other, form)).is_ok()
+                                            rows.binary_search(&(person, other, preference.meaning))
+                                                .is_ok()
                                         }) =>
                                 {
                                     Some(preference.meaning)
