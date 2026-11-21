@@ -106,6 +106,54 @@ mod tests {
     }
 
     #[test]
+    fn inactive_zero_rows_stay_implicit_during_constant_activity() {
+        let mut opening = owner(0);
+        opening.damage_remainders = vec![(4, 60)];
+        let rows = [
+            ElapsedActivity {
+                id: 1,
+                exertion: Exertion::Idle,
+            },
+            ElapsedActivity {
+                id: 2,
+                exertion: Exertion::Work,
+            },
+            ElapsedActivity {
+                id: 3,
+                exertion: Exertion::Rest,
+            },
+            ElapsedActivity {
+                id: 4,
+                exertion: Exertion::Inactive,
+            },
+            ElapsedActivity {
+                id: 5,
+                exertion: Exertion::Other,
+            },
+        ];
+        let people = HashSet::from([1, 2, 3, 4, 5]);
+        let sparse = opening.view().relevant_activity(&rows);
+        assert_eq!(
+            sparse.iter().map(|row| row.id).collect::<Vec<_>>(),
+            [1, 2, 4]
+        );
+        let sparse_people = sparse.iter().map(|row| row.id).collect();
+        let (millis, full) = opening.view().prepare_segment(&rows, 799, &people).unwrap();
+        assert_eq!(millis, 799);
+        let (_, first) = opening
+            .view()
+            .prepare_segment(&sparse, 137, &sparse_people)
+            .unwrap();
+        let (_, rest) = first
+            .state
+            .view()
+            .prepare_segment(&sparse, 662, &sparse_people)
+            .unwrap();
+        assert_eq!(rest.state, full.state);
+        assert_eq!(rest.consequences, full.consequences);
+    }
+
+    #[test]
     fn saturation_preserves_activity_order_and_partitioning() {
         let segments = [(Exertion::Work, 1000), (Exertion::Rest, 1000)];
         let whole = run(9, &segments, 1000, 1);
@@ -330,6 +378,32 @@ impl ElapsedFatigueView<'_> {
         } else {
             Cow::Borrowed(people)
         }
+    }
+
+    /// Keep activities that can create fatigue or that already own state.
+    /// Omitted people remain exactly at zero for this constant-activity frame.
+    pub fn relevant_activity(&self, activity: &[ElapsedActivity]) -> Vec<ElapsedActivity> {
+        let old = self.ordered_people();
+        let rules = &self.fatigue.rules;
+        activity
+            .par_iter()
+            .copied()
+            .filter(|row| {
+                let (gain, recovery) = rates(rules, row.exertion);
+                (row.exertion != Exertion::Inactive && gain > recovery)
+                    || old
+                        .binary_search_by_key(&row.id, |person| person.id)
+                        .is_ok()
+                    || self
+                        .remainders
+                        .binary_search_by_key(&row.id, |value| value.0)
+                        .is_ok()
+                    || self
+                        .damage_remainders
+                        .binary_search_by_key(&row.id, |value| value.0)
+                        .is_ok()
+            })
+            .collect()
     }
 
     /// Limit a proposed segment to the first exhaustion consequence and stage
