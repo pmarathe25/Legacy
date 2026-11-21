@@ -40,6 +40,54 @@ owner. Local walking, goal fetching, campaign succession, missions,
 confinement, and broader invention and ecological behavior remain incomplete;
 the restoration audit records their current boundaries.
 
+## Minute-stepped comparison
+
+The first two annual checkpoints in `runs/history/integrated-minute-20261120/`
+came from 60,000-millisecond advances with one-hour physical settlement. The
+baseline treated a reincarnated newborn as manually controlled and skipped its
+ordinary food choices even though the history runner had no player. Both
+children born in the first year died with severe hunger.
+
+The paired observer run in
+`runs/history/integrated-minute-observer-20261120/` uses the same scenario and
+advance size. It keeps succession but leaves incarnations autonomous. Both
+first-year children survived. By year two the baseline and observer had each
+recorded 13 births; the baseline recorded 13 deaths and the observer recorded
+3. By year four the observer recorded 18 births, 3 deaths, 75 living people,
+and 14 living animals. Twelve early animal deaths were attributed to hunting.
+The archive and person reports preserve the observed succession and the
+individual outcomes. These checkpoints cover the early world, before founder
+turnover. They do not establish long-term stability or minute behavior for
+owners that still settle on the physical clock.
+
+The optimized `e202ac4c` scenario enables daily elapsed care and personal
+word order. The one-day minute-step probe completed 1,440 advances and
+recorded 11 completed jobs, 37 meals, 4 recipe-learning events, and 5
+mechanical experiments. The associated 300-year run is in
+`runs/history/integrated-minute-current-20261120/`.
+
+## Whole-world scaling sample
+
+The `elapsed_scaling` example measures one live world and checks saved-state
+fingerprints across worker counts. It excludes loading and reporting. Each
+measurement below is the median of three six-hour runs with one-minute
+advances on a shared machine. The 5,100-person fixtures retain the authored
+founders and add 5,040 seeded residents. The concentrated fixture places
+those added residents in region 1.
+
+| Scenario | 1 worker | 2 workers | 4 workers | 6 workers | 8 workers |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 60 founders | 24 ms | 47 ms | 69 ms | 83 ms | 90 ms |
+| 5,100 people, two regions | 650 ms | 439 ms | 392 ms | 422 ms | 508 ms |
+| 5,100 people, concentrated | 650 ms | 441 ms | 392 ms | 450 ms | 514 ms |
+
+Each fixture produced the same fingerprint and event batch count at all
+worker counts. At four workers the larger runs were 1.66 times as fast as one
+worker. Similar timings across the two layouts give little evidence that
+regional contention explains the gap. Source review identified repeated
+deadline discovery, repeated activity construction, and many small owner
+batches as candidates for the next comparison.
+
 ## First diagnostic
 
 The initial candidate was run for 8,760 hourly ticks with resumable probe

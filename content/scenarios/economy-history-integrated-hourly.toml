@@ -986,6 +986,7 @@ lifespan = 262800
 gestation = 2920
 conception_one_in = 52560
 mate_desire = { base = 900, genetic_weight = 300, hunger_weight = -1 }
+mate_choice = { trait_locus = 0, preference_locus = 1, minimum_fit = 600, sample_size = 8 }
 breeding_max_hunger = 60
 newborn_health = 100
 mutation_per_million = 10000
@@ -1007,6 +1008,7 @@ lifespan = 219000
 gestation = 2920
 conception_one_in = 35040
 mate_desire = { base = 900, genetic_weight = 350, hunger_weight = -1 }
+mate_choice = { trait_locus = 1, preference_locus = 0, minimum_fit = 600, sample_size = 8 }
 breeding_max_hunger = 60
 newborn_health = 100
 mutation_per_million = 10000
@@ -2109,6 +2111,16 @@ destination = 2
 visit_ticks = 6
 phase = "ready"
 objective = { kind = "observe_food" }
+
+[[expedition_invitation_initiatives]]
+person = 18
+companions = [{ person = 19, value = 8, affinity_weight = 1 }, { person = 20, value = 5, affinity_weight = 1 }]
+
+[[expedition_invitation_preferences]]
+person = 19
+destination = 2
+willing = true
+return_after_visit = true
 
 [campaign.lineage]
 started = 0

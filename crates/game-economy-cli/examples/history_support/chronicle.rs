@@ -3,6 +3,17 @@ use serde_json::{Value, json};
 use std::collections::BTreeMap;
 use std::fmt::Write;
 
+#[derive(PartialEq, Eq, PartialOrd, Ord)]
+struct SupplyGroup {
+    recipient: u64,
+    suppliers: Vec<u64>,
+}
+
+struct SupplyEpisode {
+    first: u64,
+    last: u64,
+}
+
 #[derive(Default)]
 pub(super) struct Chronicle {
     counts: BTreeMap<&'static str, u64>,
@@ -11,6 +22,7 @@ pub(super) struct Chronicle {
     previous_delivered: BTreeMap<u64, u64>,
     active_ties: BTreeMap<(u64, u64), u64>,
     repeated_ties: BTreeMap<(u64, u64), (u64, u64, u64)>,
+    supply_episodes: BTreeMap<SupplyGroup, Vec<SupplyEpisode>>,
 }
 
 #[derive(Clone, Copy)]
@@ -49,6 +61,7 @@ impl Chronicle {
                 now_active.insert((sender, recipient), year);
             }
         }
+        let mut suppliers: BTreeMap<u64, Vec<u64>> = BTreeMap::new();
         for &pair in now_active.keys() {
             if let Some(&earlier) = self.active_ties.get(&pair)
                 && earlier.checked_add(1) == Some(year)
@@ -59,6 +72,22 @@ impl Chronicle {
                     .or_insert((earlier, earlier, 1));
                 entry.2 += 1 + u64::from(entry.1 != earlier);
                 entry.1 = year;
+                suppliers.entry(pair.1).or_default().push(pair.0);
+            }
+        }
+        for (recipient, people) in suppliers.into_iter().filter(|(_, people)| people.len() > 1) {
+            let episodes = self
+                .supply_episodes
+                .entry(SupplyGroup {
+                    recipient,
+                    suppliers: people,
+                })
+                .or_default();
+            let first = year.saturating_sub(1);
+            if let Some(last) = episodes.last_mut().filter(|row| row.last == first) {
+                last.last = year;
+            } else {
+                episodes.push(SupplyEpisode { first, last: year });
             }
         }
         self.previous_delivered = observed;
@@ -134,6 +163,7 @@ impl Chronicle {
         if !matches!(
             kind,
             "campaign"
+                | "care"
                 | "expeditions"
                 | "tactical"
                 | "confinement"
@@ -186,11 +216,27 @@ impl Chronicle {
         let mut ties: Vec<_> = self.repeated_ties.iter().collect();
         ties.sort_unstable_by_key(|&(pair, &(_, _, years))| (std::cmp::Reverse(years), *pair));
         ties.truncate(10);
+        let mut supply: Vec<_> = self
+            .supply_episodes
+            .iter()
+            .flat_map(|(people, episodes)| episodes.iter().map(move |years| (people, years)))
+            .collect();
+        supply.sort_unstable_by_key(|&(group, years)| {
+            (
+                std::cmp::Reverse(years.last - years.first),
+                group,
+                years.first,
+            )
+        });
+        supply.truncate(10);
         json!({
             "counts": self.counts,
             "people": contributors.iter().map(|&(person, counts)| json!({"person":person,"counts":counts})).collect::<Vec<_>>(),
             "recurring_deliveries": ties.iter().map(|&(&(sender, recipient), &(first, latest, years))| {
                 json!({"sender":sender,"recipient":recipient,"first_year":first,"latest_year":latest,"recorded_years":years})
+            }).collect::<Vec<_>>(),
+            "recurring_supply": supply.iter().map(|&(group, years)| {
+                json!({"recipient":group.recipient,"suppliers":group.suppliers,"first_year":years.first,"latest_year":years.last})
             }).collect::<Vec<_>>()
         })
     }
@@ -201,8 +247,28 @@ impl Chronicle {
 }
 
 fn classify(kind: &str, row: &Value) -> Option<Receipt> {
+    if kind == "care" {
+        let child = row["child"].as_u64()?;
+        let caregiver = row["caregiver"].as_u64();
+        return Some(Receipt {
+            label: if caregiver.is_some() {
+                "care visits"
+            } else {
+                "missed care visits"
+            },
+            actor: caregiver.or(Some(child)),
+            other: caregiver.map(|_| child),
+        });
+    }
     let person = row["person"].as_u64();
-    let category = row["kind"].as_str().unwrap_or_default();
+    let kind_value = &row["kind"];
+    let category = kind_value
+        .as_str()
+        .or_else(|| {
+            let fields = kind_value.as_object()?;
+            (fields.len() == 1).then(|| fields.keys().next().expect("one variant").as_str())
+        })
+        .unwrap_or_default();
     let label = match (kind, category) {
         ("campaign", _) => match row["change"].as_str()? {
             "life_ended" => "incarnation deaths",
@@ -242,6 +308,7 @@ fn classify(kind: &str, row: &Value) -> Option<Receipt> {
     let secondary = row["other"]
         .as_u64()
         .or_else(|| row["target"].as_u64())
+        .or_else(|| kind_value[category]["recipient"].as_u64())
         .or(person.filter(|id| Some(*id) != primary));
     Some(Receipt {
         label,
@@ -292,6 +359,24 @@ pub(super) fn write_world(text: &mut String, chronicle: &Value) {
         for tie in ties.iter().take(5) {
             writeln!(text, "- Person {} repeatedly delivered goods to person {}. Recurring deliveries first appear in year {} and last appear in year {} across {} recorded years.",
                 tie["sender"], tie["recipient"], tie["first_year"], tie["latest_year"], tie["recorded_years"]).unwrap();
+        }
+        text.push('\n');
+    }
+    if let Some(episodes) = chronicle["recurring_supply"]
+        .as_array()
+        .filter(|rows| !rows.is_empty())
+    {
+        text.push_str("## Recurring sources of supply\n\n");
+        for episode in episodes.iter().take(5) {
+            let suppliers = episode["suppliers"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_u64)
+                .map(|person| person.to_string())
+                .collect::<Vec<_>>()
+                .join(", ");
+            writeln!(text, "- Person {} received deliveries from people {suppliers} in successive years from {} through {}.", episode["recipient"], episode["first_year"], episode["latest_year"]).unwrap();
         }
         text.push('\n');
     }
@@ -356,5 +441,40 @@ mod tests {
         assert_eq!(events.len(), 1);
         assert_eq!(events[0]["at_millis"], 172);
         assert_eq!(events[0]["receipt"]["site"], 4);
+    }
+
+    #[test]
+    fn reports_successive_years_of_deliveries_from_multiple_people_and_typed_supply_events() {
+        let mut history = Chronicle::default();
+        for (year, first, second) in [(0, 0, 0), (1, 1, 1), (2, 2, 2), (3, 3, 3), (4, 4, 3)] {
+            history.snapshot(
+                &json!({"agreements":{"contracts":[
+                    {"id":1,"debtor":5,"creditor":11,"delivered":first},
+                    {"id":2,"debtor":8,"creditor":11,"delivered":second},
+                    {"id":3,"debtor":3,"creditor":7,"delivered":0}
+                ]}}),
+                year,
+                year == 0,
+            );
+        }
+        history.observe(
+            &json!({"kind":"expeditions","events":[{
+                "kind":{"supplies_acquired":{"good":1,"quantity":2,"from":{"person":1}}},
+                "at_millis":48,"person":5,"itinerary":20,"region":1
+            }]}),
+            4,
+            Some(5),
+        );
+        assert_eq!(
+            history.summary()["recurring_supply"],
+            json!([
+                {"recipient":11,"suppliers":[5,8],"first_year":1,"latest_year":3}
+            ])
+        );
+        assert_eq!(
+            history.summary()["counts"]["expedition supplies acquired"],
+            1
+        );
+        assert_eq!(history.selected()[0]["at_millis"], 48);
     }
 }
