@@ -685,6 +685,7 @@ impl CoreSchedule {
 }
 #[derive(Debug, PartialEq, Eq)]
 pub enum CoreRunEvent {
+    Pastimes(Vec<game_pastimes::Event>),
     AgreementExpiry {
         at_millis: u128,
         events: Vec<game_agreements::Event>,
@@ -1250,6 +1251,14 @@ impl CoreHost {
                         });
                     }
                     handled = true;
+                }
+                if deadline.pastime {
+                    let events = self.settle_pastimes();
+                    if !events.is_empty() {
+                        run.events.push(CoreRunEvent::Pastimes(events));
+                        handled = true;
+                        rest_dirty = true;
+                    }
                 }
                 if deadline.storage_temperature
                     && let Some(celsius) = attempt!('run, self.publish_storage_temperature())
@@ -3756,6 +3765,11 @@ impl CoreHost {
                         if !departures.is_empty() {
                             run.events.push(CoreRunEvent::Departures(departures));
                         }
+                        let pastimes = attempt!('run, self.start_pastimes(&busy));
+                        if !pastimes.is_empty() {
+                            run.events.push(CoreRunEvent::Pastimes(pastimes));
+                            rest_dirty = true;
+                        }
                         run.decisions += 1;
                         let next = Some(u128::from(offset) + u128::from(schedule.period_millis));
                         let schedule = self.schedule.as_mut().expect("active schedule");
@@ -3855,6 +3869,10 @@ impl CoreHost {
                     at_millis: self.core.simulated_millis(),
                     events: elapsed.agreement_expiries,
                 });
+            }
+            if !elapsed.pastimes.is_empty() {
+                run.events.push(CoreRunEvent::Pastimes(elapsed.pastimes));
+                rest_dirty = true;
             }
             if !elapsed.local_arrivals.is_empty() {
                 run.events.push(CoreRunEvent::LocalWalking {

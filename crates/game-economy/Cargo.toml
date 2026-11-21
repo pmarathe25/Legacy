@@ -27,6 +27,7 @@ game-disease = { path = "../game-disease" }
 game-lot-content = { path = "../game-lot-content" }
 game-genetics = { path = "../game-genetics" }
 game-purpose = { path = "../game-purpose" }
+game-pastimes = { path = "../game-pastimes" }
 game-environment = { path = "../game-environment" }
 game-economy-read = { path = "../game-economy-read" }
 game-economy-fatigue = { path = "../game-economy-fatigue" }

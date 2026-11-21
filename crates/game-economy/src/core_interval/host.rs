@@ -35,6 +35,7 @@ mod mechanics;
 mod medical;
 mod offers;
 mod past_lives;
+mod pastimes;
 mod personal_choice;
 mod personality;
 mod player;
@@ -186,6 +187,8 @@ pub struct CoreHostSnapshot {
     pub recovery: Option<crate::RecoveryRules>,
     #[serde(default)]
     pub purpose: Option<CorePurpose>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pastimes: Option<game_pastimes::Pastimes>,
     #[serde(default)]
     pub gathering: Option<crate::Gathering>,
     #[serde(default)]
@@ -276,6 +279,7 @@ pub struct CoreHost {
     environment: Option<game_environment::Environment>,
     recovery: Option<crate::RecoveryRules>,
     purpose: Option<CorePurpose>,
+    pastimes: Option<game_pastimes::Pastimes>,
     gathering: Option<crate::Gathering>,
     renewable_resource_slots: Vec<usize>,
     fauna: Option<game_fauna::Fauna>,
@@ -338,6 +342,7 @@ struct CoreRuntimeOptions {
     environment: Option<game_environment::Environment>,
     recovery: Option<crate::RecoveryRules>,
     purpose: Option<CorePurpose>,
+    pastimes: Option<game_pastimes::Pastimes>,
     gathering: Option<crate::Gathering>,
     fauna: Option<game_fauna::Fauna>,
     hunting: Option<crate::Hunting>,
@@ -395,6 +400,7 @@ impl CoreHost {
             environment,
             recovery,
             purpose,
+            pastimes,
             gathering,
             fauna,
             hunting,
@@ -468,6 +474,7 @@ impl CoreHost {
                 environment,
                 recovery,
                 purpose,
+                pastimes,
                 gathering,
                 fauna,
                 hunting,
@@ -514,6 +521,7 @@ impl CoreHost {
             environment,
             recovery,
             purpose,
+            pastimes,
             gathering,
             fauna,
             hunting,
@@ -583,6 +591,7 @@ impl CoreHost {
                 environment,
                 recovery,
                 purpose,
+                pastimes,
                 gathering,
                 fauna,
                 hunting,
@@ -643,6 +652,7 @@ impl CoreHost {
             mut environment,
             recovery,
             mut purpose,
+            pastimes,
             gathering,
             fauna,
             hunting,
@@ -1487,6 +1497,16 @@ impl CoreHost {
                 owner.contracts.par_sort_unstable_by_key(|row| row.id);
             }
         }
+        if let Some(owner) = &pastimes {
+            let people = core.people.par_iter().map(|row| row.id).collect();
+            let goods = core.physical.goods().par_iter().map(|row| row.id).collect();
+            let regions = core.physical.stock_view(core.physical.tick())?.containers
+                .into_par_iter().filter_map(|row| match row.place {
+                    game_lots::Place::Stock { region, .. } => Some(region),
+                    _ => None,
+                }).collect();
+            owner.validate(&people, &regions, &goods, core.simulated_millis())?;
+        }
         if let Some(owner) = &mut purpose {
             let people: HashSet<_> = core.people.par_iter().map(|person| person.id).collect();
             owner.validate(&people)?;
@@ -1619,6 +1639,7 @@ impl CoreHost {
             environment,
             recovery,
             purpose,
+            pastimes,
             gathering,
             renewable_resource_slots,
             fauna,
@@ -1738,6 +1759,7 @@ impl CoreHost {
             environment: self.environment.clone(),
             recovery: self.recovery.clone(),
             purpose: self.purpose.clone(),
+            pastimes: self.pastimes.clone(),
             gathering: self.gathering.clone(),
             fauna: self.fauna.clone(),
             hunting: self.hunting.clone(),
@@ -1818,6 +1840,7 @@ impl CoreHost {
         let storage_temperature = self.next_storage_temperature();
         let fear_relaxation = self.next_fear_relaxation();
         let agreement_expiry = self.next_agreement_expiry();
+        let pastime = self.next_pastime_finish();
         let first = [
             recovery,
             exposure,
@@ -1839,6 +1862,7 @@ impl CoreHost {
             storage_temperature,
             fear_relaxation,
             agreement_expiry,
+            pastime,
         ]
         .into_iter()
         .flatten()
@@ -1872,6 +1896,7 @@ impl CoreHost {
                     storage_temperature: storage_temperature == Some(after_millis),
                     fear_relaxation: fear_relaxation == Some(after_millis),
                     agreement_expiry: agreement_expiry == Some(after_millis),
+                    pastime: pastime == Some(after_millis),
                     recovery: recovery == Some(after_millis),
                     exposure: exposure == Some(after_millis),
                 };
@@ -1896,6 +1921,7 @@ impl CoreHost {
                 deadline.storage_temperature = storage_temperature == Some(after_millis);
                 deadline.fear_relaxation = fear_relaxation == Some(after_millis);
                 deadline.agreement_expiry = agreement_expiry == Some(after_millis);
+                deadline.pastime = pastime == Some(after_millis);
             }
         }
         Ok(PreparedDeadline {

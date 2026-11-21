@@ -11,6 +11,7 @@ pub(super) struct ElapsedProgress {
     pub fauna: Option<CoreFaunaTransitions>,
     pub wild_plants: Option<game_economy_agriculture::wild_plants::Cycle>,
     pub agreement_expiries: Vec<game_agreements::Event>,
+    pub pastimes: Vec<game_pastimes::Event>,
     pub disease_events: Vec<game_disease::Event>,
     pub local_arrivals: Vec<game_economy_local_transport::walking::Event>,
 }
@@ -103,6 +104,7 @@ impl ElapsedLimits {
             wild_plants,
             fear_relaxation,
             agreement_expiry,
+            host.next_pastime_finish(),
         ]
         .into_iter()
         .flatten()
@@ -655,6 +657,7 @@ impl CoreHost {
             };
             return Ok(ElapsedProgress {
                 millis: advanced,
+                pastimes: self.settle_pastimes(),
                 agreement_expiries,
                 interrupted_preparation,
                 activity,
@@ -866,6 +869,7 @@ impl CoreHost {
         };
         Ok(ElapsedProgress {
             millis: advanced,
+            pastimes: self.settle_pastimes(),
             agreement_expiries,
             interrupted_preparation,
             activity,

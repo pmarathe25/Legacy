@@ -29,6 +29,7 @@ pub(super) const PRACTICE_LESSON: u32 = 23;
 pub(super) const CONFINEMENT: u32 = 24;
 pub(super) const READ_TEXT: u32 = 25;
 pub(super) const ASSIST: u32 = 26;
+pub(super) const PASTIME: u32 = 27;
 
 fn index_by_person<T>(rows: &[T], id: u64, key: impl Fn(&T) -> u64) -> Option<usize> {
     rows.first()

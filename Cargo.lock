@@ -212,6 +212,7 @@ dependencies = [
  "game-mechanics",
  "game-nutrition",
  "game-opinions",
+ "game-pastimes",
  "game-personal-choice",
  "game-personal-conflict",
  "game-practices",
@@ -337,6 +338,7 @@ dependencies = [
  "game-market",
  "game-mechanics",
  "game-opinions",
+ "game-pastimes",
  "game-personal-choice",
  "game-practices",
  "game-production",
@@ -1050,6 +1052,15 @@ dependencies = [
 name = "game-opinions-model"
 version = "0.2.0"
 dependencies = [
+ "rayon",
+ "serde",
+]
+
+[[package]]
+name = "game-pastimes"
+version = "0.2.0"
+dependencies = [
+ "game-production-model",
  "rayon",
  "serde",
 ]
