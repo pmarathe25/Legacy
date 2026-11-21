@@ -102,7 +102,7 @@ impl CoreHost {
         actors.par_sort_unstable();
         actors.dedup();
         if let Some(physical) = physical {
-            let next = plan.publish_elapsed(owner, transactions)?;
+            let next = plan.publish_elapsed(owner, physical.transactions())?;
             self.core.physical.commit_interval_consumption(physical)?;
             self.gathering = Some(next);
         }
