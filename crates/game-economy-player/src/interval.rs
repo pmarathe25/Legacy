@@ -78,6 +78,19 @@ impl<'a> Player<'a> {
         self.host.attempt_controlled_escape(self.person)
     }
 
+    pub fn build(&mut self, blueprint: u32) -> Result<Option<u64>, String> {
+        self.host.build_controlled_site(self.person, blueprint)
+    }
+
+    pub fn demolish(&mut self, site: u64) -> Result<bool, String> {
+        self.host.demolish_controlled_site(self.person, site)
+    }
+
+    pub fn salvage(&mut self, site: u64, good: u32, quantity: u64) -> Result<bool, String> {
+        self.host
+            .salvage_controlled_site(self.person, site, good, quantity)
+    }
+
     pub fn eat(&mut self, good: u32) -> Result<bool, String> {
         self.host.controlled_person(self.person)?;
         self.host.eat_controlled(self.person, good)

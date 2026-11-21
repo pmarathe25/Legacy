@@ -8,11 +8,36 @@ pub struct CoreConstructionResults {
 }
 
 impl CoreHost {
+    pub(super) fn goal_building_needs(
+        &self,
+        owner: &game_economy_building::Construction,
+    ) -> Vec<game_economy_building::GoalNeed> {
+        let Some((goals, work)) = self.goals.as_ref().zip(self.autowork.as_ref()) else {
+            return Vec::new();
+        };
+        if !owner
+            .goal_builders
+            .par_iter()
+            .any(|builder| builder.enabled)
+        {
+            return Vec::new();
+        }
+        let planned = goals.policies(work, self.core.physical.tick());
+        planned.policies[work.policies.len()..]
+            .par_iter()
+            .filter(|policy| policy.enabled)
+            .map(|policy| game_economy_building::GoalNeed {
+                person: policy.person,
+                recipe: policy.recipe,
+            })
+            .collect()
+    }
+
     pub fn build_sites_autonomously(
         &mut self,
         blocked: &[u64],
     ) -> Result<CoreConstructionResults, String> {
-        self.build_sites_with_hunger_limit(blocked, self.core.rules.max_work_hunger)
+        self.build_sites_with_hunger_limit(blocked, u32::MAX)
     }
 
     pub(super) fn build_sites_with_hunger_limit(
@@ -20,13 +45,57 @@ impl CoreHost {
         blocked: &[u64],
         max_hunger: u32,
     ) -> Result<CoreConstructionResults, String> {
+        self.build_sites(blocked, max_hunger, None)
+    }
+
+    pub fn build_controlled_site(
+        &mut self,
+        person: u64,
+        blueprint: u32,
+    ) -> Result<Option<u64>, String> {
+        let person_state = self.controlled_person(person)?;
+        let busy = self.site_action_busy(&[])?;
+        if person_state.health == 0
+            || person_state.region.is_none()
+            || busy.binary_search(&person).is_ok()
+        {
+            return Err("acting at a site requires a living available person within reach".into());
+        }
+        let owner = self
+            .construction
+            .as_ref()
+            .ok_or("construction is disabled")?;
+        let blocked: Vec<_> = owner
+            .policies
+            .par_iter()
+            .map(|policy| policy.person)
+            .collect();
+        let result = self.build_sites(
+            &blocked,
+            u32::MAX,
+            Some(game_economy_building::Manual { person, blueprint }),
+        )?;
+        Ok(result.events.first().and_then(|event| event.site))
+    }
+
+    fn build_sites(
+        &mut self,
+        blocked: &[u64],
+        max_hunger: u32,
+        manual: Option<game_economy_building::Manual>,
+    ) -> Result<CoreConstructionResults, String> {
         if blocked.par_windows(2).any(|pair| pair[0] >= pair[1]) {
             return Err("invalid occupied people".into());
         }
         let Some(owner) = self.construction.as_ref() else {
             return Ok(CoreConstructionResults::default());
         };
-        if owner.policies.is_empty() {
+        let goal_needs = if manual.is_some() {
+            Vec::new()
+        } else {
+            self.goal_building_needs(owner)
+        };
+        if owner.policies.is_empty() && goal_needs.is_empty() && manual.is_none() {
             return Ok(CoreConstructionResults::default());
         }
         let sites = self
@@ -66,8 +135,8 @@ impl CoreHost {
             busy: &busy,
             max_hunger,
             tick,
-            manual: None,
-            goal_needs: &[],
+            manual,
+            goal_needs: &goal_needs,
             unwilling: &[],
         }
         .prepare(1)?;
@@ -130,6 +199,13 @@ impl CoreHost {
             maintenance.enroll(&sites.facilities);
         }
         let published: Vec<_> = next.events.par_iter().cloned().collect();
+        if let Some(claims) = &mut claims {
+            let built: Vec<_> = published
+                .par_iter()
+                .filter_map(|event| event.site.map(|site| (event.person, site)))
+                .collect();
+            game_economy_claims::publish_built_site_claims(claims, &built, &self.core.people);
+        }
         next.events.par_extend(old);
         next.events
             .par_sort_unstable_by_key(|event| (event.tick, event.person));

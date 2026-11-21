@@ -215,11 +215,18 @@ impl Context<'_> {
 }
 impl Plan {
     pub fn publish(self, tick: u64, events: &Events) -> Vec<Event> {
+        self.publish_transactions(tick, &events.physical_actions)
+    }
+
+    pub fn publish_transactions(
+        self,
+        tick: u64,
+        outcomes: &[game_lots::TransactionOutcome],
+    ) -> Vec<Event> {
         if self.rows.is_empty() {
             return Vec::new();
         }
-        let accepted: HashSet<_> = events
-            .physical_actions
+        let accepted: HashSet<_> = outcomes
             .par_iter()
             .filter(|row| row.accepted)
             .map(|row| row.id)

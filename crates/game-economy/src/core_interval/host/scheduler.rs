@@ -692,6 +692,10 @@ pub enum CoreRunEvent {
         at_millis: u128,
         events: Vec<game_economy_confinement::Event>,
     },
+    SiteChanges {
+        at_millis: u128,
+        changes: CoreSiteChanges,
+    },
     PersonalChoices(Vec<CoreChoiceEvent>),
     MechanicalExperiments(Vec<game_mechanics::Observation>),
     MechanicalLoads(Vec<MechanicalLoadResult>),
@@ -3226,6 +3230,17 @@ impl CoreHost {
                         busy.extend(meal_people);
                         busy.par_sort_unstable();
                         busy.dedup();
+                        let (actors, changes) =
+                            attempt!('run, self.change_sites_autonomously(&busy));
+                        if !changes.is_empty() {
+                            busy.extend(actors);
+                            busy.par_sort_unstable();
+                            busy.dedup();
+                            run.events.push(CoreRunEvent::SiteChanges {
+                                at_millis: self.core.simulated_millis(),
+                                changes,
+                            });
+                        }
                         let (participants, events) =
                             attempt!('run, self.act_on_barriers(&busy, &[]));
                         if !events.is_empty() {

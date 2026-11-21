@@ -1367,6 +1367,205 @@ guard_policies = [{ person = 3, site = 1, willing = true, oppose_opening = true 
 }
 
 #[test]
+fn a_goal_builder_can_choose_to_make_the_missing_site_for_their_own_recipe() {
+    use game_personal_choice::{Person, Preference};
+
+    let root = root();
+    let source =
+        std::fs::read_to_string(root.join("content/scenarios/economy-core-construction.toml"))
+            .unwrap();
+    let mut source = source.split_once("[[construction.policies]]").unwrap().0
+        .replace("sites = []", "sites = []\nrequirements = [{ recipe = \"fixture-tool\", kind = \"shelter\", slots = 1 }]");
+    source.push_str(
+        r#"
+[[construction.goal_builders]]
+person = 1
+enabled = true
+
+[goals]
+retry_interval = 3
+[[goals.people]]
+person = 1
+recipe = "fixture-tool"
+priority = 1
+target = 1
+"#,
+    );
+    let path =
+        std::env::temp_dir().join(format!("legacy-core-goal-site-{}.toml", std::process::id()));
+    std::fs::write(&path, source).unwrap();
+    let loaded = game_economy_cli::core_scenario(&path, &root.join("content"));
+    std::fs::remove_file(path).unwrap();
+    let opening = loaded.unwrap().snapshot();
+    for (idle, built) in [(20, false), (0, true)] {
+        let mut host = game_economy::core_interval::CoreHost::resume(opening.clone()).unwrap();
+        host.enable_personal_choices(vec![Person {
+            id: 1,
+            idle,
+            act_on_tie: false,
+            preferences: vec![Preference {
+                domain: 1,
+                enabled: true,
+                bias: 10,
+                weight: 0,
+            }],
+            actions: Vec::new(),
+        }])
+        .unwrap();
+        let run = host.advance_continuous(1, &[]).unwrap();
+        assert_eq!(run.failure, None);
+        let state = host.snapshot();
+        assert_eq!(
+            state.sites.as_ref().unwrap().facilities.sites.len(),
+            usize::from(built)
+        );
+        game_economy::core_interval::CoreHost::resume(state).unwrap();
+    }
+}
+
+#[test]
+fn demolished_cells_release_occupants_and_leave_only_real_recoverable_material() {
+    use game_economy::core_interval::{CoreHost, CoreRunEvent};
+    use game_lots::Place;
+
+    let root = root();
+    let template =
+        std::fs::read_to_string(root.join("content/scenarios/economy-core-construction.toml"))
+            .unwrap();
+    let (prefix, rest) = template.split_once("[[people]]").unwrap();
+    let (_, project) = rest.split_once("[work_sites]").unwrap();
+    let mut source = prefix.replace("seed = 7", "seed = 7\ndecision_period_millis = 100");
+    for id in 1..=5 {
+        source.push_str(&format!("\n[[people]]\nid = {id}\nregion = 1\nhealth = 100\nhunger = 0\nwilling_to_work = false\nseek_meals = false\n"));
+    }
+    source.push_str("[work_sites]");
+    source.push_str(project);
+    source.push_str(
+        r#"
+[[construction.demolition]]
+person = 2
+site = 1
+willing = false
+
+[[construction.salvaging]]
+person = 3
+site = 1
+quantity = 1
+willing = true
+
+[[construction.salvaging]]
+person = 5
+site = 1
+quantity = 1
+willing = false
+
+[confinement]
+cells = []
+cell_kinds = [{ kind = "shelter", resistance = 3 }]
+escape = [{ person = 4, willing = false, effort = 3 }]
+"#,
+    );
+    let path = std::env::temp_dir().join(format!(
+        "legacy-core-demolition-{}.toml",
+        std::process::id()
+    ));
+    std::fs::write(&path, source).unwrap();
+    let loaded = game_economy_cli::core_scenario(&path, &root.join("content"));
+    std::fs::remove_file(path).unwrap();
+    let opening = loaded.unwrap().snapshot();
+    let mut host = CoreHost::resume(opening.clone()).unwrap();
+    let initial = host.advance_continuous(1, &[]).unwrap();
+    assert_eq!(initial.failure, None);
+    let mut built = host.snapshot();
+    built.core.people[3].controlled = true;
+    let grain = built
+        .core
+        .physical
+        .goods
+        .iter()
+        .find(|good| good.name == "grain")
+        .unwrap()
+        .id;
+    let mut host = CoreHost::resume(built).unwrap();
+    assert!(host.confine_controlled_target(4, 5, 1).unwrap());
+    let mut captive = host.snapshot();
+    captive.construction.as_mut().unwrap().demolition[0].willing = true;
+    let run = |workers, steps: &[u64]| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut host = CoreHost::resume(captive.clone()).unwrap();
+                let mut changes = Vec::new();
+                for &step in steps {
+                    let run = host.advance_continuous(step, &[]).unwrap();
+                    assert_eq!(run.failure, None);
+                    changes.extend(run.events.into_iter().filter_map(|event| match event {
+                        CoreRunEvent::SiteChanges { at_millis, changes } => {
+                            Some((at_millis, changes))
+                        }
+                        _ => None,
+                    }));
+                    host = CoreHost::resume(
+                        serde_json::from_str(&serde_json::to_string(&host.snapshot()).unwrap())
+                            .unwrap(),
+                    )
+                    .unwrap();
+                }
+                let [(100, destroyed), (200, recovered)] = changes.as_slice() else {
+                    panic!("unexpected site events {changes:?}");
+                };
+                assert!(destroyed.demolished[0].destroyed);
+                assert_eq!(destroyed.released[0].person, 5);
+                assert_eq!(host.held_at(5), None);
+                assert_eq!(recovered.salvaged.len(), 1);
+                assert!(recovered.salvaged[0].recovered);
+                assert_eq!(recovered.salvaged[0].person, 3);
+                let state = host.snapshot();
+                let contents = |place| {
+                    state
+                        .core
+                        .physical
+                        .custody
+                        .containers
+                        .iter()
+                        .find(|row| row.place == place)
+                };
+                assert!(contents(Place::Site(1)).is_none());
+                assert_eq!(contents(Place::Person(3)).unwrap().used, 1);
+                assert_eq!(contents(Place::Person(5)).unwrap().used, 0);
+                assert_eq!(
+                    contents(Place::Stock {
+                        region: 1,
+                        good: grain
+                    })
+                    .unwrap()
+                    .used,
+                    6
+                );
+                state
+            })
+    };
+    assert_eq!(run(1, &[240]), run(4, &[107, 7, 126]));
+
+    let mut opening = opening;
+    opening.core.people[3].controlled = true;
+    let mut host = CoreHost::resume(opening).unwrap();
+    assert_eq!(host.build_controlled_site(4, 1).unwrap(), Some(1));
+    assert!(host.demolish_controlled_site(4, 1).unwrap());
+    let before = host.snapshot();
+    assert!(!host.salvage_controlled_site(4, 1, grain, 2).unwrap());
+    let after = host.snapshot();
+    assert_eq!(
+        after.core.physical.custody.containers,
+        before.core.physical.custody.containers
+    );
+    assert!(host.salvage_controlled_site(4, 1, grain, 1).unwrap());
+    assert!(host.salvage_controlled_site(4, 1, grain, 1).is_err());
+}
+
+#[test]
 fn people_can_choose_to_eat_at_stock_with_full_cargo_and_compete_for_one_portion() {
     use game_economy::core_interval::{CoreChoiceOutcome, CoreHost, CoreRunEvent};
     use game_lots::Place;

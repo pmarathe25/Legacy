@@ -64,6 +64,12 @@ before removing the whole-boundary runner. Include authoring, normal CLI/player
 access, history, and saved state in the migration. Exercise the feature through
 the interval host before deleting its old driver.
 
+The interval host now loads site demolition, recovery, and construction for a
+person's active recipe goal. Follow up on procuring missing construction kits
+as intermediate work, comparing demolition and salvage with other personal
+opportunities, and recording construction and recovered material in narrative
+reports.
+
 ## Content extensibility
 
 | Area | Follow-up and acceptance example |

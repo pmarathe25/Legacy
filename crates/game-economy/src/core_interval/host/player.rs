@@ -40,7 +40,14 @@ pub struct CorePlayerMarkedPage {
     pub marks: Vec<u32>,
 }
 
-/// Only the controlled person's own state and physically co-located people.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CorePlayerSite {
+    pub id: u64,
+    pub kind: Option<String>,
+    pub debris: Vec<game_lots::Lot>,
+}
+
+/// The controlled person's own state and physically accessible observations.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CorePlayerView {
     pub tick: u64,
@@ -52,6 +59,7 @@ pub struct CorePlayerView {
     pub route_reports: Vec<travel::RouteObservation>,
     pub possessions: Vec<game_lots::Lot>,
     pub nearby: Vec<CoreSeenPerson>,
+    pub accessible_sites: Vec<CorePlayerSite>,
     pub wound: Option<CorePlayerWound>,
     pub job: Option<CorePlayerJob>,
     pub fatigue: Option<CorePlayerFatigue>,
@@ -266,6 +274,47 @@ impl CoreHost {
             .physical
             .custody(game_lots::Place::Person(id))
             .map_or_else(Vec::new, |holder| holder.lots.clone());
+        let mut accessible_sites = Vec::new();
+        if let Some(region) = person
+            .region
+            .filter(|&region| self.regional_stock_reachable(id, region))
+        {
+            if let Some(sites) = &self.sites {
+                accessible_sites.par_extend(
+                    sites
+                        .facilities
+                        .sites
+                        .par_iter()
+                        .filter(|site| site.region == region)
+                        .map(|site| CorePlayerSite {
+                            id: site.id,
+                            kind: Some(site.kind.clone()),
+                            debris: Vec::new(),
+                        }),
+                );
+            }
+            if let Some(owner) = &self.construction {
+                accessible_sites.par_extend(
+                    owner
+                        .materials
+                        .par_iter()
+                        .filter(|row| row.debris && row.region == region)
+                        .filter_map(|row| {
+                            Some(CorePlayerSite {
+                                id: row.site,
+                                kind: None,
+                                debris: self
+                                    .core
+                                    .physical
+                                    .custody(game_lots::Place::Site(row.site))?
+                                    .lots
+                                    .clone(),
+                            })
+                        }),
+                );
+            }
+            accessible_sites.par_sort_unstable_by_key(|site| site.id);
+        }
         let wound = self
             .personal_conflict
             .as_ref()
@@ -353,6 +402,7 @@ impl CoreHost {
             route_reports,
             possessions,
             nearby,
+            accessible_sites,
             wound,
             job,
             fatigue,

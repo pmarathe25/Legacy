@@ -481,40 +481,7 @@ impl Context<'_> {
         choices
     }
 
-    /// Direct policy opportunities without custody or site IDs; excludes goals and manual requests.
-    pub fn direct_opportunities(&self) -> Vec<Opportunity> {
-        self.direct_choices()
-            .into_par_iter()
-            .map(|choice| Opportunity {
-                person: choice.person,
-                blueprint: choice.blueprint.id,
-                source: choice.source,
-                good: choice.blueprint.kit,
-                quantity: choice.blueprint.quantity,
-                salvage: choice.blueprint.salvage,
-            })
-            .collect()
-    }
-
-    pub fn prepare(&self, base: u64) -> Result<Plan, String> {
-        if self.manual.is_none()
-            && !self
-                .owner
-                .policies
-                .par_iter()
-                .any(|p| p.willing || p.pressure_threshold.is_some())
-            && (self.goal_needs.is_empty()
-                || !self.owner.goal_builders.par_iter().any(|p| p.enabled))
-        {
-            return Ok(Plan {
-                actions: Vec::new(),
-                custody: Vec::new(),
-                actors: Vec::new(),
-                uses: Vec::new(),
-                rows: Vec::new(),
-                next_id: self.sites.next_id,
-            });
-        }
+    fn autonomous_choices(&self) -> Vec<Choice<'_>> {
         let mut choices = self.direct_choices();
         if !self.goal_needs.is_empty() && !self.owner.goal_builders.is_empty() {
             let chosen: HashSet<_> = choices.par_iter().map(|choice| choice.person).collect();
@@ -560,11 +527,7 @@ impl Context<'_> {
                         .ok()
                         .map(|i| &self.people[i])?;
                     let region = person.region?;
-                    if person.controlled
-                        || person.health == 0
-                        || !person.willing_to_work
-                        || person.hunger > self.max_hunger
-                    {
+                    if person.controlled || person.health == 0 || person.hunger > self.max_hunger {
                         return None;
                     }
                     let (_, requirement, blueprints) = suitable
@@ -588,6 +551,44 @@ impl Context<'_> {
                 .collect();
             choices.par_extend(additions);
         }
+        choices
+    }
+
+    /// Personal construction opportunities without reserving materials or site IDs.
+    pub fn opportunities(&self) -> Vec<Opportunity> {
+        self.autonomous_choices()
+            .into_par_iter()
+            .map(|choice| Opportunity {
+                person: choice.person,
+                blueprint: choice.blueprint.id,
+                source: choice.source,
+                good: choice.blueprint.kit,
+                quantity: choice.blueprint.quantity,
+                salvage: choice.blueprint.salvage,
+            })
+            .collect()
+    }
+
+    pub fn prepare(&self, base: u64) -> Result<Plan, String> {
+        if self.manual.is_none()
+            && !self
+                .owner
+                .policies
+                .par_iter()
+                .any(|p| p.willing || p.pressure_threshold.is_some())
+            && (self.goal_needs.is_empty()
+                || !self.owner.goal_builders.par_iter().any(|p| p.enabled))
+        {
+            return Ok(Plan {
+                actions: Vec::new(),
+                custody: Vec::new(),
+                actors: Vec::new(),
+                uses: Vec::new(),
+                rows: Vec::new(),
+                next_id: self.sites.next_id,
+            });
+        }
+        let mut choices = self.autonomous_choices();
         if let Some(manual) = self.manual {
             let person = self
                 .people

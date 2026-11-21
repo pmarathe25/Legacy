@@ -38,6 +38,7 @@ mod requests;
 mod scenario;
 mod scheduler;
 mod shared_work;
+mod site_lifecycle;
 mod sites;
 mod skills;
 mod social;
@@ -68,13 +69,14 @@ pub use mechanics::{
 pub use offers::CoreSocialResults;
 pub use personal_choice::{CoreChoiceEvent, CoreChoiceIntent, CoreChoiceOutcome, CoreWorkIntent};
 pub use player::{
-    CorePlayerFatigue, CorePlayerJob, CorePlayerLanguage, CorePlayerMarkedPage, CorePlayerView,
-    CorePlayerWound, CoreSeenPerson,
+    CorePlayerFatigue, CorePlayerJob, CorePlayerLanguage, CorePlayerMarkedPage, CorePlayerSite,
+    CorePlayerView, CorePlayerWound, CoreSeenPerson,
 };
 pub use purpose::CorePurpose;
 pub use requests::{CoreDeliveryResults, CoreRequestResults};
 pub use scheduler::{CoreRun, CoreRunEvent, CoreSchedule, DecisionPhase, Incapacitation};
 pub use shared_work::{CoreAssistRecord, CoreAssistSession, CoreSharedWork};
+pub use site_lifecycle::CoreSiteChanges;
 pub use sites::{CoreRepairResults, CoreSites};
 pub use skills::{CoreSkillCredit, CoreSkills};
 pub use social::{CoreDynamicsResults, CoreHealth, CoreSocial};
@@ -1401,17 +1403,8 @@ impl CoreHost {
             )?;
         }
         if let Some(owner) = &mut construction {
-            if owner.maintenance.is_some()
-                || !owner.demolition.is_empty()
-                || !owner.demolition_events.is_empty()
-                || !owner.goal_builders.is_empty()
-                || !owner.salvaging.is_empty()
-                || !owner.salvage_events.is_empty()
-            {
-                return Err(
-                    "demolition, salvage and goal-directed construction are not yet supported"
-                        .into(),
-                );
+            if owner.maintenance.is_some() {
+                return Err("interval maintenance belongs with the physical sites".into());
             }
             owner.normalize();
             let facilities = &sites

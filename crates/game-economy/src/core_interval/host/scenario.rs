@@ -20,15 +20,6 @@ impl CoreHostSnapshot {
                 unsupported.push(name);
             }
         }
-        if state.construction.as_ref().is_some_and(|owner| {
-            !owner.demolition.is_empty()
-                || !owner.demolition_events.is_empty()
-                || !owner.goal_builders.is_empty()
-                || !owner.salvaging.is_empty()
-                || !owner.salvage_events.is_empty()
-        }) {
-            unsupported.push("construction");
-        }
         if state
             .dynamics
             .as_ref()

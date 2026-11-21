@@ -493,6 +493,47 @@ impl CoreHost {
         state.owner.enroll_sites(&built, &sites.facilities);
     }
 
+    pub(super) fn release_destroyed_barriers(&mut self, destroyed: &HashSet<u64>) -> Vec<Event> {
+        let Some(sites) = &self.sites else {
+            return Vec::new();
+        };
+        let Some(state) = self
+            .personal_conflict
+            .as_mut()
+            .and_then(|owner| owner.confinement.as_mut())
+        else {
+            return Vec::new();
+        };
+        if !state
+            .owner
+            .cells
+            .par_iter()
+            .any(|cell| destroyed.contains(&cell.site))
+        {
+            return Vec::new();
+        }
+        let tick = self.core.physical.tick();
+        let released: Vec<_> = state
+            .owner
+            .holds
+            .par_iter()
+            .filter_map(|hold| {
+                destroyed.contains(&hold.site).then_some(Event {
+                    tick,
+                    person: hold.person,
+                    actor: None,
+                    site: hold.site,
+                    kind: EventKind::Released,
+                })
+            })
+            .collect();
+        state.begin_action(self.core.simulated_millis());
+        state.owner.retain_sites(&sites.facilities);
+        state.guards.retain(|row| !destroyed.contains(&row.0));
+        state.owner.events.extend(released.iter().cloned());
+        released
+    }
+
     fn confinement_opening(&self) -> Result<(&crate::WorkSites, CoreConfinement, u64), String> {
         let offset = self.core.elapsed_millis().ok_or("no physical interval")?;
         if offset >= self.core.physical.tick_millis()

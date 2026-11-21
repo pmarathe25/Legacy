@@ -805,10 +805,9 @@ impl CoreHost {
         let needs_view = needs_provision
             || on_site_meals
             || (domain.is_none_or(|domain| domain == CONSTRUCTION)
-                && self
-                    .construction
-                    .as_ref()
-                    .is_some_and(|owner| !owner.policies.is_empty()))
+                && self.construction.as_ref().is_some_and(|owner| {
+                    !owner.policies.is_empty() || !owner.goal_builders.is_empty()
+                }))
             || (domain.is_none_or(|domain| domain == CARRYING)
                 && self.local_transport.as_ref().is_some_and(|owner| {
                     !owner.policies.is_empty() || !owner.goal_fetchers.is_empty()
@@ -940,7 +939,7 @@ impl CoreHost {
         let construction = || -> Result<Vec<CoreChoiceIntent>, String> {
             if domain.is_none_or(|domain| domain == CONSTRUCTION)
                 && let Some(owner) = &self.construction
-                && !owner.policies.is_empty()
+                && (!owner.policies.is_empty() || !owner.goal_builders.is_empty())
             {
                 #[cfg(feature = "profile")]
                 let _span = game_diagnostics::span("choice.preview.construction");
@@ -948,6 +947,7 @@ impl CoreHost {
                     .sites
                     .as_ref()
                     .ok_or("construction requires work sites")?;
+                let goal_needs = self.goal_building_needs(owner);
                 let opportunities = game_economy_building::Context {
                     owner,
                     sites: &sites.facilities,
@@ -955,14 +955,14 @@ impl CoreHost {
                     view: view.as_ref().expect("construction view"),
                     opinions: self.opinions.as_ref(),
                     claims: claims.as_ref(),
-                    busy: &busy,
+                    busy: regional,
                     max_hunger: u32::MAX,
                     tick,
                     manual: None,
-                    goal_needs: &[],
+                    goal_needs: &goal_needs,
                     unwilling: &[],
                 }
-                .direct_opportunities();
+                .opportunities();
                 let rows: Vec<_> = opportunities
                     .into_par_iter()
                     .map(|opportunity| {

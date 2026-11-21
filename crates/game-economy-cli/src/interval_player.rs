@@ -15,7 +15,7 @@ fn command(host: &mut CoreHost, person: u64, words: &[&str]) -> Result<bool, Str
     match words {
         [] => {}
         ["help"] => println!(
-            "look | wait MILLISECONDS | move REGION | walk stock|store ID | pause-walk | resume-walk | confine PERSON SITE | guard SITE | release PERSON | escape | eat GOOD | treat GOOD | work RECIPE UNITS | stop JOB | stop-assist | rest on|off | word place|person|object ID SOUNDS | form SOUNDS MARKS | inscribe SOUNDS | read PAGE | recall PAGE | save PATH | load PATH | quit (SOUNDS and MARKS are comma-separated numbers)"
+            "look | wait MILLISECONDS | move REGION | walk stock|store ID | pause-walk | resume-walk | confine PERSON SITE | guard SITE | release PERSON | escape | build BLUEPRINT | demolish SITE | salvage SITE GOOD QUANTITY | eat GOOD | treat GOOD | work RECIPE UNITS | stop JOB | stop-assist | rest on|off | word place|person|object ID SOUNDS | form SOUNDS MARKS | inscribe SOUNDS | read PAGE | recall PAGE | save PATH | load PATH | quit (SOUNDS and MARKS are comma-separated numbers)"
         ),
         ["quit"] | ["exit"] => return Ok(false),
         ["look"] => {
@@ -34,6 +34,17 @@ fn command(host: &mut CoreHost, person: u64, words: &[&str]) -> Result<bool, Str
             }
             for lot in &view.possessions {
                 println!("carried_good={} quantity={}", lot.good, lot.quantity);
+            }
+            for site in &view.accessible_sites {
+                if let Some(kind) = &site.kind {
+                    println!("site={} kind={kind}", site.id);
+                }
+                for lot in &site.debris {
+                    println!(
+                        "debris_site={} good={} quantity={}",
+                        site.id, lot.good, lot.quantity
+                    );
+                }
             }
             if let Some(wound) = view.wound {
                 println!("wound_severity={}", wound.severity);
@@ -141,6 +152,26 @@ fn command(host: &mut CoreHost, person: u64, words: &[&str]) -> Result<bool, Str
             println!("released={}", Player::new(host, person)?.release(target)?);
         }
         ["escape"] => println!("escaped={}", Player::new(host, person)?.escape()?),
+        ["build", blueprint] => {
+            let blueprint = blueprint.parse::<u32>().map_err(|_| "invalid blueprint")?;
+            println!(
+                "built_site={:?}",
+                Player::new(host, person)?.build(blueprint)?
+            );
+        }
+        ["demolish", site] => {
+            let site = site.parse::<u64>().map_err(|_| "invalid site")?;
+            println!("demolished={}", Player::new(host, person)?.demolish(site)?);
+        }
+        ["salvage", site, good, quantity] => {
+            let site = site.parse::<u64>().map_err(|_| "invalid site")?;
+            let good = good.parse::<u32>().map_err(|_| "invalid good")?;
+            let quantity = quantity.parse::<u64>().map_err(|_| "invalid quantity")?;
+            println!(
+                "salvaged={}",
+                Player::new(host, person)?.salvage(site, good, quantity)?
+            );
+        }
         ["eat", good] => {
             let good = good.parse::<u32>().map_err(|_| "invalid good")?;
             println!("consumed={}", Player::new(host, person)?.eat(good)?);

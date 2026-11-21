@@ -228,6 +228,22 @@ impl Runtime {
         Ok(())
     }
 
+    /// Retire emptied site custody in the same commit as the material transfer.
+    pub fn retire_interval_site_custody(
+        &self,
+        draft: &mut IntervalConsumptionDraft,
+        places: Vec<Place>,
+    ) -> Result<(), String> {
+        self.validate_interval_consumption(draft)?;
+        if places
+            .par_iter()
+            .any(|place| !matches!(place, Place::Site(_)))
+        {
+            return Err("invalid site custody retirement".into());
+        }
+        self.store.retire_in(&mut draft.custody, places)
+    }
+
     /// Commit a staged consumption or transfer if the generation and time have not changed.
     pub fn commit_interval_consumption(
         &mut self,
