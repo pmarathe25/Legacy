@@ -26,7 +26,11 @@ to track rates, deadlines, and behavior under different advance sizes. The
 - Mechanical designs use actual identified parts. Each character can rank
   alternative input components or a branched design. The mechanical owner
   computes force and travel in physical connection order and records which
-  parts break. Broader shared reach, parts selection, and learning remain open.
+  parts break. A character can mount an apparatus in a reachable workshop.
+  Other people can then choose to test those same physical parts after reaching
+  it. Simultaneous trials arbitrate per apparatus, use the actual decision
+  instant, and publish only changed apparatus. Broader parts selection and
+  learning remain open.
 - Wildlife selects local mates through personal attraction and inherited
   desire. An authored inherited flexibility can give different animals
   different selectivity within one species. The earlier elapsed history lost
@@ -49,10 +53,16 @@ to track rates, deadlines, and behavior under different advance sizes. The
   decision clock when the crop owner uses elapsed growth. Shared-field
   competition, actual seed-batch withdrawal, offspring custody, and the
   freedom to decline are covered across save/reload and worker counts.
+- Fallow soil recovers from actual elapsed time. A soil treatment only adds
+  fertility when its material leaves physical custody. The player's action
+  and ordinary personal choices are exercised across worker counts and
+  different physical intervals.
 - Private lexicons support remembered acquaintances. A speaker can name
   someone from their own experience. A listener needs their own grounding
   and can decline or adapt the form. Annual reports count the living people
-  who share exact spoken or written forms and show competing forms.
+  who share exact spoken or written forms and show competing forms. A
+  one-year integrated archive records adoption, adaptation, and explanations
+  that did not result in an immediate adoption.
 - Reading and joining a reserved crew can compete with other personal
   choices. An individual can decline to help even with free crew space.
   Crew capacity is applied after choices. An accepted helper contributes
@@ -63,7 +73,10 @@ to track rates, deadlines, and behavior under different advance sizes. The
 - Agreements can use elapsed deadlines and retry periods. A person can
   offer goods they do not hold, refuse terms, or explicitly withdraw.
   Delivery still needs physical custody and can occur at the last valid
-  millisecond. Expiration changes the agreement without moving goods.
+  millisecond. Expiration changes the agreement without moving goods. The
+  recipient can change their trust using their own view of fulfillment or
+  default. Recipients with opposite responses make different choices after
+  the same outcome. Elapsed decision rounds consider only open agreements.
 - Annual histories follow the calendar even when the annual checkpoint falls
   inside a physical interval. The resumed state matches the uninterrupted
   run when the caller partitions time differently and changes worker count.
