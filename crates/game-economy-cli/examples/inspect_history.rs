@@ -6,6 +6,8 @@ use std::io::{BufRead, BufReader};
 use std::path::Path;
 #[path = "history_support/chronicle.rs"]
 mod chronicle;
+#[path = "history_support/cultivars.rs"]
+mod cultivars;
 
 #[derive(Clone, Copy)]
 enum Focus {
@@ -581,7 +583,8 @@ fn inspect(path: &Path, focus: Focus, through_year: Option<u64>) -> Result<Value
                                 .map_or(&[][..], Vec::as_slice),
                         )
                     });
-                    samples.push(json!({"year":year,"living_people":live_people,"living_animals":live_animals,"human_locus_means":human_means,"animal_locus_means":animal_means,"human_mate_desire_mean":human_desire,"animal_mate_desire_mean":animal_desire,"animal_species":animal_species}));
+                    let seed_lineages = cultivars::sample(state);
+                    samples.push(json!({"seed_lineages":seed_lineages,"year":year,"living_people":live_people,"living_animals":live_animals,"human_locus_means":human_means,"animal_locus_means":animal_means,"human_mate_desire_mean":human_desire,"animal_mate_desire_mean":animal_desire,"animal_species":animal_species}));
                 }
                 if row["kind"] == "year" {
                     if let Some(events) = row["observations"].as_array() {
@@ -755,6 +758,7 @@ fn narrative(report: &Value, focus: Focus) -> String {
                 }
                 text.push_str("\n\n");
             }
+            cultivars::write_history(&mut text, &report["genome_samples"]);
         }
         Focus::Person(person) => {
             writeln!(text, "# Person {person}\n").unwrap();
