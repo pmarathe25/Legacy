@@ -338,6 +338,7 @@ dependencies = [
  "game-mechanics",
  "game-opinions",
  "game-personal-choice",
+ "game-practices",
  "game-production",
  "game-signals",
  "game-skill-catalog",

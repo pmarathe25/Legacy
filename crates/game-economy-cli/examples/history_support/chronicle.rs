@@ -198,6 +198,7 @@ impl Chronicle {
                 | "work_requests"
                 | "maturation"
                 | "recipe_learning"
+                | "personal_practices"
         ) {
             return;
         }
@@ -427,6 +428,21 @@ fn classify(kind: &str, row: &Value) -> Option<Receipt> {
             "moved" => "mechanical tests that moved a load",
             "stalled" => "mechanical tests that stalled",
             "broke" => "mechanical tests that broke a part",
+            _ => return None,
+        },
+        ("personal_practices", "aid_proposed") => "individual aid proposals",
+        ("personal_practices", "work_proposed") => "individual work and goods proposals",
+        ("personal_practices", "aid_response" | "work_response") => {
+            match (row["decision"].as_str()?, row["approved"].as_bool()) {
+                ("adopted", Some(false)) => "practices adopted without private approval",
+                ("adopted", Some(true)) => "practices adopted with private approval",
+                ("declined", _) => "practices declined",
+                _ => return None,
+            }
+        }
+        ("personal_practices", "readiness_statement") => match row["belief"].as_str()? {
+            "believes" => "readiness statements believed",
+            "disbelieves" => "readiness statements doubted",
             _ => return None,
         },
         ("work_requests", _) if row["outcome"]["kind"] == "started" => {

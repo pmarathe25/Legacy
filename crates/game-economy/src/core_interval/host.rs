@@ -113,6 +113,7 @@ pub struct CoreHistoryView<'a> {
     pub tick: u64,
     pub elapsed_social: bool,
     pub signal_learning_time: u64,
+    pub practices: Option<&'a game_practices::Practices>,
     pub language_events: &'a [game_language::Event],
     pub signal_events: &'a [game_signals::Event],
     pub signal_learning: &'a [game_signals::LearningEvent],
@@ -1655,6 +1656,10 @@ impl CoreHost {
                         .ok()
                 })
                 .unwrap_or(self.core.physical.tick()),
+            practices: self
+                .giving
+                .as_ref()
+                .and_then(|owner| owner.practices.as_ref()),
             language_events: language.map_or(&[], |owner| owner.events.as_slice()),
             signal_events: signals.map_or(&[], |owner| owner.events.as_slice()),
             signal_learning: signals.map_or(&[], |owner| owner.learning_events.as_slice()),
