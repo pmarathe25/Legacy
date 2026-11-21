@@ -4,7 +4,7 @@ The intended long-run use includes advancing a world for centuries, for example 
 
 ## Current limitations
 
-The interval host supports physical confinement, local walking, and subjective mating, including conception independent of an exclusive partnership. Scheduled captures, releases, demolition, salvage, and individual expedition milestones have elapsed timestamps in the history stream. Tactical combat, campaign state, and coordinated expeditions remain on the whole-boundary path. The history runner records selected events and annual snapshots. It includes observations of mechanical experiments and identifiable cultivated seed cohorts. Political and organizational histories still require analysis of the evidence. Scenario settings for conception, care, climate, and resource renewal are exploratory.
+The interval host supports physical confinement, local walking, subjective mating, individual expeditions, tactical rounds, and corporeal campaigns. Scheduled captures, releases, demolition, salvage, trips, encounters, and succession have elapsed timestamps in history. Tactical interventions, structural damage, and coordinated expeditions remain on the whole-boundary path. The history runner records selected events and annual snapshots, including mechanical experiments and identifiable cultivated seed cohorts. Political and organizational histories still require analysis of the evidence. Scenario settings for conception, care, climate, and resource renewal are exploratory.
 
 ## People and collective patterns
 

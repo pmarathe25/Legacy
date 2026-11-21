@@ -7,6 +7,7 @@ mod animal_care;
 mod animal_handling;
 mod animal_products;
 mod animal_restraints;
+mod campaign;
 mod claims;
 mod confinement;
 mod conflict;
@@ -49,6 +50,7 @@ mod tools;
 mod treatment;
 mod writing;
 mod written_social;
+pub use campaign::CoreCampaignView;
 pub use confinement::{BarrierAction, CoreConfinement};
 pub use conflict::{
     CorePersonalConflict, PersonalAttackPolicy, PersonalDefensePolicy, PersonalHarm,
@@ -116,6 +118,8 @@ pub struct CoreHostSnapshot {
     pub personal_conflict: Option<CorePersonalConflict>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expeditions: Option<game_economy_expeditions::elapsed::Expeditions>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub campaign: Option<game_economy_campaign::elapsed::ElapsedCampaign>,
     #[serde(default)]
     pub autowork: Option<Autowork>,
     #[serde(default)]
@@ -221,6 +225,7 @@ pub struct CoreHost {
     mechanics: Option<mechanics::Runtime>,
     personal_conflict: Option<CorePersonalConflict>,
     expeditions: Option<game_economy_expeditions::elapsed::Expeditions>,
+    campaign: Option<game_economy_campaign::elapsed::ElapsedCampaign>,
     autowork: Option<Autowork>,
     tool_wear: Option<ToolWear>,
     tool_requirements: Vec<game_economy_work::tools::Requirement>,
@@ -280,6 +285,7 @@ struct CoreRuntimeOptions {
     mechanics: Option<CoreMechanics>,
     personal_conflict: Option<CorePersonalConflict>,
     expeditions: Option<game_economy_expeditions::elapsed::Expeditions>,
+    campaign: Option<game_economy_campaign::elapsed::ElapsedCampaign>,
     sites: Option<CoreSites>,
     schedule: Option<CoreSchedule>,
     tool_requirements: Vec<game_economy_work::tools::Requirement>,
@@ -336,6 +342,7 @@ impl CoreHost {
             mechanics,
             personal_conflict,
             expeditions,
+            campaign,
             autowork,
             tool_wear,
             tool_requirements,
@@ -401,6 +408,7 @@ impl CoreHost {
                 mechanics,
                 personal_conflict,
                 expeditions,
+                campaign,
                 dreams,
                 shared_work,
                 market,
@@ -453,6 +461,7 @@ impl CoreHost {
             mechanics,
             personal_conflict,
             expeditions,
+            campaign,
             autowork,
             tool_wear,
             tool_requirements,
@@ -514,6 +523,7 @@ impl CoreHost {
                 mechanics,
                 personal_conflict,
                 expeditions,
+                campaign,
                 dreams,
                 shared_work,
                 market,
@@ -561,7 +571,7 @@ impl CoreHost {
         )
     }
     fn compile(
-        core: CoreInterval,
+        mut core: CoreInterval,
         autowork: Option<Autowork>,
         tool_wear: Option<ToolWear>,
         opinions: Option<game_opinions::Opinions>,
@@ -571,8 +581,9 @@ impl CoreHost {
     ) -> Result<Self, String> {
         let CoreRuntimeOptions {
             mechanics,
-            personal_conflict,
+            mut personal_conflict,
             expeditions,
+            campaign,
             dreams,
             shared_work,
             market,
@@ -633,6 +644,9 @@ impl CoreHost {
             knowledge = Some(legacy);
         }
         let mechanics = mechanics.map(|owner| owner.compile(&core)).transpose()?;
+        if campaign.as_ref().is_some_and(|owner| owner.costs.is_some()) {
+            personal_conflict.get_or_insert_with(CorePersonalConflict::default);
+        }
         if let Some(owner) = &personal_conflict {
             owner.validate(&core)?;
         }
@@ -1450,6 +1464,22 @@ impl CoreHost {
             let view = core.physical.view(core.physical.tick())?;
             owner.validate(&people, &goods, facilities, &view, core.physical.tick())?;
         }
+        if let Some(owner) = &campaign {
+            let now =
+                u64::try_from(core.simulated_millis()).map_err(|_| "campaign time overflow")?;
+            owner.validate(
+                family.as_ref().ok_or("campaign requires family")?,
+                &core.people,
+                now,
+            )?;
+            if let Some(current) = owner.current()
+                && let Ok(index) = core
+                    .people
+                    .binary_search_by_key(&current, |person| person.id)
+            {
+                core.people[index].controlled = owner.controlled() == Some(current);
+            }
+        }
         if let Some(schedule) = &schedule {
             schedule.validate(&core)?;
         }
@@ -1462,6 +1492,7 @@ impl CoreHost {
             mechanics,
             personal_conflict,
             expeditions,
+            campaign,
             autowork,
             tool_wear,
             tool_requirements,
@@ -1563,6 +1594,7 @@ impl CoreHost {
             mechanics: self.mechanics.as_ref().map(mechanics::Runtime::snapshot),
             personal_conflict: self.personal_conflict.clone(),
             expeditions: self.expeditions.clone(),
+            campaign: self.campaign.clone(),
             autowork: self.autowork.clone(),
             tool_wear: self.tool_wear.clone(),
             tool_requirements: self.tool_requirements.clone(),
@@ -1660,6 +1692,7 @@ impl CoreHost {
         let expedition = self.next_expedition_deadline();
         let tactical = self.next_tactical_deadline();
         let wounds = self.next_wound_deadline();
+        let invocation = self.next_invocation_deadline();
         let first = [
             recovery,
             exposure,
@@ -1673,6 +1706,7 @@ impl CoreHost {
             expedition,
             tactical,
             wounds,
+            invocation,
         ]
         .into_iter()
         .flatten()
@@ -1697,6 +1731,7 @@ impl CoreHost {
                     expedition: expedition == Some(after_millis),
                     tactical: tactical == Some(after_millis),
                     wounds: wounds == Some(after_millis),
+                    invocation: invocation == Some(after_millis),
                     recovery: recovery == Some(after_millis),
                     exposure: exposure == Some(after_millis),
                 };
@@ -1713,6 +1748,7 @@ impl CoreHost {
                 deadline.expedition = expedition == Some(after_millis);
                 deadline.tactical = tactical == Some(after_millis);
                 deadline.wounds = wounds == Some(after_millis);
+                deadline.invocation = invocation == Some(after_millis);
             }
         }
         Ok(deadline)

@@ -702,6 +702,17 @@ pub enum CoreRunEvent {
         at_millis: u128,
         people: Vec<u64>,
     },
+    Campaign(Vec<game_economy_campaign::elapsed::Event>),
+    InvocationWarning {
+        at_millis: u128,
+        warning: game_economy_campaign::InvocationWarning,
+    },
+    InvocationCost {
+        at_millis: u128,
+        person: u64,
+        damage: u32,
+        lifespan_loss: u64,
+    },
     PersonalChoices(Vec<CoreChoiceEvent>),
     MechanicalExperiments(Vec<game_mechanics::Observation>),
     MechanicalLoads(Vec<MechanicalLoadResult>),
@@ -970,6 +981,10 @@ impl CoreHost {
                 run.events
                     .push(CoreRunEvent::Expeditions(expedition_events));
             }
+            let campaign_events = attempt!('run, self.campaign_lifecycle(&[]));
+            if !campaign_events.is_empty() {
+                run.events.push(CoreRunEvent::Campaign(campaign_events));
+            }
             attempt!('run, self.sync_work_rates(blocked));
             let deadline = attempt!('run, self.host_deadline(None));
             if deadline.after_millis == 0 {
@@ -1035,6 +1050,40 @@ impl CoreHost {
                     if let Some(events) = attempt!('run, self.publish_early_work()) {
                         run.events.push(CoreRunEvent::Work(events));
                         handled = true;
+                    }
+                }
+                if deadline.invocation
+                    && let Some(dose) = attempt!('run, self.publish_invocation())
+                {
+                    use game_economy_campaign::elapsed::Dose;
+                    match dose {
+                        Dose::Warning(warning) => {
+                            run.events.push(CoreRunEvent::InvocationWarning {
+                                at_millis: self.core.simulated_millis(),
+                                warning,
+                            });
+                            run.failure = Some("invocation warning needs a choice".into());
+                            break 'run;
+                        }
+                        Dose::Applied {
+                            physical,
+                            control_change,
+                        } => {
+                            if let Some((person, damage, lifespan_loss)) = physical {
+                                run.events.push(CoreRunEvent::InvocationCost {
+                                    at_millis: self.core.simulated_millis(),
+                                    person,
+                                    damage,
+                                    lifespan_loss,
+                                });
+                            }
+                            if let Some(event) = control_change
+                                .and_then(|change| self.invocation_control_event(change))
+                            {
+                                run.events.push(CoreRunEvent::Campaign(vec![event]));
+                            }
+                            handled = true;
+                        }
                     }
                 }
                 if deadline.tactical
@@ -3309,6 +3358,16 @@ impl CoreHost {
                         if !events.is_empty() {
                             run.events.push(CoreRunEvent::Expeditions(events));
                         }
+                        let (guardians, events) =
+                            attempt!('run, self.act_on_guardian_choices(&busy));
+                        if !guardians.is_empty() {
+                            busy.extend(guardians);
+                            busy.par_sort_unstable();
+                            busy.dedup();
+                        }
+                        if !events.is_empty() {
+                            run.events.push(CoreRunEvent::Campaign(events));
+                        }
                         let departures = attempt!('run, self.depart_autonomously(&busy));
                         if !departures.is_empty() {
                             run.events.push(CoreRunEvent::Departures(departures));
@@ -3344,6 +3403,10 @@ impl CoreHost {
                 });
             }
             if !elapsed.family_events.is_empty() {
+                let events = attempt!('run, self.campaign_lifecycle(&elapsed.family_events));
+                if !events.is_empty() {
+                    run.events.push(CoreRunEvent::Campaign(events));
+                }
                 run.events.push(CoreRunEvent::FamilyTransitions {
                     at_millis: self.core.simulated_millis(),
                     events: elapsed.family_events,
@@ -3425,6 +3488,17 @@ impl CoreHost {
                 combined
                     .events
                     .push(CoreRunEvent::Expeditions(expedition_events));
+            }
+            match self.campaign_boundary_births() {
+                Ok(events) if !events.is_empty() => {
+                    combined.events.push(CoreRunEvent::Campaign(events))
+                }
+                Ok(_) => {}
+                Err(error) => {
+                    combined.failure = Some(error);
+                    combined.boundary = true;
+                    break;
+                }
             }
             if let Some(health) = self
                 .health

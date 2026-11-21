@@ -726,6 +726,7 @@ fn run() -> Result<(), String> {
     let mut args = std::env::args_os().skip(1);
     let mut player_mode = false;
     let mut interval_person = None;
+    let mut interval_campaign = false;
     let mut scenario = None;
     let mut seed = None;
     let mut population = None;
@@ -741,6 +742,8 @@ fn run() -> Result<(), String> {
                     .parse::<u64>()
                     .map_err(|_| "invalid controlled person")?,
             );
+        } else if arg == "--interval-campaign" && !interval_campaign {
+            interval_campaign = true;
         } else if arg == "--seed" && seed.is_none() {
             seed = Some(
                 args.next()
@@ -760,16 +763,25 @@ fn run() -> Result<(), String> {
             return Err("unexpected argument".into());
         }
     }
-    if let Some(person) = interval_person {
-        if player_mode || seed.is_some() || population.is_some() {
+    if interval_person.is_some() || interval_campaign {
+        if player_mode
+            || seed.is_some()
+            || population.is_some()
+            || (interval_campaign && interval_person.is_some())
+        {
             return Err(
                 "interval player cannot be combined with player, seed, or population options"
                     .into(),
             );
         }
-        let scenario =
-            scenario.unwrap_or_else(|| root.join("content/scenarios/economy-core-player.toml"));
-        return interval_player::run(&root, &scenario, person);
+        let scenario = scenario.unwrap_or_else(|| {
+            root.join(if interval_campaign {
+                "content/scenarios/economy-succession.toml"
+            } else {
+                "content/scenarios/economy-core-player.toml"
+            })
+        });
+        return interval_player::run(&root, &scenario, interval_person);
     }
     let scenario = scenario.unwrap_or_else(|| {
         root.join(if player_mode {

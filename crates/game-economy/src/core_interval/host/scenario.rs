@@ -11,9 +11,6 @@ impl CoreHostSnapshot {
             return Err("interval scenario import requires a fresh world".into());
         }
         let mut unsupported = Vec::new();
-        if state.campaign.is_some() {
-            unsupported.push("campaign");
-        }
         if state
             .dynamics
             .as_ref()
@@ -32,6 +29,16 @@ impl CoreHostSnapshot {
             .take()
             .map(|owner| {
                 game_economy_expeditions::elapsed::Expeditions::from_fresh(
+                    owner,
+                    state.physical.tick_millis,
+                )
+            })
+            .transpose()?;
+        let campaign = state
+            .campaign
+            .take()
+            .map(|owner| {
+                game_economy_campaign::elapsed::ElapsedCampaign::from_fresh(
                     owner,
                     state.physical.tick_millis,
                 )
@@ -93,8 +100,11 @@ impl CoreHostSnapshot {
         Ok(Self {
             mechanics: None,
             expeditions,
-            personal_conflict: (conflict.tactical.is_some() || conflict.confinement.is_some())
-                .then_some(conflict),
+            personal_conflict: (conflict.tactical.is_some()
+                || conflict.confinement.is_some()
+                || campaign.as_ref().is_some_and(|owner| owner.costs.is_some()))
+            .then_some(conflict),
+            campaign,
             core: CoreSnapshot {
                 seed: state.seed,
                 physical: state.physical,

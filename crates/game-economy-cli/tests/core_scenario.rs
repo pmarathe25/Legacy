@@ -1367,6 +1367,125 @@ guard_policies = [{ person = 3, site = 1, willing = true, oppose_opening = true 
 }
 
 #[test]
+fn elapsed_lineage_uses_actual_births_and_warns_before_past_life_costs() {
+    use game_economy::core_interval::{CoreHost, CoreRunEvent};
+
+    let root = root();
+    let template =
+        std::fs::read_to_string(root.join("content/scenarios/economy-core-succession.toml"))
+            .unwrap();
+    let mut source = template
+        .split_once("[care]")
+        .unwrap()
+        .0
+        .replace(
+            "tick_millis = 3600000",
+            "tick_millis = 1000\ndecision_period_millis = 50\ninvocation_period_millis = 80",
+        )
+        .replacen("age = 18", "age = 51", 1)
+        .replace("father = 1, due = 1", "father = 1, due = 3");
+    source.push_str(
+        r#"
+[family.elapsed_lifetimes]
+unit_millis = 100
+elapsed_gestation = true
+
+[campaign.lineage]
+current = 1
+started = 0
+
+[campaign.lineage.invocation]
+owner = 1
+
+[campaign.lineage.invocation.rules]
+rate_per_life = 2
+recovery_per_tick = 1
+strain_threshold = 2
+loss_threshold = 99
+strain_consent_ticks = 2
+control_loss_ticks = 3
+strain_damage_per_tick = 1
+"#,
+    );
+    let path =
+        std::env::temp_dir().join(format!("legacy-core-lineage-{}.toml", std::process::id()));
+    std::fs::write(&path, source).unwrap();
+    let loaded = game_economy_cli::core_scenario(&path, &root.join("content"));
+    std::fs::remove_file(path).unwrap();
+    let opening = loaded.unwrap().snapshot();
+    let run = |workers, time: &[u64]| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut host = CoreHost::resume(opening.clone()).unwrap();
+                assert_eq!(host.campaign_view().unwrap().controlled, Some(1));
+                let mut events = Vec::new();
+                for &step in time {
+                    let run = host.advance_continuous(step, &[]).unwrap();
+                    assert_eq!(run.failure, None);
+                    for event in run.events {
+                        if let CoreRunEvent::Campaign(changes) = event {
+                            events.extend(
+                                changes
+                                    .into_iter()
+                                    .map(|event| (event.person, event.at_millis)),
+                            );
+                        }
+                    }
+                    host = CoreHost::resume(
+                        serde_json::from_str(&serde_json::to_string(&host.snapshot()).unwrap())
+                            .unwrap(),
+                    )
+                    .unwrap();
+                }
+                assert_eq!(events, [(1, 100), (3, 300)]);
+                let view = host.campaign_view().unwrap();
+                assert_eq!(view.controlled, Some(3));
+                assert_eq!(view.past_lives[0].person, 1);
+                assert_eq!(view.past_lives[0].ended, 100);
+                assert!(host.player_view(3).unwrap().possessions.is_empty());
+                host.snapshot()
+            })
+    };
+    let whole = run(1, &[350]);
+    assert_eq!(whole, run(4, &[99, 1, 199, 1, 50]));
+    let mut host = CoreHost::resume(whole).unwrap();
+    host.activate_past_lives(3, &[1]).unwrap();
+    let opening_health = host.player_view(3).unwrap().person.health;
+    let due = host.advance_continuous(500, &[]).unwrap();
+    assert_eq!(due.elapsed_millis, 80);
+    assert_eq!(
+        due.failure.as_deref(),
+        Some("invocation warning needs a choice")
+    );
+    assert_eq!(host.player_view(3).unwrap().person.health, opening_health);
+    let warning = host.campaign_view().unwrap().warning.unwrap();
+    let mut host = CoreHost::resume(
+        serde_json::from_str(&serde_json::to_string(&host.snapshot()).unwrap()).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(host.campaign_view().unwrap().warning, Some(warning.clone()));
+    host.accept_past_life_warning(3, warning.revision).unwrap();
+    let accepted = host.advance_continuous(1, &[]).unwrap();
+    assert_eq!(accepted.failure, None);
+    assert!(accepted.events.iter().any(|event| matches!(
+        event,
+        CoreRunEvent::InvocationCost {
+            at_millis: 430,
+            person: 3,
+            damage: 1,
+            ..
+        }
+    )));
+    assert_eq!(
+        host.player_view(3).unwrap().person.health,
+        opening_health - 1
+    );
+}
+
+#[test]
 fn tactical_rounds_share_health_and_allow_individual_responses_at_exact_times() {
     use game_economy::core_interval::{CoreHost, CoreRunEvent, TacticalChoice, TacticalEventKind};
 

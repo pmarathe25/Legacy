@@ -1,4 +1,5 @@
 //! Ruler continuity and guardians over the same personal and physical world.
+pub mod elapsed;
 pub mod embodied;
 use game_economy_person::{Person, travel::Travel};
 use game_families::Families;

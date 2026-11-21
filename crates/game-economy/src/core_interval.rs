@@ -23,6 +23,7 @@ pub use game_economy_combat::Point as TacticalPoint;
 pub use game_economy_combat::elapsed::{
     Choice as TacticalChoice, Event as TacticalEvent, EventKind as TacticalEventKind,
 };
+pub use host::CoreCampaignView;
 pub use host::CoreTacticalResult;
 pub use host::{
     BarrierAction, CoreAssistRecord, CoreAssistSession, CoreChoiceEvent, CoreChoiceIntent,
@@ -148,6 +149,7 @@ pub struct CoreDeadline {
     pub expedition: bool,
     pub tactical: bool,
     pub wounds: bool,
+    pub invocation: bool,
 }
 /// Travelers published at a partial-interval offset.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -467,6 +469,7 @@ impl CoreInterval {
             expedition: false,
             tactical: false,
             wounds: false,
+            invocation: false,
             food_health: food_health == Some(after),
         })
     }

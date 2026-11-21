@@ -40,6 +40,9 @@ struct Scenario {
     /// Elapsed time between tactical rounds.
     #[serde(default)]
     combat_round_millis: Option<u64>,
+    /// Elapsed time represented by a past-life cost interval.
+    #[serde(default)]
+    invocation_period_millis: Option<u64>,
     #[serde(default)]
     on_site_meals: bool,
     stock_capacity: u64,
@@ -1034,6 +1037,7 @@ pub fn core_scenario_with_options(
     let signals = authored.signals;
     let decision_period_millis = authored.decision_period_millis;
     let combat_round_millis = authored.combat_round_millis;
+    let invocation_period_millis = authored.invocation_period_millis;
     let on_site_meals = authored.on_site_meals;
     let fatigue_rate_period_millis = authored.fatigue_rate_period_millis;
     let elapsed_fatigue = authored.elapsed_fatigue;
@@ -1104,6 +1108,17 @@ pub fn core_scenario_with_options(
             .and_then(|owner| owner.tactical.as_mut())
             .ok_or("combat round duration requires a tactical owner")?
             .round_millis = period;
+    }
+    if let Some(period) = invocation_period_millis {
+        let clock = snapshot
+            .campaign
+            .as_mut()
+            .and_then(|owner| owner.costs.as_mut())
+            .ok_or("invocation duration requires a campaign cost clock")?;
+        if clock.next_millis.is_some() {
+            clock.next_millis = Some(period);
+        }
+        clock.period_millis = period;
     }
     if let Some(config) = work_capabilities {
         let mut requirements = config
@@ -1516,6 +1531,9 @@ fn scenario_with_options_inner(
     }
     if scenario.combat_round_millis.is_some() && !interval_features {
         return Err("elapsed combat rounds require the interval simulation host".into());
+    }
+    if scenario.invocation_period_millis.is_some() && !interval_features {
+        return Err("elapsed invocation costs require the interval simulation host".into());
     }
     if scenario.on_site_meals && !interval_features {
         return Err("on-site meals require the interval simulation host".into());

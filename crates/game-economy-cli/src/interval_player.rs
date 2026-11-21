@@ -11,6 +11,26 @@ fn numbers<T: std::str::FromStr>(text: &str) -> Result<Vec<T>, String> {
         .collect()
 }
 
+fn save(host: &CoreHost, path: &[&str]) -> Result<(), String> {
+    let path = path.join(" ");
+    let file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path.trim_matches('"'))
+        .map_err(|error| error.to_string())?;
+    serde_json::to_writer(file, &host.snapshot()).map_err(|error| error.to_string())?;
+    println!("saved");
+    Ok(())
+}
+
+fn load(path: &[&str]) -> Result<CoreHost, String> {
+    let path = path.join(" ");
+    let file = File::open(path.trim_matches('"')).map_err(|error| error.to_string())?;
+    let snapshot: CoreHostSnapshot =
+        serde_json::from_reader(file).map_err(|error| error.to_string())?;
+    CoreHost::resume(snapshot)
+}
+
 fn command(host: &mut CoreHost, person: u64, words: &[&str]) -> Result<bool, String> {
     match words {
         [] => {}
@@ -320,21 +340,10 @@ fn command(host: &mut CoreHost, person: u64, words: &[&str]) -> Result<bool, Str
         }
         ["save", path @ ..] if !path.is_empty() => {
             host.controlled_person(person)?;
-            let path = path.join(" ");
-            let file = OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(path.trim_matches('"'))
-                .map_err(|error| error.to_string())?;
-            serde_json::to_writer(file, &host.snapshot()).map_err(|error| error.to_string())?;
-            println!("saved");
+            save(host, path)?;
         }
         ["load", path @ ..] if !path.is_empty() => {
-            let path = path.join(" ");
-            let file = File::open(path.trim_matches('"')).map_err(|error| error.to_string())?;
-            let snapshot: CoreHostSnapshot =
-                serde_json::from_reader(file).map_err(|error| error.to_string())?;
-            let loaded = CoreHost::resume(snapshot)?;
+            let loaded = load(path)?;
             loaded.controlled_person(person)?;
             *host = loaded;
             println!("loaded");
@@ -344,9 +353,94 @@ fn command(host: &mut CoreHost, person: u64, words: &[&str]) -> Result<bool, Str
     Ok(true)
 }
 
-pub fn run(root: &Path, scenario: &Path, person: u64) -> Result<(), String> {
+fn campaign_command(host: &mut CoreHost, words: &[&str]) -> Result<bool, String> {
+    let view = host
+        .campaign_view()
+        .ok_or("this scenario has no interval campaign")?;
+    let controlled = || {
+        view.controlled
+            .ok_or("no incarnation currently available for direct action")
+    };
+    match words {
+        [] => {}
+        ["quit" | "exit"] => return Ok(false),
+        ["campaign"] | ["look"] if view.controlled.is_none() || words[0] == "campaign" => {
+            println!(
+                "incarnation={:?} controlled={:?}",
+                view.current, view.controlled
+            );
+            for life in &view.past_lives {
+                println!(
+                    "past_life={} started={} ended={}",
+                    life.person, life.started, life.ended
+                );
+            }
+            for guardian in &view.guardians {
+                println!(
+                    "guardian={} student={:?} mentorship_millis={} released={}",
+                    guardian.person, guardian.student, guardian.observed_millis, guardian.released
+                );
+            }
+            if let Some(warning) = view.warning {
+                println!(
+                    "invocation_warning={:?} revision={} projected_burden={}",
+                    warning.kind, warning.revision, warning.projected_burden
+                );
+            }
+        }
+        ["wait", duration] => {
+            let duration = duration.parse().map_err(|_| "invalid duration")?;
+            let run = host.advance_continuous(duration, &[])?;
+            println!(
+                "elapsed_millis={} boundaries={}",
+                run.elapsed_millis, run.boundaries
+            );
+            if let Some(error) = run.failure {
+                return Err(error);
+            }
+        }
+        ["invoke", lives] => host.activate_past_lives(controlled()?, &numbers(lives)?)?,
+        ["dismiss"] => host.dismiss_past_lives(controlled()?)?,
+        ["accept-cost", revision] => {
+            let revision = revision.parse().map_err(|_| "invalid warning revision")?;
+            host.accept_past_life_warning(controlled()?, revision)?;
+        }
+        ["release-mentor", guardian] => {
+            let guardian = guardian.parse().map_err(|_| "invalid guardian")?;
+            println!(
+                "mentorship_released={}",
+                host.ask_guardian_release(controlled()?, guardian)?
+                    .is_some()
+            );
+        }
+        ["save", path @ ..] if !path.is_empty() => save(host, path)?,
+        ["load", path @ ..] if !path.is_empty() => {
+            let loaded = load(path)?;
+            loaded.campaign_view().ok_or("save has no campaign")?;
+            *host = loaded;
+            println!("loaded");
+        }
+        ["help"] => {
+            println!(
+                "campaign | invoke PAST_LIVES | dismiss | accept-cost REVISION | release-mentor GUARDIAN"
+            );
+            if let Some(person) = view.controlled {
+                return command(host, person, words);
+            }
+        }
+        _ => return command(host, controlled()?, words),
+    }
+    Ok(true)
+}
+
+pub fn run(root: &Path, scenario: &Path, person: Option<u64>) -> Result<(), String> {
     let mut host = game_economy_cli::core_scenario(scenario, &root.join("content"))?;
-    host.controlled_person(person)?;
+    if let Some(person) = person {
+        host.controlled_person(person)?;
+    } else {
+        host.campaign_view()
+            .ok_or("this scenario has no interval campaign")?;
+    }
     println!("Interval player; enter help for commands.");
     let stdin = io::stdin();
     let interactive = stdin.is_terminal();
@@ -359,7 +453,12 @@ pub fn run(root: &Path, scenario: &Path, person: u64) -> Result<(), String> {
         let Some(line) = lines.next() else { break };
         let line = line.map_err(|error| error.to_string())?;
         let words: Vec<_> = line.split_whitespace().collect();
-        match command(&mut host, person, &words) {
+        let result = if let Some(person) = person {
+            command(&mut host, person, &words)
+        } else {
+            campaign_command(&mut host, &words)
+        };
+        match result {
             Ok(true) => {}
             Ok(false) => break,
             Err(error) => eprintln!("{error}"),

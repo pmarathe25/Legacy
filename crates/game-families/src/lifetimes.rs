@@ -167,6 +167,34 @@ impl ElapsedLifetimes {
         &self.deadlines[start..end]
     }
 
+    pub(super) fn shorten(
+        &mut self,
+        person: u64,
+        duration: u64,
+        now: u128,
+    ) -> Result<bool, &'static str> {
+        let &old = self
+            .by_person
+            .get(&person)
+            .ok_or("unknown natural mortality deadline")?;
+        let revised = old
+            .saturating_sub(u128::from(duration) * u128::from(self.unit_millis))
+            .max(now);
+        if revised != old {
+            let rows = Arc::make_mut(&mut self.deadlines);
+            let old_index = rows
+                .binary_search(&(old, person))
+                .map_err(|_| "missing natural mortality deadline")?;
+            rows.remove(old_index);
+            let new_index = rows
+                .binary_search(&(revised, person))
+                .expect_err("distinct mortality deadline");
+            rows.insert(new_index, (revised, person));
+            Arc::make_mut(&mut self.by_person).insert(person, revised);
+        }
+        Ok(revised == now)
+    }
+
     pub(super) fn enroll(
         &mut self,
         rules: &FamilyRules,

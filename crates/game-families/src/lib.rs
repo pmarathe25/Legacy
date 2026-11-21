@@ -102,6 +102,32 @@ impl<'a> BirthBatch<'a> {
 }
 use game_family_index::{MemberIndex, PhysicalIndex};
 impl Families {
+    /// Apply an accepted personal lifespan cost and report a newly due death.
+    pub fn reduce_lifespan(
+        &mut self,
+        person: u64,
+        loss: u64,
+        now: u128,
+    ) -> Result<bool, &'static str> {
+        let index = self
+            .members
+            .binary_search_by_key(&person, |row| row.id)
+            .map_err(|_| "unknown lifespan owner")?;
+        let member = &mut self.members[index];
+        let next = member
+            .lifespan_loss
+            .checked_add(loss)
+            .ok_or("lifespan loss overflow")?;
+        if let Some(clock) = &mut self.elapsed_lifetimes
+            && member.alive
+        {
+            let expired = clock.shorten(person, loss, now)?;
+            member.lifespan_loss = next;
+            return Ok(expired);
+        }
+        member.lifespan_loss = next;
+        Ok(member.alive && member.age >= lifetimes::lifespan(&self.rules, member))
+    }
     /// Convert authored pregnancy times at the scenario epoch and validate saved deadlines.
     pub fn initialize_elapsed_gestation(&mut self, now: u128) -> Result<(), &'static str> {
         let timed = self
