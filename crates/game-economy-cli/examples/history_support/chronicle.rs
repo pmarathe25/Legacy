@@ -77,6 +77,7 @@ struct RecipeTransmission {
 pub(super) struct Chronicle {
     recipes: BTreeMap<u64, String>,
     lexicon: super::lexicon::LexiconHistory,
+    coordination: super::coordination::History,
     recipe_learning: BTreeMap<u64, RecipeTransmission>,
     crews: BTreeMap<u64, CrewParticipation>,
     counts: BTreeMap<&'static str, u64>,
@@ -138,6 +139,7 @@ impl Chronicle {
         }
         let mut suppliers: BTreeMap<u64, Vec<u64>> = BTreeMap::new();
         for &pair in now_active.keys() {
+            self.coordination.observe(pair.1, pair.0, year, super::coordination::Evidence::Delivery);
             if let Some(&earlier) = self.active_ties.get(&pair)
                 && earlier.checked_add(1) == Some(year)
             {
@@ -190,6 +192,7 @@ impl Chronicle {
                     continue;
                 };
                 self.crews.entry(lead).or_default().record(year, helper);
+                self.coordination.observe(lead, helper, year, super::coordination::Evidence::Crew);
                 self.record(
                     event,
                     row,
@@ -432,6 +435,7 @@ impl Chronicle {
         json!({
             "shared_crews": crews.iter().map(|&(&lead, crew)| crew.summary(lead)).collect::<Vec<_>>(),
             "counts": self.counts,
+            "coordination_patterns": self.coordination.summary(),
             "recent_mechanical_findings": self.mechanical_findings,
             "lexicon": self.lexicon.summary(),
             "recipe_transmission": transmissions.iter().map(|&(&id, learning)| json!({
@@ -634,6 +638,15 @@ fn classify(kind: &str, row: &Value) -> Option<Receipt> {
 }
 
 pub(super) fn write_world(text: &mut String, chronicle: &Value) {
+    if let Some(patterns) = chronicle["coordination_patterns"].as_array().filter(|rows| !rows.is_empty()) {
+        text.push_str("## Recurring cooperation\n\n");
+        for row in patterns {
+            writeln!(text, "- Person {} received deliveries or was joined by helpers in {} recorded years, spanning years {} through {}. Their largest recorded group in one year was {} people in year {}. The evidence includes {} choices to join their work and {} annual delivery relationships.",
+                row["person"], row["active_years"], row["first_year"], row["latest_year"], row["peak_collaborators"],
+                row["peak_year"], row["crew_choices"], row["annual_delivery_ties"]).unwrap();
+        }
+        text.push('\n');
+    }
     if let Some(findings) = chronicle["recent_mechanical_findings"].as_array().filter(|rows| !rows.is_empty()) {
         text.push_str("## Recent mechanical findings\n\n");
         for row in findings {

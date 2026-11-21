@@ -6,6 +6,8 @@ use std::io::{BufRead, BufReader};
 use std::path::Path;
 #[path = "history_support/chronicle.rs"]
 mod chronicle;
+#[path = "history_support/coordination.rs"]
+mod coordination;
 #[path = "history_support/cultivars.rs"]
 mod cultivars;
 #[path = "history_support/lexicon.rs"]
