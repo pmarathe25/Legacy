@@ -139,6 +139,7 @@ impl CoreSettlementDraft {
 pub struct CoreDeadline {
     pub after_millis: u64,
     pub quantum: bool,
+    pub expiry: bool,
     pub work: bool,
     pub arrival: bool,
     pub hunger: bool,
@@ -245,6 +246,12 @@ impl CoreInterval {
             boundary_millis.unwrap_or(u128::from(physical.tick()) * u128::from(quantum));
         if boundary_millis.checked_add(u128::from(quantum)).is_none() {
             return Err("simulation time overflow".into());
+        }
+        if let Some(expiry_time) = physical.elapsed_expiry_time() {
+            let elapsed = physical.work_interval().map_or(0, |row| row.elapsed_millis);
+            if u128::from(expiry_time) != boundary_millis + u128::from(elapsed) {
+                return Err("custody clock does not match elapsed world time".into());
+            }
         }
         let hunger_period = rules.hunger_rate.map_or(quantum, |rate| rate.per_millis);
         if people.par_windows(2).any(|p| p[0].id >= p[1].id)
@@ -438,6 +445,7 @@ impl CoreInterval {
         .map_err(str::to_owned)?;
         let nutrition = self.next_metabolism().map(u128::from);
         let food_health = self.next_food_health();
+        let expiry = self.physical.next_expiry_after().map(u128::from);
         let after = [
             Some(u128::from(remaining)),
             work,
@@ -447,6 +455,7 @@ impl CoreInterval {
             recovery,
             nutrition,
             food_health,
+            expiry,
         ]
         .into_iter()
         .flatten()
@@ -455,6 +464,7 @@ impl CoreInterval {
         Ok(CoreDeadline {
             after_millis: after as u64,
             quantum: after == u128::from(remaining),
+            expiry: expiry == Some(after),
             work: work == Some(after),
             arrival: arrival == Some(after),
             hunger: hunger == Some(after),
@@ -1082,6 +1092,7 @@ impl CoreInterval {
             deadlines.recovery,
             self.next_metabolism().map(u128::from),
             self.next_food_health(),
+            self.physical.next_expiry_after().map(u128::from),
         ]
         .into_iter()
         .flatten()

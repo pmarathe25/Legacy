@@ -73,6 +73,7 @@ pub fn prepare<T: Borrow<Transaction> + Sync>(
     } else {
         state.tick
     };
+    let instant = state.expiry_millis.unwrap_or(next);
     state
         .revision
         .checked_add(1)
@@ -118,16 +119,18 @@ pub fn prepare<T: Borrow<Transaction> + Sync>(
     let mut spoiled: Vec<_> = state
         .containers
         .par_iter()
-        .filter(|container| container.next_expiry.is_some_and(|at| at <= next))
+        .filter(|container| container.next_expiry.is_some_and(|at| at <= instant))
         .flat_map_iter(|container| {
             container.lots.iter().filter_map(move |lot| {
-                lot.expires_at.filter(|&at| at <= next).map(|at| Spoilage {
-                    place: container.place,
-                    good: lot.good,
-                    quantity: lot.quantity,
-                    expires_at: at,
-                    batch: lot.batch,
-                })
+                lot.expires_at
+                    .filter(|&at| at <= instant)
+                    .map(|at| Spoilage {
+                        place: container.place,
+                        good: lot.good,
+                        quantity: lot.quantity,
+                        expires_at: at,
+                        batch: lot.batch,
+                    })
             })
         })
         .collect();
@@ -140,7 +143,7 @@ pub fn prepare<T: Borrow<Transaction> + Sync>(
                 .lots
                 .iter()
                 .filter(|lot| {
-                    lot.good == row.movement.good && lot.expires_at.is_none_or(|at| at > next)
+                    lot.good == row.movement.good && lot.expires_at.is_none_or(|at| at > instant)
                 })
                 .map(|lot| lot.quantity)
                 .sum();
@@ -152,7 +155,7 @@ pub fn prepare<T: Borrow<Transaction> + Sync>(
                     .iter()
                     .filter_map(|lot| {
                         if lot.good != row.movement.good
-                            || lot.expires_at.is_some_and(|at| at <= next)
+                            || lot.expires_at.is_some_and(|at| at <= instant)
                         {
                             return None;
                         }
@@ -168,13 +171,13 @@ pub fn prepare<T: Borrow<Transaction> + Sync>(
             } else {
                 Default::default()
             };
-            let changed = accepted || container.next_expiry.is_some_and(|at| at <= next);
+            let changed = accepted || container.next_expiry.is_some_and(|at| at <= instant);
             let change = changed.then(|| {
                 (
                     row.source,
                     after(
                         container,
-                        next,
+                        instant,
                         row.movement.good,
                         if accepted { row.movement.quantity } else { 0 },
                     ),
@@ -204,9 +207,9 @@ pub fn prepare<T: Borrow<Transaction> + Sync>(
             .par_iter()
             .enumerate()
             .filter_map(|(index, container)| {
-                (container.next_expiry.is_some_and(|at| at <= next)
+                (container.next_expiry.is_some_and(|at| at <= instant)
                     && rows.binary_search_by_key(&index, |row| row.source).is_err())
-                .then(|| (index, after(container, next, 0, 0)))
+                .then(|| (index, after(container, instant, 0, 0)))
             }),
     );
     if changes.par_windows(2).any(|pair| pair[0].0 > pair[1].0) {
@@ -291,6 +294,7 @@ mod tests {
         );
         let state = State {
             next_batch: None,
+            expiry_millis: None,
             tick: 0,
             revision: 0,
             containers,

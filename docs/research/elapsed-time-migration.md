@@ -91,6 +91,14 @@ When using a seasonal calendar with a wildlife clock, configure
 `season_unit_millis` to give climate an independent elapsed cadence as well.
 The integrated history scenario defines both clocks. The report retains exact
 birth and death times from the wildlife owner.
+Set `elapsed_spoilage = true` to date newly created physical lots in elapsed
+milliseconds. Preparation, travel, or storage transfer retains an existing lot\'s
+deadline. Spoilage wakes from an index of active deadlines and removes the due
+lots before work or consumption at the same instant, including when a deadline
+coincides with settlement. Prepared work dates fresh output on completion.
+Older saves without an elapsed custody clock retain their archived boundary
+dates.
+
 An elapsed environment can set `exposure_period_millis` to schedule personal
 hazard damage and shelter rotation at fixed simulated times. The host uses
 the season just before each exposure event and applies it before new choices

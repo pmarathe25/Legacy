@@ -54,6 +54,7 @@ fn runtime(capacity: u64, stock: u64) -> Runtime {
     Runtime::compile(Snapshot {
         custody: State {
             next_batch: None,
+            expiry_millis: None,
             tick: 0,
             revision: 0,
             containers: vec![

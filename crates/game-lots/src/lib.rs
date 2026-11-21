@@ -30,6 +30,21 @@ pub struct Store {
     item_places: Vec<Place>,
     expiry: expiry::ExpiryIndex,
 }
+/// An elapsed advance can update just the clock or also remove due lots.
+pub struct ExpiryDraft {
+    instance: u64,
+    revision: u64,
+    before: u64,
+    at: u64,
+    custody: Option<Draft>,
+}
+
+impl ExpiryDraft {
+    pub fn spoiled(&self) -> &[Spoilage] {
+        self.custody.as_ref().map_or(&[], Draft::spoiled)
+    }
+}
+
 /// Tentative new custody is removed automatically unless its boundary commits.
 pub struct Stage<'a> {
     store: &'a mut Store,
@@ -73,6 +88,7 @@ impl Drop for Stage<'_> {
 /// An unpublished snapshot; its physical changes cannot be altered by callers.
 pub struct Draft {
     inner: game_lot_planning::Draft,
+    base_elapsed_millis: Option<u64>,
     additions: Vec<Container>,
     retire: Vec<Place>,
     item_updates: Vec<(u64, Option<Place>)>,
@@ -119,13 +135,13 @@ impl Draft {
 impl Store {
     /// Validate a saved state once; subsequent mutations go through staged drafts.
     pub fn compile(state: State) -> Result<Self, String> {
+        let now = state.expiry_millis.unwrap_or(state.tick);
         if state
             .containers
             .par_windows(2)
             .any(|pair| pair[0].place >= pair[1].place)
             || state.containers.par_iter().any(|container| {
-                container.validate().is_err()
-                    || container.next_expiry.is_some_and(|at| at <= state.tick)
+                container.validate().is_err() || container.next_expiry.is_some_and(|at| at <= now)
             })
         {
             return Err("invalid lot state".into());
@@ -165,6 +181,11 @@ impl Store {
             item_places,
             expiry,
         })
+    }
+    /// Load custody whose expiration dates are expressed as absolute milliseconds.
+    pub fn compile_elapsed(mut state: State, elapsed_millis: u64) -> Result<Self, String> {
+        state.expiry_millis = Some(elapsed_millis);
+        Self::compile(state)
     }
     /// Stage new empty custody with the same commit/rollback boundary as actions.
     pub fn stage(&mut self, containers: Vec<Container>) -> Result<Stage<'_>, String> {
@@ -250,16 +271,117 @@ impl Store {
     }
     /// Build one immutable aggregate view for decision owners at this or the next boundary.
     pub fn view(&self, boundary: u64) -> Result<View, String> {
-        view::prepare(&self.state, boundary)
+        view::prepare(
+            &self.state,
+            boundary,
+            self.state.expiry_millis.unwrap_or(boundary),
+        )
     }
     /// Read only regional stock without materializing personal or job custody.
     pub fn stock_view(&self, boundary: u64) -> Result<View, String> {
-        view::prepare_stocks(&self.state, boundary)
+        view::prepare_stocks(
+            &self.state,
+            boundary,
+            self.state.expiry_millis.unwrap_or(boundary),
+        )
     }
     /// Earliest pending expiry in the custody clock, rebuilt when a save loads.
     pub fn next_expiry(&self) -> Option<u64> {
         self.expiry.next()
     }
+    pub fn elapsed_millis(&self) -> Option<u64> {
+        self.state.expiry_millis
+    }
+
+    /// Prepare one elapsed segment ending at or before the earliest pending expiry.
+    pub fn prepare_expiry_at(&self, at: u64) -> Result<ExpiryDraft, String> {
+        let before = self
+            .state
+            .expiry_millis
+            .ok_or("custody uses boundary expiry")?;
+        if before > at || self.expiry.next().is_some_and(|due| due < at) {
+            return Err("elapsed custody must reach each expiry in order".into());
+        }
+        let custody = if self.expiry.next() == Some(at) {
+            let time = game_lot_planning::TransactionTime {
+                at,
+                next_tick: self.state.tick,
+            };
+            let planned = self.expiry.prepare(&self.state, self.instance, time)?;
+            Some(self.item_draft(planned, Vec::new(), false)?)
+        } else {
+            None
+        };
+        Ok(ExpiryDraft {
+            instance: self.instance,
+            revision: self.state.revision,
+            before,
+            at,
+            custody,
+        })
+    }
+
+    /// Stage other custody effects from the same elapsed event atomically.
+    pub fn stage_expiry_custody(
+        &self,
+        draft: &mut ExpiryDraft,
+        people: Vec<Container>,
+        batches: Option<BatchAllocation>,
+    ) -> Result<(), String> {
+        self.validate_expiry_at(draft)?;
+        if people.is_empty() && batches.is_none() {
+            return Ok(());
+        }
+        if draft.custody.is_none() {
+            draft.custody = Some(self.prepare_idle(false)?);
+        }
+        let custody = draft.custody.as_mut().expect("prepared expiry custody");
+        self.add_empty_in(custody, people)?;
+        if let Some(batches) = batches {
+            self.attach_batch_allocation(custody, batches)?;
+        }
+        Ok(())
+    }
+
+    pub fn validate_expiry_at(&self, draft: &ExpiryDraft) -> Result<(), String> {
+        if self.instance != draft.instance
+            || self.state.revision != draft.revision
+            || self.state.expiry_millis != Some(draft.before)
+        {
+            return Err("stale elapsed custody draft".into());
+        }
+        if let Some(custody) = &draft.custody {
+            self.validate_commit(custody)?;
+        }
+        Ok(())
+    }
+
+    pub fn commit_expiry_at(&mut self, draft: ExpiryDraft) -> Result<Vec<Spoilage>, String> {
+        self.validate_expiry_at(&draft)?;
+        let spoiled = if let Some(custody) = draft.custody {
+            self.commit(custody)?.1
+        } else {
+            Vec::new()
+        };
+        self.state.expiry_millis = Some(draft.at);
+        Ok(spoiled)
+    }
+
+    fn transaction_time(
+        &self,
+        advance: bool,
+    ) -> Result<game_lot_planning::TransactionTime, String> {
+        let tick = self
+            .state
+            .tick
+            .checked_add(u64::from(advance))
+            .ok_or("lot tick overflow")?;
+        Ok(game_lot_planning::TransactionTime {
+            at: self.state.expiry_millis.unwrap_or(tick),
+            next_tick: tick,
+        })
+    }
+
     pub fn tick(&self) -> u64 {
         self.state.tick
     }
@@ -538,6 +660,7 @@ impl Store {
         }
         Ok(Draft {
             inner,
+            base_elapsed_millis: self.state.expiry_millis,
             additions,
             retire: Vec::new(),
             item_updates,
@@ -639,28 +762,41 @@ impl Store {
                 })))
     }
     pub fn prepare(&self, seed: u64, moves: &[Movement]) -> Result<Draft, String> {
-        if moves.is_empty() {
-            return self.prepare_idle(true);
-        }
-        let inner =
-            game_lot_planning::prepare(&self.state, self.instance, seed, moves, &[], None, true)?;
-        let touches = !self.item_places.is_empty()
-            && moves.par_iter().any(|movement| self.touches_item(movement));
-        self.item_draft(inner, Vec::new(), touches)
+        self.prepare_movements(seed, moves, true)
     }
-    /// Stage immediate actions without advancing simulation time or refreshing goods.
+
     pub fn prepare_now(&self, seed: u64, moves: &[Movement]) -> Result<Draft, String> {
+        self.prepare_movements(seed, moves, false)
+    }
+
+    fn prepare_movements(
+        &self,
+        seed: u64,
+        moves: &[Movement],
+        advance: bool,
+    ) -> Result<Draft, String> {
         if moves.is_empty() {
-            return self.prepare_idle(false);
+            return self.prepare_idle(advance);
         }
-        let inner =
-            game_lot_planning::prepare(&self.state, self.instance, seed, moves, &[], None, false)?;
+        let time = self.transaction_time(advance)?;
+        let inner = game_lot_planning::prepare_at(
+            &self.state,
+            self.instance,
+            seed,
+            moves,
+            &[],
+            None,
+            time,
+        )?;
         let touches = !self.item_places.is_empty()
             && moves.par_iter().any(|movement| self.touches_item(movement));
         self.item_draft(inner, Vec::new(), touches)
     }
+
     fn prepare_idle(&self, advance: bool) -> Result<Draft, String> {
-        let inner = self.expiry.idle(&self.state, self.instance, advance)?;
+        let inner =
+            self.expiry
+                .prepare(&self.state, self.instance, self.transaction_time(advance)?)?;
         self.item_draft(inner, Vec::new(), false)
     }
     /// Stage all legs of each physical action together. Contention is resolved
@@ -888,6 +1024,7 @@ impl Store {
         )?
         .map(|inner| Draft {
             inner,
+            base_elapsed_millis: self.state.expiry_millis,
             additions: Vec::new(),
             retire: Vec::new(),
             item_updates: Vec::new(),
@@ -919,6 +1056,7 @@ impl Store {
         )?
         .map(|inner| Draft {
             inner,
+            base_elapsed_millis: self.state.expiry_millis,
             additions: Vec::new(),
             retire: Vec::new(),
             item_updates: Vec::new(),
@@ -951,6 +1089,7 @@ impl Store {
         )?
         .map(|(inner, additions)| Draft {
             inner,
+            base_elapsed_millis: self.state.expiry_millis,
             additions,
             retire: Vec::new(),
             item_updates: Vec::new(),
@@ -963,6 +1102,7 @@ impl Store {
         if self.instance != inner.base_instance
             || self.state.tick != inner.base_tick
             || self.state.revision != inner.base_revision
+            || self.state.expiry_millis != draft.base_elapsed_millis
             || (inner.next_tick != self.state.tick
                 && self.state.tick.checked_add(1) != Some(inner.next_tick))
         {
@@ -1028,6 +1168,7 @@ impl Store {
         self.validate_commit(&draft)?;
         let Draft {
             inner: draft,
+            base_elapsed_millis: _,
             mut additions,
             retire,
             item_updates,

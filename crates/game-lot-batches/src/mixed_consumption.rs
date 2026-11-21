@@ -184,6 +184,7 @@ mod tests {
         containers.sort_unstable_by_key(|row| row.place);
         let state = State {
             next_batch: None,
+            expiry_millis: None,
             tick: 0,
             revision: 0,
             containers,

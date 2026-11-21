@@ -118,6 +118,13 @@ fn run_steps(
                 CoreRunEvent::Starts(rows) => {
                     ("work_started", rows.iter().filter(|row| row.1).count())
                 }
+                CoreRunEvent::Spoilage { at_millis, lots } => {
+                    write_line(
+                        &mut writer,
+                        &json!({"kind":"spoilage","step":step,"at_millis":at_millis,"lots":lots}),
+                    )?;
+                    ("spoilage_events", lots.len())
+                }
                 CoreRunEvent::Work(row) => ("work_finished", row.finished.len()),
                 CoreRunEvent::Meetings(rows) => ("meetings", rows.len()),
                 CoreRunEvent::LocalWalking { at_millis, events } => {

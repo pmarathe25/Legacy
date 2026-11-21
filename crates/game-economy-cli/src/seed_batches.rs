@@ -122,6 +122,7 @@ mod tests {
         };
         let mut state = State {
             next_batch: None,
+            expiry_millis: None,
             tick: 0,
             revision: 0,
             containers: vec![

@@ -43,11 +43,11 @@ pub fn prepare(
     {
         return Ok(None);
     }
-    if state
-        .containers
-        .par_iter()
-        .any(|container| container.next_expiry.is_some_and(|at| at <= state.tick))
-    {
+    if state.containers.par_iter().any(|container| {
+        container
+            .next_expiry
+            .is_some_and(|at| at <= state.expiry_millis.unwrap_or(state.tick))
+    }) {
         return Ok(None);
     }
     let mut ids: Vec<_> = transactions.par_iter().map(|row| row.id).collect();
@@ -171,7 +171,7 @@ pub fn prepare(
                         row.source,
                         independent_transfer::after(
                             source,
-                            state.tick,
+                            state.expiry_millis.unwrap_or(state.tick),
                             movement.good,
                             movement.quantity,
                             &[],
@@ -181,7 +181,7 @@ pub fn prepare(
                         row.destination,
                         independent_transfer::after(
                             destination,
-                            state.tick,
+                            state.expiry_millis.unwrap_or(state.tick),
                             0,
                             0,
                             std::slice::from_ref(&creation.lot),
@@ -325,6 +325,7 @@ mod tests {
         (
             State {
                 next_batch: None,
+                expiry_millis: None,
                 tick: 0,
                 revision: 0,
                 containers,

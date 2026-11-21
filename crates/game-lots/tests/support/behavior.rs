@@ -16,6 +16,7 @@ fn store(mut containers: Vec<Container>) -> Store {
     containers.sort_unstable_by_key(|row| row.place);
     Store::compile(State {
         next_batch: None,
+        expiry_millis: None,
         tick: 0,
         revision: 0,
         containers,
@@ -42,6 +43,7 @@ fn unpartitioned(
     .unwrap();
     crate::Draft {
         inner,
+        base_elapsed_millis: None,
         additions,
         retire: Vec::new(),
         item_updates: Vec::new(),
@@ -3731,6 +3733,7 @@ fn disjoint_transform_commit_matches_general_plan_and_rejects_stale_draft() {
     }
     let state = State {
         next_batch: None,
+        expiry_millis: None,
         tick: 0,
         revision: 0,
         containers,

@@ -42,6 +42,7 @@ pub fn prepare(
     } else {
         state.tick
     };
+    let instant = state.expiry_millis.unwrap_or(next);
     state
         .revision
         .checked_add(1)
@@ -134,7 +135,7 @@ pub fn prepare(
             let lots: Vec<_> = source
                 .lots
                 .iter()
-                .filter(|lot| lot.good == good && lot.expires_at.is_none_or(|at| at > next))
+                .filter(|lot| lot.good == good && lot.expires_at.is_none_or(|at| at > instant))
                 .collect();
             let available: u128 = lots.iter().map(|lot| u128::from(lot.quantity)).sum();
             let mut prefix = 0u128;
@@ -147,13 +148,13 @@ pub fn prepare(
             let mut changes = Vec::with_capacity(batch.len() + 1);
             for row in batch {
                 let destination = &state.containers[row.destination];
-                let used = if destination.next_expiry.is_none_or(|at| at > next) {
+                let used = if destination.next_expiry.is_none_or(|at| at > instant) {
                     destination.used
                 } else {
                     destination
                         .lots
                         .iter()
-                        .filter(|lot| lot.expires_at.is_none_or(|at| at > next))
+                        .filter(|lot| lot.expires_at.is_none_or(|at| at > instant))
                         .map(|lot| lot.quantity)
                         .sum()
                 };
@@ -187,15 +188,15 @@ pub fn prepare(
                     id: row.action,
                     accepted,
                 });
-                if accepted || destination.next_expiry.is_some_and(|at| at <= next) {
+                if accepted || destination.next_expiry.is_some_and(|at| at <= instant) {
                     changes.push((
                         row.destination,
-                        after(destination, next, 0, 0, &arena[begin..]),
+                        after(destination, instant, 0, 0, &arena[begin..]),
                     ));
                 }
             }
-            if consumed > 0 || source.next_expiry.is_some_and(|at| at <= next) {
-                changes.push((batch[0].source, after(source, next, good, consumed, &[])));
+            if consumed > 0 || source.next_expiry.is_some_and(|at| at <= instant) {
+                changes.push((batch[0].source, after(source, instant, good, consumed, &[])));
             }
             Partial {
                 chunk: OutcomeChunk {
@@ -215,16 +216,18 @@ pub fn prepare(
     let mut spoiled: Vec<_> = state
         .containers
         .par_iter()
-        .filter(|container| container.next_expiry.is_some_and(|at| at <= next))
+        .filter(|container| container.next_expiry.is_some_and(|at| at <= instant))
         .flat_map_iter(|container| {
             container.lots.iter().filter_map(move |lot| {
-                lot.expires_at.filter(|&at| at <= next).map(|at| Spoilage {
-                    place: container.place,
-                    good: lot.good,
-                    quantity: lot.quantity,
-                    expires_at: at,
-                    batch: lot.batch,
-                })
+                lot.expires_at
+                    .filter(|&at| at <= instant)
+                    .map(|at| Spoilage {
+                        place: container.place,
+                        good: lot.good,
+                        quantity: lot.quantity,
+                        expires_at: at,
+                        batch: lot.batch,
+                    })
             })
         })
         .collect();
@@ -240,10 +243,10 @@ pub fn prepare(
     if !spoiled.is_empty() {
         changes.par_extend(state.containers.par_iter().enumerate().filter_map(
             |(index, container)| {
-                (container.next_expiry.is_some_and(|at| at <= next)
+                (container.next_expiry.is_some_and(|at| at <= instant)
                     && sources.binary_search(&index).is_err()
                     && destinations.binary_search(&index).is_err())
-                .then(|| (index, after(container, next, 0, 0, &[])))
+                .then(|| (index, after(container, instant, 0, 0, &[])))
             },
         ));
     }

@@ -561,9 +561,13 @@ impl Runtime {
         }
         game_lot_work::validate_actions(&self.catalog, external)?;
         let next_tick = self.store.tick().checked_add(1).ok_or("tick overflow")?;
-        game_lot_content::validate_growth(&self.catalog, growth.harvest, next_tick)?;
-        let mut animal_yield =
-            game_lot_content::prepare_animal_yield(&self.catalog, growth.animal_yield, next_tick)?;
+        let lot_instant = self.lot_instant(next_tick);
+        game_lot_content::validate_growth(&self.catalog, growth.harvest, lot_instant)?;
+        let mut animal_yield = game_lot_content::prepare_animal_yield(
+            &self.catalog,
+            growth.animal_yield,
+            lot_instant,
+        )?;
         if !growth.animal_products.is_empty() {
             let animals: std::collections::HashSet<_> =
                 growth.animal_yield.par_iter().map(|y| y.animal).collect();
@@ -581,18 +585,18 @@ impl Runtime {
             animal_yield.extend(game_lot_content::prepare_animal_products(
                 &self.catalog,
                 growth.animal_products,
-                next_tick,
+                lot_instant,
             )?);
         }
         animal_yield.extend(game_lot_content::prepare_writing(
             &self.catalog,
             growth.writing,
-            next_tick,
+            lot_instant,
         )?);
         animal_yield.extend(game_lot_content::prepare_gathered(
             &self.catalog,
             growth.gathered,
-            next_tick,
+            lot_instant,
         )?);
         let direct_external = external;
         let combined = game_lot_content::combine_growth(external, growth.harvest, &animal_yield);
@@ -733,7 +737,7 @@ impl Runtime {
             .filter(|row| row.phase == Phase::Working && row.job.remaining == 0)
             .map(|row| (&row.job, work_custody(Place::JobInput(row.job.id))))
             .collect();
-        let mut finished = game_lot_work::finish(&finishing, &self.catalog, next_tick)?;
+        let mut finished = game_lot_work::finish(&finishing, &self.catalog, lot_instant)?;
         let identified_plan = identified
             .map(|config| {
                 crate::identified_output::prepare(
@@ -755,13 +759,13 @@ impl Runtime {
             .filter(|row| row.phase == Phase::Returning)
             .map(|row| (&row.job, work_custody(Place::JobInput(row.job.id))))
             .collect();
-        let returned = game_lot_work::cancel(&returning, next_tick)?;
+        let returned = game_lot_work::cancel(&returning, lot_instant)?;
         let waiting: Vec<_> = next
             .par_iter()
             .filter(|row| row.phase == Phase::Waiting)
             .map(|row| (&row.job, work_custody(Place::JobOutput(row.job.id))))
             .collect();
-        let delivered = game_lot_work::deliver(&waiting, next_tick)?;
+        let delivered = game_lot_work::deliver(&waiting, lot_instant)?;
         #[cfg(feature = "profile")]
         {
             drop(profile_phase);

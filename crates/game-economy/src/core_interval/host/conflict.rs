@@ -371,9 +371,9 @@ impl CoreHost {
                     .iter()
                     .filter(|lot| {
                         lot.good == policy.good
-                            && lot
-                                .expires_at
-                                .is_none_or(|at| at > self.core.physical.tick())
+                            && lot.expires_at.is_none_or(|at| {
+                                at > self.core.physical.lot_instant(self.core.physical.tick())
+                            })
                     })
                     .map(|lot| u128::from(lot.quantity))
                     .sum();

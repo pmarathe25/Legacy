@@ -130,6 +130,7 @@ fn physical_job_reserves_then_produces_and_delivers_without_refreshing_output() 
     };
     let mut store = Store::compile(State {
         next_batch: None,
+        expiry_millis: None,
         tick: 0,
         revision: 0,
         containers: vec![stock(1, 4), stock(2, 0)],
@@ -227,6 +228,7 @@ fn blocked_waiting_output_spoils_in_its_job_and_cannot_be_recreated_by_delivery(
     };
     let mut store = Store::compile(State {
         next_batch: None,
+        expiry_millis: None,
         tick: 0,
         revision: 0,
         containers: vec![
@@ -335,6 +337,7 @@ fn interruption_returns_surviving_input_without_refreshing_it() {
     let input = Place::JobInput(5);
     let mut store = Store::compile(State {
         next_batch: None,
+        expiry_millis: None,
         tick: 1,
         revision: 0,
         containers: vec![
@@ -405,6 +408,7 @@ fn delivery_moves_only_unexpired_output_and_reports_the_loss() {
     let output = Place::JobOutput(1);
     let mut store = Store::compile(State {
         next_batch: None,
+        expiry_millis: None,
         tick: 1,
         revision: 0,
         containers: vec![

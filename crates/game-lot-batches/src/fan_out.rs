@@ -253,6 +253,7 @@ fn prepare_rows(
     } else {
         state.tick
     };
+    let instant = state.expiry_millis.unwrap_or(next);
     state
         .revision
         .checked_add(1)
@@ -323,13 +324,13 @@ fn prepare_rows(
         source
             .lots
             .par_iter()
-            .filter(|lot| lot.good == first.good && lot.expires_at.is_none_or(|at| at > next))
+            .filter(|lot| lot.good == first.good && lot.expires_at.is_none_or(|at| at > instant))
             .collect()
     } else {
         source
             .lots
             .iter()
-            .filter(|lot| lot.good == first.good && lot.expires_at.is_none_or(|at| at > next))
+            .filter(|lot| lot.good == first.good && lot.expires_at.is_none_or(|at| at > instant))
             .collect()
     };
     let lot_amounts: Vec<_> = lots.par_iter().map(|lot| lot.quantity).collect();
@@ -344,13 +345,13 @@ fn prepare_rows(
             let destination = containers
                 .get(row.destination)
                 .expect("located destination");
-            let used: u64 = if destination.next_expiry.is_none_or(|at| at > next) {
+            let used: u64 = if destination.next_expiry.is_none_or(|at| at > instant) {
                 destination.used
             } else {
                 destination
                     .lots
                     .iter()
-                    .filter(|lot| lot.expires_at.is_none_or(|at| at > next))
+                    .filter(|lot| lot.expires_at.is_none_or(|at| at > instant))
                     .map(|lot| lot.quantity)
                     .sum()
             };
@@ -385,16 +386,18 @@ fn prepare_rows(
     let mut spoiled: Vec<_> = (0..containers.len())
         .into_par_iter()
         .map(|index| containers.get(index).expect("custody index"))
-        .filter(|container| container.next_expiry.is_some_and(|at| at <= next))
+        .filter(|container| container.next_expiry.is_some_and(|at| at <= instant))
         .flat_map_iter(|container| {
             container.lots.iter().filter_map(move |lot| {
-                lot.expires_at.filter(|&at| at <= next).map(|at| Spoilage {
-                    place: container.place,
-                    good: lot.good,
-                    quantity: lot.quantity,
-                    expires_at: at,
-                    batch: lot.batch,
-                })
+                lot.expires_at
+                    .filter(|&at| at <= instant)
+                    .map(|at| Spoilage {
+                        place: container.place,
+                        good: lot.good,
+                        quantity: lot.quantity,
+                        expires_at: at,
+                        batch: lot.batch,
+                    })
             })
         })
         .collect();
@@ -441,10 +444,10 @@ fn prepare_rows(
                 let destination = containers
                     .get(row.destination)
                     .expect("located destination");
-                if accepted || destination.next_expiry.is_some_and(|at| at <= next) {
+                if accepted || destination.next_expiry.is_some_and(|at| at <= instant) {
                     changes.push((
                         row.destination,
-                        after(destination, next, 0, 0, &arena[begin..]),
+                        after(destination, instant, 0, 0, &arena[begin..]),
                     ));
                 }
             }
@@ -461,10 +464,13 @@ fn prepare_rows(
     let mut chunks = Vec::with_capacity(parts.len());
     let mut outcomes = Vec::with_capacity(rows.len());
     let mut changes = Vec::with_capacity(rows.len() + 1);
-    let source_changed = consumed > 0 || source.next_expiry.is_some_and(|at| at <= next);
+    let source_changed = consumed > 0 || source.next_expiry.is_some_and(|at| at <= instant);
     let source_first = source_index < destinations[0];
     if source_changed && source_first {
-        changes.push((source_index, after(source, next, first.good, consumed, &[])));
+        changes.push((
+            source_index,
+            after(source, instant, first.good, consumed, &[]),
+        ));
     }
     for (chunk, transactions, destinations) in parts {
         chunks.push(chunk);
@@ -472,15 +478,18 @@ fn prepare_rows(
         changes.extend(destinations);
     }
     if source_changed && !source_first {
-        changes.push((source_index, after(source, next, first.good, consumed, &[])));
+        changes.push((
+            source_index,
+            after(source, instant, first.good, consumed, &[]),
+        ));
     }
     if !spoiled.is_empty() {
         changes.par_extend((0..containers.len()).into_par_iter().filter_map(|index| {
             let container = containers.get(index).expect("custody index");
             (index != source_index
                 && destinations.binary_search(&index).is_err()
-                && container.next_expiry.is_some_and(|at| at <= next))
-            .then(|| (index, after(container, next, 0, 0, &[])))
+                && container.next_expiry.is_some_and(|at| at <= instant))
+            .then(|| (index, after(container, instant, 0, 0, &[])))
         }));
     }
     if changes.par_windows(2).any(|pair| pair[0].0 > pair[1].0) {
