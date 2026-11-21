@@ -45,15 +45,20 @@ impl Clone for Social {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Rules {
+    #[serde(default = "every_round")]
     pub interval: u64,
     pub min_health: u32,
     pub max_hunger: u32,
     pub familiarity_gain: u32,
     pub familiarity_max: u32,
-    /// Forget relationships after this many ticks without a meeting; omitted means unbounded.
+    /// Forget relationships after this many rounds without a meeting; omitted means unbounded.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub relationship_retention: Option<u64>,
 }
+fn every_round() -> u64 {
+    1
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Participant {

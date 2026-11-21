@@ -8,6 +8,7 @@ fatigue_rate_period_millis = 3600000
 elapsed_fatigue = true
 elapsed_spoilage = true
 decision_period_millis = 3600000
+social_period_millis = 3600000
 combat_round_millis = 60000
 on_site_meals = true
 stock_capacity = 100000
@@ -1319,7 +1320,6 @@ restraint_response = { resistance = 1, escape_willing = true, escape_effort = 1 
 inherit_births = true
 
 [dynamics.social.rules]
-interval = 1
 min_health = 1
 max_hunger = 100
 familiarity_gain = 1

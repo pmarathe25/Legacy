@@ -2970,6 +2970,7 @@ fn witnessed_experiments_can_ground_personal_outcome_words() {
                 language.minds[0].mechanical_interest = Some(10);
                 language.minds[1].adoption = 1000;
                 state.social = Some(CoreSocial {
+                    elapsed: None,
                     owner: game_social::Social {
                         rules: game_social::Rules {
                             interval: 1,
@@ -3073,6 +3074,7 @@ fn mechanical_testimony_follows_individual_choices_and_can_be_false() {
                 assert_eq!(host.advance_continuous(900_000, &[]).unwrap().failure, None);
                 let mut state = host.snapshot();
                 state.social = Some(CoreSocial {
+                    elapsed: None,
                     owner: game_social::Social {
                         rules: game_social::Rules {
                             interval: 1,
@@ -7129,6 +7131,7 @@ fn work_intentions_compete_with_carrying_and_share_scarce_inputs() {
                     invoked_work: None,
                 });
                 lesson_state.social = Some(game_economy::core_interval::CoreSocial {
+                    elapsed: None,
                     owner: game_social::Social {
                         rules: game_social::Rules {
                             interval: 1,
@@ -10466,6 +10469,7 @@ fn personal_practice_can_report_false_readiness_without_creating_goods() {
             std::sync::Arc::make_mut(&mut minds[0].reports).clear();
             std::sync::Arc::make_mut(&mut minds[1].sent_reports).clear();
             moved.social = Some(game_economy::core_interval::CoreSocial {
+                elapsed: None,
                 language: None, signals: None,
                 owner: game_social::Social {
                     inherit_births: false, rules: game_social::Rules { interval: 1, min_health: 1, max_hunger: 100,

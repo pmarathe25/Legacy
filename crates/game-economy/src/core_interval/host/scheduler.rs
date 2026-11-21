@@ -675,6 +675,14 @@ pub enum CoreRunEvent {
     Treatments(Vec<game_lots::TransactionOutcome>),
     Provisions(Vec<game_lots::TransactionOutcome>),
     Meetings(Vec<game_social::Encounter>),
+    ElapsedEncounters {
+        at_millis: u128,
+        meetings: Vec<game_social::Encounter>,
+        words: Vec<game_language::Event>,
+        signals: Vec<game_signals::Event>,
+        recipes: Vec<game_economy_skills::recipe_knowledge::Learned>,
+        writing: Vec<game_language::writing::Explanation>,
+    },
     WrittenExplanations(Vec<game_language::writing::Explanation>),
     Disease(Vec<game_disease::Event>),
     Incapacitations {
@@ -993,6 +1001,43 @@ impl CoreHost {
         self.advance_validated_segment(requested_millis, blocked, &mut None)
     }
 
+    fn record_dynamics(&mut self, run: &mut CoreRun, dynamics: CoreDynamicsResults) {
+        let expeditions = self.record_expedition_meetings(&dynamics.meetings);
+        if !expeditions.is_empty() {
+            run.events.push(CoreRunEvent::Expeditions(expeditions));
+        }
+        if let Some(at_millis) = dynamics.encounter_at_millis {
+            if !dynamics.meetings.is_empty()
+                || !dynamics.language_events.is_empty()
+                || !dynamics.signal_events.is_empty()
+                || !dynamics.recipe_learning.is_empty()
+                || !dynamics.written_explanations.is_empty()
+            {
+                run.events.push(CoreRunEvent::ElapsedEncounters {
+                    at_millis,
+                    meetings: dynamics.meetings,
+                    words: dynamics.language_events,
+                    signals: dynamics.signal_events,
+                    recipes: dynamics.recipe_learning,
+                    writing: dynamics.written_explanations,
+                });
+            }
+        } else {
+            if !dynamics.meetings.is_empty() {
+                run.events.push(CoreRunEvent::Meetings(dynamics.meetings));
+            }
+            if !dynamics.written_explanations.is_empty() {
+                run.events.push(CoreRunEvent::WrittenExplanations(
+                    dynamics.written_explanations,
+                ));
+            }
+        }
+        if !dynamics.disease_events.is_empty() {
+            run.events
+                .push(CoreRunEvent::Disease(dynamics.disease_events));
+        }
+    }
+
     fn advance_validated_segment(
         &mut self,
         requested_millis: u64,
@@ -1074,6 +1119,12 @@ impl CoreHost {
                 _ => (attempt!('run, self.host_deadline(None)), None),
             };
             let deadline = &plan.deadline;
+            let decision = self
+                .schedule
+                .as_ref()
+                .expect("active schedule")
+                .next_decision_millis;
+            let decision_due = decision == Some(u128::from(offset));
             if deadline.after_millis == 0 {
                 let mut handled = false;
                 if deadline.wounds {
@@ -1190,17 +1241,19 @@ impl CoreHost {
                     }
                     handled = true;
                 }
-                if !handled {
+                if deadline.social && !decision_due {
+                    let dynamics = attempt!('run, self.advance_dynamics_autonomously(blocked));
+                    self.record_dynamics(&mut run, dynamics);
+                    handled = true;
+                }
+                if handled {
+                    continue;
+                }
+                if !deadline.social || !decision_due {
                     run.failure = Some("unresolved core deadline".into());
                     break;
                 }
-                continue;
             }
-            let decision = self
-                .schedule
-                .as_ref()
-                .expect("active schedule")
-                .next_decision_millis;
             // Periodic physiological owners advance even when the next personal
             // decision lies beyond this entire physical tick.
             if offset == 0 && decision != Some(0) && self.core.physical.tick() > 0 {
@@ -1208,32 +1261,17 @@ impl CoreHost {
                 let due = self
                     .social
                     .as_ref()
-                    .is_some_and(|owner| owner.last_tick != Some(tick))
+                    .is_some_and(|owner| owner.legacy_due(tick))
                     || self.health.as_ref().is_some_and(|owner| {
                         owner.owner.time_unit_millis.is_none() && owner.last_tick != Some(tick)
                     });
                 if due {
                     let dynamics = attempt!('run, self.advance_dynamics_autonomously(blocked));
-                    if !dynamics.meetings.is_empty() {
-                        let events = self.record_expedition_meetings(&dynamics.meetings);
-                        if !events.is_empty() {
-                            run.events.push(CoreRunEvent::Expeditions(events));
-                        }
-                        run.events.push(CoreRunEvent::Meetings(dynamics.meetings));
-                    }
-                    if !dynamics.written_explanations.is_empty() {
-                        run.events.push(CoreRunEvent::WrittenExplanations(
-                            dynamics.written_explanations,
-                        ));
-                    }
-                    if !dynamics.disease_events.is_empty() {
-                        run.events
-                            .push(CoreRunEvent::Disease(dynamics.disease_events));
-                    }
+                    self.record_dynamics(&mut run, dynamics);
                     continue;
                 }
             }
-            if decision == Some(u128::from(offset)) {
+            if decision_due {
                 let schedule = self.schedule.as_ref().expect("active schedule").clone();
                 match schedule.phase {
                     DecisionPhase::Meals => {
@@ -1379,30 +1417,17 @@ impl CoreHost {
                         busy.par_sort_unstable();
                         busy.dedup();
                         let dynamics = attempt!('run, self.advance_dynamics_autonomously(&busy));
-                        let meetings = dynamics.meetings;
-                        if !meetings.is_empty() {
-                            let events = self.record_expedition_meetings(&meetings);
-                            if !events.is_empty() {
-                                run.events.push(CoreRunEvent::Expeditions(events));
-                            }
+                        if !dynamics.meetings.is_empty() {
                             meal_people.par_extend(
-                                meetings
+                                dynamics
+                                    .meetings
                                     .par_iter()
                                     .flat_map_iter(|event| [event.a, event.b]),
                             );
                             meal_people.par_sort_unstable();
                             meal_people.dedup();
-                            run.events.push(CoreRunEvent::Meetings(meetings));
                         }
-                        if !dynamics.written_explanations.is_empty() {
-                            run.events.push(CoreRunEvent::WrittenExplanations(
-                                dynamics.written_explanations,
-                            ));
-                        }
-                        if !dynamics.disease_events.is_empty() {
-                            run.events
-                                .push(CoreRunEvent::Disease(dynamics.disease_events));
-                        }
+                        self.record_dynamics(&mut run, dynamics);
                         let next = self.after_food(meal_people);
                         self.schedule.as_mut().expect("active schedule").phase = next;
                     }

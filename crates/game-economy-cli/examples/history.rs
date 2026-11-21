@@ -40,7 +40,47 @@ fn tracked_changes(root: &Path) -> Option<bool> {
 }
 
 fn observations(events: &[CoreRunEvent], current_tick: &mut u64) -> Vec<Value> {
-    events.iter().filter_map(|event| match event {
+    let mut recorded = Vec::new();
+    for event in events {
+        if let CoreRunEvent::ElapsedEncounters {
+            at_millis,
+            meetings,
+            words,
+            signals,
+            recipes,
+            writing,
+        } = event
+        {
+            if !meetings.is_empty() {
+                recorded.push(json!({"kind":"meetings","at_millis":at_millis,"events":meetings}));
+            }
+            if !words.is_empty() {
+                recorded
+                    .push(json!({"kind":"language_events","at_millis":at_millis,"events":words}));
+            }
+            if !signals.is_empty() {
+                recorded
+                    .push(json!({"kind":"signal_events","at_millis":at_millis,"events":signals}));
+            }
+            if !recipes.is_empty() {
+                recorded
+                    .push(json!({"kind":"recipe_learning","at_millis":at_millis,"events":recipes}));
+            }
+            if !writing.is_empty() {
+                recorded.push(
+                    json!({"kind":"written_explanations","at_millis":at_millis,"events":writing}),
+                );
+            }
+        } else if let Some(row) = observation(event, current_tick) {
+            recorded.push(row);
+        }
+    }
+    recorded
+}
+
+#[rustfmt::skip]
+fn observation(event: &CoreRunEvent, current_tick: &mut u64) -> Option<Value> {
+    match event {
         CoreRunEvent::Meetings(rows) if !rows.is_empty() => Some(json!({"kind":"meetings","events":rows})),
         CoreRunEvent::WrittenExplanations(rows) if !rows.is_empty() => Some(json!({"kind":"written_explanations","events":rows})),
         CoreRunEvent::Disease(rows) if !rows.is_empty() => Some(json!({"kind":"disease","events":rows})),
@@ -83,7 +123,7 @@ fn observations(events: &[CoreRunEvent], current_tick: &mut u64) -> Vec<Value> {
             Some(json!({"kind":"boundary","tick":row.tick,"finished":row.finished,"delivered":row.delivered,"interrupted":row.interrupted,"spoiled":row.spoiled,"physical_actions":row.physical_actions}))
         },
         _ => None,
-    }).collect()
+    }
 }
 
 fn animals(host: &CoreHost) -> BTreeSet<u64> {
@@ -228,27 +268,30 @@ fn run(
                 observation_batch
                     .push(json!({"kind":"animal_deaths","events":history.animal_deaths}));
             }
-            let recipe_learning: Vec<_> = history
-                .recipe_learning
-                .iter()
-                .filter(|event| event.tick == history.tick)
-                .collect();
-            if !recipe_learning.is_empty() {
-                observation_batch.push(json!({"kind":"recipe_learning", "events":recipe_learning}));
-            }
-            if !history.language_events.is_empty() {
-                observation_batch
-                    .push(json!({"kind":"language_events", "events":history.language_events}));
-            }
-            {
+            if !history.elapsed_social {
+                let recipe_learning: Vec<_> = history
+                    .recipe_learning
+                    .iter()
+                    .filter(|event| event.tick == history.tick)
+                    .collect();
+                if !recipe_learning.is_empty() {
+                    observation_batch
+                        .push(json!({"kind":"recipe_learning", "events":recipe_learning}));
+                }
+                if !history.language_events.is_empty() {
+                    observation_batch
+                        .push(json!({"kind":"language_events", "events":history.language_events}));
+                }
                 if !history.signal_events.is_empty() {
                     observation_batch
                         .push(json!({"kind":"signal_events", "events":history.signal_events}));
                 }
+            }
+            {
                 let learning: Vec<_> = history
                     .signal_learning
                     .iter()
-                    .filter(|event| event.tick == history.tick)
+                    .filter(|event| event.tick == history.signal_learning_time)
                     .collect();
                 if !learning.is_empty() {
                     observation_batch.push(json!({"kind":"signal_learning", "events":learning}));
@@ -508,7 +551,10 @@ mod tests {
         let output = std::env::temp_dir().join(format!("{token}.ndjson"));
         let text = format!(
             "{}\n[language.rules]\nsounds = [\"a\", \"k\"]\nword_length = 3\ncapacity = 16\n",
-            fs::read_to_string(original).unwrap()
+            fs::read_to_string(original).unwrap().replace(
+                "tick_millis = 2628000000",
+                "tick_millis = 2628000000\nsocial_period_millis = 1314000000",
+            )
         );
         fs::write(&scenario, text).unwrap();
         rayon::ThreadPoolBuilder::new()
@@ -518,13 +564,15 @@ mod tests {
             .install(|| run(&root, &scenario, &output, 2, 1, false, None))
             .unwrap();
         let rows = records(&output);
-        assert!(rows.iter().filter(|row| row["kind"] == "year").any(|row| {
-            row["observations"].as_array().is_some_and(|events| {
-                events
-                    .iter()
-                    .any(|event| event["kind"] == "language_events")
-            })
-        }));
+        let dated: Vec<_> = rows
+            .iter()
+            .flat_map(|row| row["observations"].as_array().into_iter().flatten())
+            .filter(|event| event["kind"] == "language_events")
+            .map(|event| event["at_millis"].as_u64().unwrap())
+            .collect();
+        assert!(dated.len() > 12);
+        assert!(dated.windows(2).all(|pair| pair[0] < pair[1]));
+        assert!(dated.iter().any(|at| !at.is_multiple_of(2_628_000_000)));
         fs::remove_file(scenario).unwrap();
         fs::remove_file(&output).unwrap();
         fs::remove_file(output.with_extension("year-2.json")).unwrap();

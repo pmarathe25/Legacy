@@ -210,6 +210,7 @@ macro_rules! prepare_dynamics {
                     $crate::Clock {
                         seed: $world.seed,
                         tick: $tick,
+                        social_round: None,
                         travel: $world.travel.as_ref(),
                         partition: $partition,
                         local: $local,
@@ -250,6 +251,7 @@ pub type OpeningLocator<'a> = dyn Fn(u64) -> Option<(u64, u8, u64, bool)> + Sync
 pub struct Clock<'a> {
     pub seed: u64,
     pub tick: u64,
+    pub social_round: Option<u64>,
     pub travel: Option<&'a game_economy_person::travel::Travel>,
     pub partition: Option<&'a (dyn Fn(u64) -> (u64, u64) + Sync)>,
     /// The index is into the opening people slice supplied to `prepare`.
@@ -311,6 +313,7 @@ impl Dynamics {
         let Clock {
             seed,
             tick,
+            social_round,
             travel,
             partition,
             local,
@@ -382,7 +385,7 @@ impl Dynamics {
                     &contacts,
                     opinions,
                     personality_override.or(self.personality.as_ref()),
-                    (seed, tick),
+                    (seed, social_round.unwrap_or(tick)),
                     requested.as_ref(),
                     pressure::Access {
                         speak,
@@ -591,6 +594,7 @@ mod tests {
                     None,
                     (&encounters, None, &[]),
                     Clock {
+                        social_round: None,
                         seed: 7,
                         tick: 1,
                         travel: None,

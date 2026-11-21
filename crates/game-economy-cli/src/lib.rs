@@ -48,6 +48,9 @@ struct Scenario {
     /// Autonomous decision cadence, independent of the physical quantum.
     #[serde(default)]
     decision_period_millis: Option<u64>,
+    /// Elapsed time between autonomous opportunities to meet.
+    #[serde(default)]
+    social_period_millis: Option<u64>,
     /// Elapsed time between tactical rounds.
     #[serde(default)]
     combat_round_millis: Option<u64>,
@@ -1105,6 +1108,7 @@ pub fn core_scenario_with_options(
     let language_topic_profiles = std::mem::take(&mut authored.language_topic_profiles);
     let signals = authored.signals.take();
     let decision_period_millis = authored.decision_period_millis;
+    let social_period_millis = authored.social_period_millis;
     let combat_round_millis = authored.combat_round_millis;
     let invocation_period_millis = authored.invocation_period_millis;
     let mut expedition_invitation_preferences =
@@ -1305,6 +1309,22 @@ pub fn core_scenario_with_options(
     }
     for person in &mut personal_choices {
         person.actions.sort_unstable_by_key(|row| row.key);
+    }
+    if let Some(period_millis) = social_period_millis {
+        let social = snapshot
+            .social
+            .as_mut()
+            .ok_or("elapsed social cadence requires encounters")?;
+        if period_millis == 0 || social.owner.rules.interval != 1 {
+            return Err(
+                "social_period_millis requires a positive period and social rules interval of one"
+                    .into(),
+            );
+        }
+        social.elapsed = Some(game_economy::core_interval::EncounterClock {
+            period_millis,
+            completed: 0,
+        });
     }
     if let Some(language) = language {
         snapshot

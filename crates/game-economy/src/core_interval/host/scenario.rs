@@ -102,6 +102,7 @@ impl CoreHostSnapshot {
         };
         let (social, health, claims, personality) = if let Some(dynamics) = state.dynamics.take() {
             let social = dynamics.social.map(|owner| CoreSocial {
+                elapsed: None,
                 owner,
                 last_tick: None,
                 language: None,

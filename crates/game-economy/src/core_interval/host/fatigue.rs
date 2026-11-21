@@ -89,6 +89,7 @@ impl ElapsedLimits {
             host.next_dry_field(),
             disease,
             host.next_local_arrival(),
+            host.next_social_encounter(),
             fauna,
             fear_relaxation,
         ]

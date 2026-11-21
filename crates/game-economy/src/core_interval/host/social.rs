@@ -18,9 +18,57 @@ pub struct CoreSocial {
     #[serde(default)]
     pub last_tick: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub elapsed: Option<EncounterClock>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub language: Option<game_language::Language>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub signals: Option<game_signals::Signals>,
+}
+
+/// The authored interval and the last completed opportunity to meet.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EncounterClock {
+    pub period_millis: u64,
+    pub completed: u64,
+}
+
+impl EncounterClock {
+    pub(super) fn last_at(self) -> u128 {
+        u128::from(self.completed) * u128::from(self.period_millis)
+    }
+
+    fn next_at(self) -> u128 {
+        self.last_at() + u128::from(self.period_millis)
+    }
+
+    pub(super) fn valid_at(self, now: u128) -> bool {
+        self.period_millis > 0 && self.last_at() <= now && now <= self.next_at()
+    }
+}
+
+impl CoreSocial {
+    pub(super) fn legacy_due(&self, tick: u64) -> bool {
+        self.elapsed.is_none() && tick > 0 && self.last_tick != Some(tick)
+    }
+
+    pub(super) fn recent_contact(&self, tick: u64, now: u128) -> bool {
+        self.elapsed.map_or_else(
+            || {
+                tick.checked_sub(1)
+                    .is_some_and(|previous| self.last_tick == Some(previous))
+            },
+            |clock| clock.completed > 0 && clock.last_at() < now && now <= clock.next_at(),
+        )
+    }
+
+    pub(super) fn communication_time(&self, tick: u64, now: u128) -> Result<u64, String> {
+        if self.elapsed.is_some() {
+            u64::try_from(now).map_err(|_| "social timestamp exhausted".into())
+        } else {
+            Ok(tick)
+        }
+    }
 }
 
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -49,9 +97,13 @@ impl Clone for CoreHealth {
 }
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct CoreDynamicsResults {
+    pub encounter_at_millis: Option<u128>,
     pub meetings: Vec<game_social::Encounter>,
     pub disease_events: Vec<game_disease::Event>,
     pub written_explanations: Vec<game_language::writing::Explanation>,
+    pub language_events: Vec<game_language::Event>,
+    pub signal_events: Vec<game_signals::Event>,
+    pub recipe_learning: Vec<game_economy_skills::recipe_knowledge::Learned>,
 }
 
 impl CoreHost {
@@ -167,14 +219,19 @@ impl CoreHost {
             .map_err(str::to_owned)
     }
 
-    /// Run at most one personal social generation per physical tick.
+    pub(super) fn next_social_encounter(&self) -> Option<u64> {
+        let clock = self.social.as_ref()?.elapsed?;
+        u64::try_from(clock.next_at().saturating_sub(self.core.simulated_millis())).ok()
+    }
+
+    /// Run a pending opportunity for personal social choices.
     pub fn meet_autonomously(
         &mut self,
         occupied: &[u64],
     ) -> Result<Vec<game_social::Encounter>, String> {
         Ok(self.advance_dynamics_autonomously(occupied)?.meetings)
     }
-    /// Advance social and disease owners once per tick, sharing actual meetings.
+    /// Advance due social and legacy disease owners, sharing actual meetings.
     pub fn advance_dynamics_autonomously(
         &mut self,
         occupied: &[u64],
@@ -183,14 +240,14 @@ impl CoreHost {
             return Err("invalid occupied people".into());
         }
         let tick = self.core.physical.tick();
-        let social = self
-            .social
-            .as_ref()
-            .filter(|owner| owner.last_tick != Some(tick));
-        let health = self.health.as_ref().filter(|owner| {
-            owner.last_tick != Some(tick) && owner.owner.time_unit_millis.is_none()
+        let now = self.core.simulated_millis();
+        let social = self.social.as_ref().filter(|owner| {
+            owner.legacy_due(tick) || owner.elapsed.is_some_and(|clock| clock.next_at() == now)
         });
-        if tick == 0 || (social.is_none() && health.is_none()) {
+        let health = self.health.as_ref().filter(|owner| {
+            tick > 0 && owner.last_tick != Some(tick) && owner.owner.time_unit_millis.is_none()
+        });
+        if social.is_none() && health.is_none() {
             return Ok(CoreDynamicsResults::default());
         }
         let offset = self.core.elapsed_millis().ok_or("no physical interval")?;
@@ -212,6 +269,18 @@ impl CoreHost {
         );
         busy.par_sort_unstable();
         busy.dedup();
+        let elapsed = social.and_then(|owner| owner.elapsed);
+        let social_round = elapsed
+            .map(|mut clock| {
+                clock.completed = clock
+                    .completed
+                    .checked_add(1)
+                    .ok_or("social clock exhausted")?;
+                Ok::<_, &str>(clock)
+            })
+            .transpose()?;
+        let communication_time =
+            social.map_or(Ok(tick), |owner| owner.communication_time(tick, now))?;
         let opening = game_economy_dynamics::Dynamics {
             social: social.map(|owner| owner.owner.clone()),
             personality: None,
@@ -236,6 +305,7 @@ impl CoreHost {
             game_economy_dynamics::Clock {
                 seed: self.core.seed,
                 tick,
+                social_round: social_round.map(|clock| clock.completed),
                 travel: None,
                 partition: walking.then_some(&partition),
                 local: None,
@@ -314,7 +384,7 @@ impl CoreHost {
                         })
                         .collect();
                     return language
-                        .prepare(&rows, self.core.seed, tick)
+                        .prepare(&rows, self.core.seed, communication_time)
                         .map_err(str::to_owned);
                 }
                 // Topics use a person's own observations and interpretations. An
@@ -342,7 +412,11 @@ impl CoreHost {
                                     .events
                                     .par_iter()
                                     .filter(|event| {
-                                        event.noticed && event.tick.checked_add(1) == Some(tick)
+                                        let preceding = elapsed.map_or_else(
+                                            || tick.checked_sub(1),
+                                            |clock| u64::try_from(clock.last_at()).ok(),
+                                        );
+                                        event.noticed && Some(event.tick) == preceding
                                     })
                                     .flat_map_iter(|event| {
                                         std::iter::once((
@@ -515,7 +589,7 @@ impl CoreHost {
                         &rows,
                         mechanical_claims.as_deref(),
                         self.core.seed,
-                        tick,
+                        communication_time,
                         &affinity,
                     )
                     .map_err(str::to_owned)
@@ -526,7 +600,7 @@ impl CoreHost {
             language.as_mut(),
         ) {
             (Some(opening), Some(next)) => {
-                self.stage_written_explanations(opening, next, &meetings, tick)?
+                self.stage_written_explanations(opening, next, &meetings, communication_time)?
             }
             _ => Vec::new(),
         };
@@ -570,7 +644,7 @@ impl CoreHost {
                     })
                     .collect();
                 signals
-                    .prepare_with_directed(&contacts, &directed, self.core.seed, tick)
+                    .prepare_with_directed(&contacts, &directed, self.core.seed, communication_time)
                     .map_err(str::to_owned)
             })
             .transpose()?;
@@ -766,10 +840,26 @@ impl CoreHost {
         } else {
             None
         };
+        let (language_events, signal_events, learned_recipes) = if elapsed.is_some() {
+            (
+                language
+                    .as_ref()
+                    .map_or_else(Vec::new, |owner| owner.events.clone()),
+                signals
+                    .as_ref()
+                    .map_or_else(Vec::new, |owner| owner.events.clone()),
+                recipe_learning
+                    .as_ref()
+                    .map_or_else(Vec::new, |owner| owner.events.clone()),
+            )
+        } else {
+            (Vec::new(), Vec::new(), Vec::new())
+        };
         if let Some(owner) = next.social {
             self.social = Some(CoreSocial {
                 owner,
-                last_tick: Some(tick),
+                last_tick: elapsed.is_none().then_some(tick),
+                elapsed: social_round,
                 language,
                 signals,
             });
@@ -826,9 +916,13 @@ impl CoreHost {
             self.work_checked_revision = None;
         }
         Ok(CoreDynamicsResults {
+            encounter_at_millis: elapsed.map(|_| now),
             meetings,
             disease_events,
             written_explanations,
+            language_events,
+            signal_events,
+            recipe_learning: learned_recipes,
         })
     }
 }

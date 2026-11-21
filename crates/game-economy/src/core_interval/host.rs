@@ -98,7 +98,7 @@ pub use shared_work::{CoreAssistRecord, CoreAssistSession, CoreSharedWork};
 pub use site_lifecycle::CoreSiteChanges;
 pub use sites::{CoreRepairResults, CoreSites};
 pub use skills::{CoreSkillCredit, CoreSkills};
-pub use social::{CoreDynamicsResults, CoreHealth, CoreSocial};
+pub use social::{CoreDynamicsResults, CoreHealth, CoreSocial, EncounterClock};
 pub use tactical::{CorePlayerTactics, CoreTacticalResult};
 pub use tools::CoreToolRepairResults;
 pub use treatment::CoreTreatmentResults;
@@ -110,6 +110,8 @@ pub use writing::{
 /// Reading this view does not clone the world or change simulation state.
 pub struct CoreHistoryView<'a> {
     pub tick: u64,
+    pub elapsed_social: bool,
+    pub signal_learning_time: u64,
     pub language_events: &'a [game_language::Event],
     pub signal_events: &'a [game_signals::Event],
     pub signal_learning: &'a [game_signals::LearningEvent],
@@ -815,18 +817,35 @@ impl CoreHost {
         }
         if let Some(social) = &social {
             let people: HashSet<_> = core.people.par_iter().map(|person| person.id).collect();
+            let tick = core.physical.tick();
+            let now = core.simulated_millis();
+            if social.elapsed.is_some_and(|clock| {
+                !clock.valid_at(now)
+                    || social.last_tick.is_some()
+                    || social.owner.rules.interval != 1
+            }) {
+                return Err("invalid elapsed social clock".into());
+            }
+            let round = social.elapsed.map_or(tick, |clock| clock.completed);
+            let last_round = social.elapsed.map_or(social.last_tick, |clock| {
+                (clock.completed > 0).then_some(clock.completed)
+            });
+            let communication_time = social.communication_time(tick, now)?;
+            let last_communication = social.elapsed.map_or(social.last_tick, |clock| {
+                u64::try_from(clock.last_at()).ok().filter(|&at| at > 0)
+            });
             social
                 .owner
-                .validate(&people, core.physical.tick())
+                .validate(&people, round)
                 .map_err(str::to_owned)?;
             if let Some(language) = &social.language {
                 language
-                    .validate(&people, core.physical.tick())
+                    .validate(&people, communication_time)
                     .map_err(str::to_owned)?;
             }
             if let Some(signals) = &social.signals {
                 signals
-                    .validate(&people, core.physical.tick())
+                    .validate(&people, communication_time)
                     .map_err(str::to_owned)?;
                 let goods: HashSet<_> = core
                     .physical
@@ -852,7 +871,7 @@ impl CoreHost {
                 if signals
                     .events
                     .par_iter()
-                    .any(|event| Some(event.tick) != social.last_tick)
+                    .any(|event| Some(event.tick) != last_communication)
                 {
                     return Err("invalid signal event time".into());
                 }
@@ -864,7 +883,7 @@ impl CoreHost {
                     .owner
                     .events
                     .par_iter()
-                    .any(|event| Some(event.tick) != social.last_tick)
+                    .any(|event| Some(event.tick) != last_round)
             {
                 return Err("invalid social decision time".into());
             }
@@ -1611,6 +1630,14 @@ impl CoreHost {
         let signals = social.and_then(|owner| owner.signals.as_ref());
         CoreHistoryView {
             tick: self.core.physical.tick(),
+            elapsed_social: social.is_some_and(|owner| owner.elapsed.is_some()),
+            signal_learning_time: social
+                .and_then(|owner| {
+                    owner
+                        .communication_time(self.core.physical.tick(), self.core.simulated_millis())
+                        .ok()
+                })
+                .unwrap_or(self.core.physical.tick()),
             language_events: language.map_or(&[], |owner| owner.events.as_slice()),
             signal_events: signals.map_or(&[], |owner| owner.events.as_slice()),
             signal_learning: signals.map_or(&[], |owner| owner.learning_events.as_slice()),
@@ -1741,6 +1768,7 @@ impl CoreHost {
         let invocation = self.next_invocation_deadline();
         let care = self.next_elapsed_care();
         let fauna = self.next_fauna_lifecycle();
+        let social = self.next_social_encounter();
         let fear_relaxation = self.next_fear_relaxation();
         let first = [
             recovery,
@@ -1758,6 +1786,7 @@ impl CoreHost {
             invocation,
             care,
             fauna,
+            social,
             fear_relaxation,
         ]
         .into_iter()
@@ -1787,6 +1816,7 @@ impl CoreHost {
                     invocation: invocation == Some(after_millis),
                     care: care == Some(after_millis),
                     fauna: fauna == Some(after_millis),
+                    social: social == Some(after_millis),
                     fear_relaxation: fear_relaxation == Some(after_millis),
                     recovery: recovery == Some(after_millis),
                     exposure: exposure == Some(after_millis),
@@ -1807,6 +1837,7 @@ impl CoreHost {
                 deadline.invocation = invocation == Some(after_millis);
                 deadline.care = care == Some(after_millis);
                 deadline.fauna = fauna == Some(after_millis);
+                deadline.social = social == Some(after_millis);
                 deadline.fear_relaxation = fear_relaxation == Some(after_millis);
             }
         }
@@ -2977,10 +3008,10 @@ impl CoreHost {
         let giving_help = giving
             .as_ref()
             .map_or_else(Vec::new, |frame| frame.plan.help(draft.events()));
-        let signal_learning = if let (Some(signals), Some(frame)) = (
+        let signal_learning = if let (Some((social, signals)), Some(frame)) = (
             self.social
                 .as_ref()
-                .and_then(|social| social.signals.as_ref()),
+                .and_then(|social| Some((social, social.signals.as_ref()?))),
             giving.as_ref(),
         ) {
             if signals
@@ -2999,7 +3030,13 @@ impl CoreHost {
                     })
                     .collect();
                 signals
-                    .prepare_gift_learning(&gifts, draft.events().tick)
+                    .prepare_gift_learning(
+                        &gifts,
+                        social.communication_time(
+                            draft.events().tick,
+                            self.core.simulated_millis(),
+                        )?,
+                    )
                     .map_err(str::to_owned)?
             } else {
                 None

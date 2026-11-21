@@ -156,7 +156,7 @@ impl CoreHost {
         let signal_gifts = self
             .social
             .as_ref()
-            .filter(|social| social.last_tick == Some(tick - 1))
+            .filter(|social| social.recent_contact(tick, self.core.simulated_millis()))
             .and_then(|social| social.signals.as_ref())
             .map_or_else(Vec::new, game_signals::Signals::gift_opportunities);
         busy.par_extend(actors.par_iter().copied());
@@ -240,7 +240,7 @@ impl CoreHost {
         if let Some(social) = self
             .social
             .as_ref()
-            .filter(|owner| owner.last_tick == Some(tick - 1))
+            .filter(|owner| owner.recent_contact(tick, self.core.simulated_millis()))
         {
             encounters.par_extend(social.owner.events.par_iter().cloned().map(|mut event| {
                 event.tick = tick;

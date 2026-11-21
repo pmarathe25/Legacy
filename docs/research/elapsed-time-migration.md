@@ -117,6 +117,15 @@ a batch moves. The index follows its new projected deadline. Curing
 continues on its own clock. Storage temperatures currently stay fixed for
 each holder.
 
+Set `social_period_millis` to schedule opportunities to meet independently of
+physical settlement. At an opportunity, people can initiate, participate or
+decline according to existing personal conditions, inclinations, and social
+pressures. Speech, gesture, written explanations, and recipe teaching are
+recorded at the actual opportunity. History preserves each observation when
+several encounters arise in one physical interval. The optional familiarity
+retention count is measured in encounter opportunities. The elapsed scenario
+can omit `dynamics.social.rules.interval`, which defaults to one.
+
 An elapsed environment can set `exposure_period_millis` to schedule personal
 hazard damage and shelter rotation at fixed simulated times. The host uses
 the season just before each exposure event and applies it before new choices

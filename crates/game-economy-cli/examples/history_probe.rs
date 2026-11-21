@@ -134,6 +134,18 @@ fn run_steps(
                 }
                 CoreRunEvent::Work(row) => ("work_finished", row.finished.len()),
                 CoreRunEvent::Meetings(rows) => ("meetings", rows.len()),
+                CoreRunEvent::ElapsedEncounters {
+                    meetings,
+                    words,
+                    signals,
+                    recipes,
+                    ..
+                } => {
+                    *counts.entry("language_events").or_default() += words.len() as u64;
+                    *counts.entry("signal_events").or_default() += signals.len() as u64;
+                    *counts.entry("recipe_learning").or_default() += recipes.len() as u64;
+                    ("meetings", meetings.len())
+                }
                 CoreRunEvent::LocalWalking { at_millis, events } => {
                     write_line(
                         &mut writer,
@@ -231,7 +243,7 @@ fn run_steps(
             .iter()
             .filter(|event| event.tick == view.tick)
             .count() as u64;
-        if recipe_count > 0 && seen_recipe != Some(view.tick) {
+        if !view.elapsed_social && recipe_count > 0 && seen_recipe != Some(view.tick) {
             *counts.entry("recipe_learning").or_default() += recipe_count;
             seen_recipe = Some(view.tick);
         }
@@ -249,7 +261,7 @@ fn run_steps(
             .iter()
             .filter(|event| event.tick == view.tick)
             .count() as u64;
-        if language_count > 0 && seen_language != Some(view.tick) {
+        if !view.elapsed_social && language_count > 0 && seen_language != Some(view.tick) {
             *counts.entry("language_events").or_default() += language_count;
             seen_language = Some(view.tick);
         }
@@ -258,7 +270,7 @@ fn run_steps(
             .iter()
             .filter(|event| event.tick == view.tick)
             .count() as u64;
-        if signal_count > 0 && seen_signal != Some(view.tick) {
+        if !view.elapsed_social && signal_count > 0 && seen_signal != Some(view.tick) {
             *counts.entry("signal_events").or_default() += signal_count;
             seen_signal = Some(view.tick);
         }

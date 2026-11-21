@@ -50,7 +50,7 @@ pub use host::{
 };
 pub use host::{CoreCampaignView, CorePastLifeView};
 pub use host::{CoreCareVisit, CoreExpeditionOffer};
-pub use host::{CoreFaunaTransitions, CoreTacticalResult};
+pub use host::{CoreFaunaTransitions, CoreTacticalResult, EncounterClock};
 pub use host::{ExpeditionEvent, ExpeditionEventKind, ExpeditionItinerary, ExpeditionStage};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -160,6 +160,7 @@ pub struct CoreDeadline {
     pub invocation: bool,
     pub care: bool,
     pub fauna: bool,
+    pub social: bool,
     pub fear_relaxation: bool,
 }
 /// Travelers published at a partial-interval offset.
@@ -484,6 +485,7 @@ impl CoreInterval {
             invocation: false,
             care: false,
             fauna: false,
+            social: false,
             fear_relaxation: false,
             food_health: food_health == Some(after),
         })
