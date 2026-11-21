@@ -11,6 +11,91 @@ pub(super) struct ElapsedProgress {
 }
 use game_economy_fatigue::TimedActivity;
 
+struct ElapsedLimits {
+    limit: u64,
+    recovery: Option<u64>,
+    immortal_recovery: Option<u128>,
+    exposure: Option<u64>,
+    natural_death: Option<u64>,
+    starvation: Option<u64>,
+    purpose: Option<u64>,
+    delivery: Option<u64>,
+    conception: Option<u64>,
+    disease: Option<u64>,
+    nutrition: Option<u64>,
+    food_health: Option<u128>,
+}
+
+impl From<PreparedDeadline> for ElapsedLimits {
+    fn from(plan: PreparedDeadline) -> Self {
+        let deadline = plan.deadline;
+        let at = |due: bool| due.then_some(deadline.after_millis);
+        Self {
+            limit: deadline.after_millis,
+            recovery: at(plan.ordinary_recovery),
+            immortal_recovery: at(deadline.recovery).map(u128::from),
+            exposure: at(deadline.exposure),
+            natural_death: at(plan.natural_death),
+            starvation: at(deadline.death),
+            purpose: at(deadline.purpose),
+            delivery: at(deadline.delivery),
+            conception: at(deadline.conception),
+            disease: at(deadline.disease),
+            nutrition: at(deadline.nutrition),
+            food_health: at(deadline.food_health).map(u128::from),
+        }
+    }
+}
+
+impl ElapsedLimits {
+    fn for_unscheduled(host: &CoreHost, requested: u64) -> Result<Self, String> {
+        let recovery = host.next_ordinary_recovery();
+        let immortal_recovery =
+            game_economy_person::next_recovery(&host.core.people).map_err(str::to_owned)?;
+        let exposure = host.next_environment_exposure();
+        let natural_death = host
+            .next_natural_death()
+            .and_then(|after| u64::try_from(after).ok());
+        let purpose = host.next_purpose();
+        let delivery = host
+            .next_delivery()
+            .and_then(|after| u64::try_from(after).ok());
+        let conception = host
+            .next_conception()
+            .and_then(|after| u64::try_from(after).ok());
+        let disease = host.next_disease_deadline();
+        let mut limit = host.core.progress_limit(requested)?;
+        limit = [
+            recovery,
+            exposure,
+            natural_death,
+            purpose,
+            delivery,
+            conception,
+            host.next_dry_field(),
+            disease,
+            host.next_local_arrival(),
+        ]
+        .into_iter()
+        .flatten()
+        .fold(limit, u64::min);
+        Ok(Self {
+            limit,
+            recovery,
+            immortal_recovery,
+            exposure,
+            natural_death,
+            starvation: None,
+            purpose,
+            delivery,
+            conception,
+            disease,
+            nutrition: host.core.next_metabolism(),
+            food_health: host.core.next_food_health(),
+        })
+    }
+}
+
 impl CoreHost {
     /// Apply already selected, individual rest choices after checking the actors.
     pub fn choose_personal_rest(
@@ -164,43 +249,15 @@ impl CoreHost {
         &mut self,
         requested: u64,
         externally_busy: &[u64],
+        prepared: Option<PreparedDeadline>,
     ) -> Result<ElapsedProgress, String> {
         let quantum = self.core.physical.tick_millis();
-        let mut consumed = self.core.progress_limit(requested)?;
-        let ordinary_recovery = self.next_ordinary_recovery();
-        if let Some(deadline) = ordinary_recovery {
-            consumed = consumed.min(deadline);
-        }
-        let exposure = self.next_environment_exposure();
-        if let Some(deadline) = exposure {
-            consumed = consumed.min(deadline);
-        }
-        let natural_death = self.next_natural_death();
-        if let Some(deadline) = natural_death {
-            consumed = deadline.min(u128::from(consumed)) as u64;
-        }
-        let purpose = self.next_purpose();
-        if let Some(deadline) = purpose {
-            consumed = consumed.min(deadline);
-        }
-        let delivery = self.next_delivery();
-        if let Some(deadline) = delivery {
-            consumed = deadline.min(u128::from(consumed)) as u64;
-        }
-        let conception = self.next_conception();
-        if let Some(deadline) = conception {
-            consumed = deadline.min(u128::from(consumed)) as u64;
-        }
-        if let Some(deadline) = self.next_dry_field() {
-            consumed = consumed.min(deadline);
-        }
-        let disease = self.next_disease_deadline();
-        if let Some(deadline) = disease {
-            consumed = consumed.min(deadline);
-        }
-        if let Some(deadline) = self.next_local_arrival() {
-            consumed = consumed.min(deadline);
-        }
+        let scheduled = prepared.is_some();
+        let limits = match prepared {
+            Some(plan) => ElapsedLimits::from(plan),
+            None => ElapsedLimits::for_unscheduled(self, requested)?,
+        };
+        let mut consumed = requested.min(limits.limit);
         let (crop_rates, crop_limit) = self.plan_crop_segment(consumed)?;
         consumed = crop_limit;
         let elapsed_owner = self
@@ -210,7 +267,9 @@ impl CoreHost {
         let mut elapsed_draft = None;
         if let Some(owner) = elapsed_owner {
             // Each elapsed segment ends before an activity transition is published.
-            consumed = consumed.min(self.core.next_deadline(None)?.after_millis);
+            if !scheduled {
+                consumed = consumed.min(self.core.next_deadline(None)?.after_millis);
+            }
             if consumed == 0 {
                 return Ok(ElapsedProgress::default());
             }
@@ -293,22 +352,22 @@ impl CoreHost {
             }
             elapsed_draft = Some(owner.prepare(&activity, consumed, &people)?);
         }
-        let ordinary_recovery_due = ordinary_recovery == Some(consumed);
+        let ordinary_recovery_due = limits.recovery == Some(consumed);
         let recovery_due = ordinary_recovery_due
-            || game_economy_person::next_recovery(&self.core.people)
-                .map_err(str::to_owned)?
+            || limits
+                .immortal_recovery
                 .is_some_and(|after| after <= u128::from(consumed));
         let injuries = elapsed_draft
             .as_ref()
             .map_or(&[][..], |draft| draft.consequences.as_slice());
         let has_injuries = !injuries.is_empty();
-        let exposure_due = exposure == Some(consumed);
-        let natural_death_due = natural_death == Some(u128::from(consumed));
-        let purpose_due = purpose == Some(consumed);
-        let delivery_due = delivery == Some(u128::from(consumed));
-        let conception_due = conception == Some(u128::from(consumed));
-        let disease_due = disease == Some(consumed);
-        let food_health_due = self.core.next_food_health() == Some(u128::from(consumed));
+        let exposure_due = limits.exposure == Some(consumed);
+        let natural_death_due = limits.natural_death == Some(consumed);
+        let purpose_due = limits.purpose == Some(consumed);
+        let delivery_due = limits.delivery == Some(consumed);
+        let conception_due = limits.conception == Some(consumed);
+        let disease_due = limits.disease == Some(consumed);
+        let food_health_due = limits.food_health == Some(u128::from(consumed));
         let mut vitals = (has_injuries
             || exposure_due
             || natural_death_due
@@ -318,7 +377,7 @@ impl CoreHost {
             || disease_due
             || food_health_due
             || ordinary_recovery_due
-            || self.core.next_metabolism() == Some(consumed))
+            || limits.nutrition == Some(consumed))
         .then(|| self.core.preview_people_progress(consumed, injuries))
         .transpose()?;
         if exposure_due {
@@ -412,7 +471,7 @@ impl CoreHost {
                     (before.health > 0 && after.health == 0).then_some(before.id)
                 })
                 .collect()
-        } else {
+        } else if !scheduled || limits.starvation == Some(consumed) {
             game_economy_person::starvation_deaths_within(
                 &self.core.people,
                 &self.core.rules,
@@ -420,6 +479,8 @@ impl CoreHost {
                 consumed,
             )
             .map_err(str::to_owned)?
+        } else {
+            Vec::new()
         };
         let incapacitations = deaths
             .par_iter()
@@ -462,7 +523,7 @@ impl CoreHost {
         let Some(owner) = &self.fatigue else {
             let credits = self.plan_skill_practice(consumed);
             let recovery = self.stage_natural_recovery(consumed, &[], vitals.as_mut())?;
-            let advanced = self.core.progress_adjusting(
+            let advanced = self.core.progress_checked_segment(
                 consumed,
                 &reductions,
                 vitals,
@@ -656,7 +717,7 @@ impl CoreHost {
             .collect::<Result<Vec<_>, _>>()?;
         let next: Vec<_> = chunks.into_par_iter().flatten().collect();
         let recovery = self.stage_natural_recovery(consumed, &next, vitals.as_mut())?;
-        let advanced = self.core.progress_adjusting(
+        let advanced = self.core.progress_checked_segment(
             consumed,
             &reductions,
             vitals,
