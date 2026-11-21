@@ -8112,6 +8112,50 @@ fn integrated_hourly_world_runs_with_personal_choices_and_borrowed_history() {
 }
 
 #[test]
+fn integrated_world_keeps_the_same_state_with_irregular_elapsed_advances() {
+    use game_economy::core_interval::CoreHost;
+    let root = root();
+    let opening = game_economy_cli::core_scenario(
+        &root.join("content/scenarios/economy-history-integrated-hourly.toml"),
+        &root.join("content"),
+    )
+    .unwrap()
+    .snapshot();
+    let simulate = |workers, slices: &[u64]| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut host = CoreHost::resume(opening.clone()).unwrap();
+                host.detach_player_control().unwrap();
+                let mut events = Vec::new();
+                for (index, &size) in slices.iter().enumerate() {
+                    let run = host.advance_continuous(size, &[]).unwrap();
+                    assert_eq!(run.failure, None);
+                    assert_eq!(run.elapsed_millis, size);
+                    events.extend(run.events);
+                    if index == 2 {
+                        let saved = serde_json::to_vec(&host.snapshot()).unwrap();
+                        host = CoreHost::resume(serde_json::from_slice(&saved).unwrap()).unwrap();
+                    }
+                }
+                (host.snapshot(), events)
+            })
+    };
+    const DAY: u64 = 86_400_000;
+    let irregular = [1, 24_131, 599_983, 3_602_104, 82_173_781];
+    assert_eq!(irregular.iter().sum::<u64>(), DAY);
+    let (whole, whole_events) = simulate(1, &[DAY]);
+    let (subdivided, subdivided_events) = simulate(4, &irregular);
+    assert_eq!(whole, subdivided);
+    assert_eq!(whole_events.len(), subdivided_events.len());
+    for (index, (a, b)) in whole_events.iter().zip(&subdivided_events).enumerate() {
+        assert_eq!(a, b, "observation {index}");
+    }
+}
+
+#[test]
 fn hourly_history_food_supply_supports_founders_and_is_worker_deterministic() {
     fn run(workers: usize) -> serde_json::Value {
         rayon::ThreadPoolBuilder::new()
