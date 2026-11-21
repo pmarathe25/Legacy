@@ -61,6 +61,7 @@ pub use conflict::{
     WoundTreatment,
 };
 pub use construction::CoreConstructionResults;
+pub use dependent_care::CoreCareVisit;
 pub use expedition_invitations::CoreExpeditionOffer;
 pub use food_search::{CoreFoodProvision, CoreFoodSearch};
 pub use game_economy_expeditions::elapsed::{
@@ -1183,6 +1184,11 @@ impl CoreHost {
                 &people,
                 core.physical.tick(),
             )?;
+            if let Some(clock) = owner.elapsed {
+                clock
+                    .validate(core.simulated_millis())
+                    .map_err(str::to_owned)?;
+            }
         }
         if pending_vital_deaths
             .par_windows(2)
@@ -1704,6 +1710,7 @@ impl CoreHost {
         let tactical = self.next_tactical_deadline();
         let wounds = self.next_wound_deadline();
         let invocation = self.next_invocation_deadline();
+        let care = self.next_elapsed_care();
         let first = [
             recovery,
             exposure,
@@ -1718,6 +1725,7 @@ impl CoreHost {
             tactical,
             wounds,
             invocation,
+            care,
         ]
         .into_iter()
         .flatten()
@@ -1743,6 +1751,7 @@ impl CoreHost {
                     tactical: tactical == Some(after_millis),
                     wounds: wounds == Some(after_millis),
                     invocation: invocation == Some(after_millis),
+                    care: care == Some(after_millis),
                     recovery: recovery == Some(after_millis),
                     exposure: exposure == Some(after_millis),
                 };
@@ -1760,6 +1769,7 @@ impl CoreHost {
                 deadline.tactical = tactical == Some(after_millis);
                 deadline.wounds = wounds == Some(after_millis);
                 deadline.invocation = invocation == Some(after_millis);
+                deadline.care = care == Some(after_millis);
             }
         }
         Ok(deadline)

@@ -1,5 +1,5 @@
 //! Individual dependent care and physical meal delivery.
-pub use game_dependent_care::DependentCare;
+pub use game_dependent_care::{DependentCare, Event};
 use game_dependent_care::{FamilyView, Feelings};
 use game_economy_person::{
     Person, Rules,
@@ -86,6 +86,19 @@ impl Context<'_> {
     }
 
     pub fn prepare_at(&self, base: u64, now: Option<u128>) -> Result<Plan, String> {
+        self.prepare_visits(base, now, None)
+    }
+
+    pub fn prepare_elapsed_at(&self, base: u64, now: u128, sequence: u64) -> Result<Plan, String> {
+        self.prepare_visits(base, Some(now), Some(sequence))
+    }
+
+    fn prepare_visits(
+        &self,
+        base: u64,
+        now: Option<u128>,
+        sequence: Option<u64>,
+    ) -> Result<Plan, String> {
         let current_age = |member: &game_families::Member| {
             now.map_or(member.age, |now| self.family.age_at(member, now))
         };
@@ -116,14 +129,31 @@ impl Context<'_> {
                 }
             })
         };
-        let draft = self.care.prepare_with_preferences(
-            &family,
-            self.family.rules.adult_age,
-            self.people,
-            self.busy,
-            (self.seed, self.tick),
-            (colocated, feelings),
-        );
+        let adult_age = self.family.rules.adult_age;
+        let draft = if let Some(sequence) = sequence {
+            let mut draft = self.care.prepare_elapsed_visits(
+                &family,
+                adult_age,
+                self.people,
+                self.busy,
+                (self.seed, sequence),
+                (colocated, feelings),
+            );
+            draft
+                .events
+                .par_iter_mut()
+                .for_each(|row| row.tick = self.tick);
+            draft
+        } else {
+            self.care.prepare_with_preferences(
+                &family,
+                adult_age,
+                self.people,
+                self.busy,
+                (self.seed, self.tick),
+                (colocated, feelings),
+            )
+        };
         let edible: HashMap<_, _> = self
             .goods
             .iter()
@@ -152,7 +182,12 @@ impl Context<'_> {
                     .binary_search_by_key(&event.child, |row| row.0)
                     .ok()
                     .map(|i| self.people[i])?;
-                if child.3.saturating_add(self.rules.hunger_per_tick) < self.rules.meal_threshold
+                let hunger = if sequence.is_some() {
+                    child.3
+                } else {
+                    child.3.saturating_add(self.rules.hunger_per_tick)
+                };
+                if hunger < self.rules.meal_threshold
                     || self
                         .eating
                         .binary_search_by_key(&child.0, |row| row.0)

@@ -51,6 +51,7 @@ fn observations(events: &[CoreRunEvent], current_tick: &mut u64) -> Vec<Value> {
         CoreRunEvent::Tactical(result) => Some(json!({"kind":"tactical","events":result.events,"strikes":result.strikes,"harm":result.harm,"sites":result.sites,"interrupted_jobs":result.interrupted_jobs,"released":result.released})),
         CoreRunEvent::WoundRecovery { at_millis, people } => Some(json!({"kind":"wound_recovery","at_millis":at_millis,"people":people})),
         CoreRunEvent::Campaign(events) => Some(json!({"kind":"campaign","events":events})),
+        CoreRunEvent::Care(visit) => Some(json!({"kind":"care","at_millis":visit.at_millis,"events":visit.events,"transfers":visit.transfers,"incapacitated":visit.incapacitated})),
         CoreRunEvent::InvocationWarning { at_millis, warning } => Some(json!({"kind":"invocation_warning","at_millis":at_millis,"warning":warning})),
         CoreRunEvent::InvocationCost { at_millis, person, damage, lifespan_loss } => Some(json!({"kind":"invocation_cost","at_millis":at_millis,"person":person,"damage":damage,"lifespan_loss":lifespan_loss})),
         CoreRunEvent::Incapacitations { at_millis, people } => Some(json!({"kind":"incapacitations","at_millis":at_millis,"people":people})),

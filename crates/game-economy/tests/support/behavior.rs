@@ -10159,6 +10159,7 @@ fn care_on_a_shared_journey_can_transmit_illness_and_feed_a_child() {
     family.members[2].parents = vec![1, 2].into();
     initial.travel.as_mut().unwrap().routes[0].ticks = 3;
     initial.care = Some(DependentCare {
+        elapsed: None,
         rules: CareRules {
             dependent_until: 5,
             max_caregiver_hunger: 100,
@@ -13776,6 +13777,7 @@ fn caregiver_can_choose_to_use_claimed_food_for_a_dependent() {
         events: vec![],
     });
     initial.care = Some(DependentCare {
+        elapsed: None,
         rules: CareRules {
             dependent_until: 5,
             max_caregiver_hunger: 100,
@@ -18313,6 +18315,7 @@ fn newborns_remain_inside_a_full_cell_with_their_mother() {
     let mut initial = campaign_fixture();
     initial.pending_food.clear();
     initial.care = Some(DependentCare {
+        elapsed: None,
         rules: CareRules {
             dependent_until: 5,
             max_caregiver_hunger: 100,
@@ -18972,6 +18975,7 @@ fn a_barrier_prevents_in_person_dependent_care() {
     family.members[2].age = 1;
     family.members[2].parents = vec![1, 2].into();
     initial.care = Some(DependentCare {
+        elapsed: None,
         rules: CareRules {
             dependent_until: 5,
             max_caregiver_hunger: 100,
@@ -30622,6 +30626,7 @@ fn newborn_gets_custody_in_the_same_generation_as_contested_food() {
         events: vec![],
     });
     initial.care = Some(DependentCare {
+        elapsed: None,
         rules: CareRules {
             dependent_until: 5,
             max_caregiver_hunger: 100,
@@ -41004,6 +41009,7 @@ fn mixed_settlement(count: u64) -> State {
         events: vec![],
     });
     initial.care = Some(DependentCare {
+        elapsed: None,
         rules: CareRules {
             dependent_until: 5,
             max_caregiver_hunger: 100,
@@ -45630,6 +45636,7 @@ fn children_can_develop_different_obligation_dispositions_from_the_same_care() {
     family.members[3].age = 1;
     family.members[3].parents = vec![1, 2].into();
     initial.care = Some(DependentCare {
+        elapsed: None,
         inherit_births: false,
         rules: CareRules {
             dependent_until: 5,
@@ -45823,6 +45830,7 @@ fn concentrated_upbringing_workload(count: u64) -> State {
         events: vec![],
     });
     state.care = Some(DependentCare {
+        elapsed: None,
         rules: CareRules {
             dependent_until: 5,
             max_caregiver_hunger: 100,
@@ -46976,6 +46984,7 @@ fn actual_newborns_can_develop_personal_obligation_dispositions_without_inheriti
         member.reproduction_allowed = false;
     }
     initial.care = Some(DependentCare {
+        elapsed: None,
         inherit_births: false,
         rules: CareRules {
             dependent_until: 5,

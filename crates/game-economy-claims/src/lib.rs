@@ -1264,6 +1264,53 @@ pub fn publish(
     opinions: &mut Option<Opinions>,
     present: Option<&(dyn Fn(u64, u64) -> bool + Sync)>,
 ) {
+    publish_uses(
+        claims,
+        uses,
+        people,
+        opinions,
+        events.tick,
+        present,
+        |usage| {
+            if usage.job {
+                events.started.binary_search(&usage.action).is_ok()
+            } else {
+                transaction_accepted(&events.physical_actions, usage.action)
+            }
+        },
+    );
+}
+
+pub fn publish_transactions(
+    claims: &mut Claims,
+    uses: &[Use],
+    transactions: &[game_lots::TransactionOutcome],
+    people: &[Person],
+    opinions: &mut Option<Opinions>,
+    tick: u64,
+    present: Option<&(dyn Fn(u64, u64) -> bool + Sync)>,
+) {
+    publish_uses(claims, uses, people, opinions, tick, present, |usage| {
+        !usage.job && transaction_accepted(transactions, usage.action)
+    });
+}
+
+fn transaction_accepted(transactions: &[game_lots::TransactionOutcome], id: u64) -> bool {
+    transactions
+        .binary_search_by_key(&id, |row| row.id)
+        .ok()
+        .is_some_and(|index| transactions[index].accepted)
+}
+
+fn publish_uses(
+    claims: &mut Claims,
+    uses: &[Use],
+    people: &[Person],
+    opinions: &mut Option<Opinions>,
+    tick: u64,
+    present: Option<&(dyn Fn(u64, u64) -> bool + Sync)>,
+    accepted: impl Fn(&Use) -> bool + Sync,
+) {
     if claims.claims.is_empty() {
         claims.events.clear();
         return;
@@ -1287,17 +1334,7 @@ pub fn publish(
     uses.par_sort_unstable_by_key(|u| (u.region, u.good, u.person));
     let mut rows: Vec<_> = uses
         .par_iter()
-        .filter(|u| {
-            if u.job {
-                events.started.binary_search(&u.action).is_ok()
-            } else {
-                events
-                    .physical_actions
-                    .binary_search_by_key(&u.action, |e| e.id)
-                    .ok()
-                    .is_some_and(|i| events.physical_actions[i].accepted)
-            }
-        })
+        .filter(|usage| accepted(usage))
         .flat_map_iter(|u| {
             let a = observers.partition_point(|c| (c.region, c.good) < (u.region, u.good));
             let b = observers.partition_point(|c| (c.region, c.good) <= (u.region, u.good));
@@ -1312,7 +1349,7 @@ pub fn publish(
                 .filter(move |c| c.person != u.person)
                 .take(4)
                 .map(move |c| UseEvent {
-                    tick: events.tick,
+                    tick,
                     person: u.person,
                     claimant: c.person,
                     region: u.region,
@@ -1329,7 +1366,7 @@ pub fn publish(
             .filter(|r| r.witnessed)
             .map(|r| (r.claimant, r.person))
             .collect();
-        opinions.witness_thefts(&witnessed, events.tick);
+        opinions.witness_thefts(&witnessed, tick);
     }
     claims.events = rows;
 }
