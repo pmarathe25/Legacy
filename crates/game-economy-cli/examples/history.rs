@@ -7,6 +7,9 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 
+#[path = "history_support/practice_log.rs"]
+mod practice_log;
+
 const YEAR_MILLIS: u64 = 365 * 24 * 60 * 60 * 1000;
 
 fn line<T: Serialize>(writer: &mut BufWriter<File>, value: &T) -> Result<(), String> {
@@ -225,6 +228,8 @@ fn run(
     host.take_opinion_events();
     let mut observation_tick = initial.core.physical.custody.tick;
     let mut previous_animals = animals(&host);
+    let mut practice_log = practice_log::PracticeLog::default();
+    practice_log.observe(host.history_view().practices);
     let mut advancing = host.stepper(&[]);
     for year in start_year + 1..=end_year {
         // Bound in-memory history even for hourly or finer simulations.
@@ -264,6 +269,14 @@ fn run(
                 observation_batch.push(json!({"kind":"opinion_changes", "events":opinion_events}));
             }
             let history = advancing.host().history_view();
+            let practice_events = practice_log.observe(history.practices);
+            if !practice_events.is_empty() {
+                observation_batch.push(json!({
+                    "kind":"personal_practices",
+                    "at_millis":advancing.host().core().simulated_millis(),
+                    "events":practice_events
+                }));
+            }
             if !history.animal_deaths.is_empty() {
                 observation_batch
                     .push(json!({"kind":"animal_deaths","events":history.animal_deaths}));

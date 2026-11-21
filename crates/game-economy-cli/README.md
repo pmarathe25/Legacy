@@ -45,6 +45,13 @@ modes use the same elapsed checkpoints for `save PATH` and `load PATH`.
 
 ## Record a history
 
+Histories record authored aid and work proposals, individual responses, and
+personally received claims of readiness when these practices are enabled.
+The archive distinguishes outward adoption from private approval. A readiness
+statement remains an attributed claim. The statements and responses can be
+read alongside actual work and physical deliveries.
+
+
 ```text
 cargo run -p game-economy-cli --profile simulation --example history -- content/scenarios/economy-history-integrated-hourly.toml runs/history/world.ndjson 300 1 60000
 cargo run -p game-economy-cli --example inspect_history -- summary runs/history/world.ndjson --narrative

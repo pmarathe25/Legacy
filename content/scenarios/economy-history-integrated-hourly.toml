@@ -1801,6 +1801,32 @@ enabled = true
 retry_ticks = 24
 request_lifetime = 3
 
+[[giving.practices.minds]]
+person = 1
+invent = true
+approve = false
+willing = false
+ask_willing = true
+shortage_threshold = 8
+minimum_shortages = 2
+review_interval = 24
+proposal_lifetime = 168
+quantity_weight = 1
+report_attitude = "trust"
+
+[[giving.practices.minds]]
+person = 2
+invent = false
+approve = true
+willing = true
+shortage_threshold = 10
+minimum_shortages = 3
+review_interval = 24
+proposal_lifetime = 168
+reserve_portions = 3
+proposal_affinity_weight = 1
+reporting = "truthful"
+
 [market]
 [[market.policies]]
 person = 2
