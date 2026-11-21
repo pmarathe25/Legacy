@@ -221,7 +221,7 @@ impl CoreHost {
             choices.par_extend(supply.into_par_iter().map(|row| row.request));
             choices.par_sort_unstable_by_key(|request| request.person);
         }
-        let goals = if owner.goal_fetchers.is_empty() {
+        let goals = if self.goals.is_none() || owner.goal_fetchers.is_empty() {
             None
         } else {
             let mut occupied = busy.clone();

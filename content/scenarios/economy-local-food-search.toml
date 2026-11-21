@@ -135,6 +135,9 @@ person = 2
 enabled = false
 max_quantity = 1
 
+[local_transport.walking.elapsed]
+unit_millis = 3600000
+
 [[local_transport.walking.routes]]
 region = 1
 from = { kind = "stock" }

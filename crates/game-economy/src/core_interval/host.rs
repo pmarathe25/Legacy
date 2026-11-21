@@ -1338,7 +1338,12 @@ impl CoreHost {
             owner.validate(&people, &goods, &view, core.travel.as_ref())?;
         }
         if let Some(owner) = &mut local_transport {
-            if !owner.goal_fetchers.is_empty() && goals.is_none() {
+            if goals.is_none()
+                && owner
+                    .goal_fetchers
+                    .iter()
+                    .any(|preference| preference.enabled)
+            {
                 return Err("goal-directed carrying requires personal goals".into());
             }
             owner.normalize();

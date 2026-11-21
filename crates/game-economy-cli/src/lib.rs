@@ -129,7 +129,7 @@ struct Scenario {
     #[serde(default)]
     mechanics: Option<MechanicsConfig>,
     #[serde(default)]
-    personal_conflict: Option<game_economy::core_interval::CorePersonalConflict>,
+    personal_conflict: Option<toml::Value>,
     #[serde(default)]
     personal_choices: Vec<game_personal_choice::Person>,
     #[serde(default)]
@@ -707,7 +707,7 @@ struct GivingConfig {
     #[serde(default)]
     acquaintance_asking: Vec<game_economy::AcquaintanceAsking>,
 }
-fn resolve_practice_names(
+fn resolve_content_names(
     value: &mut toml::Value,
     goods: &BTreeMap<&str, u32>,
     recipes: &BTreeMap<&str, u32>,
@@ -721,7 +721,7 @@ fn resolve_practice_names(
                     *value = toml::Value::Integer(i64::from(
                         *goods
                             .get(name)
-                            .ok_or_else(|| format!("unknown practice good {name}"))?,
+                            .ok_or_else(|| format!("unknown good {name}"))?,
                     ));
                 } else if key == "recipe"
                     && let Some(name) = value.as_str()
@@ -729,16 +729,16 @@ fn resolve_practice_names(
                     *value = toml::Value::Integer(i64::from(
                         *recipes
                             .get(name)
-                            .ok_or_else(|| format!("unknown practice recipe {name}"))?,
+                            .ok_or_else(|| format!("unknown recipe {name}"))?,
                     ));
                 } else {
-                    resolve_practice_names(value, goods, recipes)?;
+                    resolve_content_names(value, goods, recipes)?;
                 }
             }
         }
         toml::Value::Array(rows) => {
             for row in rows {
-                resolve_practice_names(row, goods, recipes)?;
+                resolve_content_names(row, goods, recipes)?;
             }
         }
         _ => {}
@@ -1047,12 +1047,27 @@ pub fn core_scenario_with_options(
     let work_capabilities = authored.work_capabilities.take();
     let regions: HashSet<_> = authored.regions.iter().map(|region| region.id).collect();
     let mechanics = authored.mechanics.take();
-    let mut personal_conflict = authored.personal_conflict.take();
+    let personal_conflict = authored.personal_conflict.take();
     let mut personal_choices = std::mem::take(&mut authored.personal_choices);
     let birth_choices = authored.birth_choices.take();
     let meal_preferences = std::mem::take(&mut authored.meal_preferences);
     let scenario = build_scenario(authored, content, seed, population_path)?;
     let mut snapshot = game_economy::core_interval::CoreHostSnapshot::from_scenario(scenario)?;
+    let mut personal_conflict = personal_conflict
+        .map(|mut authored| {
+            let goods = snapshot
+                .core
+                .physical
+                .goods
+                .iter()
+                .map(|good| (good.name.as_str(), good.id))
+                .collect();
+            resolve_content_names(&mut authored, &goods, &BTreeMap::new())?;
+            authored
+                .try_into::<game_economy::core_interval::CorePersonalConflict>()
+                .map_err(|error| error.to_string())
+        })
+        .transpose()?;
     if let Some(period) = fatigue_rate_period_millis {
         snapshot
             .fatigue
@@ -2199,7 +2214,7 @@ fn build_scenario(
             let practices = config
                 .practices
                 .map(|mut value| {
-                    resolve_practice_names(&mut value, &goods, &recipes)?;
+                    resolve_content_names(&mut value, &goods, &recipes)?;
                     value
                         .try_into()
                         .map_err(|error: toml::de::Error| error.to_string())

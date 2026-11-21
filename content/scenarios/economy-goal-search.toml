@@ -114,6 +114,9 @@ priority = 1
 batch = 1
 review_interval = 3
 
+[local_transport.walking.elapsed]
+unit_millis = 3600000
+
 [[local_transport.walking.routes]]
 region = 1
 from = { kind = "stock" }

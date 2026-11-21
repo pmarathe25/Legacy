@@ -178,9 +178,11 @@ fulfilled_gain = 1
 default_loss = 1
 fear_per_damage = 1
 
-[[medical.policies]]
-person = 3
-patient = 3
-medicine = "healing-herbs"
-quantity = 1
-willing = true
+[personal_conflict]
+# Carried healing herbs. The injury remedy above sets the physical dose.
+wound_care = [{ person = 3, good = "healing-herbs", willing = true }]
+
+[[personal_choices]]
+id = 3
+idle = 0
+preferences = [{ domain = 16, enabled = true, bias = 10 }]
