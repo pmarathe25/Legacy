@@ -493,7 +493,7 @@ fn inspect(path: &Path, focus: Focus, through_year: Option<u64>) -> Result<Value
                     metadata_corrections.push("The source metadata incorrectly says animal parentage is absent. Animals born in these runs have recorded parent IDs; founders may not.");
                 }
                 expected_years = row["years_requested"].as_u64();
-                metadata = json!({"calendar":row["calendar"],"tick_millis":row["tick_millis"],"step_millis":row["step_millis"],"ticks_per_year":row["ticks_per_year"],"seed":row["seed"],"git_revision":row["git_revision"],"git_revision_scope":row["git_revision_scope"],"tracked_source_modified":row["tracked_source_modified"],"executable":row["executable"],"source_kind":row["source_kind"],"limitations":row["limitations"]});
+                metadata = json!({"calendar":row["calendar"],"tick_millis":row["tick_millis"],"step_millis":row["step_millis"],"ticks_per_year":row["ticks_per_year"],"year_millis":row["year_millis"],"seed":row["seed"],"git_revision":row["git_revision"],"git_revision_scope":row["git_revision_scope"],"tracked_source_modified":row["tracked_source_modified"],"executable":row["executable"],"source_kind":row["source_kind"],"limitations":row["limitations"]});
             }
             Some("complete") => {
                 if pending_year.is_some() {

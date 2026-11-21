@@ -168,10 +168,9 @@ fn run(
     host.detach_player_control()?;
     let initial = host.snapshot();
     let tick_millis = initial.core.physical.tick_millis;
-    if tick_millis == 0 || !YEAR_MILLIS.is_multiple_of(tick_millis) {
-        return Err("the history tick must divide a 365-day year exactly".into());
-    }
-    let ticks_per_year = YEAR_MILLIS / tick_millis;
+    let ticks_per_year = YEAR_MILLIS
+        .is_multiple_of(tick_millis)
+        .then(|| YEAR_MILLIS / tick_millis);
     let step_millis = requested_step_millis.unwrap_or(tick_millis);
     if step_millis == 0 {
         return Err("history advance size must be positive".into());
@@ -179,11 +178,13 @@ fn run(
     if years == 0 {
         return Err("years must be positive".into());
     }
-    let start_tick = initial.core.physical.custody.tick;
-    if !start_tick.is_multiple_of(ticks_per_year) {
-        return Err("history must start at a year boundary".into());
+    let year_duration = u128::from(YEAR_MILLIS);
+    let start_time = host.core().simulated_millis();
+    if !start_time.is_multiple_of(year_duration) {
+        return Err("history must start at a calendar year boundary".into());
     }
-    let start_year = start_tick / ticks_per_year;
+    let start_year = u64::try_from(start_time / year_duration)
+        .map_err(|_| "history year overflow")?;
     let end_year = start_year
         .checked_add(years)
         .ok_or("history year overflow")?;
@@ -223,11 +224,11 @@ fn run(
     }
     line(
         &mut writer,
-        &json!({"kind":"metadata","schema":2,"years_requested":years,"start_year":start_year,"tick_millis":tick_millis,"step_millis":step_millis,"ticks_per_year":ticks_per_year,"calendar":"365-day years","seed":initial.core.seed,"workers":workers,"git_revision":revision(root),"git_revision_scope":"checkout at run time; executable build provenance is not verified","tracked_source_modified":tracked_changes(root),"executable":std::env::current_exe().ok(),"source":source,"source_kind":if resume {"checkpoint"} else {"scenario"},"scenario":scenario_text,"limitations":limitations}),
+        &json!({"kind":"metadata","schema":2,"years_requested":years,"start_year":start_year,"tick_millis":tick_millis,"step_millis":step_millis,"ticks_per_year":ticks_per_year,"year_millis":YEAR_MILLIS,"calendar":"365-day years","seed":initial.core.seed,"workers":workers,"git_revision":revision(root),"git_revision_scope":"checkout at run time; executable build provenance is not verified","tracked_source_modified":tracked_changes(root),"executable":std::env::current_exe().ok(),"source":source,"source_kind":if resume {"checkpoint"} else {"scenario"},"scenario":scenario_text,"limitations":limitations}),
     )?;
     line(
         &mut writer,
-        &json!({"kind":"initial","year":start_year,"snapshot":initial}),
+        &json!({"kind":"initial","year":start_year,"at_millis":start_time,"snapshot":initial}),
     )?;
     // The initial snapshot already contains any events restored from a save.
     // Subsequent events are archived with the year in which they occurred.
@@ -241,15 +242,22 @@ fn run(
         // Bound in-memory history even for hourly or finer simulations.
         let mut observation_batch = Vec::new();
         let mut previous_step_animals = previous_animals.clone();
-        for step in 0..ticks_per_year {
-            let mut remaining = tick_millis;
+        let end_time = u128::from(year) * year_duration;
+        let mut since_flush = 0;
+        while advancing.host().core().simulated_millis() < end_time {
+            let opening = advancing.host().core();
+            let to_calendar = (end_time - opening.simulated_millis()) as u64;
+            let to_physical = tick_millis - opening.elapsed_millis().unwrap_or(0);
+            let segment = to_calendar.min(to_physical);
+            let settles = segment == to_physical;
+            let mut remaining = segment;
             while remaining > 0 {
                 let elapsed = remaining.min(step_millis);
                 let result = advancing.advance(elapsed).and_then(|result| {
                     if let Some(error) = result.failure {
                         return Err(error);
                     }
-                    let expected_boundaries = u64::from(elapsed == remaining);
+                    let expected_boundaries = u64::from(settles && elapsed == remaining);
                     if result.elapsed_millis != elapsed || result.boundaries != expected_boundaries
                     {
                         return Err("unexpected elapsed time or boundary count".into());
@@ -269,6 +277,13 @@ fn run(
                     }
                 }
                 remaining -= elapsed;
+                if observation_batch.len() >= 4096 {
+                    line(
+                        &mut writer,
+                        &json!({"kind":"observation_batch","year":year,"observations":observation_batch}),
+                    )?;
+                    observation_batch.clear();
+                }
             }
             let opinion_events = advancing.take_opinion_events();
             if !opinion_events.is_empty() {
@@ -283,11 +298,11 @@ fn run(
                     "events":practice_events
                 }));
             }
-            if !history.animal_deaths.is_empty() {
+            if settles && !history.animal_deaths.is_empty() {
                 observation_batch
                     .push(json!({"kind":"animal_deaths","events":history.animal_deaths}));
             }
-            if !history.elapsed_social {
+            if settles && !history.elapsed_social {
                 let recipe_learning: Vec<_> = history
                     .recipe_learning
                     .iter()
@@ -306,7 +321,7 @@ fn run(
                         .push(json!({"kind":"signal_events", "events":history.signal_events}));
                 }
             }
-            {
+            if settles {
                 let learning: Vec<_> = history
                     .signal_learning
                     .iter()
@@ -316,8 +331,8 @@ fn run(
                     observation_batch.push(json!({"kind":"signal_learning", "events":learning}));
                 }
             }
-            if ticks_per_year > 1 {
-                if !history.family_events.is_empty() {
+            if tick_millis < YEAR_MILLIS {
+                if settles && !history.family_events.is_empty() {
                     observation_batch
                         .push(json!({"kind":"family_events", "events":history.family_events}));
                 }
@@ -347,27 +362,19 @@ fn run(
                     previous_step_animals = current;
                 }
             }
-            if ((step + 1) % 24 == 0 || step + 1 == ticks_per_year) && !observation_batch.is_empty()
-            {
-                line(
-                    &mut writer,
-                    &json!({"kind":"observation_batch","year":year,"observations":observation_batch}),
-                )?;
-                observation_batch.clear();
+            since_flush += 1;
+            if since_flush == 24 || advancing.host().core().simulated_millis() == end_time {
+                if !observation_batch.is_empty() {
+                    line(
+                        &mut writer,
+                        &json!({"kind":"observation_batch","year":year,"observations":observation_batch}),
+                    )?;
+                    observation_batch.clear();
+                }
+                since_flush = 0;
             }
         }
         let snapshot = advancing.host().snapshot();
-        if snapshot.core.physical.custody.tick
-            != year
-                .checked_mul(ticks_per_year)
-                .ok_or("history tick overflow")?
-        {
-            line(
-                &mut writer,
-                &json!({"kind":"failure","year":year,"message":"unexpected simulation tick"}),
-            )?;
-            return Err(format!("year {year}: unexpected simulation tick"));
-        }
         let current_animals: BTreeSet<_> =
             snapshot.fauna.as_ref().map_or_else(BTreeSet::new, |fauna| {
                 fauna
@@ -394,10 +401,10 @@ fn run(
         let animal_count = current_animals.len();
         line(
             &mut writer,
-            &json!({"kind":"year","year":year,"living_people":living,"living_animals":animal_count,"animal_ids_appeared":appeared,"animal_ids_no_longer_alive":inactive,"observations":[],"snapshot":snapshot}),
+            &json!({"kind":"year","year":year,"at_millis":end_time,"living_people":living,"living_animals":animal_count,"animal_ids_appeared":appeared,"animal_ids_no_longer_alive":inactive,"observations":[],"snapshot":snapshot}),
         )?;
         previous_animals = current_animals;
-        if ticks_per_year >= 8_760 || year % 50 == 0 || year == end_year {
+        if tick_millis <= YEAR_MILLIS / 8_760 || year % 50 == 0 || year == end_year {
             let checkpoint = output.with_extension(format!("year-{year}.json"));
             let file = OpenOptions::new()
                 .write(true)
@@ -405,7 +412,7 @@ fn run(
                 .open(&checkpoint)
                 .map_err(|e| e.to_string())?;
             let mut checkpoint_writer = BufWriter::new(file);
-            serde_json::to_writer(&mut checkpoint_writer, &advancing.host().snapshot())
+            serde_json::to_writer(&mut checkpoint_writer, &snapshot)
                 .map_err(|e| e.to_string())?;
             checkpoint_writer.flush().map_err(|e| e.to_string())?;
             println!(
@@ -1042,6 +1049,70 @@ mod tests {
         for (path, year) in [(&one, 3), (&six, 3), (&four, 4), (&restart, 4)] {
             fs::remove_file(path).unwrap();
             fs::remove_file(path.with_extension(format!("year-{year}.json"))).unwrap();
+        }
+    }
+
+    #[test]
+    fn annual_checkpoints_can_split_a_physical_interval() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let template = root.join("content/scenarios/economy-history-pilot.toml");
+        let quantum = YEAR_MILLIS * 3 / 4 + 17;
+        let token = format!("legacy-split-calendar-{}", std::process::id());
+        let path = |suffix: &str| std::env::temp_dir().join(format!("{token}-{suffix}"));
+        let scenario = path("scenario.toml");
+        let source = fs::read_to_string(&template).unwrap().replace(
+            &format!("tick_millis = {YEAR_MILLIS}"),
+            &format!("tick_millis = {quantum}"),
+        );
+        fs::write(&scenario, source).unwrap();
+        let first = path("first.ndjson");
+        let full = path("full.ndjson");
+        let continued = path("continued.ndjson");
+        let run_with_workers = |source: &Path, target: &Path, years, workers, resume, step| {
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(workers)
+                .build()
+                .unwrap()
+                .install(|| run(&root, source, target, years, workers, resume, step))
+                .unwrap();
+        };
+        run_with_workers(&scenario, &first, 1, 1, false, None);
+        run_with_workers(&scenario, &full, 2, 1, false, None);
+        let checkpoint = first.with_extension("year-1.json");
+        let checkpoint_state: CoreHostSnapshot =
+            serde_json::from_reader(File::open(&checkpoint).unwrap()).unwrap();
+        assert_eq!(checkpoint_state.core.boundary_millis, Some(u128::from(quantum)));
+        assert_eq!(
+            checkpoint_state.core.physical.work_interval.unwrap().elapsed_millis,
+            YEAR_MILLIS - quantum
+        );
+        run_with_workers(
+            &checkpoint,
+            &continued,
+            1,
+            6,
+            true,
+            Some(YEAR_MILLIS / 9 + 37),
+        );
+        let full_rows = records(&full);
+        let resumed_rows = records(&continued);
+        assert_eq!(resumed_rows[0]["start_year"], 1);
+        assert_eq!(resumed_rows[0]["year_millis"], YEAR_MILLIS);
+        assert_eq!(resumed_rows[0]["ticks_per_year"], Value::Null);
+        assert_eq!(resumed_rows[1]["at_millis"], YEAR_MILLIS);
+        let last_year = |rows: Vec<Value>| {
+            rows.into_iter()
+                .find(|row| row["kind"] == "year" && row["year"] == 2)
+                .unwrap()
+        };
+        let finished = last_year(full_rows);
+        assert_eq!(finished["at_millis"], YEAR_MILLIS * 2);
+        assert_eq!(finished, last_year(resumed_rows));
+        for path in [
+            scenario, checkpoint, full.with_extension("year-2.json"),
+            continued.with_extension("year-2.json"), first, full, continued,
+        ] {
+            fs::remove_file(path).unwrap();
         }
     }
 
