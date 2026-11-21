@@ -344,6 +344,7 @@ macro_rules! cultivation_methods {
 }
 
 pub struct Plan {
+    boundary: bool,
     pub actors: Vec<u64>,
     pub requesters: Vec<u64>,
     pub plant: Vec<Transaction>,
@@ -419,6 +420,26 @@ impl Context<'_> {
         choice_people: &[u64],
         selected_blocked: &[u64],
     ) -> Result<Plan, String> {
+        self.prepare_work(base, selected, choice_people, selected_blocked, true)
+    }
+
+    /// Stage the competing intentions that actually won their personal decision round.
+    pub fn prepare_elapsed(
+        &self,
+        selected: &[opportunities::Opportunity],
+        actors: &[u64],
+    ) -> Result<Plan, String> {
+        self.prepare_work(1, selected, actors, self.busy, false)
+    }
+
+    fn prepare_work(
+        &self,
+        base: u64,
+        selected: &[opportunities::Opportunity],
+        choice_people: &[u64],
+        selected_blocked: &[u64],
+        boundary: bool,
+    ) -> Result<Plan, String> {
         if selected.par_windows(2).any(|p| p[0].person >= p[1].person)
             || choice_people.par_windows(2).any(|p| p[0] >= p[1])
             || selected_blocked.par_windows(2).any(|p| p[0] >= p[1])
@@ -465,11 +486,15 @@ impl Context<'_> {
         if crops.par_windows(2).any(|p| p[0].id > p[1].id) {
             crops.par_sort_unstable_by_key(|c| c.id);
         }
-        let mut policies: Vec<_> = self.agriculture.policies.par_iter().collect();
+        let mut policies: Vec<_> = if boundary {
+            self.agriculture.policies.par_iter().collect()
+        } else {
+            Vec::new()
+        };
         if policies.par_windows(2).any(|p| p[0].person > p[1].person) {
             policies.par_sort_unstable_by_key(|p| p.person);
         }
-        let opinions = self.opinions.map(Opinions::index);
+        let opinions = self.opinions.filter(|_| boundary).map(Opinions::index);
         if (self.manual_response.is_some() || self.manual_withdrawal.is_some())
             && self.agriculture.requests.is_none()
         {
@@ -479,10 +504,15 @@ impl Context<'_> {
             .agriculture
             .requests
             .as_ref()
+            .filter(|_| boundary)
             .map(|owner| requests::prepare(owner, self, opinions.as_ref()))
             .transpose()?;
-        let mut workers: Vec<_> = self
-            .people
+        let ordinary_people = if policies.is_empty() {
+            &[]
+        } else {
+            self.people
+        };
+        let mut workers: Vec<_> = ordinary_people
             .par_iter()
             .filter_map(|person| {
                 if person.controlled
@@ -525,9 +555,12 @@ impl Context<'_> {
             drop(phase);
             phase = game_diagnostics::span("agriculture.fields");
         }
-        let mut candidates: Vec<_> = self
-            .agriculture
-            .fields
+        let ordinary_fields = if workers.is_empty() {
+            &[][..]
+        } else {
+            self.agriculture.fields.as_slice()
+        };
+        let mut candidates: Vec<_> = ordinary_fields
             .par_iter()
             .filter(|field| {
                 if manual.is_some_and(|(chosen, _)| chosen.id == field.id) {
@@ -862,7 +895,9 @@ impl Context<'_> {
         let mut fields: Vec<_> = self.agriculture.fields.par_iter().cloned().collect();
         fields
             .par_iter_mut()
-            .filter(|f| self.agriculture.growth_clock.is_none() && f.phase == Phase::Growing)
+            .filter(|f| {
+                boundary && self.agriculture.growth_clock.is_none() && f.phase == Phase::Growing
+            })
             .for_each(|f| {
                 let factor = self.season.map_or(1000, |s| {
                     if s.tending_allowed {
@@ -915,6 +950,7 @@ impl Context<'_> {
                     _ => unreachable!("each cultivation action has exactly one transaction"),
                 });
         Ok(Plan {
+            boundary,
             track_seeds: self.agriculture.provenance.is_some(),
             maturations: None,
             actors,
@@ -1033,10 +1069,15 @@ impl Plan {
         } else {
             Vec::new()
         };
+        let fallow = if self.boundary {
+            &owner.fields[..]
+        } else {
+            &[]
+        };
         let soil = owner
             .soil
             .as_ref()
-            .map(|soil| soil.advance(&owner.fields, &harvested));
+            .map(|soil| soil.advance(fallow, &harvested));
         let rows: Vec<_> = self
             .fields
             .into_par_iter()
@@ -1068,10 +1109,13 @@ impl Plan {
                 Ok(field)
             })
             .collect::<Result<_, _>>()?;
-        let requests = self
-            .requests
-            .map(|prepared| prepared.publish(&changes, &decisions))
-            .transpose()?;
+        let requests = if self.boundary {
+            self.requests
+                .map(|prepared| prepared.publish(&changes, &decisions))
+                .transpose()?
+        } else {
+            owner.requests.clone()
+        };
         Ok(Agriculture {
             growth_clock: owner.growth_clock.clone(),
             provenance,

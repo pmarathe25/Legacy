@@ -1,10 +1,147 @@
-//! Boundary cultivation, staged with the common physical generation.
+//! Cultivation choices and crop growth through physical custody.
 use super::*;
 use game_economy_agriculture::elapsed_growth::{Growth, Rates};
 type CultivationClaims = Option<(game_economy_claims::Claims, Option<game_opinions::Opinions>)>;
 type CropProgress = (Option<Growth>, Option<game_lots::BatchAllocation>);
 
+pub(super) struct CultivatedNow {
+    pub actors: Vec<u64>,
+    pub choices: Vec<CoreChoiceEvent>,
+    pub fields: Vec<game_economy_agriculture::opportunities::Opportunity>,
+}
+
 impl CoreHost {
+    pub(super) fn cultivated_at_decisions(&self) -> bool {
+        self.agriculture
+            .as_ref()
+            .is_some_and(|farm| farm.growth_clock.is_some())
+    }
+
+    /// Settle the fields selected by competing personal choices at this decision instant.
+    pub(super) fn cultivate_at_decision(
+        &mut self,
+        blocked: &[u64],
+        intents: &[CoreChoiceIntent],
+    ) -> Result<CultivatedNow, String> {
+        let resolved = self.resolve_cultivation_fields(intents);
+        let actors = resolved
+            .par_iter()
+            .map(|(choice, _)| choice.person)
+            .collect();
+        let selected: Vec<_> = resolved
+            .par_iter()
+            .filter_map(|(choice, won)| won.then_some(*choice))
+            .collect();
+        let mut outcomes = Vec::new();
+        let tick = self.core.physical.tick();
+        let offset_millis = self
+            .core
+            .elapsed_millis()
+            .ok_or("no cultivation interval")?;
+        if !selected.is_empty() {
+            let owner = self
+                .agriculture
+                .as_ref()
+                .expect("elapsed cultivation owner");
+            let busy = self.choice_busy(blocked);
+            let away = self.block_away_from_stock(&busy);
+            let view = self.core.physical.view(tick)?;
+            let claims = self.claims.as_ref().map(game_economy_claims::Claims::index);
+            let selected_people: Vec<_> = selected.par_iter().map(|choice| choice.person).collect();
+            let plan = game_economy_agriculture::Context {
+                agriculture: owner,
+                agreements: self.agreements.as_ref(),
+                people: &self.core.people,
+                opinions: self.opinions.as_ref(),
+                claims: claims.as_ref(),
+                busy: away.as_deref().unwrap_or(&busy),
+                contact_blocked: blocked,
+                catalog: self.core.physical.catalog(),
+                view: &view,
+                lot_instant: self.core.physical.lot_instant(tick),
+                tick,
+                manual: None,
+                manual_response: None,
+                manual_withdrawal: None,
+                reserved_field: None,
+                season: self.current_season(tick),
+            }
+            .prepare_elapsed(&selected, &selected_people)?;
+            if !plan.changes.is_empty() {
+                let actions = plan
+                    .plant
+                    .par_iter()
+                    .chain(plan.harvest.par_iter())
+                    .cloned()
+                    .collect();
+                let seed = self.core.seed ^ self.core.decision_time_key();
+                let (draft, events) = self
+                    .core
+                    .physical
+                    .prepare_interval_cultivation(actions, seed)?;
+                outcomes = plan
+                    .actors
+                    .par_iter()
+                    .zip(plan.changes.par_iter())
+                    .map(|(&actor, &(_, action, _, _))| {
+                        let accepted = events
+                            .physical_actions
+                            .binary_search_by_key(&action, |row| row.id)
+                            .is_ok_and(|index| events.physical_actions[index].accepted);
+                        (actor, accepted)
+                    })
+                    .collect();
+                outcomes.par_sort_unstable_by_key(|row| row.0);
+                if outcomes.par_iter().any(|row| row.1) {
+                    let (farm, claims) = self.stage_cultivation(Some(plan), &events, &[])?;
+                    self.core.physical.commit_interval_consumption(draft)?;
+                    self.agriculture = farm;
+                    if let Some((claims, opinions)) = claims {
+                        self.claims = Some(claims);
+                        self.opinions = opinions;
+                    }
+                }
+            }
+        }
+        let choices: Vec<_> = resolved
+            .par_iter()
+            .map(|(choice, won)| CoreChoiceEvent {
+                tick,
+                offset_millis,
+                actor: choice.person,
+                key: Some(game_personal_choice::Key {
+                    domain: personal_choice::CULTIVATION,
+                    action: choice.field,
+                }),
+                outcome: if *won {
+                    outcomes
+                        .binary_search_by_key(&choice.person, |row| row.0)
+                        .map_or(CoreChoiceOutcome::Stale, |index| {
+                            if outcomes[index].1 {
+                                CoreChoiceOutcome::Accepted
+                            } else {
+                                CoreChoiceOutcome::Denied
+                            }
+                        })
+                } else {
+                    CoreChoiceOutcome::Denied
+                },
+            })
+            .collect();
+        let fields = resolved
+            .into_par_iter()
+            .zip(choices.par_iter())
+            .filter_map(|((field, _), event)| {
+                (event.outcome == CoreChoiceOutcome::Accepted).then_some(field)
+            })
+            .collect();
+        Ok(CultivatedNow {
+            actors,
+            choices,
+            fields,
+        })
+    }
+
     pub(super) fn next_dry_field(&self) -> Option<u64> {
         u64::try_from(self.irrigation.as_ref()?.next_dry_after()?).ok()
     }

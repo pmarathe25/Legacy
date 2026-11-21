@@ -672,8 +672,43 @@ impl CoreHost {
     ) -> (Vec<u64>, Vec<CoreChoiceEvent>) {
         let tick = self.core.physical.tick();
         let offset = self.core.elapsed_millis().expect("active interval");
-        let round = self.core.decision_time_key();
+        let resolved = self.resolve_cultivation_fields(intents);
         let schedule = self.schedule.as_mut().expect("active schedule");
+        schedule.pending_cultivation.par_extend(
+            resolved
+                .par_iter()
+                .filter_map(|(row, accepted)| accepted.then_some(*row)),
+        );
+        schedule
+            .pending_cultivation
+            .par_sort_unstable_by_key(|row| row.person);
+        let actors = resolved.par_iter().map(|row| row.0.person).collect();
+        let events = resolved
+            .into_par_iter()
+            .map(|(row, accepted)| CoreChoiceEvent {
+                tick,
+                offset_millis: offset,
+                actor: row.person,
+                key: Some(Key {
+                    domain: CULTIVATION,
+                    action: row.field,
+                }),
+                outcome: if accepted {
+                    CoreChoiceOutcome::Pending
+                } else {
+                    CoreChoiceOutcome::Denied
+                },
+            })
+            .collect();
+        (actors, events)
+    }
+
+    pub(super) fn resolve_cultivation_fields(
+        &self,
+        intents: &[CoreChoiceIntent],
+    ) -> Vec<(game_economy_agriculture::opportunities::Opportunity, bool)> {
+        let round = self.core.decision_time_key();
+        let schedule = self.schedule.as_ref().expect("active schedule");
         let mut occupied: Vec<_> = schedule
             .pending_cultivation
             .par_iter()
@@ -702,33 +737,7 @@ impl CoreHost {
             })
             .collect();
         resolved.par_sort_unstable_by_key(|row| row.0.person);
-        schedule.pending_cultivation.par_extend(
-            resolved
-                .par_iter()
-                .filter_map(|(row, accepted)| accepted.then_some(*row)),
-        );
-        schedule
-            .pending_cultivation
-            .par_sort_unstable_by_key(|row| row.person);
-        let actors = resolved.par_iter().map(|row| row.0.person).collect();
-        let events = resolved
-            .into_par_iter()
-            .map(|(row, accepted)| CoreChoiceEvent {
-                tick,
-                offset_millis: offset,
-                actor: row.person,
-                key: Some(Key {
-                    domain: CULTIVATION,
-                    action: row.field,
-                }),
-                outcome: if accepted {
-                    CoreChoiceOutcome::Pending
-                } else {
-                    CoreChoiceOutcome::Denied
-                },
-            })
-            .collect();
-        (actors, events)
+        resolved
     }
 
     pub(super) fn queue_gathering(

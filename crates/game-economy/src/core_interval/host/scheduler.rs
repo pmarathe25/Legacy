@@ -775,6 +775,10 @@ pub enum CoreRunEvent {
         lifespan_loss: u64,
     },
     PersonalChoices(Vec<CoreChoiceEvent>),
+    ElapsedCultivation {
+        at_millis: u128,
+        fields: Vec<game_economy_agriculture::opportunities::Opportunity>,
+    },
     ElapsedGathering {
         at_millis: u128,
         events: Vec<crate::gathering::Harvested>,
@@ -1953,12 +1957,23 @@ impl CoreHost {
                             meal_people.dedup();
                             self.record_personal_choices(&mut run, events);
                         }
-                        let (actors, pending) = self.queue_cultivation(&intents);
-                        meal_people.par_extend(actors.into_par_iter());
-                        meal_people.par_sort_unstable();
-                        meal_people.dedup();
-                        if !pending.is_empty() {
-                            self.record_personal_choices(&mut run, pending);
+                        let (actors, choices) = if self.cultivated_at_decisions() {
+                            let cultivation = attempt!('run, self.cultivate_at_decision(&busy, &intents));
+                            if !cultivation.fields.is_empty() {
+                                run.events.push(CoreRunEvent::ElapsedCultivation {
+                                    at_millis: self.core.simulated_millis(),
+                                    fields: cultivation.fields,
+                                });
+                            }
+                            (cultivation.actors, cultivation.choices)
+                        } else {
+                            self.queue_cultivation(&intents)
+                        };
+                        if !choices.is_empty() {
+                            meal_people.par_extend(actors);
+                            meal_people.par_sort_unstable();
+                            meal_people.dedup();
+                            self.record_personal_choices(&mut run, choices);
                         }
                         let gather_now = self.gathers_at_decisions();
                         if !gather_now {

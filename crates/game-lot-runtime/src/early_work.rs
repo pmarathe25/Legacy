@@ -525,6 +525,94 @@ impl Runtime {
         })
     }
 
+    /// Stage seed withdrawals and harvest outputs at an open interval instant.
+    pub fn prepare_interval_cultivation(
+        &self,
+        mut actions: Vec<Transaction>,
+        seed: u64,
+    ) -> Result<(IntervalConsumptionDraft, crate::Events), String> {
+        let interval = self
+            .work_interval
+            .as_ref()
+            .ok_or("no physical work interval")?;
+        if interval.tick != self.tick()
+            || interval.custody_revision != self.store.revision()
+            || interval.elapsed_millis >= self.tick_millis
+        {
+            return Err("invalid interval for cultivation".into());
+        }
+        let instant = self.lot_instant(interval.tick);
+        actions
+            .par_iter()
+            .try_for_each(|action| match &action.movements[..] {
+                [] => game_lot_content::validate_growth(
+                    &self.catalog,
+                    std::slice::from_ref(action),
+                    instant,
+                ),
+                [seed]
+                    if matches!(seed.from, Place::Stock { good, .. } if good == seed.good)
+                        && seed.to.is_none() =>
+                {
+                    game_lot_work::validate_actions(&self.catalog, std::slice::from_ref(action))
+                }
+                _ => Err("invalid cultivation custody".into()),
+            })?;
+        renumber_operations(&mut actions)?;
+        let mut custody = self.store.prepare_transactions_now(seed, &actions)?;
+        if !custody.spoiled().is_empty() {
+            return Err("interval cultivation cannot publish pending spoilage".into());
+        }
+        let (movements, _) = custody.take_outcome_batch();
+        let (headers, arenas) = movements.into_parts();
+        let requests: Vec<_> = actions
+            .par_iter()
+            .filter_map(|action| action.movements.first().map(|row| (action.id, *row)))
+            .collect();
+        let receipts = headers
+            .into_par_iter()
+            .map(|movement| {
+                let i = requests
+                    .binary_search_by_key(&movement.id, |row| row.1.id)
+                    .map_err(|_| "missing cultivation receipt request")?;
+                let (action, request) = requests[i];
+                Ok(crate::ExternalReceiptHeader {
+                    action,
+                    request,
+                    movement,
+                })
+            })
+            .collect::<Result<_, String>>()?;
+        let mut physical_movements = crate::ExternalReceiptBatch::from_parts(receipts, arenas);
+        physical_movements.sort_by_action();
+        let events = crate::Events {
+            tick: interval.tick,
+            started: Vec::new(),
+            start_denied: Vec::new(),
+            abandoned: Vec::new(),
+            suspended: Vec::new(),
+            adopted: Vec::new(),
+            finished: Vec::new(),
+            delivered: Vec::new(),
+            output_lost: Vec::new(),
+            interrupted: Vec::new(),
+            returned: Vec::new(),
+            empty_returns: Vec::new(),
+            spoiled: Vec::new(),
+            physical_actions: custody.transactions().to_vec(),
+            physical_movements,
+        };
+        Ok((
+            IntervalConsumptionDraft {
+                epoch: self.epoch,
+                tick: interval.tick,
+                offset_millis: interval.elapsed_millis,
+                custody,
+            },
+            events,
+        ))
+    }
+
     /// Stage identified pages and consume the writer's actual paper and ink atomically.
     pub fn prepare_interval_writing(
         &self,

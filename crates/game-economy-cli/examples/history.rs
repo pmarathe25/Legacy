@@ -118,6 +118,7 @@ fn observation(event: &CoreRunEvent, current_tick: &mut u64) -> Option<Value> {
         CoreRunEvent::LocalCarries(rows) if !rows.is_empty() => Some(json!({"kind":"local_carrying","events":rows})),
         CoreRunEvent::CrewStarts { at_millis, crew } => Some(json!({"kind":"crew_starts","at_millis":at_millis,"events":crew})),
         CoreRunEvent::AgreementExpiry { at_millis, events } => Some(json!({"kind":"agreement_expiry","at_millis":at_millis,"events":events})),
+        CoreRunEvent::ElapsedCultivation { at_millis, fields } => Some(json!({"kind":"elapsed_cultivation","at_millis":at_millis,"events":fields})),
         CoreRunEvent::ElapsedGathering { at_millis, events } => Some(json!({"kind":"gathered_resources","at_millis":at_millis,"events":events})),
         CoreRunEvent::PersonalChoices(rows) if !rows.is_empty() => Some(json!({"kind":"personal_choices","events":rows})),
         CoreRunEvent::PersonalStrikes { events, harm } if !events.is_empty() => Some(json!({"kind":"personal_strikes","tick":*current_tick,"events":events,"harm":harm})),
