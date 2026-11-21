@@ -249,6 +249,7 @@ impl Chronicle {
                 | "work_requests"
                 | "maturation"
                 | "recipe_learning"
+                | "written_explanations"
                 | "personal_practices"
                 | "agreement_expiry"
         ) {
@@ -433,6 +434,33 @@ fn classify(kind: &str, row: &Value) -> Option<Receipt> {
             label: "recipe lessons recorded",
             actor: Some(row["teacher"].as_u64()?),
             other: Some(row["student"].as_u64()?),
+        });
+    }
+    if kind == "written_explanations" {
+        let speaker = row["speaker"].as_u64()?;
+        let listener = row["listener"].as_u64()?;
+        let adoption = row["adopted"].as_object();
+        let (label, actor, other) = match adoption {
+            Some(_) if row["adopted"]["marks"] != row["marks"] => (
+                "written forms adapted after an explanation",
+                listener,
+                speaker,
+            ),
+            Some(_) => (
+                "written forms adopted after an explanation",
+                listener,
+                speaker,
+            ),
+            None => (
+                "written explanations without recorded adoption",
+                speaker,
+                listener,
+            ),
+        };
+        return Some(Receipt {
+            label,
+            actor: Some(actor),
+            other: Some(other),
         });
     }
     if kind == "maturation" {
@@ -683,6 +711,33 @@ pub(super) fn write_person(text: &mut String, rows: &Value, time_name: fn(u64) -
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn written_history_distinguishes_adoption_adaptation_and_hearing() {
+        let mut history = Chronicle::default();
+        history.observe(
+            &json!({
+                "kind":"written_explanations", "at_millis":17,
+                "events":[
+                    {"speaker":1,"listener":2,"marks":[4],"adopted":{"sounds":[0],"marks":[4]}},
+                    {"speaker":1,"listener":3,"marks":[4],"adopted":{"sounds":[0],"marks":[7]}},
+                    {"speaker":1,"listener":4,"marks":[4],"heard":true}
+                ]
+            }),
+            1,
+            Some(3),
+        );
+        let summary = history.summary();
+        let counts = &summary["counts"];
+        assert_eq!(counts["written forms adopted after an explanation"], 1);
+        assert_eq!(counts["written forms adapted after an explanation"], 1);
+        assert_eq!(counts["written explanations without recorded adoption"], 1);
+        let personal = history.selected();
+        assert_eq!(personal.len(), 1);
+        assert_eq!(personal[0]["actor"], 3);
+        assert_eq!(personal[0]["other"], 1);
+        assert_eq!(personal[0]["at_millis"], 17);
+    }
 
     #[test]
     fn crew_counts_come_from_attributed_accepted_starts() {

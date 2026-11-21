@@ -39,6 +39,25 @@ show = true
 adopt = true
 remember_capacity = 4
 
+[[language.writing.sharing]]
+person = 43
+show = true
+adopt = true
+remember_capacity = 4
+
+[[language.writing.sharing]]
+person = 44
+show = true
+adopt = true
+remember_capacity = 4
+adopted_marks = [74044]
+
+[[language.writing.sharing]]
+person = 45
+show = false
+adopt = false
+remember_capacity = 4
+
 [[language.minds]]
 person = 1
 syntax = { initiative = 700, demonstrate = true }
