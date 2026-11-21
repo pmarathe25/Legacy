@@ -88,6 +88,26 @@ regional contention explains the gap. Source review identified repeated
 deadline discovery, repeated activity construction, and many small owner
 batches as candidates for the next comparison.
 
+The next optimized build included the checked-deadline and fatigue changes,
+the single elapsed execution path, and the newer wildlife owner. The same
+archived reference scenario used its original wildlife configuration.
+
+| Scenario and caller step | 1 worker | 2 workers | 4 workers | 6 workers | 8 workers |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 60 founders, minute | 31 ms | 45 ms | 67 ms | 81 ms | 113 ms |
+| 5,100 people across two regions, minute | 790 ms | 515 ms | 441 ms | 535 ms | 629 ms |
+| 5,100 people concentrated, minute | 623 ms | 491 ms | 546 ms | 503 ms | 610 ms |
+| 5,100 people across two regions, hour | 404 ms | 234 ms | 209 ms | 227 ms | 257 ms |
+| 5,100 people concentrated, hour | 389 ms | 259 ms | 219 ms | 221 ms | 255 ms |
+
+Each of the larger fixtures produced identical final state and event
+fingerprints across both caller step sizes and all sampled worker counts.
+The minute-step run took more wall time, especially at higher concurrency.
+These measurements came from a shared workstation and are evidence of
+remaining overhead. They do not identify a hardware or architectural ceiling.
+The archived inputs, raw timings and executable hash are under
+`runs/scaling/20261120/`.
+
 ## First thirty years
 
 The `e202ac4c` reference run in `runs/history/integrated-minute-current-20261120/`
@@ -105,6 +125,24 @@ recorded one incarnation succession, and counted 275,377 care visits. The
 succession follows the authored lineage. Institutional continuity requires
 evidence from recurring actions among independent participants. The run was
 still advancing when this report was compiled.
+
+## Fifty-year ecological comparison
+
+In the reference run, six grazers were hunted during the first 15 simulated
+days. The 12 founders produced three descendants. The nine animals that
+survived hunting eventually died of old age, leaving the grazer population
+extinct by year 41. By year 50 there were 76 living berry browsers and 88
+living people. The archive records 92 human births and 64 human deaths
+through that year. The year-50 narrative and ecological counts are saved
+alongside the reference archive.
+
+A separate 300-year run in
+`runs/history/integrated-minute-elapsed-fauna-20261120/` enables the new
+wildlife lifecycle and current scenario choices. It advances in 60,000 ms
+requests and records exact animal births and deaths. The launch record
+includes the scenario and executable hashes. The original and revised
+scenarios differ in several settings, so compare individual causal receipts
+before attributing changes to any single mechanism.
 
 ## First diagnostic
 
