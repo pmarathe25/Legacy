@@ -12,19 +12,48 @@ struct Outcome {
     event_count: usize,
 }
 
+#[derive(Clone, Copy, Debug)]
+enum Read {
+    None,
+    Person,
+    Snapshot,
+}
+
+impl Read {
+    fn observe(self, host: &CoreHost, person: Option<u64>) {
+        match self {
+            Self::None => (),
+            Self::Person => {
+                std::hint::black_box(person.and_then(|id| host.core().person(id)));
+            }
+            Self::Snapshot => {
+                std::hint::black_box(host.snapshot());
+            }
+        }
+    }
+}
+
 fn sample(
     opening: &CoreHostSnapshot,
     duration: u64,
     step_millis: u64,
     retain_preparation: bool,
+    read: Read,
 ) -> Result<(Duration, Outcome), String> {
     let mut host = CoreHost::resume(opening.clone())?;
+    let person = opening.core.people.first().map(|person| person.id);
     let (elapsed, observations) = if retain_preparation {
         let mut stepper = host.stepper(&[]);
-        observe(duration, step_millis, |duration| stepper.advance(duration))?
+        observe(duration, step_millis, |duration| {
+            let result = stepper.advance(duration)?;
+            read.observe(stepper.host(), person);
+            Ok(result)
+        })?
     } else {
         observe(duration, step_millis, |duration| {
-            host.advance_continuous(duration, &[])
+            let result = host.advance_continuous(duration, &[])?;
+            read.observe(&host, person);
+            Ok(result)
         })?
     };
     let saved = serde_json::to_vec(&host.snapshot()).map_err(|error| error.to_string())?;
@@ -95,6 +124,15 @@ fn main() -> Result<(), String> {
                 .filter(|&value| value > 0)
                 .ok_or("invalid LEGACY_BENCH_ADVANCE_MILLIS")
         })?;
+    let read = match std::env::var("LEGACY_BENCH_READ")
+        .as_deref()
+        .unwrap_or("none")
+    {
+        "none" => Read::None,
+        "person" => Read::Person,
+        "snapshot" => Read::Snapshot,
+        _ => return Err("LEGACY_BENCH_READ must be none, person, or snapshot".into()),
+    };
     let retain_preparation = std::env::var_os("LEGACY_BENCH_REPLAN").is_none();
     let scenario = Path::new(&values[0]);
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
@@ -110,7 +148,7 @@ fn main() -> Result<(), String> {
     let mut expected = None;
     let mut first = None;
     println!(
-        "people={} duration_millis={duration} advance_millis={step_millis} repeats={repeats} retain_preparation={retain_preparation}",
+        "people={} duration_millis={duration} advance_millis={step_millis} repeats={repeats} retain_preparation={retain_preparation} read={read:?}",
         opening.core.people.len()
     );
     for workers in [1, 2, 4, 6, 8]
@@ -121,10 +159,12 @@ fn main() -> Result<(), String> {
             .num_threads(workers)
             .build()
             .map_err(|error| error.to_string())?;
+        #[cfg(feature = "profile")]
+        let profile_before = game_diagnostics::snapshot();
         let mut timings = Vec::new();
         for _ in 0..repeats {
             let (elapsed, outcome) =
-                pool.install(|| sample(&opening, duration, step_millis, retain_preparation))?;
+                pool.install(|| sample(&opening, duration, step_millis, retain_preparation, read))?;
             if outcome != *expected.get_or_insert(outcome) {
                 return Err(format!("simulation diverged at {workers} workers"));
             }
@@ -142,6 +182,15 @@ fn main() -> Result<(), String> {
             outcome.state,
             outcome.events,
         );
+        #[cfg(feature = "profile")]
+        for (key, after) in game_diagnostics::snapshot() {
+            if key.starts_with("elapsed.") {
+                let before = profile_before.get(key);
+                let calls = after.calls - before.map_or(0, |row| row.calls);
+                let nanoseconds = after.nanoseconds - before.map_or(0, |row| row.nanoseconds);
+                println!("workers={workers} phase={key} count={calls} ns={nanoseconds}");
+            }
+        }
     }
     Ok(())
 }

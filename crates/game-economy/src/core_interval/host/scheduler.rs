@@ -1126,7 +1126,11 @@ impl CoreHost {
                 {
                     (segment.deadline, segment.activity)
                 }
-                _ => (attempt!('run, self.host_deadline(None)), None),
+                _ => {
+                    #[cfg(feature = "profile")]
+                    let _phase = game_diagnostics::span("elapsed.prepare.deadlines");
+                    (attempt!('run, self.host_deadline(None)), None)
+                }
             };
             let deadline = &plan.deadline;
             let decision = self
@@ -1291,6 +1295,8 @@ impl CoreHost {
                 }
             }
             if decision_due {
+                #[cfg(feature = "profile")]
+                let _phase = game_diagnostics::span("elapsed.decisions");
                 let schedule = self.schedule.as_ref().expect("active schedule").clone();
                 match schedule.phase {
                     DecisionPhase::Meals => {
@@ -3606,6 +3612,8 @@ impl CoreHost {
                 .rates
                 .clone();
             self.base_shared_rates(&mut current_rates);
+            #[cfg(feature = "profile")]
+            let settlement_phase = game_diagnostics::span("elapsed.settlement");
             let events = match self.settle_with_schedule(blocked, Some(&mut schedule)) {
                 Ok(events) => events,
                 Err(error) => {
@@ -3614,6 +3622,8 @@ impl CoreHost {
                     break;
                 }
             };
+            #[cfg(feature = "profile")]
+            drop(settlement_phase);
             combined
                 .events
                 .push(CoreRunEvent::Boundary(Box::new(events)));
