@@ -101,6 +101,14 @@ impl<'a> Player<'a> {
             .withdraw_controlled_expedition_invitation(self.person, invitation)
     }
 
+    pub fn schedule_expedition_departure(
+        &mut self,
+        delay_millis: u64,
+    ) -> Result<game_economy::core_interval::ExpeditionEvent, String> {
+        self.host
+            .schedule_controlled_departure(self.person, delay_millis)
+    }
+
     pub fn continue_expedition(
         &mut self,
     ) -> Result<Vec<game_economy::core_interval::ExpeditionEvent>, String> {

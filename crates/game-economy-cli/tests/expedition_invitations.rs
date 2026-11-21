@@ -18,6 +18,10 @@ destination = 2
 willing = {willing}
 return_after_visit = true
 
+[[expedition_departures]]
+person = 1
+after_millis = 1000
+
 [[expedition_invitation_initiatives]]
 person = 1
 companions = [{{ person = 2, value = 20 }}]
@@ -77,13 +81,24 @@ entries = [
                 let joined = host.expedition(2).unwrap();
                 assert_ne!(joined.id, 1);
                 assert_eq!(joined.visit_millis, 2000);
+                assert_eq!(joined.depart_after_millis, Some(1_000));
+                assert_eq!(joined.stage, game_economy::core_interval::ExpeditionStage::Ready);
                 assert!(joined.head_home);
             }
-            assert!(host.expedition(1).is_some());
+            assert_eq!(host.expedition(1).unwrap().stage, game_economy::core_interval::ExpeditionStage::Ready);
             assert!(host.expedition(3).is_some());
             let snapshot = host.snapshot();
             let mut resumed = CoreHost::resume(serde_json::from_value(serde_json::to_value(&snapshot).unwrap()).unwrap()).unwrap();
-            assert_eq!(host.advance_continuous(1943, &[]).unwrap().failure, None);
+            let run = host.advance_continuous(1943, &[]).unwrap();
+            assert_eq!(run.failure, None);
+            let departures: Vec<_> = run.events.iter().filter_map(|row| {
+                if let CoreRunEvent::Expeditions(events) = row { Some(events) } else { None }
+            }).flatten().filter_map(|event| {
+                matches!(event.kind, ExpeditionEventKind::OutboundLeg)
+                    .then_some((event.person, event.at_millis))
+            }).collect();
+            assert!(departures.contains(&(1, 1_000)));
+            assert_eq!(departures.contains(&(2, 1_000)), expected != ExpeditionReplyKind::Declined);
             assert_eq!(resumed.advance_continuous(1943, &[]).unwrap().failure, None);
             assert_eq!(host.snapshot(), resumed.snapshot());
             serde_json::to_value(host.snapshot()).unwrap()
@@ -142,6 +157,7 @@ pressure_threshold = 3
     std::fs::remove_file(path).unwrap();
     let mut host = loaded.unwrap();
     host.plan_controlled_expedition(1, 2, 150, None).unwrap();
+    host.schedule_controlled_departure(1, 1_000).unwrap();
     assert_eq!(
         host.invite_controlled_expedition(1, 2)
             .unwrap()
@@ -171,6 +187,7 @@ pressure_threshold = 3
     assert!(!host.expedition(3).unwrap().head_home);
     let offered = host.invite_controlled_expedition(1, 4).unwrap();
     assert!(offered.response.is_none());
+    assert_eq!(offered.invitation.depart_after_millis, Some(1_000));
     assert!(host.expedition(4).is_none());
 
     let checkpoint = |host: &CoreHost| {
@@ -205,6 +222,10 @@ pressure_threshold = 3
         accepted.joined_itinerary,
         Some(other_offer.invitation.itinerary)
     );
+    host.schedule_controlled_departure(4, 0).unwrap();
+    assert_eq!(host.expedition(4).unwrap().depart_after_millis, None);
+    assert_eq!(host.expedition(1).unwrap().depart_after_millis, Some(1_000));
+    assert_eq!(host.expedition(2).unwrap().depart_after_millis, Some(1_000));
     host.abandon_controlled_expedition(4).unwrap();
     assert!(host.expedition(4).is_none());
     assert!(host.expedition(1).is_some());
