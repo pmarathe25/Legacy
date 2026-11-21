@@ -108,6 +108,31 @@ remaining overhead. They do not identify a hardware or architectural ceiling.
 The archived inputs, raw timings and executable hash are under
 `runs/scaling/20261120/`.
 
+### Reused preparation across minute requests
+
+The optimized build at `5e62025a` measured six simulated hours with the same
+reference scenario and population fixtures. Each range spans two medians
+from batches of three runs. Both modes used the same binary and produced
+identical state and ordered event fingerprints at 1, 2, 4, 6, and 8 workers.
+
+| Layout | One worker, replan | One worker, retain | Four workers, replan | Four workers, retain |
+| --- | ---: | ---: | ---: | ---: |
+| 5,100 people across two regions | 830 ms | 739–823 ms | 625–715 ms | 496–577 ms |
+| 5,100 people concentrated | 816–851 ms | 693–707 ms | 631–753 ms | 462–488 ms |
+
+The best four-worker speedups with retained preparation were 1.66 times
+across two regions and 1.50 times in the concentrated layout. The samples
+show lower wall time with retained preparation and leave the balance between
+parallel overhead and genuine contention unresolved. Other histories and
+builds were running on the shared workstation.
+
+An independent custody test expired 120,000 lots spread across holders in
+121.5 ms at one worker, 67.6 ms at four, and 60.9 ms at eight. The same quantity
+in one holder took 1.80 ms at one worker and 1.29 ms at four. The concentrated
+path removes the due prefix in bulk. Timings and executable hashes are in
+`runs/scaling/20261120/`.
+
+
 ## First thirty years
 
 The `e202ac4c` reference run in `runs/history/integrated-minute-current-20261120/`
@@ -143,6 +168,16 @@ requests and records exact animal births and deaths. The launch record
 includes the scenario and executable hashes. The original and revised
 scenarios differ in several settings, so compare individual causal receipts
 before attributing changes to any single mechanism.
+
+The thermal-storage build at `5e62025a`, using the integrated scenario from
+`953f9f95`, passed a five-day probe with 7,200 minute advances. At 432,000,000
+ms, the archive records 24 units of prepared roots maturing in inventory 1
+at 8 °C. The corresponding 300-year history is in
+`runs/history/integrated-minute-thermal-20261120/`. A separate CLI smoke
+check at `1141aef3` advanced all 111 standalone scenarios by 60,000 ms. The
+campaign population file also passed when supplied as an overlay to its
+campaign scenario.
+
 
 ## First diagnostic
 
