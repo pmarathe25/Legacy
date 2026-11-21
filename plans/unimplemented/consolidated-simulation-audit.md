@@ -49,6 +49,16 @@ to track rates, deadlines, and behavior under different advance sizes. The
   choices. An individual can decline to help even with free crew space.
   Crew capacity is applied after choices. An accepted helper contributes
   only their actual elapsed effort.
+- Players can assemble actual carried parts and choose mechanical trials. The
+  host rejects missing parts and excessive force. History identifies lead
+  workers and helpers from accepted crew starts.
+- Agreements can use elapsed deadlines and retry periods. A person can
+  offer goods they do not hold, refuse terms, or explicitly withdraw.
+  Delivery still needs physical custody and can occur at the last valid
+  millisecond. Expiration changes the agreement without moving goods.
+- Annual histories follow the calendar even when the annual checkpoint falls
+  inside a physical interval. The resumed state matches the uninterrupted
+  run when the caller partitions time differently and changes worker count.
 - The 5,100-person benchmarks give identical ordered receipts across worker
   counts. The original minute observation test staged 306,000 rows per
   physiology owner. The sparse fatigue stage now skips every unchanged
