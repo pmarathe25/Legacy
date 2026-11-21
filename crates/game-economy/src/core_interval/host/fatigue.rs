@@ -377,6 +377,10 @@ impl CoreHost {
                 activity = Some(self.elapsed_activity_frame(&owner.resting(), externally_busy)?);
             }
             let frame = activity.as_ref().expect("prepared elapsed activity");
+            #[cfg(feature = "profile")]
+            let _phase = game_diagnostics::span("elapsed.progress.fatigue");
+            #[cfg(feature = "profile")]
+            game_diagnostics::count("elapsed.rows.fatigue", frame.people.len() as u64);
             let (millis, draft) =
                 owner.prepare_segment(&frame.activity, consumed, &frame.people)?;
             consumed = millis;

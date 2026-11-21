@@ -377,6 +377,13 @@ impl CoreInterval {
             pending_food: self.pending_food.par_iter().copied().collect(),
         }
     }
+    /// Inspect one committed person without materializing a world snapshot.
+    pub fn person(&self, id: u64) -> Option<&game_economy_person::Person> {
+        self.people
+            .binary_search_by_key(&id, |person| person.id)
+            .ok()
+            .map(|index| &self.people[index])
+    }
     pub fn elapsed_millis(&self) -> Option<u64> {
         self.physical
             .work_interval()
@@ -1143,6 +1150,8 @@ impl CoreInterval {
             Some(vitals) => vitals,
             None => self.preview_people_progress(consumed, &[])?,
         };
+        #[cfg(feature = "profile")]
+        let travel_phase = game_diagnostics::span("elapsed.progress.travel_and_placement");
         let mut travel = self.travel.clone();
         if let Some(travel) = &mut travel {
             travel
@@ -1176,6 +1185,10 @@ impl CoreInterval {
             } else {
                 (None, Vec::new())
             };
+        #[cfg(feature = "profile")]
+        drop(travel_phase);
+        #[cfg(feature = "profile")]
+        let physical_phase = game_diagnostics::span("elapsed.progress.physical");
         let advanced = if dead.is_empty()
             && reductions.is_empty()
             && batches.is_none()
@@ -1213,6 +1226,8 @@ impl CoreInterval {
                 )?
                 .0
         };
+        #[cfg(feature = "profile")]
+        drop(physical_phase);
         debug_assert_eq!(advanced, consumed);
         if let Some(placement) = placement {
             placement.publish(&mut people, &mut travel);
@@ -1245,9 +1260,21 @@ impl CoreInterval {
             return Err("invalid elapsed injuries".into());
         }
         let quantum = self.physical.tick_millis();
+        #[cfg(feature = "profile")]
+        let vital_phase = game_diagnostics::span("elapsed.progress.vitals");
+        #[cfg(feature = "profile")]
+        {
+            game_diagnostics::count("elapsed.rows.vitals", self.people.len() as u64);
+            game_diagnostics::count(
+                "elapsed.inline_bytes.vitals",
+                std::mem::size_of_val(self.people.as_slice()) as u64,
+            );
+        }
         let mut people =
             game_economy_person::stage_vitals(&self.people, &self.rules, consumed, quantum)
                 .map_err(str::to_owned)?;
+        #[cfg(feature = "profile")]
+        drop(vital_phase);
         if !injuries.is_empty() {
             people.par_iter_mut().for_each(|person| {
                 if let Ok(index) = injuries.binary_search_by_key(&person.id, |injury| injury.id) {

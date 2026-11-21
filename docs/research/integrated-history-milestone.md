@@ -133,6 +133,22 @@ path removes the due prefix in bulk. Timings and executable hashes are in
 `runs/scaling/20261120/`.
 
 
+### Observation cost
+
+The instrumented `elapsed_scaling` example supports `LEGACY_BENCH_READ`
+values `none`, `person`, and `snapshot`. Turn on owner counters with
+`--features profile` and `LEGACY_PROFILE=1`. Row counts describe actual staging
+attempts and inline bytes exclude heap allocations.
+
+A one-hour development-build sample with 5,100 concentrated residents
+staged 306,000 vitals rows and 306,000 fatigue rows in one-minute advances
+under all three observation modes. A single one-hour advance staged 5,100
+rows per owner. Each combination produced identical saved state and 14
+ordered receipts through all five measured worker counts. The count grows
+with the number of caller horizons even when there is no intermediate read.
+This diagnostic attributes work and does not estimate production throughput.
+
+
 ## First thirty years
 
 The `e202ac4c` reference run in `runs/history/integrated-minute-current-20261120/`
