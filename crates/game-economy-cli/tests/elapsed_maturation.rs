@@ -118,7 +118,7 @@ fn a_character_can_make_a_preparation_that_finishes_independently_of_work() {
     assert_eq!(whole.0[0].1[1].outcome, MaturationOutcome::Matured);
     assert_eq!(whole.0[1].0, u128::from(5 * DAY + WORK_TIME));
     assert_eq!(whole.0[1].1[0].outcome, MaturationOutcome::Matured);
-    let dated: Vec<_> = whole
+    let mut dated: Vec<_> = whole
         .1
         .containers
         .iter()
@@ -126,6 +126,7 @@ fn a_character_can_make_a_preparation_that_finishes_independently_of_work() {
         .filter(|lot| lot.good == edible)
         .map(|lot| (lot.quantity, lot.expires_at))
         .collect();
+    dated.sort_unstable_by_key(|row| row.1);
     assert_eq!(
         dated,
         [(5, Some(185 * DAY)), (24, Some(185 * DAY + WORK_TIME))]
@@ -138,7 +139,7 @@ fn moving_a_preparation_changes_its_conditions_and_preserves_its_deadline() {
     let preparation = good(&physical, "curing-root-batch");
     let mut runtime = Runtime::compile(physical).unwrap();
     assert_eq!(runtime.tick_millis(), QUANTUM);
-    runtime.begin_work_interval(&[]).unwrap();
+    assert_eq!(runtime.work_interval().unwrap().elapsed_millis, 0);
     runtime.progress_work_interval(2 * DAY).unwrap();
     let moving = [Transaction {
         id: 1,
