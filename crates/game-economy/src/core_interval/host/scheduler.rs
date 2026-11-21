@@ -2,10 +2,11 @@
 use super::*;
 use std::sync::Arc;
 
-const SELECTED_DOMAINS: u64 = (1 << 1)
-    | (1 << 2)
-    | (1 << 3)
-    | (1 << 4)
+const BASE_DOMAINS: u64 = (1 << personal_choice::CONSTRUCTION)
+    | (1 << personal_choice::CARRYING)
+    | (1 << personal_choice::MAINTENANCE)
+    | (1 << personal_choice::WORK);
+const SELECTED_DOMAINS: u64 = BASE_DOMAINS
     | (1 << 6)
     | (1 << 7)
     | (1 << 8)
@@ -1759,48 +1760,19 @@ impl CoreHost {
                                 })
                                 .is_ok()
                         });
-                        let has_experiments = intents.par_iter().any(|intent| {
-                            matches!(
-                                intent.key.domain,
-                                personal_choice::EXPERIMENT | personal_choice::MECHANICAL_WATCH
-                            )
-                        });
-                        let has_meals = intents
+                        let optional_domains = intents
                             .par_iter()
-                            .any(|intent| intent.key.domain == personal_choice::MEAL);
-                        let has_tool_repairs = intents
-                            .par_iter()
-                            .any(|intent| intent.key.domain == personal_choice::TOOL_REPAIR);
-                        let has_food_pickups = intents
-                            .par_iter()
-                            .any(|intent| intent.key.domain == personal_choice::FOOD_PICKUP);
-                        let has_treatments = intents
-                            .par_iter()
-                            .any(|intent| intent.key.domain == personal_choice::SELF_TREATMENT);
-                        let has_mechanical_loads = intents
-                            .par_iter()
-                            .any(|intent| intent.key.domain == personal_choice::MECHANICAL_LOAD);
-                        let has_mechanical_designs = intents
-                            .par_iter()
-                            .any(|intent| intent.key.domain == personal_choice::MECHANICAL_DESIGN);
-                        let has_attacks = intents
-                            .par_iter()
-                            .any(|intent| intent.key.domain == personal_choice::PERSONAL_ATTACK);
-                        let has_barriers = intents
-                            .par_iter()
-                            .any(|intent| intent.key.domain == personal_choice::CONFINEMENT);
-                        let has_wound_care = intents
-                            .par_iter()
-                            .any(|intent| intent.key.domain == personal_choice::WOUND_CARE);
-                        let has_written_forms = intents
-                            .par_iter()
-                            .any(|intent| intent.key.domain == personal_choice::WRITTEN_FORM);
-                        let has_mark_inscriptions = intents
-                            .par_iter()
-                            .any(|intent| intent.key.domain == personal_choice::MARK_INSCRIPTION);
-                        let has_remembered_forms = intents
-                            .par_iter()
-                            .any(|intent| intent.key.domain == personal_choice::REMEMBERED_FORM);
+                            .map(|intent| {
+                                let domain =
+                                    if intent.key.domain == personal_choice::MECHANICAL_WATCH {
+                                        personal_choice::EXPERIMENT
+                                    } else {
+                                        intent.key.domain
+                                    };
+                                1u64.checked_shl(domain).unwrap_or(0)
+                                    & (SELECTED_DOMAINS & !BASE_DOMAINS)
+                            })
+                            .reduce(|| 0, |a, b| a | b);
                         let random = game_genetics::random(self.core.seed, 0x63686f696365, round);
                         let first = if has_work {
                             random % 4
@@ -1809,114 +1781,63 @@ impl CoreHost {
                         } else {
                             random & 1
                         };
-                        self.schedule.as_mut().expect("active schedule").phase = if has_experiments
-                            || has_meals
-                            || has_tool_repairs
-                            || has_food_pickups
-                            || has_treatments
-                            || has_mechanical_loads
-                            || has_mechanical_designs
-                            || has_attacks
-                            || has_barriers
-                            || has_wound_care
-                            || has_written_forms
-                            || has_mark_inscriptions
-                            || has_remembered_forms
-                        {
-                            let mut remaining = 0;
-                            if has_experiments {
-                                remaining |= 1 << 6;
-                            }
-                            if has_meals {
-                                remaining |= 1 << 7;
-                            }
-                            if has_tool_repairs {
-                                remaining |= 1 << 8;
-                            }
-                            if has_food_pickups {
-                                remaining |= 1 << 9;
-                            }
-                            if has_treatments {
-                                remaining |= 1 << 10;
-                            }
-                            if has_mechanical_loads {
-                                remaining |= 1 << 12;
-                            }
-                            if has_mechanical_designs {
-                                remaining |= 1 << 13;
-                            }
-                            if has_attacks {
-                                remaining |= 1 << 15;
-                            }
-                            if has_barriers {
-                                remaining |= 1 << personal_choice::CONFINEMENT;
-                            }
-                            if has_wound_care {
-                                remaining |= 1 << 16;
-                            }
-                            if has_written_forms {
-                                remaining |= 1 << 17;
-                            }
-                            if has_mark_inscriptions {
-                                remaining |= 1 << 18;
-                            }
-                            if has_remembered_forms {
-                                remaining |= 1 << 19;
-                            }
-                            if self.construction.is_some() {
-                                remaining |= 1 << 1;
-                            }
-                            if self.local_transport.is_some() {
-                                remaining |= 1 << 2;
-                            }
-                            if has_maintenance && self.sites.is_some() {
-                                remaining |= 1 << 3;
-                            }
-                            if has_work && self.autowork.is_some() {
-                                remaining |= 1 << 4;
-                            }
-                            DecisionPhase::ChosenBatch {
-                                meal_people,
-                                intents,
-                                remaining,
-                            }
-                        } else if first == 0 {
-                            DecisionPhase::ChosenConstruction {
-                                meal_people,
-                                intents,
-                                carrying_after: true,
-                                maintenance_after: has_maintenance,
-                                work_after: has_work,
-                                remaining: None,
-                            }
-                        } else if first == 1 {
-                            DecisionPhase::ChosenCarrying {
-                                meal_people,
-                                intents,
-                                construction_after: true,
-                                maintenance_after: has_maintenance,
-                                work_after: has_work,
-                                remaining: None,
-                            }
-                        } else if first == 2 {
-                            DecisionPhase::ChosenMaintenance {
-                                meal_people,
-                                intents,
-                                construction_after: true,
-                                carrying_after: true,
-                                work_after: has_work,
-                                remaining: None,
-                            }
-                        } else {
-                            DecisionPhase::ChosenWork {
-                                meal_people,
-                                intents,
-                                construction_after: true,
-                                carrying_after: true,
-                                maintenance_after: has_maintenance,
-                                remaining: None,
-                            }
-                        };
+                        self.schedule.as_mut().expect("active schedule").phase =
+                            if optional_domains != 0 {
+                                let mut remaining = optional_domains;
+                                if self.construction.is_some() {
+                                    remaining |= 1 << 1;
+                                }
+                                if self.local_transport.is_some() {
+                                    remaining |= 1 << 2;
+                                }
+                                if has_maintenance && self.sites.is_some() {
+                                    remaining |= 1 << 3;
+                                }
+                                if has_work && self.autowork.is_some() {
+                                    remaining |= 1 << 4;
+                                }
+                                DecisionPhase::ChosenBatch {
+                                    meal_people,
+                                    intents,
+                                    remaining,
+                                }
+                            } else if first == 0 {
+                                DecisionPhase::ChosenConstruction {
+                                    meal_people,
+                                    intents,
+                                    carrying_after: true,
+                                    maintenance_after: has_maintenance,
+                                    work_after: has_work,
+                                    remaining: None,
+                                }
+                            } else if first == 1 {
+                                DecisionPhase::ChosenCarrying {
+                                    meal_people,
+                                    intents,
+                                    construction_after: true,
+                                    maintenance_after: has_maintenance,
+                                    work_after: has_work,
+                                    remaining: None,
+                                }
+                            } else if first == 2 {
+                                DecisionPhase::ChosenMaintenance {
+                                    meal_people,
+                                    intents,
+                                    construction_after: true,
+                                    carrying_after: true,
+                                    work_after: has_work,
+                                    remaining: None,
+                                }
+                            } else {
+                                DecisionPhase::ChosenWork {
+                                    meal_people,
+                                    intents,
+                                    construction_after: true,
+                                    carrying_after: true,
+                                    maintenance_after: has_maintenance,
+                                    remaining: None,
+                                }
+                            };
                     }
                     DecisionPhase::ChosenBatch {
                         meal_people,
