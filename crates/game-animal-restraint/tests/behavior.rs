@@ -24,6 +24,7 @@ fn fixture(count: u64, shared: bool) -> (Vec<Person>, Fauna, Restraints) {
     let fauna = Fauna {
         last_tick: 0,
         lifecycle_period_millis: None,
+        dispersal: None,
         recent_deaths: vec![],
         next_id: animals + 1,
         species: vec![Species {
