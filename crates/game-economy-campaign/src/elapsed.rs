@@ -64,6 +64,9 @@ pub struct ElapsedCampaign {
     /// Lineage opening, closing, and waiting times are elapsed milliseconds.
     pub lineage: Lineage,
     pub guardians: Vec<Guardian>,
+    /// An observer follows the lineage while its incarnations make their own choices.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub observer_only: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub costs: Option<CostClock>,
 }
@@ -117,6 +120,7 @@ impl ElapsedCampaign {
         Ok(Self {
             lineage: campaign.lineage,
             guardians,
+            observer_only: false,
             costs,
         })
     }
@@ -155,6 +159,7 @@ impl ElapsedCampaign {
                     .next_millis
                     .is_some_and(|at| at < now || at - now > clock.period_millis)
                 || clock.owner.pending.is_some() && clock.next_millis != Some(now)
+                || self.observer_only && Self::player_cost_pending(clock)
             {
                 return Err("invalid invocation cost clock".into());
             }
@@ -172,10 +177,26 @@ impl ElapsedCampaign {
 
     pub fn controlled(&self) -> Option<u64> {
         self.current().filter(|_| {
-            self.costs
-                .as_ref()
-                .is_none_or(|clock| clock.owner.control_until.is_none())
+            !self.observer_only
+                && self
+                    .costs
+                    .as_ref()
+                    .is_none_or(|clock| clock.owner.control_until.is_none())
         })
+    }
+
+    pub fn become_observer(&mut self) -> Result<(), String> {
+        if self.costs.as_ref().is_some_and(Self::player_cost_pending) {
+            return Err("resolve the current invocation before detaching player control".into());
+        }
+        self.observer_only = true;
+        Ok(())
+    }
+
+    fn player_cost_pending(clock: &CostClock) -> bool {
+        clock.owner.pending.is_some()
+            || !clock.owner.active.is_empty()
+            || clock.owner.control_until.is_some()
     }
 
     pub fn observe_lifecycle(

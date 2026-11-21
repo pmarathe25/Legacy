@@ -112,6 +112,7 @@ fn run(
             Some(text),
         )
     };
+    host.detach_player_control()?;
     let initial = host.snapshot();
     let tick_millis = initial.core.physical.tick_millis;
     if tick_millis == 0 || !YEAR_MILLIS.is_multiple_of(tick_millis) {
