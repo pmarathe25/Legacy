@@ -2,6 +2,7 @@
 use super::{Consequence, Fatigue, Person};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
+use std::borrow::Cow;
 use std::collections::HashSet;
 
 /// Activity remains constant for the segment. Inactive people do not accrue fatigue.
@@ -80,6 +81,28 @@ mod tests {
                 }
                 (state, damage)
             })
+    }
+
+    #[test]
+    fn one_opening_frame_produces_the_same_first_exhaustion_event() {
+        let opening = owner(8);
+        let actors = HashSet::from([1]);
+        let activity = [ElapsedActivity {
+            id: 1,
+            exertion: Exertion::Work,
+        }];
+        let predicted = opening
+            .next_damage_deadline(&activity, &actors)
+            .unwrap()
+            .unwrap() as u64;
+        let complete = opening.prepare(&activity, predicted, &actors).unwrap();
+        let (used, prepared) = opening
+            .view()
+            .prepare_segment(&activity, predicted + 91, &actors)
+            .unwrap();
+        assert_eq!(used, predicted);
+        assert_eq!(prepared.state, complete.state);
+        assert_eq!(prepared.consequences, complete.consequences);
     }
 
     #[test]
@@ -195,8 +218,58 @@ pub struct ElapsedFatigueDraft {
     pub consequences: Vec<Consequence>,
 }
 
+/// The opening physiology and exact fractions shared by one elapsed frame.
+pub struct ElapsedFatigueView<'a> {
+    pub(crate) fatigue: &'a Fatigue,
+    pub(crate) rate_period_millis: u64,
+    pub(crate) remainders: &'a [(u64, u64)],
+    pub(crate) damage_remainders: &'a [(u64, u64)],
+}
+
 impl ElapsedFatigue {
+    fn view(&self) -> ElapsedFatigueView<'_> {
+        ElapsedFatigueView {
+            fatigue: &self.fatigue,
+            rate_period_millis: self.rate_period_millis,
+            remainders: &self.remainders,
+            damage_remainders: &self.damage_remainders,
+        }
+    }
+
     pub fn validate(&self, people: &HashSet<u64>) -> Result<(), String> {
+        self.view().validate(people)
+    }
+
+    /// Predict the first damage event if these activities remain unchanged.
+    pub fn next_damage_deadline(
+        &self,
+        activity: &[ElapsedActivity],
+        people: &HashSet<u64>,
+    ) -> Result<Option<u128>, String> {
+        let seed = self.view();
+        seed.validate_activity(activity, people)?;
+        seed.damage_deadline(activity, &seed.ordered_people())
+    }
+
+    /// Stage one half-open segment with the supplied personal activity choices.
+    pub fn prepare(
+        &self,
+        activity: &[ElapsedActivity],
+        millis: u64,
+        people: &HashSet<u64>,
+    ) -> Result<ElapsedFatigueDraft, String> {
+        let seed = self.view();
+        seed.validate_activity(activity, people)?;
+        seed.prepare_at(activity, &seed.ordered_people(), millis)
+    }
+}
+
+impl ElapsedFatigueView<'_> {
+    pub fn resting(&self) -> Vec<u64> {
+        self.fatigue.resting()
+    }
+
+    pub(crate) fn validate(&self, people: &HashSet<u64>) -> Result<(), String> {
         self.fatigue.validate(people)?;
         let valid = |rows: &[(u64, u64)]| {
             !rows.par_windows(2).any(|pair| pair[0].0 >= pair[1].0)
@@ -205,8 +278,8 @@ impl ElapsedFatigue {
                 })
         };
         if self.rate_period_millis == 0
-            || !valid(&self.remainders)
-            || !valid(&self.damage_remainders)
+            || !valid(self.remainders)
+            || !valid(self.damage_remainders)
             || self.fatigue.people.par_iter().any(|person| {
                 person.fatigue == self.fatigue.rules.capacity
                     && self
@@ -248,24 +321,48 @@ impl ElapsedFatigue {
         Ok(())
     }
 
-    /// Predict the first damage event if these activities remain unchanged.
-    /// The host must also stop at earlier activity or health transitions.
-    pub fn next_damage_deadline(
+    fn ordered_people(&self) -> Cow<'_, [Person]> {
+        let people = &self.fatigue.people;
+        if people.par_windows(2).any(|rows| rows[0].id > rows[1].id) {
+            let mut ordered: Vec<_> = people.par_iter().cloned().collect();
+            ordered.par_sort_unstable_by_key(|person| person.id);
+            Cow::Owned(ordered)
+        } else {
+            Cow::Borrowed(people)
+        }
+    }
+
+    /// Limit a proposed segment to the first exhaustion consequence and stage
+    /// the exact fractions from the same opening activity and physiology.
+    pub fn prepare_segment(
         &self,
         activity: &[ElapsedActivity],
+        maximum_millis: u64,
         people: &HashSet<u64>,
-    ) -> Result<Option<u128>, String> {
+    ) -> Result<(u64, ElapsedFatigueDraft), String> {
         self.validate_activity(activity, people)?;
+        let old = self.ordered_people();
+        let millis = self
+            .damage_deadline(activity, &old)?
+            .map_or(maximum_millis, |deadline| {
+                deadline.min(u128::from(maximum_millis)) as u64
+            });
+        Ok((millis, self.prepare_at(activity, &old, millis)?))
+    }
+
+    fn damage_deadline(
+        &self,
+        activity: &[ElapsedActivity],
+        old: &[Person],
+    ) -> Result<Option<u128>, String> {
         let rules = &self.fatigue.rules;
         if rules.exhaustion_damage == 0 {
             return Ok(None);
         }
-        let mut old: Vec<_> = self.fatigue.people.par_iter().collect();
-        old.par_sort_unstable_by_key(|person| person.id);
         let period = u128::from(self.rate_period_millis);
         let threshold = u128::from(rules.exhaustion_at) * period;
         let cap = u128::from(rules.capacity) * period;
-        let deadlines: Result<Vec<_>, String> = activity
+        activity
             .par_iter()
             .map(|row| {
                 let fraction = |entries: &[(u64, u64)]| {
@@ -278,7 +375,7 @@ impl ElapsedFatigue {
                     .binary_search_by_key(&row.id, |person| person.id)
                     .ok()
                     .map_or(0, |index| old[index].fatigue);
-                let initial = u128::from(fatigue) * period + u128::from(fraction(&self.remainders));
+                let initial = u128::from(fatigue) * period + u128::from(fraction(self.remainders));
                 if initial > cap {
                     return Err("fatigue exceeds capacity".into());
                 }
@@ -286,7 +383,7 @@ impl ElapsedFatigue {
                     return Ok(None);
                 }
                 let (gain, recovery) = rates(rules, row.exertion);
-                let required = (period - u128::from(fraction(&self.damage_remainders)))
+                let required = (period - u128::from(fraction(self.damage_remainders)))
                     .div_ceil(u128::from(rules.exhaustion_damage));
                 let deadline = if gain >= recovery {
                     let rate = u128::from(gain - recovery);
@@ -308,22 +405,21 @@ impl ElapsedFatigue {
                 };
                 Ok(deadline)
             })
-            .collect();
-        Ok(deadlines?.into_par_iter().flatten().min())
+            .try_reduce(
+                || None,
+                |left, right| Ok(left.into_iter().chain(right).min()),
+            )
     }
 
     /// Stage one half-open segment. Exhaustion exposure is sampled at the end
     /// of each elapsed millisecond; fractions survive interrupted exposure.
     /// Rest is an input to this calculation, never an automatic decision.
-    pub fn prepare(
+    fn prepare_at(
         &self,
         activity: &[ElapsedActivity],
+        old: &[Person],
         millis: u64,
-        people: &HashSet<u64>,
     ) -> Result<ElapsedFatigueDraft, String> {
-        self.validate_activity(activity, people)?;
-        let mut old: Vec<_> = self.fatigue.people.par_iter().collect();
-        old.par_sort_unstable_by_key(|person| person.id);
         let rules = &self.fatigue.rules;
         let period = u128::from(self.rate_period_millis);
         let threshold = u128::from(rules.exhaustion_at) * period;
@@ -347,7 +443,7 @@ impl ElapsedFatigue {
                         .map_or(0, |index| entries[index].1)
                 };
                 let initial =
-                    u128::from(person.fatigue) * period + u128::from(fraction(&self.remainders));
+                    u128::from(person.fatigue) * period + u128::from(fraction(self.remainders));
                 if initial > cap {
                     return Err("fatigue exceeds capacity".into());
                 }
@@ -383,7 +479,7 @@ impl ElapsedFatigue {
                 };
                 person.fatigue = (exact / period) as u32;
                 let fatigue_fraction = (exact % period) as u64;
-                let damage_exact = u128::from(fraction(&self.damage_remainders))
+                let damage_exact = u128::from(fraction(self.damage_remainders))
                     + exposed * u128::from(rules.exhaustion_damage);
                 let damage = u32::try_from(damage_exact / period)
                     .map_err(|_| "elapsed exhaustion damage overflow".to_string())?;
@@ -397,7 +493,7 @@ impl ElapsedFatigue {
             .collect();
         let rows = rows?;
         Ok(ElapsedFatigueDraft {
-            state: Self {
+            state: ElapsedFatigue {
                 fatigue: Fatigue {
                     rules: rules.clone(),
                     people: rows

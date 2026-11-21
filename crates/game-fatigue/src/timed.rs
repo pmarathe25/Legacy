@@ -54,7 +54,7 @@ impl TimedFatigue {
         {
             return Err("invalid fractional fatigue".into());
         }
-        if let Some(elapsed) = self.elapsed_owner() {
+        if let Some(elapsed) = self.elapsed_view() {
             elapsed.validate(people)?;
         }
         Ok(())
@@ -62,11 +62,21 @@ impl TimedFatigue {
 
     /// Construct the elapsed owner only for saves explicitly using that mode.
     pub fn elapsed_owner(&self) -> Option<super::ElapsedFatigue> {
+        let elapsed = self.elapsed_view()?;
         Some(super::ElapsedFatigue {
-            fatigue: self.fatigue.clone(),
+            fatigue: elapsed.fatigue.clone(),
+            rate_period_millis: elapsed.rate_period_millis,
+            remainders: elapsed.remainders.to_vec(),
+            damage_remainders: elapsed.damage_remainders.to_vec(),
+        })
+    }
+
+    pub fn elapsed_view(&self) -> Option<super::ElapsedFatigueView<'_>> {
+        Some(super::ElapsedFatigueView {
+            fatigue: &self.fatigue,
             rate_period_millis: self.rate_period_millis?,
-            remainders: self.remainders.clone(),
-            damage_remainders: self.elapsed_damage_remainders.clone()?,
+            remainders: &self.remainders,
+            damage_remainders: self.elapsed_damage_remainders.as_deref()?,
         })
     }
 
