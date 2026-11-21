@@ -35,6 +35,7 @@ pub struct Context<'a> {
     pub busy: &'a [u64],
     pub max_hunger: u32,
     pub instant: Instant,
+    pub deadlines: Option<&'a game_agreements::runtime::Runtime>,
 }
 #[derive(Clone, Copy)]
 pub struct HelpMemory {
@@ -62,6 +63,7 @@ pub fn prepare(context: Context<'_>) -> Result<Plan, String> {
         busy,
         max_hunger,
         instant,
+        deadlines,
     } = context;
     let Some(owner) = owner.filter(|o| {
         o.offering
@@ -73,12 +75,20 @@ pub fn prepare(context: Context<'_>) -> Result<Plan, String> {
     }) else {
         return Ok(Plan::default());
     };
-    let pending: HashSet<_> = owner
-        .contracts
-        .par_iter()
-        .filter(|c| matches!(c.status, Status::Proposed | Status::Active))
-        .map(|c| (c.debtor, c.creditor, c.good))
-        .collect();
+    let pending: Option<HashSet<_>> = deadlines.is_none().then(|| {
+        owner
+            .contracts
+            .par_iter()
+            .filter(|c| matches!(c.status, Status::Proposed | Status::Active))
+            .map(|c| (c.debtor, c.creditor, c.good))
+            .collect()
+    });
+    let has_pending = |party| {
+        deadlines.map_or_else(
+            || pending.as_ref().is_some_and(|rows| rows.contains(&party)),
+            |index| index.has_live_promise(party, instant.now),
+        )
+    };
     let opinions = opinions
         .filter(|_| {
             owner
@@ -206,7 +216,7 @@ pub fn prepare(context: Context<'_>) -> Result<Plan, String> {
                 && together(actor.id, recipient.id)
                 && busy.binary_search(&actor.id).is_err()
                 && (pressured || (policy.willing && trusts))
-                && !pending.contains(&(actor.id, recipient.id, policy.good)))
+                && !has_pending((actor.id, recipient.id, policy.good)))
             .then_some((policy, observed_work, observed_help))
         })
         .collect();
@@ -281,7 +291,7 @@ pub fn prepare(context: Context<'_>) -> Result<Plan, String> {
                     if policy
                         .last_work_offer_at
                         .is_some_and(|old| old >= completed)
-                        || pending.contains(&(actor.id, memory.worker, policy.good))
+                        || has_pending((actor.id, memory.worker, policy.good))
                     {
                         return None;
                     }
@@ -327,7 +337,7 @@ pub fn prepare(context: Context<'_>) -> Result<Plan, String> {
                         || policy
                             .last_work_offer_at
                             .is_some_and(|old| old >= memory.tick)
-                        || pending.contains(&(actor.id, memory.worker, policy.good))
+                        || has_pending((actor.id, memory.worker, policy.good))
                     {
                         return None;
                     }

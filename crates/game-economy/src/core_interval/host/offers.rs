@@ -126,6 +126,7 @@ impl CoreHost {
                 busy: &busy,
                 max_hunger: self.core.rules.max_work_hunger,
                 instant,
+                deadlines: self.agreement_deadlines.as_ref(),
             })?;
         let mut actors: Vec<_> = plan.actors().collect();
         actors.par_sort_unstable();

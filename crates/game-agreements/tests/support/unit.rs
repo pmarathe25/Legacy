@@ -402,6 +402,8 @@ fn elapsed_agreements_keep_the_last_delivery_instant_and_allow_withdrawal() {
     assert_eq!(withdrawn.contracts[0].delivered, 0);
     let mut deadlines = runtime::Runtime::compile(&active);
     assert_eq!(deadlines.next_expiration_after(151), Some(2));
+    assert!(deadlines.has_live_promise((1, 2, 1), 152));
+    assert!(!deadlines.has_live_promise((1, 2, 1), 153));
     deadlines.advance_at(&mut active, owner.instant(152, 2).unwrap());
     assert!(active.events.is_empty());
     deadlines.advance_at(&mut active, owner.instant(153, 2).unwrap());

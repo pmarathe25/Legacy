@@ -1,10 +1,13 @@
-//! Due-date index for the fused host. Commands rebuild it at compilation boundaries.
+//! Elapsed deadline and party indexes rebuilt when agreement statuses change.
 use crate::{Agreements, Event, EventKind, Status};
 use rayon::prelude::*;
+use std::collections::HashMap;
+type PartiesAndGood = (u64, u64, u32);
 const BLOCK: usize = 4096;
 pub struct Runtime {
     pending: Vec<(u64, usize)>,
     cursor: usize,
+    last_due_by_party: HashMap<PartiesAndGood, u64>,
 }
 impl Runtime {
     pub fn compile(state: &Agreements) -> Self {
@@ -18,8 +21,45 @@ impl Runtime {
             })
             .collect();
         pending.par_sort_unstable();
-        Self { pending, cursor: 0 }
+        let last_due_by_party = if state.time_unit_millis.is_some() {
+            // Keep each pair live through its latest outstanding promise.
+            pending
+                .par_iter()
+                .fold(
+                    HashMap::new,
+                    |mut entries: HashMap<PartiesAndGood, u64>, &(due, slot)| {
+                        let contract = &state.contracts[slot];
+                        let key = (contract.debtor, contract.creditor, contract.good);
+                        let latest = entries.entry(key).or_insert(due);
+                        *latest = (*latest).max(due);
+                        entries
+                    },
+                )
+                .reduce(HashMap::new, |mut left, mut right| {
+                    if left.len() < right.len() {
+                        std::mem::swap(&mut left, &mut right);
+                    }
+                    for (key, due) in right {
+                        let latest = left.entry(key).or_insert(due);
+                        *latest = (*latest).max(due);
+                    }
+                    left
+                })
+        } else {
+            HashMap::new()
+        };
+        Self {
+            pending,
+            cursor: 0,
+            last_due_by_party,
+        }
     }
+    pub fn has_live_promise(&self, parties_and_good: PartiesAndGood, now: u64) -> bool {
+        self.last_due_by_party
+            .get(&parties_and_good)
+            .is_some_and(|due| *due >= now)
+    }
+
     /// The advertised due instant is still valid for delivery.
     pub fn next_expiration_after(&self, now: u128) -> Option<u64> {
         let due = self.pending.get(self.cursor)?.0.checked_add(1)?;
