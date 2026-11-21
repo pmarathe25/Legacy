@@ -253,7 +253,9 @@ fn run(
             let segment = to_calendar.min(to_physical);
             let settles = segment == to_physical;
             let mut remaining = segment;
-            while remaining > 0 {
+            // A resumed interval may already be at its physical deadline.
+            // A zero-duration call still publishes that settlement.
+            loop {
                 let elapsed = remaining.min(step_millis);
                 let result = advancing.advance(elapsed).and_then(|result| {
                     if let Some(error) = result.failure {
@@ -285,6 +287,9 @@ fn run(
                         &json!({"kind":"observation_batch","year":year,"observations":observation_batch}),
                     )?;
                     observation_batch.clear();
+                }
+                if remaining == 0 {
+                    break;
                 }
             }
             let opinion_events = advancing.take_opinion_events();
