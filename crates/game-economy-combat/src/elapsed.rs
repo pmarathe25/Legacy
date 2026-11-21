@@ -1,4 +1,5 @@
 //! Local tactical engagements with independent elapsed round deadlines.
+use crate::elapsed_structures::{SiteStrike, Structures};
 use crate::{Combat, Map, Point, Protection, Reaction, Response, Weapon};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -13,6 +14,9 @@ pub enum Choice {
     Attack {
         target: u64,
         pursue: bool,
+    },
+    AttackSite {
+        site: u64,
     },
     Move {
         destination: Point,
@@ -72,6 +76,8 @@ pub struct Tactical {
     pub base_force: u32,
     pub next_id: u64,
     pub maps: Vec<Map>,
+    #[serde(default, skip_serializing_if = "Structures::is_empty")]
+    pub structures: Structures,
     pub engagements: Vec<Engagement>,
     pub reactions: Vec<Reaction>,
     pub protection: Vec<Protection>,
@@ -125,6 +131,7 @@ pub struct Round {
     pub changes: Vec<Engagement>,
     pub events: Vec<Event>,
     pub hits: Vec<Hit>,
+    pub site_strikes: Vec<SiteStrike>,
     pub protection: Vec<(u64, u32)>,
 }
 
@@ -160,6 +167,7 @@ impl Tactical {
             base_force: combat.conflict.damage,
             next_id: combat.conflict.next_id,
             maps,
+            structures: Structures::new(combat.structures, combat.structure_preferences),
             engagements: Vec::new(),
             reactions,
             weapons: combat.weapons,
@@ -200,12 +208,13 @@ impl Tactical {
                         !people.contains(&row.person) || !map.open(row.position)
                             || matches!(row.choice, Choice::Attack { target, .. } if target == row.person || fight.people.binary_search_by_key(&target, |person| person.person).is_err())
                             || matches!(row.choice, Choice::Move { destination } if !map.open(destination))
+                            || matches!(row.choice, Choice::AttackSite { site } if self.structures.target(site, fight.region).is_none())
                     })
             })
         {
             return Err("invalid elapsed tactical state".into());
         }
-        Ok(())
+        self.structures.validate(&self.maps, people)
     }
 
     pub fn map(&self, region: u64) -> Option<&Map> {
@@ -394,6 +403,19 @@ impl Tactical {
             .people
             .binary_search_by_key(&person, |row| row.person)
             .expect("engaged person");
+        if let Choice::AttackSite { site } = choice {
+            let target = self
+                .structures
+                .target(site, fight.region)
+                .ok_or("unknown local tactical site")?;
+            let map = &self.maps[self
+                .maps
+                .binary_search_by_key(&fight.region, |row| row.region)
+                .expect("engagement map")];
+            if !map.visible(fight.people[position].position, target.position) {
+                return Err("the site is not visible".into());
+            }
+        }
         fight.people[position].choice = choice;
         Ok(())
     }
@@ -403,25 +425,27 @@ impl Tactical {
         now: u128,
         actors: &[Actor],
         seed: u64,
-        fear: &(dyn Fn(u64, u64) -> u64 + Sync),
+        feelings: &(dyn Fn(u64, u64) -> (u64, u64) + Sync),
     ) -> Result<Round, String> {
         let rows: Vec<_> = self
             .engagements
             .par_iter()
             .filter(|day| day.next_millis == now)
-            .map(|fight| prepare_one(fight, self, actors, now, seed, fear))
+            .map(|fight| prepare_one(fight, self, actors, now, seed, feelings))
             .collect::<Result<_, _>>()?;
         let mut round = Round {
             at_millis: now,
             changes: Vec::new(),
             events: Vec::new(),
             hits: Vec::new(),
+            site_strikes: Vec::new(),
             protection: Vec::new(),
         };
         for (fight, mut results) in rows {
             round.changes.push(fight);
             round.events.append(&mut results.events);
             round.hits.append(&mut results.hits);
+            round.site_strikes.append(&mut results.site_strikes);
             round.protection.append(&mut results.protection);
         }
         round.protection.par_sort_unstable_by_key(|row| row.0);
@@ -476,12 +500,24 @@ impl Tactical {
             .min();
         round.events
     }
+
+    pub fn remove_structures(&mut self, destroyed: &HashSet<u64>) {
+        self.structures.remove(destroyed, &mut self.maps);
+        self.engagements.par_iter_mut().for_each(|fight| {
+            for row in &mut fight.people {
+                if matches!(row.choice, Choice::AttackSite { site } if destroyed.contains(&site)) {
+                    row.choice = Choice::Wait;
+                }
+            }
+        });
+    }
 }
 
 #[derive(Default)]
 struct Results {
     events: Vec<Event>,
     hits: Vec<Hit>,
+    site_strikes: Vec<SiteStrike>,
     protection: Vec<(u64, u32)>,
 }
 
@@ -540,7 +576,7 @@ fn prepare_one(
     actors: &[Actor],
     now: u128,
     seed: u64,
-    fear: &(dyn Fn(u64, u64) -> u64 + Sync),
+    feelings: &(dyn Fn(u64, u64) -> (u64, u64) + Sync),
 ) -> Result<(Engagement, Results), String> {
     let map = owner.map(fight.region).ok_or("no tactical map here")?;
     let mut results = Results::default();
@@ -617,7 +653,7 @@ fn prepare_one(
                 || opponent.is_some_and(|other| {
                     preference
                         .retreat_fear_at_least
-                        .is_some_and(|threshold| fear(row.person, other.person) >= threshold)
+                        .is_some_and(|threshold| feelings(row.person, other.person).0 >= threshold)
                 })
             {
                 Choice::Retreat
@@ -633,6 +669,17 @@ fn prepare_one(
             }
         } else {
             row.choice
+        };
+        let choice = if actor.can_act
+            && !actor.controlled
+            && choice != Choice::Retreat
+            && let Some(site) = owner
+                .structures
+                .chosen(row.person, row.position, map, feelings)
+        {
+            Choice::AttackSite { site }
+        } else {
+            choice
         };
         decisions.push((choice, opponent.map(|row| row.position)));
     }
@@ -723,6 +770,22 @@ fn prepare_one(
             let mut event = fight.event(now, Some(row.person), EventKind::Missed);
             event.target = Some(target);
             results.events.push(event);
+        }
+        if let Choice::AttackSite { site } = choice
+            && let Some(target) = owner.structures.target(site, fight.region)
+        {
+            let harm = find(row.person).expect("present fighter").force;
+            if harm > 0 && map.can_attack(row.position, target.position) {
+                results.site_strikes.push(SiteStrike {
+                    at_millis: now,
+                    engagement: fight.id,
+                    sequence: fight.sequence,
+                    actor: row.person,
+                    site,
+                    harm,
+                    collapsed: false,
+                });
+            }
         }
     }
     let attack_index: Vec<_> = results
