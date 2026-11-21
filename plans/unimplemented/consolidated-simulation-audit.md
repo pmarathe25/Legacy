@@ -41,6 +41,10 @@ to track rates, deadlines, and behavior under different advance sizes. The
   owner arbitrates competing requests and charges only accepted transfers.
   A composed test covers renewal, competing gatherers, exact receipts, and
   save/resume across worker counts and physical settlement intervals.
+- People with a cultivation choice profile can plant or harvest on their
+  decision clock when the crop owner uses elapsed growth. Shared-field
+  competition, actual seed-batch withdrawal, offspring custody, and the
+  freedom to decline are covered across save/reload and worker counts.
 - Private lexicons support remembered acquaintances. A speaker can name
   someone from their own experience. A listener needs their own grounding
   and can decline or adapt the form. Annual reports count the living people

@@ -83,8 +83,11 @@ The host integrates fractional growth up to season changes and ripening
 deadlines using the opening moisture and each seed cohort's seasonal traits.
 Ripening and descendant batch allocation commit together. The optional
 `irrigation.evaporation_period_millis` retains fractional water loss and pauses
-growth at the exact drying deadline. Planting, harvest, and actors adding
-water still use boundary actions.
+growth at the exact drying deadline. In these worlds, people with a
+cultivation choice profile can plant or harvest at their personal decision
+instant. The field changes only when the dated seed withdrawal or harvest
+output is accepted. Boundary cultivation still handles ordinary policies,
+requests and actors adding water.
 
 `fauna.lifecycle_period_millis` gives wildlife a fixed ecological cadence.
 At each deadline the wildlife owner stages age, hunger, finite grazing, climate
