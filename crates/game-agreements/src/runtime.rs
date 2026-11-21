@@ -1,5 +1,5 @@
 //! Elapsed deadline and party indexes rebuilt when agreement statuses change.
-use crate::{Agreements, Event, EventKind, Status};
+use crate::{Agreements, Contract, Event, EventKind, Status};
 use rayon::prelude::*;
 use std::collections::HashMap;
 type PartiesAndGood = (u64, u64, u32);
@@ -53,6 +53,20 @@ impl Runtime {
             cursor: 0,
             last_due_by_party,
         }
+    }
+
+    pub fn has_open_contracts(&self) -> bool {
+        self.cursor < self.pending.len()
+    }
+
+    /// Pair this index with the agreement state it was compiled from and updated with.
+    pub fn open_contracts<'a>(
+        &'a self,
+        state: &'a Agreements,
+    ) -> impl ParallelIterator<Item = &'a Contract> {
+        self.pending[self.cursor..]
+            .par_iter()
+            .map(|&(_, slot)| &state.contracts[slot])
     }
     pub fn has_live_promise(&self, parties_and_good: PartiesAndGood, now: u64) -> bool {
         self.last_due_by_party

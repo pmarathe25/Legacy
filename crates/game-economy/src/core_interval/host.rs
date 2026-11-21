@@ -602,7 +602,7 @@ impl CoreHost {
         tool_wear: Option<ToolWear>,
         opinions: Option<game_opinions::Opinions>,
         goals: Option<game_goals::Goals>,
-        agreements: Option<game_agreements::Agreements>,
+        mut agreements: Option<game_agreements::Agreements>,
         options: CoreRuntimeOptions,
     ) -> Result<Self, String> {
         let CoreRuntimeOptions {
@@ -1468,7 +1468,7 @@ impl CoreHost {
                 .validate(&people, &recipes, core.physical.tick())
                 .map_err(str::to_owned)?;
         }
-        if let Some(owner) = &agreements {
+        if let Some(owner) = &mut agreements {
             owner
                 .instant(core.simulated_millis(), core.physical.tick())
                 .map_err(str::to_owned)?;
@@ -1482,6 +1482,9 @@ impl CoreHost {
             owner
                 .validate(&people, &goods, core.physical.tick())
                 .map_err(str::to_owned)?;
+            if owner.contracts.par_windows(2).any(|pair| pair[0].id > pair[1].id) {
+                owner.contracts.par_sort_unstable_by_key(|row| row.id);
+            }
         }
         if let Some(owner) = &mut purpose {
             let people: HashSet<_> = core.people.par_iter().map(|person| person.id).collect();
@@ -3482,9 +3485,6 @@ impl CoreHost {
         if let Some(goals) = goals {
             self.goals = Some(goals);
         }
-        if let Some(agreements) = agreements {
-            self.agreements = Some(agreements);
-        }
         if let Some(owner) = agriculture {
             self.agriculture = Some(owner);
         }
@@ -3558,6 +3558,10 @@ impl CoreHost {
             self.opinions = opinions;
         } else if let Some(opinions) = medical_opinions {
             self.opinions = Some(opinions);
+        }
+        if let Some(agreements) = agreements {
+            Self::learn_agreement_outcomes(&self.core.people, self.opinions.as_mut(), &agreements);
+            self.agreements = Some(agreements);
         }
         self.inherit_birth_preferences(&newborns, events.tick);
         if committed_care {

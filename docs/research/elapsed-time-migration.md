@@ -165,8 +165,11 @@ review instants are absolute elapsed milliseconds in this mode. A person
 can accept before the due instant, deliver through the due instant, or
 choose to withdraw while delivery is still possible. Expiry records a lapse
 or an unfulfilled agreement without triggering a transfer. Offer reviews
-remain personal decisions, and physical evidence keeps its original tick
-provenance.
+remain personal decisions. An accepted final delivery or an unfulfilled
+agreement gives its living recipient private evidence for their own signed
+trust response, which informs later choices. A lapsed offer has no such result.
+Elapsed acceptance and delivery decisions use the open-agreement index.
+Physical evidence keeps its original tick provenance.
 
 An elapsed environment can set `exposure_period_millis` to schedule personal
 hazard damage and shelter rotation at fixed simulated times. The host uses

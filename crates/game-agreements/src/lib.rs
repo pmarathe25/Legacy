@@ -248,6 +248,19 @@ impl Instant {
 }
 
 impl Agreements {
+    /// Elapsed hosts can reuse the deadline index. Boundary callers filter their saved rows.
+    pub fn open_contract_candidates<'a>(
+        &'a self,
+        runtime: Option<&'a runtime::Runtime>,
+    ) -> impl ParallelIterator<Item = &'a Contract> {
+        use rayon::iter::Either;
+
+        match runtime {
+            Some(runtime) => Either::Left(runtime.open_contracts(self)),
+            None => Either::Right(self.contracts.par_iter()),
+        }
+    }
+
     /// Convert only the eligibility clock. Physical evidence keeps its own timestamp.
     pub fn instant(
         &self,

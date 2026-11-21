@@ -147,6 +147,26 @@ pub fn automatic(
     tick: u64,
     endpoint_together: Option<&EndpointProximity<'_>>,
 ) -> AutomaticDecisions {
+    automatic_with_runtime(
+        (owner, None),
+        people,
+        opinions,
+        locations,
+        busy,
+        tick,
+        endpoint_together,
+    )
+}
+
+pub fn automatic_with_runtime(
+    (owner, runtime): (&Agreements, Option<&game_agreements::runtime::Runtime>),
+    people: &[PersonSnapshot],
+    opinions: Option<&Opinions>,
+    locations: &Colocation,
+    busy: &[u64],
+    tick: u64,
+    endpoint_together: Option<&EndpointProximity<'_>>,
+) -> AutomaticDecisions {
     let mut policies: Vec<_> = owner
         .policies
         .par_iter()
@@ -155,8 +175,7 @@ pub fn automatic(
     policies.par_sort_unstable_by_key(|p| p.person);
     let opinions = opinions.map(Opinions::index);
     let mut candidates: Vec<_> = owner
-        .contracts
-        .par_iter()
+        .open_contract_candidates(runtime)
         .filter_map(|contract| {
             if contract.status != Status::Proposed
                 || contract.due <= tick

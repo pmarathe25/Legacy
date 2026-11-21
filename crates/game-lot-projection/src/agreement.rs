@@ -249,6 +249,14 @@ pub struct Context<'a> {
 }
 impl Context<'_> {
     pub fn plan(&self, action_base: u64) -> Result<Plan, String> {
+        self.plan_with_runtime(action_base, None)
+    }
+
+    pub fn plan_with_runtime(
+        &self,
+        action_base: u64,
+        runtime: Option<&game_agreements::runtime::Runtime>,
+    ) -> Result<Plan, String> {
         if action_base == 0
             || self
                 .people
@@ -264,8 +272,7 @@ impl Context<'_> {
         let opinions = self.opinions.map(Opinions::index);
         let mut candidates: Vec<_> = self
             .agreements
-            .contracts
-            .par_iter()
+            .open_contract_candidates(runtime)
             .filter(|contract| {
                 if contract.status != Status::Active
                     || contract.due < self.tick

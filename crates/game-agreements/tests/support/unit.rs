@@ -401,6 +401,11 @@ fn elapsed_agreements_keep_the_last_delivery_instant_and_allow_withdrawal() {
     assert_eq!(withdrawn.contracts[0].status, Status::Withdrawn);
     assert_eq!(withdrawn.contracts[0].delivered, 0);
     let mut deadlines = runtime::Runtime::compile(&active);
+    assert!(deadlines.has_open_contracts());
+    assert_eq!(
+        active.open_contract_candidates(Some(&deadlines)).map(|row| row.id).collect::<Vec<_>>(),
+        ids,
+    );
     assert_eq!(deadlines.next_expiration_after(151), Some(2));
     assert!(deadlines.has_live_promise((1, 2, 1), 152));
     assert!(!deadlines.has_live_promise((1, 2, 1), 153));
@@ -410,5 +415,8 @@ fn elapsed_agreements_keep_the_last_delivery_instant_and_allow_withdrawal() {
     assert_eq!(active.contracts[0].status, Status::Defaulted);
     assert_eq!(active.contracts[1].status, Status::Withdrawn);
     assert_eq!(deadlines.next_expiration_after(153), None);
+    assert!(!deadlines.has_open_contracts());
+    assert_eq!(active.open_contract_candidates(Some(&deadlines)).count(), 0);
+    assert_eq!(active.contracts.len(), 2);
     assert!(active.events.iter().all(|event| event.tick == 2));
 }

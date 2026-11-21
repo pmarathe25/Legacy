@@ -1611,6 +1611,10 @@ meeting_trust = { regular = 1, pressured = -2 }
 person = 2
 meeting_trust = { regular = -1, pressured = 0 }
 
+[[opinions.sensitivities]]
+person = 16
+trust_promise_unfulfilled = -2
+
 [dynamics.personality]
 social_urgency_per_isolation = 1
 inherit_births = true
@@ -2210,7 +2214,7 @@ assert_outputs = true
 [agreements]
 next_id = 1
 time_unit_millis = 3600000
-policies = [{ person = 16, accept = true, honor = true }]
+policies = [{ person = 16, accept = true, honor = true, minimum_trust = -1 }]
 
 [[promise_offering]]
 person = 15

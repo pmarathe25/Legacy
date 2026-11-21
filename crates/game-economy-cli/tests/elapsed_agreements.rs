@@ -1,6 +1,7 @@
 use game_agreements::{Decision, Delivery, EventKind, Proposal, Status};
 use game_economy::core_interval::{CoreHost, CoreRunEvent};
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 fn scenario(quantum: u64, offering: bool) -> CoreHost {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
@@ -60,9 +61,11 @@ willing = true
 "#,
         );
     }
+    static FIXTURE: AtomicU64 = AtomicU64::new(0);
     let path = std::env::temp_dir().join(format!(
-        "legacy-elapsed-pledges-{}-{quantum}-{offering}.toml",
-        std::process::id()
+        "legacy-elapsed-pledges-{}-{}.toml",
+        std::process::id(),
+        FIXTURE.fetch_add(1, Ordering::Relaxed)
     ));
     std::fs::write(&path, source).unwrap();
     let loaded = game_economy_cli::core_scenario(&path, &root.join("content"));
@@ -73,6 +76,127 @@ willing = true
 fn restored(host: &CoreHost) -> CoreHost {
     let bytes = serde_json::to_vec(&host.snapshot()).unwrap();
     CoreHost::resume(serde_json::from_slice(&bytes).unwrap()).unwrap()
+}
+
+#[test]
+fn a_recipients_interpretation_of_a_default_changes_their_next_choice() {
+    let run =
+        |workers, quantum, changes_trust, steps: &[u64]| {
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(workers)
+                .build()
+                .unwrap()
+                .install(|| {
+                    let mut state = scenario(quantum, true).snapshot();
+                    state.opinions = Some(serde_json::from_value(serde_json::json!({
+                    "rules": {"minimum": -10, "maximum": 10, "initial": 0,
+                        "fulfilled_gain": 2, "default_loss": 8},
+                    "sensitivities": [{"person": 2, "trust_promise_unfulfilled": changes_trust}]
+                })).unwrap());
+                    state.agreements.as_mut().unwrap().policies = serde_json::from_value(
+                        serde_json::json!([{"person": 2, "accept": true, "minimum_trust": 0}]),
+                    )
+                    .unwrap();
+                    let mut host = CoreHost::resume(state).unwrap();
+                    let mut changes = Vec::new();
+                    let mut expiries = Vec::new();
+                    for &duration in steps {
+                        let advance = host.advance_continuous(duration, &[]).unwrap();
+                        assert_eq!(advance.failure, None);
+                        for event in advance.events {
+                            if let CoreRunEvent::AgreementExpiry { at_millis, events } = event {
+                                expiries.extend(
+                                    events.into_iter().map(|event| (at_millis, event.kind)),
+                                );
+                            }
+                        }
+                        changes.extend(host.take_opinion_events().into_iter().map(|event| {
+                            assert_eq!((event.observer, event.target), (2, 1));
+                            (event.before, event.after)
+                        }));
+                        host = restored(&host);
+                    }
+                    let state = host.snapshot();
+                    let statuses: Vec<_> = state
+                        .agreements
+                        .unwrap()
+                        .contracts
+                        .into_iter()
+                        .map(|contract| contract.status)
+                        .collect();
+                    (statuses, expiries, changes)
+                })
+        };
+    let cautious = run(1, 1000, -2, &[160]);
+    assert_eq!(cautious, run(6, 37, -2, &[11, 39, 1, 43, 66]));
+    assert_eq!(cautious.0, [Status::Defaulted, Status::Withdrawn]);
+    assert_eq!(
+        cautious.1,
+        [(51, EventKind::Defaulted), (151, EventKind::Withdrawn)]
+    );
+    assert_eq!(cautious.2, [(0, -2)]);
+    let encouraged = run(6, 37, 1, &[51, 109]);
+    assert_eq!(encouraged.0, [Status::Defaulted, Status::Defaulted]);
+    assert_eq!(encouraged.2, [(0, 1), (1, 2)]);
+}
+
+#[test]
+fn the_recipient_learns_at_the_successful_final_delivery() {
+    let mut opening = scenario(850, false).snapshot();
+    opening.opinions = Some(
+        serde_json::from_value(serde_json::json!({
+            "rules": {"minimum": -10, "maximum": 10, "initial": 0,
+                "fulfilled_gain": 2, "default_loss": 8},
+            "sensitivities": [{"person": 2, "trust_promise_fulfilled": -3}]
+        }))
+        .unwrap(),
+    );
+    let good = opening
+        .core
+        .physical
+        .goods
+        .iter()
+        .find(|good| good.name == "bread")
+        .unwrap()
+        .id;
+    let mut host = CoreHost::resume(opening).unwrap();
+    let contract = host
+        .propose_agreements(&[Proposal {
+            debtor: 1,
+            creditor: 2,
+            good,
+            quantity: 1,
+            due: 55,
+        }])
+        .unwrap()[0];
+    host.decide_agreements(&[Decision {
+        contract,
+        actor: 2,
+        accept: true,
+    }])
+    .unwrap();
+    assert_eq!(host.advance_continuous(55, &[]).unwrap().failure, None);
+    let outcomes = host
+        .deliver_agreements(&[Delivery {
+            contract,
+            actor: 1,
+            quantity: 1,
+        }])
+        .unwrap();
+    assert!(outcomes[0].accepted);
+    assert_eq!(
+        host.snapshot().agreements.unwrap().contracts[0].status,
+        Status::Fulfilled
+    );
+    let changes = host.take_opinion_events();
+    assert_eq!(changes.len(), 1);
+    assert_eq!(
+        (changes[0].observer, changes[0].target, changes[0].after),
+        (2, 1, -3)
+    );
+    host = restored(&host);
+    assert_eq!(host.advance_continuous(500, &[]).unwrap().failure, None);
+    assert!(host.take_opinion_events().is_empty());
 }
 
 #[test]

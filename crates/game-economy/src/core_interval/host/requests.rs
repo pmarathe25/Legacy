@@ -135,7 +135,10 @@ impl CoreHost {
         let occupied = self.blocked_with_rest(blocked);
         let blocked = occupied.as_deref().unwrap_or(blocked);
         let Some(owner) = self.agreements.as_ref().filter(|owner| {
-            !owner.contracts.is_empty()
+            self.agreement_deadlines.as_ref().map_or_else(
+                || !owner.contracts.is_empty(),
+                game_agreements::runtime::Runtime::has_open_contracts,
+            )
                 && owner.policies.par_iter().any(|policy| {
                     policy.honor
                         || policy.fear_honor_threshold.is_some()
@@ -194,7 +197,7 @@ impl CoreHost {
             blocked_receivers: &[],
             tick: now,
         }
-        .plan(1)?;
+        .plan_with_runtime(1, self.agreement_deadlines.as_ref())?;
         let actors = plan.actors();
         let deliveries = plan.selected_deliveries();
         let outcomes = self.deliver_agreements(&deliveries)?;
@@ -408,6 +411,7 @@ impl CoreHost {
                         }),
                 );
         }
+        Self::learn_agreement_outcomes(&self.core.people, self.opinions.as_mut(), &next);
         self.publish_agreements(next);
         Ok(outcomes)
     }

@@ -9,6 +9,43 @@ pub struct CoreSocialResults {
 }
 
 impl CoreHost {
+    /// A living recipient can notice whether the agreed delivery reached them.
+    /// This observation is private and leaves the cause and its interpretation open.
+    pub(super) fn learn_agreement_outcomes(
+        people: &[game_economy_person::Person],
+        opinions: Option<&mut game_opinions::Opinions>,
+        owner: &game_agreements::Agreements,
+    ) {
+        use game_agreements::EventKind::{Defaulted, Fulfilled};
+
+        let Some(opinions) = opinions else { return };
+        let observed: Vec<_> = owner
+            .events
+            .par_iter()
+            .filter_map(|event| {
+                if !matches!(event.kind, Defaulted | Fulfilled) {
+                    return None;
+                }
+                let slot = owner
+                    .contracts
+                    .binary_search_by_key(&event.contract, |row| row.id)
+                    .ok()?;
+                let contract = &owner.contracts[slot];
+                let creditor = people
+                    .binary_search_by_key(&contract.creditor, |row| row.id)
+                    .ok()?;
+                (people[creditor].health > 0).then(|| (contract.clone(), event.clone()))
+            })
+            .collect();
+        if !observed.is_empty() {
+            let (contracts, events): (Vec<_>, Vec<_>) = observed.into_iter().unzip();
+            let earlier = std::mem::take(&mut opinions.events);
+            opinions.advance_validated(&contracts, &events, events[0].tick);
+            let later = std::mem::replace(&mut opinions.events, earlier);
+            opinions.events.extend(later);
+        }
+    }
+
     pub(super) fn publish_agreements(&mut self, owner: game_agreements::Agreements) {
         self.agreement_deadlines = owner
             .time_unit_millis
@@ -39,6 +76,7 @@ impl CoreHost {
             .as_mut()
             .expect("compiled agreement deadlines")
             .advance_at(owner, instant);
+        Self::learn_agreement_outcomes(&self.core.people, self.opinions.as_mut(), owner);
         owner.events.clone()
     }
 
@@ -164,11 +202,13 @@ impl CoreHost {
             return Err("invalid occupied people".into());
         }
         let Some(owner) = self.agreements.as_ref().filter(|owner| {
-            !owner.contracts.is_empty()
-                && owner
-                    .policies
-                    .par_iter()
-                    .any(|policy| policy.accept || policy.accept_pressure_threshold.is_some())
+            self.agreement_deadlines.as_ref().map_or_else(
+                || !owner.contracts.is_empty(),
+                game_agreements::runtime::Runtime::has_open_contracts,
+            ) && owner
+                .policies
+                .par_iter()
+                .any(|policy| policy.accept || policy.accept_pressure_threshold.is_some())
         }) else {
             return Ok(CoreSocialResults::default());
         };
@@ -183,8 +223,8 @@ impl CoreHost {
             .map(|person| (person.id, person.region, person.health, person.hunger))
             .collect();
         let locations = game_economy_person::travel::Colocation::new(None);
-        let plan = game_economy_promises::automatic(
-            owner,
+        let plan = game_economy_promises::automatic_with_runtime(
+            (owner, self.agreement_deadlines.as_ref()),
             &people,
             self.opinions.as_ref(),
             &locations,
