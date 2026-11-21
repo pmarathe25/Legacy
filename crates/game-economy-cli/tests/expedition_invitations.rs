@@ -1,6 +1,79 @@
 use game_economy::core_interval::{CoreHost, ExpeditionReplyKind};
 
 #[test]
+fn joining_a_trip_and_keeping_its_rendezvous_are_two_personal_choices() {
+    use game_economy::core_interval::{CoreRunEvent, ExpeditionEventKind};
+    let simulate = |workers, join_rendezvous| {
+        rayon::ThreadPoolBuilder::new().num_threads(workers).build().unwrap().install(|| {
+            let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+            let template = std::fs::read_to_string(root.join("content/scenarios/economy-core-player.toml")).unwrap();
+            let mut source = template.split_once("[hauling]").unwrap().0
+                .replace("controlled = true", "controlled = false");
+            source.push_str(r#"
+[[people]]
+id = 2
+region = 1
+health = 100
+hunger = 0
+willing_to_work = false
+seek_meals = false
+
+[missions]
+next_id = 2
+entries = [{ id = 1, person = 1, origin = 1, destination = 2, visit_ticks = 8, phase = "ready" }]
+
+[[expedition_departures]]
+person = 1
+after_millis = 1000
+
+[[expedition_rendezvous]]
+person = 1
+group = 82
+minimum_companions = 1
+wait_millis = 3000
+
+[[expedition_invitation_initiatives]]
+person = 1
+companions = [{ person = 2, value = 10 }]
+
+[[expedition_invitation_preferences]]
+person = 2
+destination = 2
+willing = true
+return_after_visit = true
+"#);
+            if join_rendezvous {
+                source.push_str("rendezvous = { minimum_companions = 0, wait_millis = 0 }\n");
+            }
+            let path = std::env::temp_dir().join(format!("legacy-invited-rendezvous-{}-{join_rendezvous}.toml", std::process::id()));
+            std::fs::write(&path, source).unwrap();
+            let loaded = game_economy_cli::core_scenario(&path, &root.join("content"));
+            std::fs::remove_file(path).unwrap();
+            let mut host = loaded.unwrap();
+            let opening = host.advance_continuous(173, &[]).unwrap();
+            assert_eq!(opening.failure, None);
+            assert_eq!(host.expedition(2).unwrap().rendezvous.is_some(), join_rendezvous);
+            let saved = serde_json::to_vec(&host.snapshot()).unwrap();
+            let mut host = CoreHost::resume(serde_json::from_slice(&saved).unwrap()).unwrap();
+            let run = host.advance_continuous(2828, &[]).unwrap();
+            assert_eq!(run.failure, None);
+            let events: Vec<_> = run.events.into_iter().filter_map(|event| match event {
+                CoreRunEvent::Expeditions(rows) => Some(rows),
+                _ => None,
+            }).flatten().collect();
+            let departures: Vec<_> = events.iter().filter(|row| row.kind == ExpeditionEventKind::OutboundLeg)
+                .map(|row| (row.person, row.at_millis)).collect();
+            assert_eq!(departures, if join_rendezvous { vec![(1, 1000), (2, 1000)] } else { vec![(2, 1000), (1, 3000)] });
+            assert_eq!(events.iter().filter(|row| matches!(row.kind, ExpeditionEventKind::CompanionsDeparted { group: 82, companions: 1 })).count(), if join_rendezvous { 2 } else { 0 });
+            events
+        })
+    };
+    for join_rendezvous in [false, true] {
+        assert_eq!(simulate(1, join_rendezvous), simulate(6, join_rendezvous));
+    }
+}
+
+#[test]
 fn autonomous_invitations_arbitrate_by_the_recipients_own_preferences() {
     use game_economy::core_interval::{CoreRunEvent, ExpeditionEventKind};
     let simulate = |workers, willing, obligation| {

@@ -74,6 +74,7 @@ impl CoreHost {
             destination: trip.destination,
             visit_millis: trip.visit_millis,
             depart_after_millis: trip.depart_after_millis,
+            rendezvous_group: trip.rendezvous.map(|choice| choice.group),
         };
         let response = if beneficiary.controlled {
             None
@@ -90,10 +91,14 @@ impl CoreHost {
         let reply = response
             .map(|(choice, head_home)| {
                 let joined = if matches!(choice, Response::Joined | Response::JoinedUnderPressure) {
-                    Some(
-                        next.start(invitation.personal_plan(region, head_home), now)?
-                            .itinerary,
-                    )
+                    let itinerary = next.start(invitation.personal_plan(region, head_home), now)?.itinerary;
+                    let rendezvous = next.invitations.preference(target, invitation.destination)
+                        .and_then(|choice| invitation.personal_rendezvous(choice, now));
+                    if rendezvous.is_some() {
+                        let event = next.set_rendezvous(target, rendezvous, now)?;
+                        next.pending_events.push(event);
+                    }
+                    Some(itinerary)
                 } else {
                     None
                 };
@@ -181,6 +186,7 @@ impl CoreHost {
                     destination: trip.destination,
                     visit_millis: trip.visit_millis,
                     depart_after_millis: trip.depart_after_millis,
+                    rendezvous_group: trip.rendezvous.map(|choice| choice.group),
                 };
                 let reply = (!recipient.controlled).then(|| {
                     self.decide_expedition_invitation(

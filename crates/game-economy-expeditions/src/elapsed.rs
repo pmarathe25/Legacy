@@ -88,6 +88,8 @@ pub enum EventKind {
         recipient: u64,
         response: Option<Response>,
         joined_itinerary: Option<u64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        rendezvous_group: Option<u64>,
     },
 }
 
@@ -412,6 +414,7 @@ impl Expeditions {
                     || source.destination != invitation.destination
                     || source.visit_millis != invitation.visit_millis
                     || source.depart_after_millis != invitation.depart_after_millis
+                    || source.rendezvous.map(|row| row.group) != invitation.rendezvous_group
                 {
                     return Err("expedition invitation differs from the sender's itinerary".into());
                 }
@@ -422,10 +425,13 @@ impl Expeditions {
                                 "expedition recipient already has an active itinerary".into()
                             );
                         }
-                        Some(Itinerary::new(
+                        let mut row = Itinerary::new(
                             id,
                             invitation.personal_plan(invitation.origin, *head_home),
-                        ))
+                        );
+                        row.rendezvous = self.invitations.preference(invitation.recipient, invitation.destination)
+                            .and_then(|choice| invitation.personal_rendezvous(choice, now));
+                        Some(row)
                     }
                     (_, Some((Response::Withdrawn, _))) => {
                         return Err(
@@ -442,6 +448,7 @@ impl Expeditions {
                         recipient: invitation.recipient,
                         response: reply.map(|row| row.0),
                         joined_itinerary,
+                        rendezvous_group: invitation.rendezvous_group,
                     },
                 );
                 Ok((note, joined, reply.is_none().then_some(*invitation)))
@@ -453,6 +460,9 @@ impl Expeditions {
             events.push(note);
             if let Some(row) = joined {
                 events.push(row.event(now, row.origin, EventKind::Planned));
+                if row.rendezvous.is_some() {
+                    events.push(row.event(now, row.origin, EventKind::RendezvousChanged { rendezvous: row.rendezvous }));
+                }
                 self.itineraries.push(row);
             }
             pending.extend(notification);

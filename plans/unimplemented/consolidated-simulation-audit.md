@@ -162,7 +162,9 @@ departure plans, sourcing, collapsing structures, local tactical reinforcement,
 guardian bodies, past-life memories and practiced work rates, and unattended
 succession. Travelers can choose to wait for companions before their first
 leg or depart at their own deadline. Larger formations, coordination on
-later legs, and sharing appointments through invitations remain open. Exercise
+later legs, and learning about appointments by other social routes remain
+open. An invitation can report an appointment. The recipient can take up
+the trip and independently decide whether to wait for company. Exercise
 them through normal authoring, the player interface, history, and saved state.
 The removed runner remains available in Git history.
 
