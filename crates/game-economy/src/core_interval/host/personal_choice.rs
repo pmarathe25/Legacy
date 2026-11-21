@@ -558,7 +558,7 @@ impl CoreHost {
         let mut outcomes = if allowed.is_empty() {
             Vec::new()
         } else {
-            self.start_with_sites_hunger_limit(&allowed, u32::MAX, true)?
+            self.start_with_sites_hunger_limit(&allowed, u32::MAX, true, None)?
         };
         outcomes.par_extend(
             starts
