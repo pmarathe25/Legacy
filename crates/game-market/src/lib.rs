@@ -69,11 +69,22 @@ pub struct Policy {
     /// Personal value placed on helping with an uncompensated request.
     #[serde(default)]
     pub help_value: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub opinion_weights: Option<OpinionWeights>,
     pub values: Vec<Value>,
     /// Subjective incentives toward specific people; these do not imply approval.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub influences: Vec<Influence>,
 }
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct OpinionWeights {
+    pub affinity: i32,
+    pub trust: i32,
+    pub fear: i32,
+    pub obligation: i32,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Influence {
