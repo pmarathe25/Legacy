@@ -1,6 +1,7 @@
 //! Person- and location-owned physical lots with staged expiry and movement.
 mod batch_allocation;
 mod compose;
+mod expiry;
 mod view;
 pub use batch_allocation::{BatchAllocation, BatchCount, BatchRange};
 pub use compose::{Composed, compose};
@@ -27,6 +28,7 @@ pub struct Store {
     instance: u64,
     items: Vec<(u64, Place)>,
     item_places: Vec<Place>,
+    expiry: expiry::ExpiryIndex,
 }
 /// Tentative new custody is removed automatically unless its boundary commits.
 pub struct Stage<'a> {
@@ -155,11 +157,13 @@ impl Store {
         }
         let instance = instance()?;
         let item_places = item_places(&items);
+        let expiry = expiry::ExpiryIndex::new(&state.containers);
         Ok(Self {
             state,
             instance,
             items,
             item_places,
+            expiry,
         })
     }
     /// Stage new empty custody with the same commit/rollback boundary as actions.
@@ -251,6 +255,10 @@ impl Store {
     /// Read only regional stock without materializing personal or job custody.
     pub fn stock_view(&self, boundary: u64) -> Result<View, String> {
         view::prepare_stocks(&self.state, boundary)
+    }
+    /// Earliest pending expiry in the custody clock, rebuilt when a save loads.
+    pub fn next_expiry(&self) -> Option<u64> {
+        self.expiry.next()
     }
     pub fn tick(&self) -> u64 {
         self.state.tick
@@ -631,6 +639,9 @@ impl Store {
                 })))
     }
     pub fn prepare(&self, seed: u64, moves: &[Movement]) -> Result<Draft, String> {
+        if moves.is_empty() {
+            return self.prepare_idle(true);
+        }
         let inner =
             game_lot_planning::prepare(&self.state, self.instance, seed, moves, &[], None, true)?;
         let touches = !self.item_places.is_empty()
@@ -639,11 +650,18 @@ impl Store {
     }
     /// Stage immediate actions without advancing simulation time or refreshing goods.
     pub fn prepare_now(&self, seed: u64, moves: &[Movement]) -> Result<Draft, String> {
+        if moves.is_empty() {
+            return self.prepare_idle(false);
+        }
         let inner =
             game_lot_planning::prepare(&self.state, self.instance, seed, moves, &[], None, false)?;
         let touches = !self.item_places.is_empty()
             && moves.par_iter().any(|movement| self.touches_item(movement));
         self.item_draft(inner, Vec::new(), touches)
+    }
+    fn prepare_idle(&self, advance: bool) -> Result<Draft, String> {
+        let inner = self.expiry.idle(&self.state, self.instance, advance)?;
+        self.item_draft(inner, Vec::new(), false)
     }
     /// Stage all legs of each physical action together. Contention is resolved
     /// conservatively: a failed leg rejects the entire action for this boundary.
@@ -736,6 +754,13 @@ impl Store {
         advance: bool,
         allocation: Option<(&BatchAllocation, &[u32])>,
     ) -> Result<Draft, String> {
+        if transactions.is_empty()
+            && containers.is_empty()
+            && compact.is_empty()
+            && allocation.is_none()
+        {
+            return self.prepare_idle(advance);
+        }
         self.validate_batch_creations(transactions, allocation)?;
         let check_items = self.check_creations(transactions)?;
         if check_items
@@ -786,6 +811,9 @@ impl Store {
         additions: Vec<Container>,
         allocation: Option<(&BatchAllocation, &[u32])>,
     ) -> Result<Draft, String> {
+        if transactions.is_empty() && additions.is_empty() && allocation.is_none() {
+            return self.prepare_idle(advance);
+        }
         self.validate_batch_creations(transactions, allocation)?;
         let check_items = self.check_creations(transactions)?;
         if !check_items
@@ -1019,10 +1047,14 @@ impl Store {
         match draft.changes {
             game_lot_planning::Changes::Empty => {}
             game_lot_planning::Changes::Flat(mut changes) => {
+                self.expiry.update(&self.state.containers, &changes);
                 publish(&mut self.state.containers, &mut changes, 0);
                 changes.into_par_iter().for_each(drop);
             }
             game_lot_planning::Changes::Runs(mut runs) => {
+                for run in &runs {
+                    self.expiry.update(&self.state.containers, run);
+                }
                 publish_runs(&mut self.state.containers, &mut runs, 0);
                 runs.into_par_iter().flat_map_iter(|run| run).for_each(drop);
             }

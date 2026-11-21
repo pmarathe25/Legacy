@@ -329,6 +329,7 @@ fn prepare_rows(
                         good: lot.good,
                         quantity: lot.quantity,
                         expires_at: at,
+                        batch: lot.batch,
                     })
                 })
             })
@@ -336,7 +337,7 @@ fn prepare_rows(
     } else {
         Vec::new()
     };
-    spoiled.par_sort_unstable_by_key(|row| (row.place, row.good, row.expires_at));
+    spoiled.par_sort_unstable_by_key(|row| (row.place, row.good, row.expires_at, row.batch));
 
     #[cfg(feature = "profile")]
     {

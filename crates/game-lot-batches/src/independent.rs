@@ -126,11 +126,12 @@ pub fn prepare<T: Borrow<Transaction> + Sync>(
                     good: lot.good,
                     quantity: lot.quantity,
                     expires_at: at,
+                    batch: lot.batch,
                 })
             })
         })
         .collect();
-    spoiled.par_sort_unstable_by_key(|row| (row.place, row.good, row.expires_at));
+    spoiled.par_sort_unstable_by_key(|row| (row.place, row.good, row.expires_at, row.batch));
     let resolved: Vec<_> = rows
         .par_iter()
         .map(|row| {

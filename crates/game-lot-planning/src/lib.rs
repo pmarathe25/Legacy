@@ -4,7 +4,7 @@ mod prepare;
 pub use changes::Changes;
 pub use game_lot_allocation::prefixes;
 use game_lot_model::{Container, OutcomeBatch, Spoilage, TransactionOutcome};
-pub use prepare::prepare;
+pub use prepare::{prepare, prepare_at};
 use std::ops::Range;
 
 /// Transaction membership aligned with the caller's flattened operation arrays.
@@ -15,6 +15,14 @@ pub struct Batch<'a> {
     pub additions: &'a [Container],
     /// Sorted transaction IDs whose consuming movement needs acceptance only.
     pub compact: &'a [u64],
+}
+
+/// The physical instant of a plan and the custody generation it will publish.
+/// In boundary-based runs both values are the boundary index.
+#[derive(Clone, Copy)]
+pub struct TransactionTime {
+    pub at: u64,
+    pub next_tick: u64,
 }
 
 pub struct Draft {

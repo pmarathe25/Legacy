@@ -223,11 +223,12 @@ pub fn prepare(
                     good: lot.good,
                     quantity: lot.quantity,
                     expires_at: at,
+                    batch: lot.batch,
                 })
             })
         })
         .collect();
-    spoiled.par_sort_unstable_by_key(|row| (row.place, row.good, row.expires_at));
+    spoiled.par_sort_unstable_by_key(|row| (row.place, row.good, row.expires_at, row.batch));
     let mut chunks = Vec::with_capacity(parts.len());
     let mut outcomes = Vec::with_capacity(rows.len());
     let mut changes = Vec::with_capacity(rows.len() + sources.len());

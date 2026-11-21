@@ -393,11 +393,12 @@ fn prepare_rows(
                     good: lot.good,
                     quantity: lot.quantity,
                     expires_at: at,
+                    batch: lot.batch,
                 })
             })
         })
         .collect();
-    spoiled.par_sort_unstable_by_key(|row| (row.place, row.good, row.expires_at));
+    spoiled.par_sort_unstable_by_key(|row| (row.place, row.good, row.expires_at, row.batch));
     let chunk_size = rows.len().div_ceil(64).clamp(16, 2048);
     let parts: Vec<_> = positions
         .par_chunks(chunk_size)

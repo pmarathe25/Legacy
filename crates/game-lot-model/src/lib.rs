@@ -179,6 +179,8 @@ pub struct Spoilage {
     pub good: u32,
     pub quantity: u64,
     pub expires_at: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub batch: Option<u64>,
 }
 
 /// An accepted movement returns the exact source cohorts; a rejected movement returns none.

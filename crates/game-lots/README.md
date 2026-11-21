@@ -69,3 +69,5 @@ For the 49,999-job admission workload, merging already sorted custody runs inste
 Independent transfers keep moved cohorts in immutable chunk-owned receipt arenas. Each outcome exposes only its own exact slice, and serialized outcomes retain their ordinary flat lot arrays. Copies of a receipt remain valid after the source draft is dropped.
 
 Independent transfers merge already ordered dated cohorts in linear time. Work is divided into fixed logical chunks that also expose parallelism in smaller, cohort-heavy batches. The ignored `many_cohort_transfer_benchmark` accepts `LEGACY_ATTEMPTS`, `LEGACY_COHORTS`, and `LEGACY_WORKERS` to measure this path.
+
+The custody owner maintains one next-expiry entry per perishable container. An idle settlement stages only due containers. The index follows accepted moves and creations and is rebuilt from actual lots when loading a save. Spoilage receipts preserve an optional batch identity.

@@ -701,3 +701,56 @@ fn large_exact_source_update_preserves_unselected_and_expires_old_batches() {
             .all(|lot| lot.batch.is_some_and(|id| id % 2 != 0 && id % 3 != 0))
     );
 }
+
+#[test]
+fn expiry_index_follows_custody_preserves_batch_and_rebuilds_on_load() {
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut store = Store::compile(State {
+                    next_batch: Some(9),
+                    tick: 0,
+                    revision: 0,
+                    containers: vec![
+                        Container::new(
+                            Place::Person(1),
+                            10,
+                            vec![cohort(7, 3, Some(2)), cohort(8, 4, Some(5))],
+                        )
+                        .unwrap(),
+                        Container::new(Place::Person(2), 10, vec![]).unwrap(),
+                    ],
+                })
+                .unwrap();
+                assert_eq!(store.next_expiry(), Some(2));
+                let stale = store.prepare(19, &[]).unwrap();
+                let movement = store
+                    .prepare_transactions_now(19, &[transfer(1, 1, 2, 3)])
+                    .unwrap();
+                store.commit(movement).unwrap();
+                assert!(store.commit(stale).is_err());
+                assert_eq!(store.next_expiry(), Some(2));
+
+                let quiet = store.prepare_transactions(19, &[]).unwrap();
+                assert!(quiet.spoiled().is_empty());
+                store.commit(quiet).unwrap();
+                let due = store.prepare_transactions(19, &[]).unwrap();
+                assert_eq!(due.spoiled().len(), 1);
+                assert_eq!(due.spoiled()[0].place, Place::Person(2));
+                assert_eq!(due.spoiled()[0].batch, Some(7));
+                assert_eq!(due.spoiled()[0].quantity, 3);
+                let (_, spoiled) = store.commit(due).unwrap();
+                assert_eq!(store.next_expiry(), Some(5));
+                let state = store.export();
+                let restored =
+                    serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap();
+                let owner = Store::compile(restored).unwrap();
+                assert_eq!(owner.next_expiry(), Some(5));
+                (spoiled, owner.export())
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
