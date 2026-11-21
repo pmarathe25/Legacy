@@ -6,8 +6,10 @@ The interval campaign uses absolute times for deaths, subsequent births, and
 invocation costs. A warning pauses advancement at the due instant until the
 player accepts or dismisses it. An accepted cost can change health, shorten the
 current lifespan, or suspend control. A successor has their own possessions
-and relationships. Corporeal guardians use ordinary journeys and make their
-own mentorship judgments.
+and relationships. Guardians use ordinary journeys and make their own
+mentorship judgments. Older opening declarations create immortal people in the
+same physical world and recover at the authored rate per simulated duration.
+Ongoing confinement and journeys belong to those people's physical owners.
 
 An unattended history follows the same lineage while releasing player inputs.
 Each incarnation continues choosing food, work, and relationships when there

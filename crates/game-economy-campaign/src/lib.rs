@@ -21,6 +21,77 @@ pub struct Campaign {
     #[serde(default)]
     pub embodied_guardians: Option<embodied::Guardians>,
 }
+
+impl Campaign {
+    /// Give old opening declarations a body in the common person and travel owners.
+    pub fn embody_opening_guardians(
+        &mut self,
+        period_millis: u64,
+        world_max_health: u32,
+    ) -> Result<Vec<Person>, String> {
+        let Some(opening) = self.guardians.as_ref() else {
+            return Ok(Vec::new());
+        };
+        if self.embodied_guardians.is_some()
+            || opening.max_health != world_max_health
+            || opening.recovery_per_tick == 0
+            || opening.mentorship_ticks == 0
+            || period_millis == 0
+        {
+            return Err(
+                "guardian opening needs one body model and the world's health limit".into(),
+            );
+        }
+        if opening
+            .guardians
+            .par_iter()
+            .any(|row| row.confined || row.journey.is_some())
+        {
+            return Err("author confinement and travel on the guardian's physical body".into());
+        }
+        let people = opening
+            .guardians
+            .par_iter()
+            .map(|row| Person {
+                id: row.id,
+                region: Some(row.region),
+                health: row.health,
+                hunger: 0,
+                hunger_remainder: 0,
+                starvation_remainder: 0,
+                immortal: Some(game_economy_person::Immortal {
+                    recovery_per_tick: 0,
+                    recovery_rate: Some(game_economy_person::RecoveryRate {
+                        units: opening.recovery_per_tick,
+                        per_millis: period_millis,
+                    }),
+                    recovery_remainder: 0,
+                }),
+                controlled: false,
+                willing_to_work: false,
+                seek_meals: false,
+            })
+            .collect();
+        self.embodied_guardians = Some(embodied::Guardians {
+            guardians: opening
+                .guardians
+                .par_iter()
+                .map(|row| embodied::Guardian {
+                    person: row.id,
+                    mentorship_required: row
+                        .mentorship_required
+                        .unwrap_or(opening.mentorship_ticks),
+                    student: row.student,
+                    mentorship: row.mentorship,
+                    released: row.released,
+                })
+                .collect(),
+        });
+        self.guardians = None;
+        Ok(people)
+    }
+}
+
 fn routes(travel: Option<&Travel>) -> Result<Vec<Route>, String> {
     travel.map_or(Ok(Vec::new()), |travel| {
         travel
