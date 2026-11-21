@@ -82,6 +82,8 @@ pub enum Outcome {
 #[serde(deny_unknown_fields)]
 pub struct Observation {
     pub tick: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub at_millis: Option<u128>,
     pub actor: u64,
     pub apparatus: u64,
     pub output_part: u64,
@@ -109,7 +111,7 @@ pub struct Draft {
     instance: u64,
     revision: u64,
     tick: u64,
-    apparatus: Vec<Apparatus>,
+    changes: Vec<(usize, Apparatus)>,
     observations: Vec<Observation>,
 }
 
@@ -315,6 +317,17 @@ impl World {
         seed: u64,
         requests: &[Assembly],
     ) -> Result<AssemblyDraft, String> {
+        self.prepare_assemblies_at(tick, tick, seed, requests)
+    }
+
+    /// Stage assemblies with a tie key derived from simulated time.
+    pub fn prepare_assemblies_at(
+        &self,
+        tick: u64,
+        round: u64,
+        seed: u64,
+        requests: &[Assembly],
+    ) -> Result<AssemblyDraft, String> {
         if self.state.last_tick.is_some_and(|last| tick < last)
             || self.state.revision.checked_add(1).is_none()
         {
@@ -369,7 +382,7 @@ impl World {
             .map(|group| {
                 let priority = |row: &&(u8, u64, u64)| {
                     (
-                        random(seed ^ tick.rotate_left(17) ^ row.2.rotate_left(29)),
+                        random(seed ^ round.rotate_left(17) ^ row.2.rotate_left(29)),
                         row.2,
                     )
                 };
@@ -461,6 +474,20 @@ impl World {
     /// Prepare without changing the world. Callers provide chosen actions and
     /// validate personal access and physical effort before invoking this owner.
     pub fn prepare(&self, tick: u64, seed: u64, requests: &[Experiment]) -> Result<Draft, String> {
+        self.prepare_at(tick, None, seed, requests)
+    }
+
+    /// Keep the physical generation for evidence and use absolute time for competing trials.
+    pub fn prepare_at(
+        &self,
+        tick: u64,
+        at_millis: Option<u128>,
+        seed: u64,
+        requests: &[Experiment],
+    ) -> Result<Draft, String> {
+        let round = at_millis.map_or(tick, |now| {
+            (now as u64) ^ ((now >> 64) as u64).rotate_left(29)
+        });
         if self.state.last_tick.is_some_and(|last| tick < last)
             || self.state.revision.checked_add(1).is_none()
         {
@@ -523,7 +550,7 @@ impl World {
                     let priority = |row: &&Experiment| {
                         (
                             random(
-                                seed ^ tick.rotate_left(17)
+                                seed ^ round.rotate_left(17)
                                     ^ row.apparatus
                                     ^ row.actor.rotate_left(29),
                             ),
@@ -540,38 +567,34 @@ impl World {
                 .collect::<Vec<_>>();
             &selected
         };
-        let staged: Vec<_> = self
-            .state
-            .apparatus
+        let staged: Vec<_> = winners
             .par_iter()
             .enumerate()
-            .map(|(position, opening)| {
-                let mut machine = opening.clone();
-                let winner = if aligned {
-                    Some(position)
+            .map(|(index, &request)| {
+                let slot = if aligned {
+                    index
                 } else {
-                    winners
-                        .binary_search_by_key(&machine.id, |row| row.apparatus)
-                        .ok()
+                    self.state
+                        .apparatus
+                        .binary_search_by_key(&request.apparatus, |row| row.id)
+                        .expect("validated apparatus")
                 };
-                let observation = winner
-                    .map(|index| {
-                        evaluate(
-                            &mut machine,
-                            &self.topology[position],
-                            &self.state.catalog,
-                            tick,
-                            winners[index],
-                        )
-                    })
-                    .transpose()?;
-                Ok((machine, observation))
+                let mut machine = self.state.apparatus[slot].clone();
+                let observation = evaluate(
+                    &mut machine,
+                    &self.topology[slot],
+                    &self.state.catalog,
+                    tick,
+                    at_millis,
+                    request,
+                )?;
+                Ok((slot, machine, observation))
             })
             .collect::<Result<_, String>>()?;
         let mut observations: Vec<_> = if winners.len() == requests.len() {
             staged
                 .par_iter()
-                .filter_map(|(_, event)| event.clone())
+                .map(|(_, _, event)| event.clone())
                 .collect()
         } else {
             requests
@@ -581,13 +604,11 @@ impl World {
                         .binary_search_by_key(&row.apparatus, |winner| winner.apparatus)
                         .expect("validated apparatus has a winner");
                     if winners[winner].actor == row.actor {
-                        let index = staged
-                            .binary_search_by_key(&row.apparatus, |(machine, _)| machine.id)
-                            .expect("validated apparatus is staged");
-                        staged[index].1.clone().expect("winner was evaluated")
+                        staged[winner].2.clone()
                     } else {
                         Observation {
                             tick,
+                            at_millis,
                             actor: row.actor,
                             apparatus: row.apparatus,
                             output_part: row.output_part,
@@ -614,7 +635,12 @@ impl World {
             instance: self.instance,
             revision: self.state.revision,
             tick,
-            apparatus: staged.into_par_iter().map(|(machine, _)| machine).collect(),
+            changes: staged
+                .into_par_iter()
+                .filter_map(|(slot, machine, event)| {
+                    (!event.broken_parts.is_empty()).then_some((slot, machine))
+                })
+                .collect(),
             observations,
         })
     }
@@ -637,12 +663,27 @@ impl World {
     pub fn commit(&mut self, draft: Draft) -> Result<Vec<Observation>, String> {
         self.validate_draft(&draft)?;
         let revision = self.state.revision + 1;
-        let prior = std::mem::replace(&mut self.state.apparatus, draft.apparatus);
+        publish_changes(&mut self.state.apparatus, &draft.changes, 0);
         self.state.last_tick = Some(draft.tick);
         self.state.revision = revision;
-        prior.into_par_iter().for_each(drop);
         Ok(draft.observations)
     }
+}
+
+fn publish_changes(apparatus: &mut [Apparatus], changes: &[(usize, Apparatus)], origin: usize) {
+    if changes.len() <= 64 {
+        for (slot, machine) in changes {
+            apparatus[*slot - origin] = machine.clone();
+        }
+        return;
+    }
+    let middle = changes.len() / 2;
+    let right_origin = changes[middle].0;
+    let (left, right) = apparatus.split_at_mut(right_origin - origin);
+    rayon::join(
+        || publish_changes(left, &changes[..middle], origin),
+        || publish_changes(right, &changes[middle..], right_origin),
+    );
 }
 
 #[derive(Clone, Copy)]
@@ -657,6 +698,7 @@ fn evaluate(
     topology: &[SolveNode],
     catalog: &Catalog,
     tick: u64,
+    at_millis: Option<u128>,
     request: Experiment,
 ) -> Result<Observation, String> {
     let blocked = Reading {
@@ -737,6 +779,7 @@ fn evaluate(
     };
     Ok(Observation {
         tick,
+        at_millis,
         actor: request.actor,
         apparatus: request.apparatus,
         output_part: request.output_part,
@@ -749,4 +792,80 @@ fn evaluate(
         delivered_work: u128::from(request.load_force) * u128::from(travel),
         broken_parts,
     })
+}
+
+#[cfg(test)]
+mod sparse_trials {
+    use super::*;
+
+    #[test]
+    fn only_changed_apparatus_is_published_and_ties_follow_absolute_time() {
+        let run = |workers, tick| {
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(workers)
+                .build()
+                .unwrap()
+                .install(|| {
+                    let mut world = World::compile(Snapshot {
+                        catalog: Catalog {
+                            components: vec![Component {
+                                id: 1,
+                                name: "Lever".into(),
+                                force_ratio_numerator: 1,
+                                force_ratio_denominator: 1,
+                                efficiency_per_mille: 1000,
+                                max_input_force: 100,
+                            }],
+                        },
+                        apparatus: (1..=512)
+                            .map(|id| Apparatus {
+                                id,
+                                parts: Arc::new(vec![Part {
+                                    id,
+                                    component: 1,
+                                    parent: None,
+                                    share_per_mille: 1000,
+                                    broken: false,
+                                }]),
+                            })
+                            .collect(),
+                        revision: 0,
+                        last_tick: None,
+                    })
+                    .unwrap();
+                    let mut trials: Vec<_> = (1..=512)
+                        .step_by(4)
+                        .map(|id| Experiment {
+                            actor: id,
+                            apparatus: id,
+                            output_part: id,
+                            input_force: 200,
+                            input_distance: 1,
+                            load_force: 1,
+                        })
+                        .collect();
+                    trials.push(Experiment {
+                        actor: 999,
+                        ..trials[0]
+                    });
+                    let draft = world.prepare_at(tick, Some(3415), 7, &trials).unwrap();
+                    assert_eq!(draft.changes.len(), 128);
+                    assert_eq!(draft.observations().len(), 129);
+                    let mut observations = world.commit(draft).unwrap();
+                    assert!(
+                        world
+                            .apparatus()
+                            .iter()
+                            .all(|machine| { machine.parts[0].broken == (machine.id % 4 == 1) })
+                    );
+                    for observation in &mut observations {
+                        assert_eq!(observation.at_millis, Some(3415));
+                        assert_eq!(observation.tick, tick);
+                        observation.tick = 0;
+                    }
+                    (observations, world.apparatus().to_vec())
+                })
+        };
+        assert_eq!(run(1, 2), run(6, 20));
+    }
 }
