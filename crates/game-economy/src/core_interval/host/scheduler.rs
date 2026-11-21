@@ -3342,6 +3342,20 @@ impl CoreHost {
                                 ..Default::default()
                             }));
                         }
+                        let arrivals = attempt!('run, self.intervene_autonomously(&busy));
+                        if !arrivals.is_empty() {
+                            busy.par_extend(arrivals.par_iter().filter_map(|row| {
+                                (row.kind == game_economy_combat::elapsed::EventKind::Entered)
+                                    .then_some(row.person?)
+                            }));
+                            busy.par_sort_unstable();
+                            busy.dedup();
+                            rest_dirty = true;
+                            run.events.push(CoreRunEvent::Tactical(CoreTacticalResult {
+                                events: arrivals,
+                                ..Default::default()
+                            }));
+                        }
                         let walking = attempt!('run, self.walk_autonomously(&busy));
                         if !walking.is_empty() {
                             run.events.push(CoreRunEvent::LocalWalking {

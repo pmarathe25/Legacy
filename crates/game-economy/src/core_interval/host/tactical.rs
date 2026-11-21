@@ -418,9 +418,6 @@ pub(super) fn import_tactical(
     combat: Combat,
     round_millis: u64,
 ) -> Result<(Tactical, Option<game_personal_conflict::wounds::Wounds>), String> {
-    if !combat.interventions.is_empty() {
-        return Err("interval tactical encounters do not yet import interventions".into());
-    }
     let wounds = combat.injuries.as_ref().map(|injuries| {
         let rules = &injuries.rules;
         game_personal_conflict::wounds::Wounds {

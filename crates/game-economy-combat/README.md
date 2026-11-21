@@ -5,6 +5,11 @@ Elapsed encounters use independent round deadlines. A character may choose
 physical reach and adds wear to the real site. Collapse releases any associated
 hold, interrupts bound work, and leaves retained materials in debris. The
 history archive records both the attributed strike and its effects.
+An available person can join a local engagement through a willing or motivated
+`interventions` preference. Entry positions are resolved independently within
+each engagement. `join-fight BENEFICIARY OPPONENT` lets a controlled person
+enter and choose their next action. A new participant's first chance to act is
+the engagement's next scheduled round.
 
 Encounters use persistent tactical maps and actual local people. Incoming attacks are grouped by target in a cached parallel plan, and their simultaneous damage enters the same personal and family generation as hunger and disease. Combatants cannot perform other automatic actions during the round. The individual attacked does not need to agree to an encounter; their own reaction determines their initial response.
 
