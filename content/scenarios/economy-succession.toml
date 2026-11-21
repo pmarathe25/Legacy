@@ -269,7 +269,7 @@ default_loss = 2
 theft_loss = 2
 encounter_gain = 1
 fear_per_damage = 1
-fear_decay_per_tick = 1
+fear_decay = { amount = 1, period_millis = 3600000 }
 gratitude_gain = 1
 affinity = { limit = 10, encounter_change = 1, help_change = 2, harm_change_per_damage = -1, pressured_encounter_change = 0 }
 obligation_relief = 1

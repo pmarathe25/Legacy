@@ -159,6 +159,7 @@ pub struct CoreDeadline {
     pub invocation: bool,
     pub care: bool,
     pub fauna: bool,
+    pub fear_relaxation: bool,
 }
 /// Travelers published at a partial-interval offset.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -473,6 +474,7 @@ impl CoreInterval {
             invocation: false,
             care: false,
             fauna: false,
+            fear_relaxation: false,
             food_health: food_health == Some(after),
         })
     }

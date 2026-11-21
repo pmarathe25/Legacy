@@ -35,7 +35,7 @@ An optional signed `affinity_stock_use` independently controls how a claimant fe
 
 `fear_per_damage` optionally increases the victim's directed fear of a person who actually injures them. This is tracked independently of trust and does not require a market. The fused host applies those updates only after the complete tick succeeds. Automatic responses to requests can use the victim's previously committed fear; compliance does not imply approval or increase trust.
 
-Optional `fear_decay_per_tick` reduces existing fear in parallel at each committed tick, before new injuries are recorded. It defaults to zero. Choices read the prior committed fear, so a person can later stop complying as fear subsides without altering trust or obligations.
+Set `fear_decay = { amount = 1, period_millis = 3600000 }` in opinion rules to let existing fear relax on elapsed deadlines. Trust, affinity, and obligations remain independent. Optional `fear_decay_per_tick` reduces existing fear in parallel at each committed tick, before new injuries are recorded. It defaults to zero. Choices read the prior committed fear, so a person can later stop complying as fear subsides without altering trust or obligations.
 `content/scenarios/fear_recovery.toml` demonstrates this: request work from person 2, advance three ticks, and request it again; the same person can begin the first job and refuse the later request.
 
 `gratitude_gain` optionally increases a person's directed sense of obligation when they actually receive a one-sided gift. It does not create a contract or guarantee future repayment; it can influence later requests. Failed or declined transfers do not create this experience.

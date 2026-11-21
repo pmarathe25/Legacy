@@ -40,9 +40,9 @@ impl Clone for Opinions {
     }
 }
 pub use game_opinions_model::{
-    AffinityRules, ConfinementReaction, Confrontation, Event, MeetingTrust, ObligationDevelopment,
-    Opinion, OpposedActionReaction, RelationshipCase, ReportReception, Rules, Sensitivity,
-    SubjectiveReaction, TeachingReaction,
+    AffinityRules, ConfinementReaction, Confrontation, Event, FearDecay, MeetingTrust,
+    ObligationDevelopment, Opinion, OpposedActionReaction, RelationshipCase, ReportReception,
+    Rules, Sensitivity, SubjectiveReaction, TeachingReaction,
 };
 
 pub struct Index<'a> {
@@ -214,7 +214,23 @@ impl Opinions {
     }
     /// Time updates each person's existing fear independently of trust and obligations.
     pub fn decay_fear(&mut self) {
-        let decay = self.rules.fear_decay_per_tick;
+        if self.rules.fear_decay.is_none() {
+            self.relax_fear(self.rules.fear_decay_per_tick);
+        }
+    }
+
+    pub fn next_fear_relaxation(&self, now: u128) -> Option<u64> {
+        let period = self.rules.fear_decay?.period_millis;
+        (period != 0).then(|| period - (now % u128::from(period)) as u64)
+    }
+
+    pub fn relax_elapsed_fear(&mut self) {
+        if let Some(clock) = self.rules.fear_decay {
+            self.relax_fear(clock.amount);
+        }
+    }
+
+    fn relax_fear(&mut self, decay: u64) {
         if decay > 0 && self.records.par_iter().any(|row| row.fear > 0) {
             self.records
                 .par_iter_mut()
@@ -577,6 +593,11 @@ impl Opinions {
         }
     }
     pub fn validate(&self, people: &HashSet<u64>, now: u64) -> Result<(), &'static str> {
+        if self.rules.fear_decay.is_some_and(|clock| {
+            clock.period_millis == 0 || clock.amount == 0 || self.rules.fear_decay_per_tick != 0
+        }) {
+            return Err("invalid elapsed fear relaxation");
+        }
         let r = &self.rules;
         if r.newborn_obligation_development
             .as_ref()

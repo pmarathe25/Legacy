@@ -380,6 +380,7 @@ fn promises_do_not_compel_delivery_but_fear_can_change_a_personal_choice() {
             encounter_gain: 0,
             fear_per_damage: 0,
             fear_decay_per_tick: 0,
+            fear_decay: None,
             gratitude_gain: 0,
             obligation_relief: 0,
             minimum_report_trust: None,

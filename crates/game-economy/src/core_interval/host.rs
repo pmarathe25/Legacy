@@ -1728,6 +1728,7 @@ impl CoreHost {
         let invocation = self.next_invocation_deadline();
         let care = self.next_elapsed_care();
         let fauna = self.next_fauna_lifecycle();
+        let fear_relaxation = self.next_fear_relaxation();
         let first = [
             recovery,
             exposure,
@@ -1744,6 +1745,7 @@ impl CoreHost {
             invocation,
             care,
             fauna,
+            fear_relaxation,
         ]
         .into_iter()
         .flatten()
@@ -1771,6 +1773,7 @@ impl CoreHost {
                     invocation: invocation == Some(after_millis),
                     care: care == Some(after_millis),
                     fauna: fauna == Some(after_millis),
+                    fear_relaxation: fear_relaxation == Some(after_millis),
                     recovery: recovery == Some(after_millis),
                     exposure: exposure == Some(after_millis),
                 };
@@ -1790,6 +1793,7 @@ impl CoreHost {
                 deadline.invocation = invocation == Some(after_millis);
                 deadline.care = care == Some(after_millis);
                 deadline.fauna = fauna == Some(after_millis);
+                deadline.fear_relaxation = fear_relaxation == Some(after_millis);
             }
         }
         Ok(PreparedDeadline {
@@ -1797,6 +1801,12 @@ impl CoreHost {
             natural_death: natural_death == Some(deadline.after_millis),
             deadline,
         })
+    }
+
+    fn next_fear_relaxation(&self) -> Option<u64> {
+        self.opinions
+            .as_ref()?
+            .next_fear_relaxation(self.core.simulated_millis())
     }
 
     fn next_ordinary_recovery(&self) -> Option<u64> {

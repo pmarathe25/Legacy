@@ -26,6 +26,7 @@ struct ElapsedLimits {
     nutrition: Option<u64>,
     food_health: Option<u128>,
     fauna: Option<u64>,
+    fear_relaxation: Option<u64>,
 }
 
 impl From<PreparedDeadline> for ElapsedLimits {
@@ -46,6 +47,7 @@ impl From<PreparedDeadline> for ElapsedLimits {
             nutrition: at(deadline.nutrition),
             food_health: at(deadline.food_health).map(u128::from),
             fauna: at(deadline.fauna),
+            fear_relaxation: at(deadline.fear_relaxation),
         }
     }
 }
@@ -68,6 +70,7 @@ impl ElapsedLimits {
             .and_then(|after| u64::try_from(after).ok());
         let disease = host.next_disease_deadline();
         let fauna = host.next_fauna_lifecycle();
+        let fear_relaxation = host.next_fear_relaxation();
         let mut limit = host.core.progress_limit(requested)?;
         limit = [
             recovery,
@@ -80,6 +83,7 @@ impl ElapsedLimits {
             disease,
             host.next_local_arrival(),
             fauna,
+            fear_relaxation,
         ]
         .into_iter()
         .flatten()
@@ -98,6 +102,7 @@ impl ElapsedLimits {
             nutrition: host.core.next_metabolism(),
             food_health: host.core.next_food_health(),
             fauna,
+            fear_relaxation,
         })
     }
 }
@@ -544,6 +549,7 @@ impl CoreHost {
                 local_arrivals = self.publish_local_progress(local_progress);
                 self.publish_resource_renewal(renewal);
                 self.publish_elapsed_fauna(fauna, fauna_transitions.as_ref());
+                self.relax_due_fear(limits.fear_relaxation == Some(advanced));
                 self.publish_crop_growth(growth);
                 if let Some(moisture) = moisture {
                     self.irrigation
@@ -736,6 +742,7 @@ impl CoreHost {
         )?;
         self.publish_resource_renewal(renewal);
         self.publish_elapsed_fauna(fauna, fauna_transitions.as_ref());
+        self.relax_due_fear(limits.fear_relaxation == Some(advanced));
         let local_arrivals = self.publish_local_progress(local_progress);
         self.publish_crop_growth(growth);
         if let Some(moisture) = moisture {
@@ -794,6 +801,12 @@ impl CoreHost {
             disease_events,
             local_arrivals,
         })
+    }
+
+    fn relax_due_fear(&mut self, due: bool) {
+        if due && let Some(opinions) = &mut self.opinions {
+            opinions.relax_elapsed_fear();
+        }
     }
 
     /// Use actual rested time in this segment, including work interruptions.
