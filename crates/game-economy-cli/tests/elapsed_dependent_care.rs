@@ -98,8 +98,15 @@ period_millis = 83
     let mut host = CoreHost::resume(coincident).unwrap();
     let result = host.advance_continuous(1000, &[]).unwrap();
     assert_eq!(result.failure, None);
-    assert_eq!(result.events.iter().filter_map(|event| match event {
-        CoreRunEvent::Care(visit) => Some(visit.at_millis),
-        _ => None,
-    }).collect::<Vec<_>>(), [500, 1000]);
+    assert_eq!(
+        result
+            .events
+            .iter()
+            .filter_map(|event| match event {
+                CoreRunEvent::Care(visit) => Some(visit.at_millis),
+                _ => None,
+            })
+            .collect::<Vec<_>>(),
+        [500, 1000]
+    );
 }
