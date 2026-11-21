@@ -8,6 +8,8 @@ use std::path::Path;
 mod chronicle;
 #[path = "history_support/cultivars.rs"]
 mod cultivars;
+#[path = "history_support/lexicon.rs"]
+mod lexicon;
 
 #[derive(Clone, Copy)]
 enum Focus {
@@ -831,6 +833,7 @@ fn narrative(report: &Value, focus: Focus) -> String {
                 }
             }
             cultivars::write_history(&mut text, &report["genome_samples"]);
+            lexicon::write_history(&mut text, &report["chronicle"]["lexicon"]);
         }
         Focus::Person(person) => {
             writeln!(text, "# Person {person}\n").unwrap();
