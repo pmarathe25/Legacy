@@ -1,5 +1,6 @@
 //! Bounded personal observations and voluntary encounter-based reports.
 pub mod adapter;
+pub mod episodes;
 use game_social::Encounter;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -15,6 +16,8 @@ pub struct Knowledge {
     /// existing bounded-record behavior.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub retention: Vec<Retention>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub episodes: Option<std::sync::Arc<episodes::Memory>>,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -494,6 +497,9 @@ impl Knowledge {
     ) -> Result<(), &'static str> {
         if self.max_records == 0 {
             return Err("invalid knowledge capacity");
+        }
+        if let Some(memory) = &self.episodes {
+            memory.validate(people, regions)?;
         }
         let mut minds = HashSet::new();
         for mind in &self.minds {
@@ -1168,6 +1174,7 @@ impl Knowledge {
             max_records: self.max_records,
             minds: next,
             retention,
+            episodes: self.episodes.clone(),
         })
     }
 }

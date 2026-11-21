@@ -31,6 +31,7 @@ mod hauling_requests;
 mod hunting;
 mod local_transport;
 mod local_walking;
+mod memory;
 mod market;
 mod mechanics;
 mod medical;
@@ -817,6 +818,9 @@ impl CoreHost {
             let people: HashSet<_> = core.people.par_iter().map(|person| person.id).collect();
             let view = core.physical.view(core.physical.tick())?;
             game_economy_knowledge::validate(Some(owner), &people, &view, core.physical.tick())?;
+            if let Some(memory) = &owner.episodes {
+                memory.validate_at(core.simulated_millis())?;
+            }
         }
         if let Some(owner) = &food_search {
             let people: HashSet<_> = core.people.par_iter().map(|person| person.id).collect();

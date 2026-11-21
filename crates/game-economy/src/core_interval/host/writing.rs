@@ -370,6 +370,7 @@ impl CoreHost {
                 max_records: owner.max_records,
                 minds: owner.minds.par_iter().cloned().collect(),
                 retention: owner.retention.par_iter().cloned().collect(),
+                episodes: owner.episodes.clone(),
             };
             next.receive_reports_at(&reports, tick)
                 .map_err(str::to_owned)?;

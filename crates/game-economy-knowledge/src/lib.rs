@@ -5,6 +5,7 @@ use game_knowledge::Observation;
 pub use game_knowledge::{
     Knowledge, Mind, Misreport, PersonReport, RecallTrace, Record, Reporting, Retention, SeenPerson,
 };
+pub use game_knowledge::episodes;
 use game_lots::{Place, View};
 use game_opinions::Opinions;
 use game_production_model::Good;

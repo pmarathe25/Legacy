@@ -2055,6 +2055,29 @@ enabled = true
 max_records = 4
 minds = []
 
+[[knowledge.episodes.minds]]
+person = 33
+capacity = 8
+attention = [
+    { kind = "meeting", value = 3, retention_millis = 43200000 },
+    { kind = "creative_practice", value = 12, retention_millis = 604800000 },
+]
+reflection_millis = 86400000
+consolidation = { rest_millis = 14400000, extension_millis = 172800000 }
+
+[[knowledge.episodes.minds]]
+person = 34
+capacity = 6
+attention = [
+    { kind = "meeting", value = 10, retention_millis = 172800000 },
+    { kind = "creative_practice", value = 2, retention_millis = 21600000 },
+]
+
+[[knowledge.episodes.minds]]
+person = 35
+capacity = 8
+attention = [{ kind = "creative_practice", value = 8, retention_millis = 259200000 }]
+
 [environment]
 season_unit_millis = 3600000
 exposure_period_millis = 3600000

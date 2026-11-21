@@ -31,6 +31,7 @@ impl Clone for CoreFoodSearch {
                     max_records: knowledge.max_records,
                     minds: knowledge.minds.par_iter().cloned().collect(),
                     retention: knowledge.retention.par_iter().cloned().collect(),
+                    episodes: knowledge.episodes.clone(),
                 }),
         }
     }

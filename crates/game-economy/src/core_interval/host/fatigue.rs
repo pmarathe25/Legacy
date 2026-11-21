@@ -190,6 +190,7 @@ impl CoreHost {
             .collect();
         self.fatigue.as_mut().expect("checked fatigue").fatigue = staged;
         if !choices.is_empty() {
+            self.record_episode_rest(choices.iter().map(|choice| (choice.person, choice.resting)));
             self.work_checked_revision = None;
         }
         Ok(events)
@@ -275,6 +276,7 @@ impl CoreHost {
                 .people
                 .insert(index, game_fatigue_person(person, resting)),
         }
+        self.record_episode_rest([(person, resting)]);
         self.work_checked_revision = None;
         Ok(())
     }

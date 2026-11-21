@@ -170,6 +170,12 @@ several encounters arise in one physical interval. The optional familiarity
 retention count is measured in encounter opportunities. The elapsed scenario
 can omit `dynamics.social.rules.interval`, which defaults to one.
 
+`knowledge.episodes` sets each character's attention and retention by kind of
+event. Actual meetings and completed creative activities supply first-hand
+episodes. Recollection fades in elapsed milliseconds and may lose its precise
+date. Deliberate reflection and sufficient time spent in the person's chosen
+rest state can extend accessibility without altering the original date.
+
 Set `agreements.time_unit_millis` to measure each authored offer's
 `due_after` and `retry_ticks` as durations in that fixed unit. Saved due and
 review instants are absolute elapsed milliseconds in this mode. A person

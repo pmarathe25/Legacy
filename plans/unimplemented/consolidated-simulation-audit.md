@@ -34,8 +34,9 @@ to track rates, deadlines, and behavior under different advance sizes. The
 - Wildlife selects local mates through personal attraction and inherited
   desire. An authored inherited flexibility can give different animals
   different selectivity within one species. The earlier elapsed history lost
-  its grazer population after hunting removed six founders and none of the
-  remaining local pairings met both animals' thresholds.
+  its grazer population after hunting removed six founders. The last two
+  mutually compatible pairs found in the annual checkpoints shared one male.
+  The remaining animals died without enough offspring to replace them.
 - Wild stands support heritable plant strains, viable seed banks, finite
   adult capacity, and local habitat selection without human activity.
   Competing local variants and physical seed withdrawals are tested
@@ -73,6 +74,12 @@ to track rates, deadlines, and behavior under different advance sizes. The
   Completion is dated by elapsed time and people can assign it different
   meaning. Tests cover finite material use, retained instruments, interruption,
   and deterministic decisions for 4,096 individual participants.
+- Bounded private episodes come from actual meetings and completed creative
+  activities. Attention and memory length can differ across people. Recall
+  fades by elapsed time and precise dates can become uncertain. Explicit
+  reflection and sufficient chosen rest can reinforce accessibility. Tests
+  compare save/reload, irregular time partitions, and independent and
+  concentrated observations at different worker counts.
 - Reading and joining a reserved crew can compete with other personal
   choices. An individual can decline to help even with free crew space.
   Crew capacity is applied after choices. An accepted helper contributes

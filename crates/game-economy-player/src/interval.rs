@@ -1,7 +1,8 @@
 //! Player-controlled actions on the interval host, without administrative events.
 use game_economy::core_interval::{
     CoreHost, CoreMarkInscription, CoreMarkObservation, CorePlayerView, CorePromiseReply,
-    MechanicalApparatus, MechanicalExperiment, MechanicalObservation, WoundTreatment,
+    EpisodeCue, MechanicalApparatus, MechanicalExperiment, MechanicalObservation, RecalledEpisode,
+    WoundTreatment,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -96,6 +97,14 @@ impl<'a> Player<'a> {
 
     pub fn stop_pastime(&mut self) -> Result<bool, String> {
         Ok(self.host.stop_pastime_controlled(self.person)?.is_some())
+    }
+
+    pub fn memories(&self, other: Option<u64>) -> Result<Vec<RecalledEpisode>, String> {
+        self.host.recall_episodes_controlled(self.person, other)
+    }
+
+    pub fn reflect_on_memory(&mut self, cue: EpisodeCue) -> Result<bool, String> {
+        self.host.reflect_on_episode_controlled(self.person, cue)
     }
 
     pub fn promise(

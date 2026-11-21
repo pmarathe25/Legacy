@@ -32,6 +32,7 @@ pub use game_economy_expeditions::elapsed_invitations::{
     Preference as ExpeditionInvitationPreference, Reply as ExpeditionReply,
     Response as ExpeditionReplyKind,
 };
+pub use game_economy_knowledge::episodes::{Cue as EpisodeCue, Recall as RecalledEpisode};
 pub use game_mechanics::{
     Apparatus as MechanicalApparatus, Experiment as MechanicalExperiment,
     Observation as MechanicalObservation,

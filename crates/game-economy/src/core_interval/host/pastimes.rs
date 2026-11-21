@@ -201,6 +201,7 @@ impl CoreHost {
             })
         });
         self.pastimes = Some(owner);
+        self.remember_pastimes(&events);
         if let Some(purpose) = &mut self.purpose {
             let tick = self.core.physical.tick();
             let experiences: Vec<_> = events

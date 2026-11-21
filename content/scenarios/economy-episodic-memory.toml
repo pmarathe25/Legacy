@@ -1,0 +1,95 @@
+# One encounter, different recollections. A controlled musician can reflect and rest.
+seed = 11
+tick_millis = 3600000
+decision_period_millis = 3600000
+social_period_millis = 200000
+fatigue_rate_period_millis = 3600000
+elapsed_fatigue = true
+stock_capacity = 100
+food_relief_divisor = 20
+
+[rules]
+hunger_per_tick = 0
+meal_threshold = 5
+starvation_threshold = 50
+starvation_damage = 1
+max_health = 100
+carrying_capacity = 10
+max_work_hunger = 20
+
+[[regions]]
+id = 1
+stock = {}
+
+[[people]]
+id = 1
+region = 1
+health = 100
+hunger = 0
+willing_to_work = false
+seek_meals = false
+
+[[people]]
+id = 2
+region = 1
+health = 100
+hunger = 0
+willing_to_work = false
+seek_meals = false
+
+[[people]]
+id = 3
+region = 1
+health = 100
+hunger = 0
+willing_to_work = false
+seek_meals = false
+controlled = true
+goods = { "reed-pipe" = 1 }
+
+[dynamics.social]
+participants = [{ person = 1, willing = true }, { person = 2, willing = true }]
+
+[dynamics.social.rules]
+interval = 1
+min_health = 1
+max_hunger = 100
+familiarity_gain = 1
+familiarity_max = 10
+
+[fatigue.rules]
+capacity = 30
+baseline_gain = 1
+work_gain = 2
+travel_gain = 1
+idle_recovery = 1
+rest_recovery = 5
+rest_at = 15
+resume_at = 5
+exhaustion_at = 25
+exhaustion_damage = 1
+
+[pastimes]
+catalogs = ["pastimes/daily.toml"]
+activities = { "play-reed-pipe" = 1 }
+
+[knowledge]
+max_records = 4
+minds = []
+
+[[knowledge.episodes.minds]]
+person = 1
+capacity = 2
+attention = [{ kind = "meeting", value = 12, retention_millis = 600000 }]
+
+[[knowledge.episodes.minds]]
+person = 2
+capacity = 2
+attention = [{ kind = "meeting", value = 0, retention_millis = 600000 }]
+
+[[knowledge.episodes.minds]]
+person = 3
+capacity = 3
+attention = [{ kind = "creative_practice", value = 10, retention_millis = 450000 }]
+reflection_millis = 300000
+consolidation = { rest_millis = 200000, extension_millis = 600000 }

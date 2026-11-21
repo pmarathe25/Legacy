@@ -47,6 +47,7 @@ fn meeting() -> Encounter {
 fn passive_recall_expires_and_accepted_reading_reinforces_without_refreshing_evidence() {
     let claim = record();
     let mut owner = Knowledge {
+        episodes: None,
         max_records: 4,
         minds: vec![mind(1, vec![]), mind(2, vec![claim.clone()])],
         retention: vec![Retention {
@@ -76,6 +77,7 @@ fn an_old_page_can_restore_a_claim_after_a_newer_memory_has_faded() {
     newer.food = 50;
     newer.observed_at = 1;
     let mut owner = Knowledge {
+        episodes: None,
         max_records: 4,
         minds: vec![mind(1, vec![]), mind(2, vec![newer])],
         retention: vec![Retention {
@@ -100,6 +102,7 @@ fn superseded_reports_do_not_reinforce_and_invalid_batches_are_atomic() {
     newer.food = 50;
     newer.observed_at = 1;
     let mut owner = Knowledge {
+        episodes: None,
         max_records: 4,
         minds: vec![mind(1, vec![]), mind(2, vec![newer.clone()])],
         retention: vec![Retention {
@@ -125,6 +128,7 @@ fn superseded_reports_do_not_reinforce_and_invalid_batches_are_atomic() {
 fn only_matching_used_evidence_is_reinforced() {
     let claim = record();
     let mut owner = Knowledge {
+        episodes: None,
         max_records: 4,
         minds: vec![mind(1, vec![]), mind(2, vec![claim.clone()])],
         retention: vec![Retention {
@@ -153,6 +157,7 @@ fn hearing_a_forgotten_report_again_restores_its_recall() {
     let mut earlier = record();
     earlier.learned_from = Some(1);
     let owner = Knowledge {
+        episodes: None,
         max_records: 4,
         minds: vec![mind(1, vec![record()]), mind(2, vec![earlier])],
         retention: vec![Retention {
@@ -183,6 +188,7 @@ fn retelling_equal_evidence_reinforces_both_people_without_changing_provenance()
     let mut received = record();
     received.learned_from = Some(1);
     let owner = Knowledge {
+        episodes: None,
         max_records: 4,
         minds: vec![mind(1, vec![record()]), mind(2, vec![received.clone()])],
         retention: vec![
@@ -255,6 +261,7 @@ fn a_new_report_takes_precedence_over_rehearsing_an_equal_one() {
     let mut unknown = record();
     unknown.region = 3;
     let owner = Knowledge {
+        episodes: None,
         max_records: 4,
         minds: vec![mind(1, vec![equal.clone(), unknown]), mind(2, vec![equal])],
         retention: vec![Retention {
@@ -279,6 +286,7 @@ fn sparse_person_ids_reinforce_independent_encounters() {
     let mut received = record();
     received.learned_from = Some(1);
     let owner = Knowledge {
+        episodes: None,
         max_records: 4,
         minds: vec![mind(3, vec![received]), mind(1, vec![record()])],
         retention: vec![
@@ -345,6 +353,7 @@ fn sparse_person_ids_reinforce_independent_encounters() {
 fn forgotten_speaker_cannot_relay_a_memory_but_an_accepted_report_has_its_own_retention() {
     let regions = HashSet::from([1, 2]);
     let owner = Knowledge {
+        episodes: None,
         max_records: 4,
         minds: vec![mind(1, vec![record()]), mind(2, vec![])],
         retention: vec![
@@ -410,6 +419,7 @@ fn forgotten_speaker_cannot_relay_a_memory_but_an_accepted_report_has_its_own_re
 #[test]
 fn malformed_retention_is_rejected() {
     let mut owner = Knowledge {
+        episodes: None,
         max_records: 4,
         minds: vec![mind(1, vec![record()])],
         retention: vec![Retention {
@@ -451,6 +461,7 @@ fn personal_memory_retention_benchmark() {
         .unwrap_or(100u64);
     assert!(stride > 0);
     let owner = Knowledge {
+        episodes: None,
         max_records: 4,
         minds: (1..=count)
             .map(|person| mind(person, vec![record()]))
@@ -523,6 +534,7 @@ fn personal_memory_retelling_benchmark() {
         .unwrap_or(1u64);
     assert!(count.is_multiple_of(2) && stride > 0 && encounter_stride > 0);
     let owner = Knowledge {
+        episodes: None,
         max_records: 4,
         minds: (1..=count)
             .map(|person| mind(person, vec![record()]))

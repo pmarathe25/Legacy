@@ -53,7 +53,7 @@ fn command(host: &mut CoreHost, person: u64, words: &[&str]) -> Result<bool, Str
     match words {
         [] => {}
         ["help"] => println!(
-            "look | wait MILLISECONDS | move REGION | walk stock|store ID | pause-walk | resume-walk | trip REGION VISIT_MILLISECONDS [food] | trip go|survey|back|cancel | trip leave-in MILLISECONDS | fight PERSON | join-fight BENEFICIARY OPPONENT | tactic wait|defend|retreat | tactic attack PERSON | tactic attack-site SITE | tactic move X Y | confine PERSON SITE | guard SITE | release PERSON | escape | build BLUEPRINT | demolish SITE | salvage SITE GOOD QUANTITY | gather NODE | cultivate FIELD [CARRIED_SEED_BATCH] | amend FIELD | water FIELD QUANTITY | pastime ACTIVITY | pastime stop | assemble APPARATUS PART... | mount APPARATUS STORE | unmount APPARATUS STORE | experiment APPARATUS OUTPUT FORCE DISTANCE LOAD | promise PERSON GOOD QUANTITY DUE_IN_MILLISECONDS | respond PROMISE accept|decline|withdraw | deliver PROMISE QUANTITY | eat GOOD | treat GOOD | wear GOOD | unwear | work RECIPE UNITS | stop JOB | stop-assist | rest on|off | word place|person|object ID SOUNDS | form SOUNDS MARKS | inscribe SOUNDS | read PAGE | recall PAGE | save PATH | load PATH | quit (SOUNDS and MARKS are comma-separated numbers)"
+            "look | wait MILLISECONDS | move REGION | walk stock|store ID | pause-walk | resume-walk | trip REGION VISIT_MILLISECONDS [food] | trip go|survey|back|cancel | trip leave-in MILLISECONDS | fight PERSON | join-fight BENEFICIARY OPPONENT | tactic wait|defend|retreat | tactic attack PERSON | tactic attack-site SITE | tactic move X Y | confine PERSON SITE | guard SITE | release PERSON | escape | build BLUEPRINT | demolish SITE | salvage SITE GOOD QUANTITY | gather NODE | cultivate FIELD [CARRIED_SEED_BATCH] | amend FIELD | water FIELD QUANTITY | pastime ACTIVITY | pastime stop | memories [PERSON] | reflect-memory PERSON | reflect-memory activity ACTIVITY | assemble APPARATUS PART... | mount APPARATUS STORE | unmount APPARATUS STORE | experiment APPARATUS OUTPUT FORCE DISTANCE LOAD | promise PERSON GOOD QUANTITY DUE_IN_MILLISECONDS | respond PROMISE accept|decline|withdraw | deliver PROMISE QUANTITY | eat GOOD | treat GOOD | wear GOOD | unwear | work RECIPE UNITS | stop JOB | stop-assist | rest on|off | word place|person|object ID SOUNDS | form SOUNDS MARKS | inscribe SOUNDS | read PAGE | recall PAGE | save PATH | load PATH | quit (SOUNDS and MARKS are comma-separated numbers)"
         ),
         ["quit"] | ["exit"] => return Ok(false),
         ["look"] => {
@@ -503,6 +503,40 @@ fn command(host: &mut CoreHost, person: u64, words: &[&str]) -> Result<bool, Str
             let activity = id.parse::<u32>().map_err(|_| "invalid activity")?;
             let started = Player::new(host, person)?.start_pastime(activity)?;
             println!("activity={activity} started={started}");
+        }
+        ["memories", other @ ..] if other.len() <= 1 => {
+            let other = other.first().map(|id| number(id)).transpose()?;
+            let memories = Player::new(host, person)?.memories(other)?;
+            if memories.is_empty() {
+                println!("No accessible memories.");
+            }
+            for memory in memories {
+                let time = memory.precise_time.map_or_else(|| "uncertain".to_owned(), |now| now.to_string());
+                match memory.cue {
+                    game_economy::core_interval::EpisodeCue::Meeting { other, region } => {
+                        println!("met person={other} region={region} time_millis={time} strength={}", memory.strength);
+                    }
+                    game_economy::core_interval::EpisodeCue::CreativePractice { activity } => {
+                        println!("practiced activity={activity} time_millis={time} strength={}", memory.strength);
+                    }
+                }
+            }
+        }
+        ["reflect-memory", other] => {
+            let mut player = Player::new(host, person)?;
+            let memories = player.memories(Some(number(other)?))?;
+            let reflected = match memories.first() {
+                Some(memory) => player.reflect_on_memory(memory.cue)?,
+                None => false,
+            };
+            println!("memory_reinforced={reflected}");
+        }
+        ["reflect-memory", "activity", id] => {
+            let activity = id.parse::<u32>().map_err(|_| "invalid activity")?;
+            let reflected = Player::new(host, person)?.reflect_on_memory(
+                game_economy::core_interval::EpisodeCue::CreativePractice { activity },
+            )?;
+            println!("memory_reinforced={reflected}");
         }
         ["amend", field] => {
             let field = number(field)?;

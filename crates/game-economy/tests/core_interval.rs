@@ -2920,6 +2920,7 @@ fn core_host_departure_benchmark() {
                     .collect(),
             },
             knowledge: Some(game_economy_knowledge::Knowledge {
+                episodes: None,
                 max_records: 2,
                 retention: vec![],
                 minds: (2..=count)
@@ -3365,6 +3366,7 @@ fn food_search_follows_personal_report_even_when_it_is_stale() {
         initial.physical.custody.containers.push(Container::new(Place::Person(2), 10, vec![]).unwrap());
         initial.physical.custody.containers.sort_by_key(|row| row.place);
         let knowledge = game_economy_knowledge::Knowledge {
+            episodes: None,
             max_records: 4, retention: vec![], minds: vec![game_economy_knowledge::Mind {
                 person: 2, remember_people: false, people_seen: vec![], people_reporting: None,
                 people_reports: vec![], reporting: None, misreport: None,
@@ -3440,7 +3442,7 @@ fn personal_food_acquisition_contends_for_real_stock_then_eats() {
             fatigue: None, activity: vec![], giving: None, practice_work_asks: vec![], practice_work_evidence: Default::default(), skills: None, taking: None, medical: None, goal_setbacks: vec![], purpose: None, animal_restraints: None, animal_products: None, recovery: None, fauna: None, hunting: None, animal_feelings: None, animal_care: None, animal_handling: None, family: None, dependent_care: None, gathering: None, environment: None, irrigation: None, agriculture: None, health: None, knowledge: None, social: None, personality: None, claims: None, food_search: Some(game_economy::core_interval::CoreFoodSearch {
                 claims: None,
                 search: game_economy::FoodSearch {min_hunger: 5, min_report_food: 1, max_report_age: 10, retry_ticks: 1, inherit_births: false, people: vec![]},
-                knowledge: Some(game_economy_knowledge::Knowledge {max_records: 1, minds: vec![], retention: vec![]}),
+                knowledge: Some(game_economy_knowledge::Knowledge { episodes: None, max_records: 1, minds: vec![], retention: vec![]}),
             }), opinions: None, goals: None, dreams: None, shared_work: None, market: None, writing: None, local_transport: None, construction: None, hauling: None, agreements: None, sites: None, schedule: None,
         };
         let mut claim_snapshot = snapshot.clone();
@@ -6623,7 +6625,7 @@ fn pressured_meeting_can_share_a_false_personal_report_once_per_tick() {
         let snapshot = CoreHostSnapshot { pastimes: None, work_capabilities: None, personal_conflict: None, expeditions: None, campaign: None, mechanics: None,
             core: initial, autowork: None, tool_wear: None, tool_requirements: vec![], paused_work_rates: vec![], pending_vital_deaths: vec![],
             fatigue: None, activity: vec![], giving: None, practice_work_asks: vec![], practice_work_evidence: Default::default(), skills: None, taking: None, medical: None, goal_setbacks: vec![], purpose: None, animal_restraints: None, animal_products: None, recovery: None, fauna: None, hunting: None, animal_feelings: None, animal_care: None, animal_handling: None, family: None, dependent_care: None, gathering: None, environment: None, irrigation: None, agriculture: None, health: None, claims: None, social: Some(social), personality: None,
-            food_search: None, knowledge: Some(game_economy_knowledge::Knowledge {max_records: 4, minds, retention: vec![]}),
+            food_search: None, knowledge: Some(game_economy_knowledge::Knowledge { episodes: None, max_records: 4, minds, retention: vec![]}),
             opinions: Some(opinions), goals: None, dreams: None, shared_work: None, market: None, writing: None, local_transport: None, construction: None, hauling: None, agreements: None, sites: None, schedule: None,
         };
         let mut failing = snapshot.clone();
@@ -6697,7 +6699,7 @@ fn pressured_meeting_can_share_false_taking_testimony_once() {
                 "report_policies": [{"person":2,"recipient":3,"actor":1,"willing":false,"pressure_threshold":1,"claimed_outcome":"resisted"}],
                 "receptions": [{"person":3,"stance":"believe","toward_actor":{"resisted":{"affinity":-3}}}]
             })).unwrap()), medical: None, goal_setbacks: vec![], purpose: None, animal_restraints: None, animal_products: None, recovery: None, fauna: None, hunting: None, animal_feelings: None, animal_care: None, animal_handling: None, family: None, dependent_care: None, gathering: None, environment: None, irrigation: None, agriculture: None, health: None, claims: None, social: Some(social), personality: None,
-            food_search: None, knowledge: Some(game_economy_knowledge::Knowledge {max_records: 4, minds, retention: vec![]}),
+            food_search: None, knowledge: Some(game_economy_knowledge::Knowledge { episodes: None, max_records: 4, minds, retention: vec![]}),
             opinions: Some(opinions), goals: None, dreams: None, shared_work: None, market: None, writing: None, local_transport: None, construction: None, hauling: None, agreements: None, sites: None, schedule: None,
         };
         let mut failing = snapshot.clone();
@@ -6779,7 +6781,7 @@ fn personal_inquiry_requires_later_meetings_and_subjective_assessment() {
                 "assessment_preferences": [{"person":3,"different_believed":4}],
                 "inquiry_pursuit": [2,3]
             })).unwrap()), medical: None, goal_setbacks: vec![], purpose: None, animal_restraints: None, animal_products: None, recovery: None, fauna: None, hunting: None, animal_feelings: None, animal_care: None, animal_handling: None, family: None, dependent_care: None, gathering: None, environment: None, irrigation: None, agriculture: None, health: None, claims: None, social: Some(social), personality: None,
-            food_search: None, knowledge: Some(game_economy_knowledge::Knowledge {max_records: 4, minds, retention: vec![]}),
+            food_search: None, knowledge: Some(game_economy_knowledge::Knowledge { episodes: None, max_records: 4, minds, retention: vec![]}),
             opinions: Some(opinions), goals: None, dreams: None, shared_work: None, market: None, writing: None, local_transport: None, construction: None, hauling: None, agreements: None, sites: None, schedule: None,
         };
         let mut host = CoreHost::begin(snapshot, &[(1, 1)]).unwrap();
@@ -6862,7 +6864,7 @@ fn personal_inquiry_can_be_declined() {
                 "assessment_preferences": [{"person":3,"different_believed":4}],
                 "inquiry_pursuit": [2,3]
             })).unwrap()), medical: None, goal_setbacks: vec![], purpose: None, animal_restraints: None, animal_products: None, recovery: None, fauna: None, hunting: None, animal_feelings: None, animal_care: None, animal_handling: None, family: None, dependent_care: None, gathering: None, environment: None, irrigation: None, agriculture: None, health: None, claims: None, social: Some(social), personality: None,
-            food_search: None, knowledge: Some(game_economy_knowledge::Knowledge {max_records: 4, minds, retention: vec![]}),
+            food_search: None, knowledge: Some(game_economy_knowledge::Knowledge { episodes: None, max_records: 4, minds, retention: vec![]}),
             opinions: Some(opinions), goals: None, dreams: None, shared_work: None, market: None, writing: None, local_transport: None, construction: None, hauling: None, agreements: None, sites: None, schedule: None,
         };
         let mut host = CoreHost::begin(snapshot, &[(1, 1)]).unwrap();
@@ -6932,7 +6934,7 @@ fn personal_inquiry_expires_without_a_later_decision() {
                 "assessment_preferences": [{"person":3,"different_believed":4}],
                 "inquiry_pursuit": [2,3]
             })).unwrap()), medical: None, goal_setbacks: vec![], purpose: None, animal_restraints: None, animal_products: None, recovery: None, fauna: None, hunting: None, animal_feelings: None, animal_care: None, animal_handling: None, family: None, dependent_care: None, gathering: None, environment: None, irrigation: None, agriculture: None, health: None, claims: None, social: Some(social), personality: None,
-            food_search: None, knowledge: Some(game_economy_knowledge::Knowledge {max_records: 4, minds, retention: vec![]}),
+            food_search: None, knowledge: Some(game_economy_knowledge::Knowledge { episodes: None, max_records: 4, minds, retention: vec![]}),
             opinions: Some(opinions), goals: None, dreams: None, shared_work: None, market: None, writing: None, local_transport: None, construction: None, hauling: None, agreements: None, sites: None, schedule: None,
         };
         let mut host = CoreHost::begin(snapshot, &[(1, 1)]).unwrap();
@@ -9449,6 +9451,7 @@ fn core_host_social_benchmark() {
         last_tick: None,
     };
     let knowledge = game_economy_knowledge::Knowledge {
+        episodes: None,
         max_records: 2,
         retention: vec![],
         minds: (2..=count)
@@ -15722,6 +15725,7 @@ fn family_birth_custody_and_worker_death_commit_atomically() {
             routes.journeys.clear();
             inherited.core.travel = Some(routes);
             inherited.knowledge = Some(game_economy_knowledge::Knowledge {
+                episodes: None,
                 max_records: 4, retention: vec![], minds: vec![game_economy_knowledge::Mind {
                     person: 2, remember_people: false, people_seen: vec![], people_reporting: None,
                     people_reports: vec![], reporting: None, misreport: None,

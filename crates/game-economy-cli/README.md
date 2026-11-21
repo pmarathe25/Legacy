@@ -112,6 +112,14 @@ uses the carried materials when it starts, and leaves reusable instruments in
 custody. The [pastime scenario](../../content/scenarios/economy-pastimes.toml)
 includes song composition, instrument practice, and painting.
 
+In a scenario with personal episodes, `memories` recalls the controlled
+character's experiences. `memories PERSON` limits the view to encounters
+with that person. Faint recollections can lose their precise dates.
+`reflect-memory PERSON` or `reflect-memory activity ACTIVITY` deliberately
+rehearses a surviving recollection without changing when it happened.
+The [episodic-memory scenario](../../content/scenarios/economy-episodic-memory.toml)
+includes a musician whose memory can consolidate after sufficient chosen rest.
+
 `gather NODE` takes one yield into personal custody if stock and carrying space
 permit. For an engineering scenario, `look` lists carried items and apparatus.
 `assemble 7 1001:1:0:1000 1002:2:1001:1000` connects item 1002 to item

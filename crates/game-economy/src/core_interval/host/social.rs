@@ -967,6 +967,7 @@ impl CoreHost {
             self.core.generation = generation;
             self.work_checked_revision = None;
         }
+        self.remember_meetings(&meetings, now);
         Ok(CoreDynamicsResults {
             encounter_at_millis: elapsed.map(|_| now),
             meetings,
