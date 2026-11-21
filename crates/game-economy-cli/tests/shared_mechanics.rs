@@ -153,6 +153,7 @@ fn a_reachable_shared_machine_uses_its_real_parts_and_arbitrates_simultaneous_tr
                 let results = host
                     .experiment_mechanics(&[trial(1), trial(2)], &[])
                     .unwrap();
+                assert!(results.iter().all(|row| row.at_millis == Some(360)));
                 assert_eq!(
                     results
                         .iter()
@@ -180,7 +181,9 @@ fn a_reachable_shared_machine_uses_its_real_parts_and_arbitrates_simultaneous_tr
                         &[],
                     )
                     .unwrap();
-                assert!(independent.iter().all(|row| row.outcome == Outcome::Moved));
+                assert!(independent.iter().all(|row| {
+                    row.outcome == Outcome::Moved && row.at_millis == Some(360)
+                }));
                 let mut visitor = Player::new(&mut host, 2).unwrap();
                 assert!(visitor.move_apparatus(7, 9, false).unwrap());
                 assert_eq!(visitor.view().unwrap().carried_apparatus, [apparatus]);

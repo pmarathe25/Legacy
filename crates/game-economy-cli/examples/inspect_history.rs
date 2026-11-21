@@ -922,9 +922,12 @@ fn narrative(report: &Value, focus: Focus) -> String {
                 .flatten()
                 .take(5)
             {
-                if let (Some(tick), Some(outcome)) =
-                    (experiment["tick"].as_u64(), experiment["outcome"].as_str())
-                {
+                let Some(outcome) = experiment["outcome"].as_str() else {
+                    continue;
+                };
+                if let Some(time) = experiment["at_millis"].as_u64() {
+                    writeln!(text, "At {}, a mechanical experiment involving them recorded the outcome `{outcome}`.\n", simulated_time(time)).unwrap();
+                } else if let Some(tick) = experiment["tick"].as_u64() {
                     writeln!(text, "At tick {tick}, a mechanical experiment involving them recorded the outcome `{outcome}`.\n").unwrap();
                 }
             }
