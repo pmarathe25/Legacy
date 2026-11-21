@@ -1,6 +1,6 @@
 //! Summaries of attributed actions in the archive, outside simulation state.
 use serde_json::{Value, json};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write;
 
 #[derive(PartialEq, Eq, PartialOrd, Ord)]
@@ -14,6 +14,14 @@ struct SupplyEpisode {
     last: u64,
 }
 
+struct ExpeditionParticipation {
+    first_year: u64,
+    latest_year: u64,
+    people: BTreeSet<u64>,
+    joined: u64,
+    joined_under_pressure: u64,
+}
+
 #[derive(Default)]
 pub(super) struct Chronicle {
     counts: BTreeMap<&'static str, u64>,
@@ -23,6 +31,7 @@ pub(super) struct Chronicle {
     active_ties: BTreeMap<(u64, u64), u64>,
     repeated_ties: BTreeMap<(u64, u64), (u64, u64, u64)>,
     supply_episodes: BTreeMap<SupplyGroup, Vec<SupplyEpisode>>,
+    expedition_participation: BTreeMap<u64, ExpeditionParticipation>,
 }
 
 #[derive(Clone, Copy)]
@@ -173,9 +182,43 @@ impl Chronicle {
             return;
         }
         for row in event["events"].as_array().into_iter().flatten() {
+            if kind == "expeditions" {
+                self.record_expedition_participation(row, year);
+            }
             if let Some(receipt) = classify(kind, row) {
                 self.record(event, row, year, focus, receipt);
             }
+        }
+    }
+
+    fn record_expedition_participation(&mut self, row: &Value, year: u64) {
+        let invitation = &row["kind"]["invitation"];
+        let (Some(inviter), Some(recipient), Some(response)) = (
+            row["person"].as_u64(),
+            invitation["recipient"].as_u64(),
+            invitation["response"].as_str(),
+        ) else {
+            return;
+        };
+        if !matches!(response, "joined" | "joined_under_pressure") {
+            return;
+        }
+        let entry = self
+            .expedition_participation
+            .entry(inviter)
+            .or_insert_with(|| ExpeditionParticipation {
+                first_year: year,
+                latest_year: year,
+                people: BTreeSet::new(),
+                joined: 0,
+                joined_under_pressure: 0,
+            });
+        entry.latest_year = year;
+        entry.people.insert(recipient);
+        if response == "joined" {
+            entry.joined += 1;
+        } else {
+            entry.joined_under_pressure += 1;
         }
     }
 
@@ -229,6 +272,10 @@ impl Chronicle {
             )
         });
         supply.truncate(10);
+        let mut expeditions: Vec<_> = self.expedition_participation.iter().collect();
+        expeditions
+            .sort_unstable_by_key(|&(person, row)| (std::cmp::Reverse(row.people.len()), *person));
+        expeditions.truncate(10);
         json!({
             "counts": self.counts,
             "people": contributors.iter().map(|&(person, counts)| json!({"person":person,"counts":counts})).collect::<Vec<_>>(),
@@ -237,6 +284,9 @@ impl Chronicle {
             }).collect::<Vec<_>>(),
             "recurring_supply": supply.iter().map(|&(group, years)| {
                 json!({"recipient":group.recipient,"suppliers":group.suppliers,"first_year":years.first,"latest_year":years.last})
+            }).collect::<Vec<_>>(),
+            "expedition_participation": expeditions.iter().map(|&(&person, row)| {
+                json!({"inviter":person,"participants":row.people,"joined":row.joined,"joined_under_pressure":row.joined_under_pressure,"first_year":row.first_year,"latest_year":row.latest_year})
             }).collect::<Vec<_>>()
         })
     }
@@ -281,7 +331,14 @@ fn classify(kind: &str, row: &Value) -> Option<Receipt> {
         },
         ("expeditions", "reached_destination") => "expedition arrivals",
         ("expeditions", "supplies_acquired") => "expedition supplies acquired",
-        ("expeditions", "invitation") => "expedition invitations",
+        ("expeditions", "invitation") => match kind_value["invitation"]["response"].as_str() {
+            None => "expedition invitations without an immediate reply",
+            Some("joined") => "expedition invitations accepted",
+            Some("joined_under_pressure") => "expedition invitations accepted under pressure",
+            Some("declined") => "expedition invitations declined",
+            Some("withdrawn") => "expedition invitations withdrawn",
+            _ => return None,
+        },
         ("expeditions", "objective_met") => "completed expedition objectives",
         ("expeditions", "reached_origin") => "expedition returns",
         ("expeditions", "abandoned") => "abandoned expeditions",
@@ -377,6 +434,24 @@ pub(super) fn write_world(text: &mut String, chronicle: &Value) {
                 .collect::<Vec<_>>()
                 .join(", ");
             writeln!(text, "- Person {} received deliveries from people {suppliers} in successive years from {} through {}.", episode["recipient"], episode["first_year"], episode["latest_year"]).unwrap();
+        }
+        text.push('\n');
+    }
+    if let Some(entries) = chronicle["expedition_participation"]
+        .as_array()
+        .filter(|rows| !rows.is_empty())
+    {
+        text.push_str("## Expedition participation\n\n");
+        for row in entries.iter().take(5) {
+            let participants = row["participants"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_u64)
+                .map(|person| person.to_string())
+                .collect::<Vec<_>>()
+                .join(", ");
+            writeln!(text, "- People {participants} joined expeditions on person {}'s invitation from year {} through {}. The archive records {} replies to join and {} replies to join under pressure.", row["inviter"], row["first_year"], row["latest_year"], row["joined"], row["joined_under_pressure"]).unwrap();
         }
         text.push('\n');
     }
@@ -476,5 +551,26 @@ mod tests {
             1
         );
         assert_eq!(history.selected()[0]["at_millis"], 48);
+    }
+
+    #[test]
+    fn reports_participation_separately_from_refusal_and_pressure() {
+        let mut history = Chronicle::default();
+        let invitation = |recipient, response| json!({"person":5,"kind":{"invitation":{"recipient":recipient,"response":response}}});
+        history.observe(&json!({"kind":"expeditions","events":[invitation(6, "declined"), invitation(3, "joined")]}), 2, None);
+        history.observe(
+            &json!({"kind":"expeditions","events":[invitation(8, "joined_under_pressure")]}),
+            3,
+            None,
+        );
+        let summary = history.summary();
+        assert_eq!(summary["counts"]["expedition invitations declined"], 1);
+        assert_eq!(
+            summary["expedition_participation"],
+            json!([{
+                "inviter":5,"participants":[3,8],"joined":1,"joined_under_pressure":1,
+                "first_year":2,"latest_year":3
+            }])
+        );
     }
 }

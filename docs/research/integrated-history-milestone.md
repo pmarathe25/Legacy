@@ -88,6 +88,24 @@ regional contention explains the gap. Source review identified repeated
 deadline discovery, repeated activity construction, and many small owner
 batches as candidates for the next comparison.
 
+## First thirty years
+
+The `e202ac4c` reference run in `runs/history/integrated-minute-current-20261120/`
+advanced in one-minute requests with hourly settlement plus independent,
+finer deadlines. It began with 60 people and 24 animals. Its year-30 archive
+recorded 69 human births and 33 deaths. The human population peaked at 103 in
+year 25 and reached 96 in year 30. Wildlife reached 61, including 58 berry
+browsers. At that point animal death receipts attributed 12 deaths to hunting
+and 14 to old age.
+
+The [history inspector](../../crates/game-economy-cli/README.md#record-a-history)
+produced `through-year-30-narrative.md` alongside the archive. It attributed 170
+successful load moves and 11,325 stalled experiments to the same person,
+recorded one incarnation succession, and counted 275,377 care visits. The
+succession follows the authored lineage. Institutional continuity requires
+evidence from recurring actions among independent participants. The run was
+still advancing when this report was compiled.
+
 ## First diagnostic
 
 The initial candidate was run for 8,760 hourly ticks with resumable probe
