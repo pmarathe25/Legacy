@@ -44,6 +44,9 @@ struct Scenario {
     #[serde(default)]
     invocation_period_millis: Option<u64>,
     #[serde(default)]
+    expedition_invitation_preferences:
+        Vec<game_economy::core_interval::ExpeditionInvitationPreference>,
+    #[serde(default)]
     on_site_meals: bool,
     stock_capacity: u64,
     food_relief_divisor: u32,
@@ -1038,6 +1041,7 @@ pub fn core_scenario_with_options(
     let decision_period_millis = authored.decision_period_millis;
     let combat_round_millis = authored.combat_round_millis;
     let invocation_period_millis = authored.invocation_period_millis;
+    let mut expedition_invitation_preferences = authored.expedition_invitation_preferences;
     let on_site_meals = authored.on_site_meals;
     let fatigue_rate_period_millis = authored.fatigue_rate_period_millis;
     let elapsed_fatigue = authored.elapsed_fatigue;
@@ -1119,6 +1123,15 @@ pub fn core_scenario_with_options(
             clock.next_millis = Some(period);
         }
         clock.period_millis = period;
+    }
+    if !expedition_invitation_preferences.is_empty() {
+        expedition_invitation_preferences.sort_unstable_by_key(|row| (row.person, row.destination));
+        snapshot
+            .expeditions
+            .as_mut()
+            .ok_or("invitation preferences require expeditions")?
+            .invitations
+            .preferences = expedition_invitation_preferences;
     }
     if let Some(config) = work_capabilities {
         let mut requirements = config
@@ -1534,6 +1547,11 @@ fn scenario_with_options_inner(
     }
     if scenario.invocation_period_millis.is_some() && !interval_features {
         return Err("elapsed invocation costs require the interval simulation host".into());
+    }
+    if !scenario.expedition_invitation_preferences.is_empty() && !interval_features {
+        return Err(
+            "expedition invitation preferences require the interval simulation host".into(),
+        );
     }
     if scenario.on_site_meals && !interval_features {
         return Err("on-site meals require the interval simulation host".into());

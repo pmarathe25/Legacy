@@ -1,4 +1,5 @@
 //! Personal itineraries driven by accepted travel, observations, and elapsed time.
+use crate::elapsed_invitations::Invitations;
 use crate::{DeliveryPreference, Missions, Objective};
 use game_economy_person::{Person, travel};
 use rayon::prelude::*;
@@ -102,6 +103,8 @@ pub struct Expeditions {
     pub invitation_pressure: Option<u64>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub pending_events: Vec<Event>,
+    #[serde(default, skip_serializing_if = "Invitations::is_pristine")]
+    pub invitations: Invitations,
 }
 
 pub struct TravelContext<'a> {
@@ -173,6 +176,7 @@ impl Expeditions {
             itineraries,
             invitation_pressure: owner.pressure_threshold,
             pending_events: Vec::new(),
+            invitations: Invitations::default(),
         })
     }
 
@@ -183,6 +187,7 @@ impl Expeditions {
         goods: &HashSet<u32>,
         now: u128,
     ) -> Result<(), String> {
+        self.invitations.validate(people, regions, now)?;
         let mut active: Vec<_> = self
             .itineraries
             .par_iter()

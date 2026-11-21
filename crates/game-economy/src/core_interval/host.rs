@@ -14,6 +14,7 @@ mod conflict;
 mod construction;
 mod dependent_care;
 mod dreams;
+mod expedition_invitations;
 mod expeditions;
 mod family;
 mod fatigue;
@@ -58,6 +59,7 @@ pub use conflict::{
     WoundTreatment,
 };
 pub use construction::CoreConstructionResults;
+pub use expedition_invitations::CoreExpeditionOffer;
 pub use food_search::{CoreFoodProvision, CoreFoodSearch};
 pub use game_economy_expeditions::elapsed::{
     Event as ExpeditionEvent, EventKind as ExpeditionEventKind, Itinerary as ExpeditionItinerary,
