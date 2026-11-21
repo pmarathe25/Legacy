@@ -102,6 +102,8 @@ pub struct WoundCarePolicy {
 pub struct CorePersonalConflict {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub confinement: Option<super::CoreConfinement>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tactical: Option<game_economy_combat::elapsed::Tactical>,
     #[serde(default)]
     pub attacks: Vec<PersonalAttackPolicy>,
     #[serde(default)]
@@ -112,6 +114,9 @@ pub struct CorePersonalConflict {
     pub reactions: Vec<PersonalStrikeReaction>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub wounds: Option<game_personal_conflict::wounds::Wounds>,
+    /// Exact healing duration. With this clock, wound timestamps use milliseconds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wound_recovery_millis: Option<u64>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub wound_care: Vec<WoundCarePolicy>,
     /// Physical deaths awaiting the next family boundary.
@@ -132,11 +137,29 @@ impl CorePersonalConflict {
                 .binary_search_by_key(&person, |row| row.id)
                 .is_ok()
         };
+        if let Some(tactical) = &self.tactical {
+            let people = core.people.par_iter().map(|row| row.id).collect();
+            let goods = core.physical.goods().par_iter().map(|row| row.id).collect();
+            let regions = core
+                .physical
+                .stock_view(core.physical.tick())?
+                .containers
+                .into_par_iter()
+                .filter_map(|row| match row.place {
+                    game_lots::Place::Stock { region, .. } => Some(region),
+                    _ => None,
+                })
+                .collect();
+            tactical.validate(core.simulated_millis(), &people, &regions, &goods)?;
+        }
         if self
             .last_tick
             .is_some_and(|tick| tick > core.physical.tick())
             || (!self.pending_deaths.is_empty() && self.last_tick != Some(core.physical.tick()))
             || (self.last_tick.is_none() && (!self.events.is_empty() || !self.harm.is_empty()))
+            || self
+                .wound_recovery_millis
+                .is_some_and(|duration| duration == 0 || self.wounds.is_none())
             || self
                 .attacks
                 .par_windows(2)
@@ -216,9 +239,17 @@ impl CorePersonalConflict {
             return Err("invalid personal conflict state".into());
         }
         if let Some(wounds) = &self.wounds {
-            wounds
-                .validate(core.physical.tick(), &exists)
-                .map_err(str::to_owned)?;
+            if self.wound_recovery_millis.is_some() {
+                let now =
+                    u64::try_from(core.simulated_millis()).map_err(|_| "wound time overflow")?;
+                wounds
+                    .validate_at(now, &exists, true)
+                    .map_err(str::to_owned)?;
+            } else {
+                wounds
+                    .validate(core.physical.tick(), &exists)
+                    .map_err(str::to_owned)?;
+            }
             if wounds.remedies.par_iter().any(|remedy| {
                 !core
                     .physical
@@ -234,6 +265,37 @@ impl CorePersonalConflict {
 }
 
 impl CoreHost {
+    pub(super) fn next_wound_deadline(&self) -> Option<u64> {
+        let owner = self.personal_conflict.as_ref()?;
+        owner.wound_recovery_millis?;
+        let heals = owner
+            .wounds
+            .as_ref()?
+            .cases
+            .par_iter()
+            .map(|row| row.heals_at)
+            .min()?;
+        u64::try_from(u128::from(heals).saturating_sub(self.core.simulated_millis())).ok()
+    }
+
+    pub fn recover_due_wounds(&mut self) -> Vec<u64> {
+        if self.next_wound_deadline() != Some(0) {
+            return Vec::new();
+        }
+        let now = self.core.simulated_millis();
+        let owner = self
+            .personal_conflict
+            .as_mut()
+            .and_then(|owner| owner.wounds.as_mut())
+            .expect("timed wounds checked");
+        let (remaining, healed): (Vec<_>, Vec<_>) = std::mem::take(&mut owner.cases)
+            .into_par_iter()
+            .partition(|row| u128::from(row.heals_at) > now);
+        owner.cases = remaining;
+        self.work_checked_revision = None;
+        healed.into_par_iter().map(|row| row.person).collect()
+    }
+
     /// Preview each individual's own available wound-care opportunity.
     pub fn preview_wound_care(&self, occupied: &[u64]) -> Result<Vec<WoundTreatment>, String> {
         if occupied.par_windows(2).any(|pair| pair[0] >= pair[1]) {
@@ -473,7 +535,6 @@ impl CoreHost {
             .personal_conflict
             .as_ref()
             .ok_or("personal conflict is not enabled")?;
-        let tick = self.core.physical.tick();
         let offset = self.core.elapsed_millis().ok_or("no physical interval")?;
         if offset >= self.core.physical.tick_millis()
             || self.core.next_deadline(None)?.after_millis == 0
@@ -517,6 +578,8 @@ impl CoreHost {
             !capable
                 || occupied.binary_search(&strike.actor).is_ok()
                 || active.contains(&strike.actor)
+                || self.has_tactical_engagement(strike.actor)
+                || self.has_tactical_engagement(strike.target)
                 || actor.is_none_or(|person| person.health == 0)
                 || target.is_none_or(|person| person.health == 0)
                 || actor.zip(target).is_none_or(|(actor, target)| {
@@ -534,6 +597,19 @@ impl CoreHost {
             return Err("strikes require capable available local actors and living targets".into());
         }
         let resolved = game_personal_conflict::resolve(strikes, defenses).map_err(str::to_owned)?;
+        self.apply_personal_harm(resolved)
+    }
+
+    /// Publish one simultaneous batch staged by a local conflict owner.
+    pub(super) fn apply_personal_harm(
+        &mut self,
+        resolved: game_personal_conflict::Resolution,
+    ) -> Result<Vec<PersonalHarm>, String> {
+        let owner = self
+            .personal_conflict
+            .as_ref()
+            .ok_or("personal conflict is not enabled")?;
+        let tick = self.core.physical.tick();
         // Interpret each strike from each participant's own perspective. These
         // are potential penetrations, not a division of capped health loss.
         let mut opinions = if self.opinions.is_some() && !owner.reactions.is_empty() {
@@ -615,7 +691,15 @@ impl CoreHost {
                         harm: row.before - row.after,
                     })
                     .collect();
-                wounds.injured(&injuries, tick).map_err(str::to_owned)
+                if let Some(duration) = owner.wound_recovery_millis {
+                    let now = u64::try_from(self.core.simulated_millis())
+                        .map_err(|_| "wound time overflow")?;
+                    wounds
+                        .injured_for(&injuries, now, duration)
+                        .map_err(str::to_owned)
+                } else {
+                    wounds.injured(&injuries, tick).map_err(str::to_owned)
+                }
             })
             .transpose()?;
         let generation = if changed {

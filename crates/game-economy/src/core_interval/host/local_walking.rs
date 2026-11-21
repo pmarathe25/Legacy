@@ -24,12 +24,16 @@ impl CoreHost {
 
     pub(super) fn regional_stock_reachable(&self, person: u64, region: u64) -> bool {
         self.held_at(person).is_none()
+            && !self.has_tactical_engagement(person)
             && self
                 .walking()
                 .is_none_or(|walking| walking.stock_reachable(person, region))
     }
 
     pub(super) fn local_partition(&self, person: u64) -> (u64, u64) {
+        if self.has_tactical_engagement(person) {
+            return (4, person);
+        }
         if let Some(site) = self.held_at(person) {
             return (3, site);
         }
@@ -45,7 +49,7 @@ impl CoreHost {
 
     pub(super) fn same_local_endpoint(&self, a: u64, b: u64) -> bool {
         let a = self.local_partition(a);
-        a.0 != 2 && a == self.local_partition(b)
+        !matches!(a.0, 2 | 4) && a == self.local_partition(b)
     }
 
     pub(super) fn clear_local_positions(&mut self, departed: &[u64]) {
@@ -86,6 +90,9 @@ impl CoreHost {
             .collect();
         if let Some(owner) = self.confinement() {
             excluded.par_extend(owner.holds.par_iter().map(|hold| hold.person));
+        }
+        if let Some(owner) = self.tactical() {
+            excluded.extend(owner.actors());
         }
         if excluded.is_empty() {
             return None;
@@ -155,6 +162,9 @@ impl CoreHost {
     pub(super) fn local_walk_exclusions(&self, blocked: &[u64]) -> Vec<u64> {
         let resting = self.blocked_with_rest(blocked);
         let mut busy = resting.as_deref().unwrap_or(blocked).to_vec();
+        if let Some(owner) = self.tactical() {
+            busy.extend(owner.actors());
+        }
         busy.par_extend(self.core.physical.work().par_iter().filter_map(|row| {
             (row.phase == game_lot_runtime::Phase::Working).then_some(row.job.worker)
         }));

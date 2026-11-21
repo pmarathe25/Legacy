@@ -15,7 +15,7 @@ fn command(host: &mut CoreHost, person: u64, words: &[&str]) -> Result<bool, Str
     match words {
         [] => {}
         ["help"] => println!(
-            "look | wait MILLISECONDS | move REGION | walk stock|store ID | pause-walk | resume-walk | trip REGION VISIT_MILLISECONDS [food] | trip go|survey|back|cancel | confine PERSON SITE | guard SITE | release PERSON | escape | build BLUEPRINT | demolish SITE | salvage SITE GOOD QUANTITY | eat GOOD | treat GOOD | work RECIPE UNITS | stop JOB | stop-assist | rest on|off | word place|person|object ID SOUNDS | form SOUNDS MARKS | inscribe SOUNDS | read PAGE | recall PAGE | save PATH | load PATH | quit (SOUNDS and MARKS are comma-separated numbers)"
+            "look | wait MILLISECONDS | move REGION | walk stock|store ID | pause-walk | resume-walk | trip REGION VISIT_MILLISECONDS [food] | trip go|survey|back|cancel | fight PERSON | tactic wait|defend|retreat | tactic attack PERSON | tactic move X Y | confine PERSON SITE | guard SITE | release PERSON | escape | build BLUEPRINT | demolish SITE | salvage SITE GOOD QUANTITY | eat GOOD | treat GOOD | work RECIPE UNITS | stop JOB | stop-assist | rest on|off | word place|person|object ID SOUNDS | form SOUNDS MARKS | inscribe SOUNDS | read PAGE | recall PAGE | save PATH | load PATH | quit (SOUNDS and MARKS are comma-separated numbers)"
         ),
         ["quit"] | ["exit"] => return Ok(false),
         ["look"] => {
@@ -66,6 +66,18 @@ fn command(host: &mut CoreHost, person: u64, words: &[&str]) -> Result<bool, Str
                     "trip={} destination={} stage={:?} objective_met={}",
                     plan.id, plan.destination, plan.stage, plan.objective_met
                 );
+            }
+            if let Some(tactics) = &view.tactics {
+                println!(
+                    "fight={} x={} y={} next_round={}",
+                    tactics.engagement,
+                    tactics.position.x,
+                    tactics.position.y,
+                    tactics.next_round_millis
+                );
+                for (person, position) in &tactics.visible {
+                    println!("fighter={person} x={} y={}", position.x, position.y);
+                }
             }
             for report in view.route_reports {
                 let observed = report.observed_at_millis.map_or_else(
@@ -165,6 +177,37 @@ fn command(host: &mut CoreHost, person: u64, words: &[&str]) -> Result<bool, Str
                 (words.len() == 4).then_some(game_economy::MissionObjective::ObserveFood);
             let event = Player::new(host, person)?.plan_expedition(region, duration, objective)?;
             println!("trip={} planned=true", event.itinerary);
+        }
+        ["fight", target] => {
+            let target = target.parse::<u64>().map_err(|_| "invalid person")?;
+            let event = Player::new(host, person)?.confront(target)?;
+            println!("fight={} started=true", event.engagement);
+        }
+        ["tactic", "wait" | "defend" | "retreat"] => {
+            use game_economy::core_interval::TacticalChoice;
+            let action = match words[1] {
+                "wait" => TacticalChoice::Wait,
+                "defend" => TacticalChoice::Defend,
+                _ => TacticalChoice::Retreat,
+            };
+            Player::new(host, person)?.choose_tactics(action)?;
+        }
+        ["tactic", "attack", target] => {
+            let target = target.parse::<u64>().map_err(|_| "invalid person")?;
+            Player::new(host, person)?.choose_tactics(
+                game_economy::core_interval::TacticalChoice::Attack {
+                    target,
+                    pursue: true,
+                },
+            )?;
+        }
+        ["tactic", "move", x, y] => {
+            use game_economy::core_interval::{TacticalChoice, TacticalPoint};
+            let x = x.parse::<u32>().map_err(|_| "invalid position")?;
+            let y = y.parse::<u32>().map_err(|_| "invalid position")?;
+            Player::new(host, person)?.choose_tactics(TacticalChoice::Move {
+                destination: TacticalPoint { x, y },
+            })?;
         }
         ["confine", target, site] => {
             let target = target.parse::<u64>().map_err(|_| "invalid person")?;

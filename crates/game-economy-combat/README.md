@@ -17,3 +17,20 @@ Optional injury rules create a persistent, attributed wound from an actual strik
 An authored tactical structure maps a real maintainable work site to an open point on its region's map. A fighter can target that site instead of striking a person; a strike requires tactical reach and line of sight and adds actual wear after the current boundary's work and repairs. The existing wear limit blocks later jobs, and ordinary repair consumes real materials. With `collapses_at_limit = true`, a strike that reaches the limit removes the site, interrupts its active work, and leaves its actual retained construction materials as recoverable debris. A structure may own an authored `barrier` rectangle on its persistent tactical map; removing the site removes that barrier and changes movement and line of sight. Each barrier must belong to exactly one site. Removing a site clears its tactical mapping and orders targeting it.
 
 An autonomous fighter with a personal site-attack preference can independently choose that target while otherwise attacking an opponent. Willingness, or the fighter's own fear of or felt obligation toward a named person, can motivate the choice. It replaces that fighter's ordinary strike for the round; no authority or consent is implied.
+
+## Elapsed tactical rounds
+
+The interval host imports fresh generated maps and applies rounds at absolute
+deadlines. A scenario can set `combat_round_millis`. An attack can begin an
+encounter with a reachable person. That person independently chooses how to
+respond, including waiting, defending, fighting, or retreating. The interval
+player can use `fight PERSON` and `tactic wait|defend|retreat|attack|move`.
+
+Independent engagements prepare from the same opening state. Movement
+conflicts use positions and stable priorities inside each engagement. Accepted
+strikes share the ordinary health and wound owners. Imported injury recovery
+uses elapsed time, and a tactical round can land between economic boundaries
+or exactly on one. The history stream records round times, actual strikes,
+and wounds that heal.
+
+The interval import still rejects tactical site attacks and interventions.

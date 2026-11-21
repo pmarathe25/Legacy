@@ -11,13 +11,8 @@ impl CoreHostSnapshot {
             return Err("interval scenario import requires a fresh world".into());
         }
         let mut unsupported = Vec::new();
-        for (name, present) in [
-            ("campaign", state.campaign.is_some()),
-            ("combat", state.combat.is_some()),
-        ] {
-            if present {
-                unsupported.push(name);
-            }
+        if state.campaign.is_some() {
+            unsupported.push("campaign");
         }
         if state
             .dynamics
@@ -42,6 +37,26 @@ impl CoreHostSnapshot {
                 )
             })
             .transpose()?;
+        let mut conflict = CorePersonalConflict {
+            confinement: state.confinement.take().map(CoreConfinement::new),
+            ..Default::default()
+        };
+        if let Some(owner) = state.combat.take() {
+            let (tactical, wounds) =
+                super::tactical::import_tactical(owner, state.physical.tick_millis)?;
+            conflict.tactical = Some(tactical);
+            conflict.wound_recovery_millis = wounds
+                .as_ref()
+                .map(|wounds| {
+                    wounds
+                        .rules
+                        .recovery_ticks
+                        .checked_mul(state.physical.tick_millis)
+                        .ok_or("wound duration overflow")
+                })
+                .transpose()?;
+            conflict.wounds = wounds;
+        }
         let mut construction = state.construction.take();
         let maintenance = construction
             .as_mut()
@@ -78,10 +93,8 @@ impl CoreHostSnapshot {
         Ok(Self {
             mechanics: None,
             expeditions,
-            personal_conflict: state.confinement.take().map(|owner| CorePersonalConflict {
-                confinement: Some(CoreConfinement::new(owner)),
-                ..Default::default()
-            }),
+            personal_conflict: (conflict.tactical.is_some() || conflict.confinement.is_some())
+                .then_some(conflict),
             core: CoreSnapshot {
                 seed: state.seed,
                 physical: state.physical,

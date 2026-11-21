@@ -19,6 +19,11 @@ use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 mod host;
+pub use game_economy_combat::Point as TacticalPoint;
+pub use game_economy_combat::elapsed::{
+    Choice as TacticalChoice, Event as TacticalEvent, EventKind as TacticalEventKind,
+};
+pub use host::CoreTacticalResult;
 pub use host::{
     BarrierAction, CoreAssistRecord, CoreAssistSession, CoreChoiceEvent, CoreChoiceIntent,
     CoreChoiceOutcome, CoreConfinement, CoreConstructionResults, CoreDeliveryResults,
@@ -141,6 +146,8 @@ pub struct CoreDeadline {
     pub disease: bool,
     pub local_arrival: bool,
     pub expedition: bool,
+    pub tactical: bool,
+    pub wounds: bool,
 }
 /// Travelers published at a partial-interval offset.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -458,6 +465,8 @@ impl CoreInterval {
             disease: false,
             local_arrival: false,
             expedition: false,
+            tactical: false,
+            wounds: false,
             food_health: food_health == Some(after),
         })
     }

@@ -37,6 +37,9 @@ struct Scenario {
     /// Autonomous decision cadence, independent of the physical quantum.
     #[serde(default)]
     decision_period_millis: Option<u64>,
+    /// Elapsed time between tactical rounds.
+    #[serde(default)]
+    combat_round_millis: Option<u64>,
     #[serde(default)]
     on_site_meals: bool,
     stock_capacity: u64,
@@ -1030,6 +1033,7 @@ pub fn core_scenario_with_options(
     let language_topic_profiles = authored.language_topic_profiles;
     let signals = authored.signals;
     let decision_period_millis = authored.decision_period_millis;
+    let combat_round_millis = authored.combat_round_millis;
     let on_site_meals = authored.on_site_meals;
     let fatigue_rate_period_millis = authored.fatigue_rate_period_millis;
     let elapsed_fatigue = authored.elapsed_fatigue;
@@ -1069,6 +1073,15 @@ pub fn core_scenario_with_options(
                 .as_mut()
                 .and_then(|old| old.confinement.take());
         }
+        if let Some(imported) = &mut snapshot.personal_conflict {
+            if owner.tactical.is_none() {
+                owner.tactical = imported.tactical.take();
+            }
+            if owner.wounds.is_none() {
+                owner.wounds = imported.wounds.take();
+                owner.wound_recovery_millis = imported.wound_recovery_millis;
+            }
+        }
         owner
             .attacks
             .sort_unstable_by_key(|row| (row.actor, row.id));
@@ -1083,6 +1096,14 @@ pub fn core_scenario_with_options(
     }
     if personal_conflict.is_some() {
         snapshot.personal_conflict = personal_conflict;
+    }
+    if let Some(period) = combat_round_millis {
+        snapshot
+            .personal_conflict
+            .as_mut()
+            .and_then(|owner| owner.tactical.as_mut())
+            .ok_or("combat round duration requires a tactical owner")?
+            .round_millis = period;
     }
     if let Some(config) = work_capabilities {
         let mut requirements = config
@@ -1492,6 +1513,9 @@ fn scenario_with_options_inner(
         return Err(
             "elapsed decision cadence or fatigue rates require the interval simulation host".into(),
         );
+    }
+    if scenario.combat_round_millis.is_some() && !interval_features {
+        return Err("elapsed combat rounds require the interval simulation host".into());
     }
     if scenario.on_site_meals && !interval_features {
         return Err("on-site meals require the interval simulation host".into());

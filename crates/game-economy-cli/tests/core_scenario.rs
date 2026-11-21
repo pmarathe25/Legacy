@@ -1367,6 +1367,130 @@ guard_policies = [{ person = 3, site = 1, willing = true, oppose_opening = true 
 }
 
 #[test]
+fn tactical_rounds_share_health_and_allow_individual_responses_at_exact_times() {
+    use game_economy::core_interval::{CoreHost, CoreRunEvent, TacticalChoice, TacticalEventKind};
+
+    let root = root();
+    let template =
+        std::fs::read_to_string(root.join("content/scenarios/economy-core-player.toml")).unwrap();
+    let mut source = template.split_once("[hauling]").unwrap().0.replace(
+        "tick_millis = 1000",
+        "tick_millis = 274\ndecision_period_millis = 100\ncombat_round_millis = 137",
+    );
+    for id in 2..=4 {
+        source.push_str(&format!("\n[[people]]\nid = {id}\nregion = 1\nhealth = 100\nhunger = 0\nwilling_to_work = false\nseek_meals = false\ncontrolled = {}\n", id == 3));
+    }
+    source.push_str(
+        r#"
+[combat]
+damage = 6
+reactions = [{ person = 2, response = "defend" }]
+
+[combat.map_rules]
+width = 20
+height = 20
+obstacle_count = 0
+max_obstacle_size = 1
+movement = 3
+attack_range = 3
+
+[combat.injuries]
+minimum_damage = 1
+recovery_ticks = 1
+work_percent = 75
+medicine = "grain"
+medicine_quantity = 1
+"#,
+    );
+    let path =
+        std::env::temp_dir().join(format!("legacy-core-tactical-{}.toml", std::process::id()));
+    std::fs::write(&path, source).unwrap();
+    let loaded = game_economy_cli::core_scenario(&path, &root.join("content"));
+    std::fs::remove_file(path).unwrap();
+    let mut host = loaded.unwrap();
+    assert_eq!(
+        host.start_controlled_engagement(1, 2).unwrap().engagement,
+        1
+    );
+    assert_eq!(
+        host.start_controlled_engagement(3, 4).unwrap().engagement,
+        2
+    );
+    assert!(host.start_controlled_engagement(1, 4).is_err());
+    assert_eq!(
+        host.player_view(1).unwrap().tactics.unwrap().visible[0].0,
+        2
+    );
+    let active = host.snapshot();
+    let run = |workers, steps: &[u64]| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut host = CoreHost::resume(active.clone()).unwrap();
+                let mut rounds = Vec::new();
+                for &step in steps {
+                    let run = host.advance_continuous(step, &[]).unwrap();
+                    assert_eq!(run.failure, None);
+                    rounds.extend(run.events.into_iter().filter_map(|event| match event {
+                        CoreRunEvent::Tactical(result) => Some(result),
+                        _ => None,
+                    }));
+                    host = CoreHost::resume(
+                        serde_json::from_str(&serde_json::to_string(&host.snapshot()).unwrap())
+                            .unwrap(),
+                    )
+                    .unwrap();
+                }
+                assert_eq!(rounds.len(), 2);
+                for (index, round) in rounds.iter().enumerate() {
+                    let at = (index as u128 + 1) * 137;
+                    assert!(round.events.iter().all(|event| event.at_millis == at));
+                    assert_eq!(
+                        round
+                            .strikes
+                            .iter()
+                            .map(|row| (row.actor, row.target, row.defended, row.harm))
+                            .collect::<Vec<_>>(),
+                        [(1, 2, 3, 3), (3, 4, 0, 6)]
+                    );
+                }
+                let state = host.snapshot();
+                assert_eq!(
+                    state
+                        .core
+                        .people
+                        .iter()
+                        .map(|row| row.health)
+                        .collect::<Vec<_>>(),
+                    [100, 94, 100, 88]
+                );
+                (rounds, state)
+            })
+    };
+    let (_, fought) = run(1, &[274]);
+    assert_eq!(run(1, &[274]), run(4, &[39, 100, 135]));
+
+    let mut host = CoreHost::resume(fought).unwrap();
+    host.choose_controlled_tactics(1, TacticalChoice::Retreat)
+        .unwrap();
+    host.choose_controlled_tactics(3, TacticalChoice::Wait)
+        .unwrap();
+    let run = host.advance_continuous(600, &[]).unwrap();
+    assert_eq!(run.failure, None);
+    assert!(run.events.iter().any(|event| matches!(event, CoreRunEvent::Tactical(round)
+        if round.events.iter().any(|row| row.person == Some(1) && row.kind == TacticalEventKind::Withdrew))));
+    assert!(host.tactical_engagement(1).is_none());
+    assert!(host.tactical_engagement(3).is_some());
+    assert!(run.events.iter().any(
+        |event| matches!(event, CoreRunEvent::WoundRecovery {at_millis: 548, people}
+        if people == &[2, 4])
+    ));
+    assert_eq!(host.snapshot().core.people[3].health, 88);
+}
+
+#[test]
 fn expedition_arrival_observation_visit_and_return_use_elapsed_time() {
     use game_economy::MissionObjective;
     use game_economy::core_interval::{

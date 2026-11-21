@@ -100,6 +100,20 @@ impl<'a> Player<'a> {
             .confine_controlled_target(self.person, target, site)
     }
 
+    pub fn confront(
+        &mut self,
+        target: u64,
+    ) -> Result<game_economy::core_interval::TacticalEvent, String> {
+        self.host.start_controlled_engagement(self.person, target)
+    }
+
+    pub fn choose_tactics(
+        &mut self,
+        choice: game_economy::core_interval::TacticalChoice,
+    ) -> Result<(), String> {
+        self.host.choose_controlled_tactics(self.person, choice)
+    }
+
     pub fn guard(&mut self, site: u64) -> Result<(), String> {
         self.host.guard_controlled_cell(self.person, site)
     }

@@ -59,7 +59,8 @@ Keep the [feature ownership index](../../docs/design/feature-ownership.md) curre
 boundaries change.
 
 The larger simplification is one execution path. Migrate campaign, coordinated
-expeditions, tactical combat, and the [other paths rejected by the interval loader](../../crates/game-economy/src/core_interval/host/scenario.rs)
+expeditions, tactical interventions and structure damage, and the
+[other paths rejected by the interval loader](../../crates/game-economy/src/core_interval/host/scenario.rs)
 before removing the whole-boundary runner. Include authoring, normal CLI/player
 access, history, and saved state in the migration. Exercise the feature through
 the interval host before deleting its old driver.

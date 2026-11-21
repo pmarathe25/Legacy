@@ -78,6 +78,15 @@ impl Wounds {
         tick: u64,
         exists: &(dyn Fn(u64) -> bool + Sync),
     ) -> Result<(), &'static str> {
+        self.validate_at(tick, exists, false)
+    }
+
+    pub fn validate_at(
+        &self,
+        now: u64,
+        exists: &(dyn Fn(u64) -> bool + Sync),
+        pending_recovery: bool,
+    ) -> Result<(), &'static str> {
         if self.rules.minimum_harm == 0
             || self.rules.recovery_ticks == 0
             || self
@@ -94,8 +103,9 @@ impl Wounds {
             || self.cases.par_iter().any(|wound| {
                 !exists(wound.person)
                     || wound.severity == 0
-                    || wound.sustained_at > tick
-                    || wound.heals_at <= tick
+                    || wound.sustained_at > now
+                    || wound.heals_at < now
+                    || (!pending_recovery && wound.heals_at == now)
                     || wound.heals_at <= wound.sustained_at
             })
         {
@@ -107,7 +117,17 @@ impl Wounds {
     /// Prepare a generation from simultaneous, already capped physical losses.
     /// No individual attacker is credited with a group injury.
     pub fn injured(&self, injuries: &[Injury], tick: u64) -> Result<Self, &'static str> {
-        if self.rules.minimum_harm == 0 || self.rules.recovery_ticks == 0 {
+        self.injured_for(injuries, tick, self.rules.recovery_ticks)
+    }
+
+    /// The enclosing owner's clock defines the timestamp and duration unit.
+    pub fn injured_for(
+        &self,
+        injuries: &[Injury],
+        tick: u64,
+        recovery: u64,
+    ) -> Result<Self, &'static str> {
+        if self.rules.minimum_harm == 0 || recovery == 0 {
             return Err("invalid wound rules");
         }
         if injuries
@@ -121,7 +141,7 @@ impl Wounds {
             .par_iter()
             .any(|row| row.harm >= self.rules.minimum_harm);
         let healing = if has_injuries {
-            tick.checked_add(self.rules.recovery_ticks)
+            tick.checked_add(recovery)
                 .ok_or("wound recovery overflow")?
         } else {
             tick

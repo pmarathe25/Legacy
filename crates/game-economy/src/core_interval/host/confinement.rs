@@ -562,6 +562,9 @@ impl CoreHost {
     }
 
     pub(super) fn can_pass_possession(&self, a: u64, b: u64) -> bool {
+        if self.has_tactical_engagement(a) || self.has_tactical_engagement(b) {
+            return false;
+        }
         let Some(owner) = self.confinement() else {
             return self.same_local_endpoint(a, b);
         };

@@ -43,6 +43,7 @@ mod site_lifecycle;
 mod sites;
 mod skills;
 mod social;
+mod tactical;
 mod taking;
 mod tools;
 mod treatment;
@@ -85,6 +86,7 @@ pub use site_lifecycle::CoreSiteChanges;
 pub use sites::{CoreRepairResults, CoreSites};
 pub use skills::{CoreSkillCredit, CoreSkills};
 pub use social::{CoreDynamicsResults, CoreHealth, CoreSocial};
+pub use tactical::{CorePlayerTactics, CoreTacticalResult};
 pub use tools::CoreToolRepairResults;
 pub use treatment::CoreTreatmentResults;
 pub use writing::{
@@ -1656,6 +1658,8 @@ impl CoreHost {
         let disease = self.next_disease_deadline();
         let local_arrival = self.next_local_arrival();
         let expedition = self.next_expedition_deadline();
+        let tactical = self.next_tactical_deadline();
+        let wounds = self.next_wound_deadline();
         let first = [
             recovery,
             exposure,
@@ -1667,6 +1671,8 @@ impl CoreHost {
             disease,
             local_arrival,
             expedition,
+            tactical,
+            wounds,
         ]
         .into_iter()
         .flatten()
@@ -1689,6 +1695,8 @@ impl CoreHost {
                     disease: disease == Some(after_millis),
                     local_arrival: local_arrival == Some(after_millis),
                     expedition: expedition == Some(after_millis),
+                    tactical: tactical == Some(after_millis),
+                    wounds: wounds == Some(after_millis),
                     recovery: recovery == Some(after_millis),
                     exposure: exposure == Some(after_millis),
                 };
@@ -1703,6 +1711,8 @@ impl CoreHost {
                 deadline.disease = disease == Some(after_millis);
                 deadline.local_arrival = local_arrival == Some(after_millis);
                 deadline.expedition = expedition == Some(after_millis);
+                deadline.tactical = tactical == Some(after_millis);
+                deadline.wounds = wounds == Some(after_millis);
             }
         }
         Ok(deadline)
@@ -2805,6 +2815,7 @@ impl CoreHost {
         let next_wounds = self
             .personal_conflict
             .as_ref()
+            .filter(|owner| owner.wound_recovery_millis.is_none())
             .and_then(|owner| owner.wounds.as_ref())
             .map(|wounds| {
                 wounds

@@ -697,6 +697,11 @@ pub enum CoreRunEvent {
         changes: CoreSiteChanges,
     },
     Expeditions(Vec<game_economy_expeditions::elapsed::Event>),
+    Tactical(CoreTacticalResult),
+    WoundRecovery {
+        at_millis: u128,
+        people: Vec<u64>,
+    },
     PersonalChoices(Vec<CoreChoiceEvent>),
     MechanicalExperiments(Vec<game_mechanics::Observation>),
     MechanicalLoads(Vec<MechanicalLoadResult>),
@@ -919,13 +924,7 @@ impl CoreHost {
         let start = self.core.elapsed_millis().ok_or("no physical interval")?;
         let quantum = self.core.physical.tick_millis();
         let mut run = CoreRun::default();
-        let mut occupied = self.fatigue.as_ref().map(|owner| {
-            let mut people = external_blocked.to_vec();
-            people.par_extend(owner.fatigue.resting());
-            people.par_sort_unstable();
-            people.dedup();
-            people
-        });
+        let mut occupied = self.decision_occupations(external_blocked);
         let mut rest_dirty = false;
         macro_rules! attempt {
             ($label:lifetime, $operation:expr) => {
@@ -940,13 +939,7 @@ impl CoreHost {
         }
         'run: loop {
             if rest_dirty {
-                occupied = self.fatigue.as_ref().map(|owner| {
-                    let mut people = external_blocked.to_vec();
-                    people.par_extend(owner.fatigue.resting());
-                    people.par_sort_unstable();
-                    people.dedup();
-                    people
-                });
+                occupied = self.decision_occupations(external_blocked);
                 rest_dirty = false;
             }
             let blocked = occupied.as_deref().unwrap_or(external_blocked);
@@ -981,6 +974,16 @@ impl CoreHost {
             let deadline = attempt!('run, self.host_deadline(None));
             if deadline.after_millis == 0 {
                 let mut handled = false;
+                if deadline.wounds {
+                    let people = self.recover_due_wounds();
+                    if !people.is_empty() {
+                        run.events.push(CoreRunEvent::WoundRecovery {
+                            at_millis: self.core.simulated_millis(),
+                            people,
+                        });
+                        handled = true;
+                    }
+                }
                 if deadline.arrival
                     && let Some(arrivals) = attempt!('run, self.publish_arrivals())
                 {
@@ -1033,6 +1036,13 @@ impl CoreHost {
                         run.events.push(CoreRunEvent::Work(events));
                         handled = true;
                     }
+                }
+                if deadline.tactical
+                    && let Some(result) = attempt!('run, self.publish_tactical_rounds())
+                {
+                    run.events.push(CoreRunEvent::Tactical(result));
+                    rest_dirty = true;
+                    handled = true;
                 }
                 if !handled {
                     run.failure = Some("unresolved core deadline".into());
@@ -3267,6 +3277,21 @@ impl CoreHost {
                             busy.extend(participants);
                             busy.par_sort_unstable();
                             busy.dedup();
+                        }
+                        let starts = attempt!('run, self.confront_autonomously(&busy, schedule.period_millis));
+                        if !starts.is_empty() {
+                            busy.par_extend(
+                                starts
+                                    .par_iter()
+                                    .flat_map_iter(|row| row.person.into_iter().chain(row.target)),
+                            );
+                            busy.par_sort_unstable();
+                            busy.dedup();
+                            rest_dirty = true;
+                            run.events.push(CoreRunEvent::Tactical(CoreTacticalResult {
+                                events: starts,
+                                ..Default::default()
+                            }));
                         }
                         let walking = attempt!('run, self.walk_autonomously(&busy));
                         if !walking.is_empty() {
