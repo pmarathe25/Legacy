@@ -995,6 +995,11 @@ impl CoreHost {
             let blocked = pending_busy.as_deref().unwrap_or(blocked);
             let offset = self.core.elapsed_millis().expect("active interval");
             if offset == quantum {
+                if self.core.physical.elapsed_expiry_time().is_some()
+                    && let Some(events) = attempt!('run, self.publish_early_work())
+                {
+                    run.events.push(CoreRunEvent::Work(events));
+                }
                 run.boundary = true;
                 break;
             }

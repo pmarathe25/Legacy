@@ -95,7 +95,9 @@ Set `elapsed_spoilage = true` to date newly created physical lots in elapsed
 milliseconds. Preparation, travel, or storage transfer retains an existing lot\'s
 deadline. Spoilage wakes from an index of active deadlines and removes the due
 lots before work or consumption at the same instant, including when a deadline
-coincides with settlement. Prepared work dates fresh output on completion.
+coincides with settlement. Prepared work dates fresh output on completion and places it directly into
+regional custody when capacity permits. The job holds output when the stock is
+full.
 Older saves without an elapsed custody clock retain their archived boundary
 dates.
 

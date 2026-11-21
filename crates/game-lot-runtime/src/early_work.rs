@@ -47,6 +47,7 @@ pub struct EarlyWorkEvents {
     pub tick: u64,
     pub offset_millis: u64,
     pub finished: Vec<u64>,
+    pub delivered: Vec<u64>,
     pub interrupted: Vec<u64>,
     pub rejected: Vec<u64>,
 }
@@ -838,9 +839,10 @@ impl Runtime {
         if interval.tick != self.tick()
             || interval.custody_revision != self.store.revision()
             || interval.elapsed_millis == 0
-            || interval.elapsed_millis >= self.tick_millis
+            || interval.elapsed_millis > self.tick_millis
+            || (interval.elapsed_millis == self.tick_millis && self.elapsed_expiry_time().is_none())
         {
-            return Err("early work requires a valid partial interval".into());
+            return Err("early work requires a valid elapsed interval".into());
         }
         self.epoch
             .checked_add(1)
@@ -904,9 +906,7 @@ impl Runtime {
             drop(phase);
             phase = game_diagnostics::span("physical.early.custody");
         }
-        let mut custody = self
-            .store
-            .prepare_transactions_now(seed, &finished.transactions)?;
+        let (mut custody, delivered) = self.stage_finished_custody(finished.transactions, seed)?;
         let produced_items = identified_plan.as_ref().map_or_else(Vec::new, |plan| {
             plan.items
                 .par_iter()
@@ -947,7 +947,11 @@ impl Runtime {
         }
         self.store.retire_in(
             &mut custody,
-            accepted.par_iter().map(|&id| Place::JobInput(id)).collect(),
+            accepted
+                .par_iter()
+                .map(|&id| Place::JobInput(id))
+                .chain(delivered.par_iter().map(|&id| Place::JobOutput(id)))
+                .collect(),
         )?;
         self.store.validate_commit(&custody)?;
         #[cfg(feature = "profile")]
@@ -955,7 +959,12 @@ impl Runtime {
             drop(phase);
             phase = game_diagnostics::span("physical.early.bookkeeping");
         }
-        let mut work: Vec<_> = self.work.par_iter().cloned().collect();
+        let mut work: Vec<_> = self
+            .work
+            .par_iter()
+            .filter(|row| delivered.binary_search(&row.job.id).is_err())
+            .cloned()
+            .collect();
         work.par_iter_mut().for_each(|row| {
             if accepted.binary_search(&row.job.id).is_ok() {
                 row.phase = Phase::Waiting;
@@ -993,11 +1002,76 @@ impl Runtime {
                 tick: self.tick(),
                 offset_millis: interval.elapsed_millis,
                 finished: accepted,
+                delivered,
                 interrupted,
                 rejected,
             },
         }))
     }
+    fn stage_finished_custody(
+        &self,
+        mut transactions: Vec<game_lots::Transaction>,
+        seed: u64,
+    ) -> Result<(game_lots::Draft, Vec<u64>), String> {
+        if self.elapsed_expiry_time().is_none() || transactions.is_empty() {
+            return Ok((
+                self.store.prepare_transactions_now(seed, &transactions)?,
+                Vec::new(),
+            ));
+        }
+        let mut direct: Vec<_> = transactions
+            .par_iter_mut()
+            .filter_map(|transaction| {
+                let work = self
+                    .work
+                    .binary_search_by_key(&transaction.id, |row| row.job.id)
+                    .ok()?;
+                let region = self.work[work].job.region;
+                let stock = |good| Place::Stock { region, good };
+                if transaction
+                    .creations
+                    .iter()
+                    .any(|output| self.store.container(stock(output.lot.good)).is_none())
+                {
+                    return None;
+                }
+                for output in &mut transaction.creations {
+                    output.to = stock(output.lot.good);
+                }
+                Some(transaction.id)
+            })
+            .collect();
+        direct.par_sort_unstable();
+        let mut custody = self.store.prepare_transactions_now(seed, &transactions)?;
+        let denied: Vec<_> = custody
+            .transactions()
+            .par_iter()
+            .filter_map(|result| {
+                (!result.accepted && direct.binary_search(&result.id).is_ok()).then_some(result.id)
+            })
+            .collect();
+        if !denied.is_empty() {
+            transactions
+                .par_iter_mut()
+                .filter(|row| denied.binary_search(&row.id).is_ok())
+                .for_each(|transaction| {
+                    for output in &mut transaction.creations {
+                        output.to = Place::JobOutput(transaction.id);
+                    }
+                });
+            direct.retain(|id| denied.binary_search(id).is_err());
+            custody = self.store.prepare_transactions_now(seed, &transactions)?;
+            direct.retain(|id| {
+                custody
+                    .transactions()
+                    .binary_search_by_key(id, |result| result.id)
+                    .ok()
+                    .is_some_and(|index| custody.transactions()[index].accepted)
+            });
+        }
+        Ok((custody, direct))
+    }
+
     pub fn validate_early_work(&self, draft: &EarlyWorkDraft) -> Result<(), String> {
         let interval = self
             .work_interval
