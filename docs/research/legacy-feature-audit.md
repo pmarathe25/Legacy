@@ -37,7 +37,13 @@ and richer ecological pressures remain unfinished.
 
 For each restored feature: demonstrate its owner actually runs through `CoreHost`, with data-defined configuration and observations; exercise personal refusal or noncompliance where relevant; test resource conservation and rollback, save/resume and deterministic results across worker counts. Measure independent and contested workloads separately. Do not mark the full domain complete merely because a type, catalog, or isolated helper is present. Historical institutions are descriptions of autonomous behavior and never grant authority or bind agreements by themselves.
 
-The ordinary `--player` CLI currently constructs `Economy` and advances its whole-boundary player interface; it does not run the interval host used by the restored features and history runner. The separate `--interval-player PERSON` path now provides a limited personal view, time advancement, travel, eating, chosen work, voluntary rest, self-treatment, personally chosen spoken and written forms, and save/load on the interval host. Campaign integration and the rest of the player actions and observations remain necessary before this gap can be closed.
+The ordinary `--player` CLI runs the elapsed campaign on the same host as the history runner. `--person PERSON` opens a personally controlled scenario with time advancement, travel, eating, chosen work, voluntary rest, self-treatment, spoken and written forms, and save/load. The explicitly selected whole-boundary interface remains during migration of the remaining player actions and observations.
+
+The ordinary unattended CLI also loads the elapsed host directly. Its `step`
+command accepts milliseconds, and saves can be resumed by the history runner.
+Personal two-word syntax is exercised through carried-object demonstrations.
+Learners can adopt a different order or decline. Expedition sourcing and local
+tactical reinforcement have focused save/reload and worker-count coverage.
 
 Autonomy applies to every domain, including work, care, speech, learning, invention, relationships, cooperation and conflict. A feature may provide physical opportunities, constraints and consequences, but it must not impose decisions or compliance as a consequence of a role, agreement, encounter or institution. Personal motives, capabilities, experience, obligations, fear and circumstances may influence choices; fear and obligation need not be experienced by every person. The current fixed ordering of activities and existing per-feature policies are not proof of this requirement and require a cross-domain audit and redesign.
 

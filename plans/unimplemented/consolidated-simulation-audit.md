@@ -59,9 +59,10 @@ Keep the [feature ownership index](../../docs/design/feature-ownership.md) curre
 boundaries change.
 
 The larger simplification is one execution path. The elapsed host now handles
-individual expedition invitations, collapsing structures, guardian bodies,
-past-life memories, and unattended succession. Finish the remaining campaign
-abilities, coordinated expeditions, tactical interventions, and the
+individual expedition invitations and sourcing, collapsing structures, local
+tactical reinforcement, guardian bodies, past-life memories, and unattended
+succession. Finish the remaining campaign abilities, coordinated expeditions,
+larger formations, and the
 [other paths rejected by the interval loader](../../crates/game-economy/src/core_interval/host/scenario.rs)
 before removing the whole-boundary runner. Include authoring, normal CLI/player
 access, history, and saved state in the migration. Exercise the feature through
@@ -92,7 +93,7 @@ reports.
 | --- | --- |
 | Scheduler and ongoing work | Early phases such as meetings, delivery, reading, and help can reserve an actor before competing proposals are compared. Move discretionary actions into personal evaluation, including the option to idle or keep, interrupt, or abandon an activity. Respect prior commitments as motives and account for setup or interruption costs. Ordinary work and shared work already have some continuation or withdrawal support. |
 | Rest and capability | Interval rest and resumption are now personal choices, and elapsed fatigue and exhaustion are physical effects in the integrated path. Keep that behavior, broaden alternatives while occupied, and retire the automatic rest thresholds with the whole-boundary path. Check remaining shared age or hunger gates on negotiation, delivery, agriculture, and work. Model relevant ability and risk directly. |
-| Meetings and pressure | Ordinary pairing chooses adjacent people from a seeded local order once they are generally willing. Use bounded targets that reflect personal affinity, aversion, fear, and goals. Separate an incidental encounter, a deliberate approach, and the receiver's response. Preserve refusal, compliance under pressure, and physical coercion. |
+| Meetings and pressure | Known local peers can be preferred by directed affinity, while incidental pairing chooses adjacent people from a seeded local order. Extend bounded deliberate approaches to aversion and goals. Separate an incidental encounter, a deliberate approach, and the receiver's response. Preserve refusal, compliance under pressure, and physical coercion. |
 | Teaching and language | Personal choice profiles can independently decline or rank practice lessons during encounters. Extend this to competition with other activities, comprehension, and incidental learning. Preserve exact recipe knowledge separately. Keep phoneme mappings and written marks personal and revisable, with choices about whether to explain, adopt, or modify them. |
 | Interpretation and relationships | Ordinary and pressured encounters support signed trust and affinity responses by person and directed relationship. Promise outcomes and help have shared fallbacks, with personal and directed overrides in existing paths. Extend signed interpretation and neutral responses to remaining paths. Preserve the ability to enjoy harm, feel no obligation, distrust a helpful person, or help from real affection, fear, or obligation. |
 | Family and learned inclinations | In subjective mating, inherited desire and directed attraction already matter and conception need not require an exclusive relationship. Revisit mandatory kin exclusions and legacy automatic pairing. Separate personally learned aversion, biological consequences, and relationship choices. Review the single reciprocal partner field and the feature policies copied from a parent, retaining genetic dispositions while allowing experience and upbringing to change behavior. |
