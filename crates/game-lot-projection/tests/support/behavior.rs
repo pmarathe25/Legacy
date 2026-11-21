@@ -177,6 +177,7 @@ fn fear_can_motivate_cooperation_but_only_actual_transfer_resolves_the_offer() {
             request_help: false,
             min_gain: 0,
             help_value: 0,
+            opinion_weights: None,
             values: vec![Value { good: 1, value: 10 }],
             influences: vec![Influence {
                 person: 1,
