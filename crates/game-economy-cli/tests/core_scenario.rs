@@ -1368,7 +1368,7 @@ guard_policies = [{ person = 3, site = 1, willing = true, oppose_opening = true 
 
 #[test]
 fn elapsed_lineage_uses_actual_births_and_warns_before_past_life_costs() {
-    use game_economy::core_interval::{CoreHost, CoreRunEvent};
+    use game_economy::core_interval::{CoreHost, CoreRunEvent, InvocationWarningKind};
 
     let root = root();
     let template =
@@ -1401,10 +1401,21 @@ owner = 1
 rate_per_life = 2
 recovery_per_tick = 1
 strain_threshold = 2
-loss_threshold = 99
+loss_threshold = 4
 strain_consent_ticks = 2
-control_loss_ticks = 3
+control_loss_ticks = 1
 strain_damage_per_tick = 1
+
+[skills]
+rules = []
+
+[skills.recipe_knowledge]
+[[skills.recipe_knowledge.minds]]
+person = 1
+known = ["fixture-tool"]
+share = []
+willing_to_learn = false
+capacity = 1
 "#,
     );
     let path =
@@ -1413,6 +1424,14 @@ strain_damage_per_tick = 1
     let loaded = game_economy_cli::core_scenario(&path, &root.join("content"));
     std::fs::remove_file(path).unwrap();
     let opening = loaded.unwrap().snapshot();
+    let known_recipe = opening
+        .core
+        .physical
+        .recipes
+        .iter()
+        .find(|row| row.name == "fixture-tool")
+        .unwrap()
+        .id;
     let run = |workers, time: &[u64]| {
         rayon::ThreadPoolBuilder::new()
             .num_threads(workers)
@@ -1452,7 +1471,13 @@ strain_damage_per_tick = 1
     let whole = run(1, &[350]);
     assert_eq!(whole, run(4, &[99, 1, 199, 1, 50]));
     let mut host = CoreHost::resume(whole).unwrap();
+    assert!(host.consult_past_life(3, 1).is_err());
     host.activate_past_lives(3, &[1]).unwrap();
+    assert_eq!(
+        host.consult_past_life(3, 1).unwrap().known_recipes,
+        [known_recipe]
+    );
+    assert!(host.consult_past_life(3, 2).is_err());
     let opening_health = host.player_view(3).unwrap().person.health;
     let due = host.advance_continuous(500, &[]).unwrap();
     assert_eq!(due.elapsed_millis, 80);
@@ -1483,6 +1508,30 @@ strain_damage_per_tick = 1
         host.player_view(3).unwrap().person.health,
         opening_health - 1
     );
+    let due = host.advance_continuous(500, &[]).unwrap();
+    assert_eq!(due.elapsed_millis, 79);
+    let warning = host.campaign_view().unwrap().warning.unwrap();
+    assert_eq!(warning.kind, InvocationWarningKind::ControlLoss);
+    assert_eq!(warning.duration, 1);
+    host.accept_past_life_warning(3, warning.revision).unwrap();
+    host.advance_continuous(1, &[]).unwrap();
+    assert_eq!(host.campaign_view().unwrap().controlled, None);
+    assert!(host.consult_past_life(3, 1).is_err());
+    assert!(host.dismiss_past_lives(3).is_err());
+    let mut host = CoreHost::resume(
+        serde_json::from_str(&serde_json::to_string(&host.snapshot()).unwrap()).unwrap(),
+    )
+    .unwrap();
+    host.advance_continuous(78, &[]).unwrap();
+    assert_eq!(host.campaign_view().unwrap().controlled, None);
+    host.advance_continuous(1, &[]).unwrap();
+    assert_eq!(host.campaign_view().unwrap().controlled, Some(3));
+    assert_eq!(
+        host.consult_past_life(3, 1).unwrap().known_recipes,
+        [known_recipe]
+    );
+    host.dismiss_past_lives(3).unwrap();
+    assert!(host.consult_past_life(3, 1).is_err());
 }
 
 #[test]

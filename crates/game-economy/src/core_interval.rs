@@ -19,11 +19,11 @@ use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 mod host;
+pub use game_economy_campaign::InvocationWarningKind;
 pub use game_economy_combat::Point as TacticalPoint;
 pub use game_economy_combat::elapsed::{
     Choice as TacticalChoice, Event as TacticalEvent, EventKind as TacticalEventKind,
 };
-pub use host::CoreCampaignView;
 pub use host::CoreTacticalResult;
 pub use host::{
     BarrierAction, CoreAssistRecord, CoreAssistSession, CoreChoiceEvent, CoreChoiceIntent,
@@ -44,6 +44,7 @@ pub use host::{
     PersonalHarm, PersonalStrikeReaction, StrikeCapability, StrikeFeeling, StrikeInterpretation,
     WitnessedMechanicalResult, WoundCarePolicy, WoundTreatment,
 };
+pub use host::{CoreCampaignView, CorePastLifeView};
 pub use host::{ExpeditionEvent, ExpeditionEventKind, ExpeditionItinerary, ExpeditionStage};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

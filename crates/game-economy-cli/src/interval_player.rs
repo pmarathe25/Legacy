@@ -400,6 +400,14 @@ fn campaign_command(host: &mut CoreHost, words: &[&str]) -> Result<bool, String>
             }
         }
         ["invoke", lives] => host.activate_past_lives(controlled()?, &numbers(lives)?)?,
+        ["recall-life", life] => {
+            let life = life.parse().map_err(|_| "invalid past life")?;
+            let memory = host.consult_past_life(controlled()?, life)?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&memory).map_err(|error| error.to_string())?
+            );
+        }
         ["dismiss"] => host.dismiss_past_lives(controlled()?)?,
         ["accept-cost", revision] => {
             let revision = revision.parse().map_err(|_| "invalid warning revision")?;
@@ -422,7 +430,7 @@ fn campaign_command(host: &mut CoreHost, words: &[&str]) -> Result<bool, String>
         }
         ["help"] => {
             println!(
-                "campaign | invoke PAST_LIVES | dismiss | accept-cost REVISION | release-mentor GUARDIAN"
+                "campaign | invoke PAST_LIVES | recall-life LIFE | dismiss | accept-cost REVISION | release-mentor GUARDIAN"
             );
             if let Some(person) = view.controlled {
                 return command(host, person, words);

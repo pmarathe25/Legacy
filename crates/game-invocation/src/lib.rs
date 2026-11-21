@@ -298,6 +298,17 @@ impl Invocation {
     }
     /// Called only on a staged copy after prepare succeeds.
     pub fn advance(&mut self, now: u64) -> Result<(), String> {
+        self.advance_period(now, now)
+    }
+
+    /// Apply a dose at the end of its waiting period. A newly accepted episode
+    /// starts at this deadline and lasts through the following full periods.
+    pub fn apply_at_deadline(&mut self, periods_applied: u64) -> Result<(), String> {
+        let deadline = periods_applied.checked_add(1).ok_or("period overflow")?;
+        self.advance_period(periods_applied, deadline)
+    }
+
+    fn advance_period(&mut self, now: u64, suspension_start: u64) -> Result<(), String> {
         if !self.prepare(now)? {
             return Err("invocation warning needs a choice".into());
         }
@@ -317,7 +328,8 @@ impl Invocation {
         }
         if self.loss_approved && !self.loss_triggered && self.burden >= self.rules.loss_threshold {
             self.control_until = Some(
-                now.checked_add(self.rules.control_loss_ticks)
+                suspension_start
+                    .checked_add(self.rules.control_loss_ticks)
                     .ok_or("control deadline overflow")?,
             );
             self.loss_approved = false;

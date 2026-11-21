@@ -32,6 +32,7 @@ mod market;
 mod mechanics;
 mod medical;
 mod offers;
+mod past_lives;
 mod personal_choice;
 mod personality;
 mod player;
@@ -75,6 +76,7 @@ pub use mechanics::{
     MechanicalWitnessRequest, WitnessedMechanicalResult,
 };
 pub use offers::CoreSocialResults;
+pub use past_lives::CorePastLifeView;
 pub use personal_choice::{CoreChoiceEvent, CoreChoiceIntent, CoreChoiceOutcome, CoreWorkIntent};
 pub use player::{
     CorePlayerFatigue, CorePlayerJob, CorePlayerLanguage, CorePlayerMarkedPage, CorePlayerSite,
