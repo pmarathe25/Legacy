@@ -2214,7 +2214,8 @@ impl CoreHost {
                 })
             };
             if people.par_iter().any(|profile| preferred(profile.id)) {
-                let offers = self.assistance_candidates(&busy, |person, _| preferred(person))?;
+                let offers =
+                    self.assistance_candidates(&busy, true, |person, _| preferred(person))?;
                 intents.par_extend(offers.into_par_iter().map(|candidate| CoreChoiceIntent {
                     actor: candidate.person,
                     key: Key {

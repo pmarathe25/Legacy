@@ -16723,6 +16723,8 @@ fn personal_assistance_competes_with_idleness_and_uses_only_free_crew_slots() {
             .unwrap()
             .install(|| {
                 let mut initial = two_helpers_fixture();
+                initial.core.rules.max_work_hunger = 3;
+                initial.core.people[2].hunger = 10;
                 let mut fourth = initial.core.people[2].clone();
                 fourth.id = 4;
                 initial.core.people.push(fourth);

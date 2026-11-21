@@ -194,7 +194,7 @@ impl CoreHost {
         {
             return Err("helper assignments are already active".into());
         }
-        let candidates = self.assistance_candidates(blocked, |person, _| allowed(person))?;
+        let candidates = self.assistance_candidates(blocked, false, |person, _| allowed(person))?;
         self.admit_assistance(candidates)
     }
 
@@ -206,7 +206,7 @@ impl CoreHost {
         if selections.is_empty() {
             return Ok((Vec::new(), Vec::new()));
         }
-        let candidates = self.assistance_candidates(blocked, |person, job| {
+        let candidates = self.assistance_candidates(blocked, true, |person, job| {
             selections.binary_search(&(person, job)).is_ok()
         })?;
         let mut available: Vec<_> = candidates.par_iter().map(|c| c.person).collect();
@@ -217,6 +217,7 @@ impl CoreHost {
     pub(super) fn assistance_candidates(
         &self,
         blocked: &[u64],
+        personal: bool,
         allowed: impl Fn(u64, u64) -> bool + Sync,
     ) -> Result<Vec<game_economy_work::shared::Candidate>, String> {
         if blocked.par_windows(2).any(|pair| pair[0] >= pair[1]) {
@@ -279,7 +280,7 @@ impl CoreHost {
             .par_chunk_by(|first, second| first.event.job == second.event.job)
             .map(|crew| (crew[0].event.job, crew.len()))
             .collect();
-        Ok(game_economy_work::shared::Context {
+        let mut candidates = game_economy_work::shared::Context {
             owner: &owner.owner,
             people: &self.core.people,
             work: self.core.physical.work(),
@@ -293,17 +294,40 @@ impl CoreHost {
             claims: claims.as_ref(),
             skills: self.skills.as_ref().map(|owner| &owner.owner),
             injuries: None,
-            family: self.family.as_ref(),
+            family: if personal { None } else { self.family.as_ref() },
             tools: &self.tool_requirements,
             tool_wear: self.tool_wear.as_ref(),
             physical: &self.core.physical,
             view: &view,
             opinions: self.opinions.as_ref(),
-            max_hunger: self.core.rules.max_work_hunger,
+            max_hunger: if personal {
+                u32::MAX
+            } else {
+                self.core.rules.max_work_hunger
+            },
             seed: self.core.seed,
             tick: self.core.physical.tick(),
         }
-        .interval_candidates(&occupancies, allowed))
+        .interval_candidates(&occupancies, allowed);
+        if self.walking().is_some() || self.confinement().is_some() {
+            candidates = candidates
+                .into_par_iter()
+                .filter(|row| self.same_local_endpoint(row.person, row.lead))
+                .collect();
+        }
+        if personal && self.work_capabilities.is_some() && !candidates.is_empty() {
+            let attempts: Vec<_> = candidates
+                .par_iter()
+                .map(|row| (row.person, row.recipe))
+                .collect();
+            let permitted = self.work_capability_checks(&attempts);
+            candidates = candidates
+                .into_par_iter()
+                .zip(permitted)
+                .filter_map(|(row, physically_capable)| physically_capable.then_some(row))
+                .collect();
+        }
+        Ok(candidates)
     }
 
     fn admit_assistance(

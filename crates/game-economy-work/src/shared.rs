@@ -142,8 +142,8 @@ pub struct Context<'a> {
 pub struct Candidate {
     pub job: u64,
     pub person: u64,
-    lead: u64,
-    recipe: u32,
+    pub lead: u64,
+    pub recipe: u32,
     offered: u64,
     remaining: u64,
     base: u64,
