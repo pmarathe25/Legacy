@@ -5,48 +5,7 @@ use game_production::{
 use std::collections::{BTreeMap, HashSet};
 use std::path::Path;
 use toml::Value;
-
-fn entries(directory: &Path, kind: &str) -> Result<BTreeMap<String, Value>, String> {
-    let mut paths: Vec<_> = std::fs::read_dir(directory)
-        .map_err(|error| format!("{}: {error}", directory.display()))?
-        .map(|entry| entry.map(|e| e.path()).map_err(|error| error.to_string()))
-        .collect::<Result<_, _>>()?;
-    paths.retain(|path| path.extension().is_some_and(|ext| ext == "toml"));
-    paths.sort();
-    let mut rows = BTreeMap::new();
-    for path in paths {
-        let source = std::fs::read_to_string(&path)
-            .map_err(|error| format!("{}: {error}", path.display()))?;
-        let document: Value =
-            toml::from_str(&source).map_err(|error| format!("{}: {error}", path.display()))?;
-        let header = document.as_table().ok_or("invalid content document")?;
-        if header
-            .get("id")
-            .and_then(Value::as_str)
-            .is_none_or(str::is_empty)
-            || header
-                .get("version")
-                .and_then(Value::as_integer)
-                .is_none_or(|version| version <= 0)
-        {
-            return Err(format!("{}: invalid content header", path.display()));
-        }
-        let table = header
-            .get("data")
-            .and_then(|v| v.get(kind))
-            .and_then(Value::as_table)
-            .ok_or_else(|| format!("{}: missing {kind}", path.display()))?;
-        for (key, value) in table {
-            if rows.insert(key.clone(), value.clone()).is_some() {
-                return Err(format!("duplicate {kind} key: {key}"));
-            }
-        }
-    }
-    if rows.is_empty() {
-        return Err(format!("no {kind} in {}", directory.display()));
-    }
-    Ok(rows)
-}
+mod packs;
 fn positive(row: &Value, key: &str) -> Result<u64, String> {
     row.get(key)
         .and_then(Value::as_integer)
@@ -113,8 +72,7 @@ pub fn augment(
     if work_unit_millis == 0 || capacity == 0 || food_relief_divisor == 0 {
         return Err("invalid catalog conversion rules".into());
     }
-    let objects = entries(objects, "objects")?;
-    let recipes = entries(recipes, "recipes")?;
+    let (objects, recipes) = packs::load(objects, recipes)?;
     let mut next = production.clone();
     let mut ids = BTreeMap::new();
     let mut used: HashSet<u32> = next.goods.iter().map(|good| good.id).collect();
@@ -122,7 +80,13 @@ pub fn augment(
         ids.insert(good.name.to_ascii_lowercase().replace(' ', "-"), good.id);
     }
     let mut id = next.goods.iter().map(|good| good.id).max().unwrap_or(0);
-    for (key, object) in objects {
+    for packs::Definition {
+        key,
+        runtime_id,
+        row: object,
+        ..
+    } in objects
+    {
         positive(&object, "id").map_err(|error| format!("object {key}: {error}"))?;
         if object
             .get("name")
@@ -134,6 +98,9 @@ pub fn augment(
         let food = food_profile(&object, food_relief_divisor)
             .map_err(|error| format!("object {key}: {error}"))?;
         if let Some(&existing) = ids.get(&key) {
+            if runtime_id.is_some() {
+                return Err(format!("namespaced object {key} already exists"));
+            }
             let good = next
                 .goods
                 .iter_mut()
@@ -144,13 +111,18 @@ pub fn augment(
             }
             continue;
         }
-        id = id.checked_add(1).ok_or("good identity overflow")?;
-        if !used.insert(id) {
-            return Err("duplicate good identity".into());
+        let assigned = if let Some(runtime_id) = runtime_id {
+            runtime_id
+        } else {
+            id = id.checked_add(1).ok_or("good identity overflow")?;
+            id
+        };
+        if !used.insert(assigned) {
+            return Err(format!("object {key}: duplicate good identity {assigned}"));
         }
-        ids.insert(key.clone(), id);
+        ids.insert(key.clone(), assigned);
         next.goods.push(Good {
-            id,
+            id: assigned,
             name: key,
             food,
         });
@@ -162,7 +134,30 @@ pub fn augment(
         .max()
         .unwrap_or(0);
     let mut required = BTreeMap::<u32, u64>::new();
-    for (key, row) in recipes {
+    let mut recipe_ids: HashSet<_> = next.recipes.iter().map(|recipe| recipe.id).collect();
+    let mut recipe_names: HashSet<_> = next
+        .recipes
+        .iter()
+        .map(|recipe| recipe.name.clone())
+        .collect();
+    for packs::Definition {
+        key,
+        namespace,
+        runtime_id,
+        row,
+    } in recipes
+    {
+        if !recipe_names.insert(key.clone()) {
+            return Err(format!("recipe {key} already exists"));
+        }
+        let resolve = |name: &str| {
+            namespace
+                .as_ref()
+                .filter(|_| !name.contains(':'))
+                .and_then(|namespace| ids.get(&format!("{namespace}:{name}")))
+                .or_else(|| ids.get(name))
+                .copied()
+        };
         let inputs = row
             .get("inputs")
             .and_then(Value::as_table)
@@ -171,9 +166,8 @@ pub fn augment(
         let amounts = inputs
             .iter()
             .map(|(good, value)| {
-                let id = *ids
-                    .get(good)
-                    .ok_or_else(|| format!("recipe {key}: unknown input {good}"))?;
+                let id =
+                    resolve(good).ok_or_else(|| format!("recipe {key}: unknown input {good}"))?;
                 let quantity = value
                     .as_integer()
                     .and_then(|v| u64::try_from(v).ok())
@@ -189,19 +183,29 @@ pub fn augment(
                 .or_insert(input.quantity);
         }
         let outputs =
-            recipe_outputs(&row, &ids).map_err(|error| format!("recipe {key}: {error}"))?;
+            recipe_outputs(&row, &resolve).map_err(|error| format!("recipe {key}: {error}"))?;
         let duration =
             positive(&row, "duration").map_err(|error| format!("recipe {key}: {error}"))?;
         let ticks = duration.div_ceil(work_unit_millis);
         let ticks = u32::try_from(ticks).map_err(|_| format!("recipe {key}: duration overflow"))?;
-        recipe_id = recipe_id.checked_add(1).ok_or("recipe identity overflow")?;
+        let assigned = if let Some(runtime_id) = runtime_id {
+            runtime_id
+        } else {
+            recipe_id = recipe_id.checked_add(1).ok_or("recipe identity overflow")?;
+            recipe_id
+        };
+        if !recipe_ids.insert(assigned) {
+            return Err(format!(
+                "recipe {key}: duplicate recipe identity {assigned}"
+            ));
+        }
         if let Some(category) = row.get("skill") {
             let category = category
                 .as_str()
                 .filter(|name| !name.trim().is_empty())
                 .ok_or_else(|| format!("recipe {key}: invalid skill category"))?;
             next.recipe_categories.push(RecipeCategory {
-                recipe: recipe_id,
+                recipe: assigned,
                 category: category.to_owned(),
             });
         }
@@ -212,7 +216,7 @@ pub fn augment(
                 .or_insert(output.quantity);
         }
         next.recipes.push(Recipe {
-            id: recipe_id,
+            id: assigned,
             name: key,
             ticks,
             inputs: amounts,
@@ -236,15 +240,20 @@ pub fn augment(
             }
         }
     }
+    next.goods.sort_unstable_by_key(|row| row.id);
+    next.recipes.sort_unstable_by_key(|row| row.id);
+    next.recipe_categories
+        .sort_unstable_by_key(|row| row.recipe);
     *production = next;
     Ok(())
 }
 
-fn recipe_outputs(row: &Value, ids: &BTreeMap<String, u32>) -> Result<Vec<Amount>, String> {
+fn recipe_outputs(
+    row: &Value,
+    resolve: &impl Fn(&str) -> Option<u32>,
+) -> Result<Vec<Amount>, String> {
     let amount = |name: &str, quantity| -> Result<Amount, String> {
-        let good = *ids
-            .get(name)
-            .ok_or_else(|| format!("unknown output {name}"))?;
+        let good = resolve(name).ok_or_else(|| format!("unknown output {name}"))?;
         Ok(Amount { good, quantity })
     };
     let Some(outputs) = row.get("outputs") else {
@@ -272,6 +281,78 @@ mod tests {
     use super::*;
 
     #[test]
+    fn validates_packs_atomically_and_preserves_explicit_catalog_ids() {
+        use std::fs;
+
+        let root =
+            std::env::temp_dir().join(format!("legacy-content-packs-{}", std::process::id()));
+        let objects = root.join("objects");
+        let recipes = root.join("recipes");
+        fs::create_dir_all(&objects).unwrap();
+        fs::create_dir_all(&recipes).unwrap();
+        let base = objects.join("base.toml");
+        let first = objects.join("orchard.toml");
+        let other = objects.join("extra.toml");
+        let crafts = recipes.join("crafts.toml");
+        fs::write(
+            &base,
+            "id='objects/base'\nversion=1\n[data.objects.grain]\nid=1\nname='Grain'\n",
+        )
+        .unwrap();
+        fs::write(&first, "id='objects/orchard'\nversion=1\nnamespace='orchard'\n[data.objects.pomace]\nid=1\nruntime_id=44\nname='Pomace'\n").unwrap();
+        let craft = "id='workshop/orchard'\nversion=1\nnamespace='orchard'\nrequires={'objects/orchard'=1}\n[data.recipes.grind]\nruntime_id=10\ninputs={grain=1}\noutput='pomace'\nquantity=1\nduration=1\n";
+        fs::write(&crafts, craft).unwrap();
+        let empty = Production {
+            max_work_hunger: 3,
+            goods: vec![],
+            recipes: vec![],
+            recipe_categories: vec![],
+            inventories: vec![],
+            jobs: vec![],
+            events: vec![],
+        };
+        let compile = || {
+            let mut result = empty.clone();
+            augment(&mut result, &objects, &recipes, 1, 10, 1).unwrap();
+            result
+        };
+        let first = compile();
+        assert_eq!(first.goods[1].name, "orchard:pomace");
+        assert_eq!(first.goods[1].id, 44);
+        assert_eq!(first.recipes[0].name, "orchard:grind");
+        assert_eq!(first.recipes[0].id, 10);
+        assert_eq!(first.recipes[0].outputs[0].good, 44);
+
+        fs::write(&other, "id='objects/extra'\nversion=1\nnamespace='added'\n[data.objects.ash]\nid=1\nruntime_id=19\nname='Ash'\n").unwrap();
+        let mut extended = compile();
+        extended.goods.retain(|good| good.id != 19);
+        assert_eq!(extended, first);
+
+        let mut unchanged = empty.clone();
+        fs::write(&crafts, craft.replace("objects/orchard", "objects/missing")).unwrap();
+        assert!(
+            augment(&mut unchanged, &objects, &recipes, 1, 10, 1)
+                .unwrap_err()
+                .contains("requires missing pack")
+        );
+        assert_eq!(unchanged, empty);
+        fs::write(&crafts, craft.replace("version=1", "version=2")).unwrap();
+        assert!(
+            augment(&mut unchanged, &objects, &recipes, 1, 10, 1)
+                .unwrap_err()
+                .contains("unsupported content pack version 2")
+        );
+        assert_eq!(unchanged, empty);
+
+        for file in [base, objects.join("orchard.toml"), other, crafts] {
+            fs::remove_file(file).unwrap();
+        }
+        fs::remove_dir(&objects).unwrap();
+        fs::remove_dir(&recipes).unwrap();
+        fs::remove_dir(&root).unwrap();
+    }
+
+    #[test]
     fn rejects_authored_nutrients_the_simulation_cannot_use() {
         let object: Value =
             toml::from_str("[food]\nportion = 1\nrelief = 1\nnutrients = { enregy = 12 }").unwrap();
@@ -284,9 +365,10 @@ mod tests {
     #[test]
     fn resolves_all_outputs_and_rejects_an_ambiguous_recipe() {
         let ids = BTreeMap::from([("bread".to_owned(), 1), ("bran".to_owned(), 2)]);
+        let resolve = |name: &str| ids.get(name).copied();
         let row = |source| toml::from_str::<Value>(source).unwrap();
         assert_eq!(
-            recipe_outputs(&row("outputs = { bran = 1, bread = 3 }"), &ids).unwrap(),
+            recipe_outputs(&row("outputs = { bran = 1, bread = 3 }"), &resolve).unwrap(),
             [
                 Amount {
                     good: 2,
@@ -301,10 +383,10 @@ mod tests {
         assert!(
             recipe_outputs(
                 &row("outputs = { bran = 1 }\noutput = 'bread'\nquantity = 3"),
-                &ids
+                &resolve
             )
             .is_err()
         );
-        assert!(recipe_outputs(&row("outputs = { missing = 1 }"), &ids).is_err());
+        assert!(recipe_outputs(&row("outputs = { missing = 1 }"), &resolve).is_err());
     }
 }
