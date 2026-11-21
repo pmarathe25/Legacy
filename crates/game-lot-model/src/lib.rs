@@ -260,13 +260,21 @@ pub struct StorageTemperature {
 
 impl StorageClimate {
     pub fn temperature(&self, place: Place) -> i16 {
+        self.override_at(place).unwrap_or(self.ambient_celsius)
+    }
+
+    pub fn override_at(&self, place: Place) -> Option<i16> {
         self.places
             .binary_search_by_key(&place, |row| row.place)
-            .map_or(self.ambient_celsius, |index| self.places[index].celsius)
+            .ok()
+            .map(|index| self.places[index].celsius)
     }
 
     fn rate(&self, place: Place) -> u16 {
-        let celsius = self.temperature(place);
+        self.rate_at(self.temperature(place))
+    }
+
+    pub fn rate_at(&self, celsius: i16) -> u16 {
         let index = self
             .aging_rates
             .partition_point(|row| row.from_celsius <= celsius);
@@ -336,11 +344,27 @@ impl State {
         }
         let from = from.map_or(thermal::NORMAL_RATE, |place| climate.rate(place));
         let to = climate.rate(to);
+        lot.rescale_aging(expiry, at, from, to)
+    }
+}
+
+impl Lot {
+    /// Preserve exact remaining shelf life when the physical storage rate changes.
+    pub fn change_aging_rate(&mut self, at: u64, from: u16, to: u16) -> Result<(), String> {
+        if let Some(expiry) = self.expires_at
+            && self.freshness != Freshness::Preparation
+        {
+            self.rescale_aging(expiry, at, from, to)?;
+        }
+        Ok(())
+    }
+
+    fn rescale_aging(&mut self, expiry: u64, at: u64, from: u16, to: u16) -> Result<(), String> {
         if from != to {
             let (deadline, freshness) =
-                thermal::rescale(expiry, lot.freshness.slack(), at, from, to)?;
-            lot.expires_at = Some(deadline);
-            lot.freshness = freshness;
+                thermal::rescale(expiry, self.freshness.slack(), at, from, to)?;
+            self.expires_at = Some(deadline);
+            self.freshness = freshness;
         }
         Ok(())
     }

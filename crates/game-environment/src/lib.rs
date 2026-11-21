@@ -26,6 +26,9 @@ pub struct Season {
     pub duration: u64,
     pub food_growth_per_thousand: u32,
     pub exposure_per_thousand: u32,
+    /// The exposed storage temperature while this elapsed season is open.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub storage_celsius: Option<i16>,
     #[serde(default = "allowed")]
     pub planting_allowed: bool,
     #[serde(default = "allowed")]
@@ -151,6 +154,19 @@ impl Environment {
         let mut seen = HashSet::new();
         let mut names = HashSet::new();
         let mut duration = 0u64;
+        let seasonal_storage = self
+            .seasons
+            .iter()
+            .any(|season| season.storage_celsius.is_some());
+        if seasonal_storage
+            && (self.season_unit_millis.is_none()
+                || self
+                    .seasons
+                    .iter()
+                    .any(|season| season.storage_celsius.is_none()))
+        {
+            return Err("seasonal storage requires a temperature in every elapsed season".into());
+        }
         for season in &self.seasons {
             if season.name.trim().is_empty()
                 || !names.insert(&season.name)
@@ -177,6 +193,11 @@ impl Environment {
     pub fn next_exposure(&self, now: u128) -> Option<u64> {
         let period = self.exposure_period_millis.filter(|&period| period != 0)?;
         (!self.regions.is_empty()).then(|| period - (now % u128::from(period)) as u64)
+    }
+
+    pub fn seasonal_storage_at(&self, now: u128) -> Option<i16> {
+        self.seasons.first()?.storage_celsius?;
+        self.season_at(now, 0)?.storage_celsius
     }
 
     /// Elapsed time to the next named season, including across cycle wrap.

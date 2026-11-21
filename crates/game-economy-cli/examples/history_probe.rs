@@ -125,6 +125,13 @@ fn run_steps(
                     )?;
                     ("spoilage_events", lots.len())
                 }
+                CoreRunEvent::StorageTemperature { at_millis, celsius } => {
+                    write_line(
+                        &mut writer,
+                        &json!({"kind":"storage_temperature","step":step,"at_millis":at_millis,"celsius":celsius}),
+                    )?;
+                    ("storage_temperature", 1)
+                }
                 CoreRunEvent::Maturation { at_millis, events } => {
                     write_line(
                         &mut writer,

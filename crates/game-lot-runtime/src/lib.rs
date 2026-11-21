@@ -124,6 +124,24 @@ impl Runtime {
             elapsed_expiry: ElapsedExpiryEvents::default(),
         })
     }
+    pub fn ambient_storage_celsius(&self) -> Option<i16> {
+        self.store.ambient_celsius()
+    }
+
+    /// Reproject exposed lots from their exact age at the committed custody instant.
+    pub fn change_ambient_temperature(&mut self, celsius: i16) -> Result<bool, String> {
+        if self.store.ambient_celsius() == Some(celsius) {
+            return Ok(false);
+        }
+        let epoch = self.epoch.checked_add(1).ok_or("physical epoch overflow")?;
+        self.store.change_ambient_temperature(celsius)?;
+        if let Some(interval) = &mut self.work_interval {
+            interval.custody_revision = self.store.revision();
+        }
+        self.epoch = epoch;
+        Ok(true)
+    }
+
     pub fn elapsed_expiry_time(&self) -> Option<u64> {
         self.store.elapsed_millis()
     }

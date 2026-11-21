@@ -114,8 +114,12 @@ and optional `places` overrides for particular physical holders. Its
 consumes shelf life at half speed. Food retains exact fractional age
 when moved across different thermal rates, including when only part of
 a batch moves. The index follows its new projected deadline. Curing
-continues on its own clock. Storage temperatures currently stay fixed for
-each holder.
+continues on its own clock. To vary exposed storage by season, give every
+elapsed season a `storage_celsius` and set the initial ambient temperature
+to the first season. Seasonal changes keep the exact accumulated age of
+exposed lots. A holder with an explicit temperature is insulated from the
+seasonal ambient change. Lots due at the change finish under the closing
+conditions. New work output uses the opening season's temperature.
 
 An elapsed environment can set `exposure_period_millis` to schedule personal
 hazard damage and shelter rotation at fixed simulated times. The host uses

@@ -3,6 +3,7 @@ mod batch_allocation;
 mod compose;
 mod expiry;
 mod maturation;
+mod temperature;
 mod view;
 pub use batch_allocation::{BatchAllocation, BatchCount, BatchRange};
 pub use compose::{Composed, compose};

@@ -7463,6 +7463,7 @@ fn boundary_cultivation_uses_real_seeds_grows_and_harvests_after_reload() {
                 let mut seasonal = snapshot.clone();
                 seasonal.agriculture.as_mut().unwrap().fields.truncate(1);
                 let season = |name: &str, planting, tending, harvest| game_environment::Season {
+                    storage_celsius: None,
                     name: name.into(),
                     duration: 1,
                     food_growth_per_thousand: 1000,
@@ -8865,6 +8866,7 @@ fn core_host_cultivation_benchmark() {
                 shelter_good: None,
             }],
             seasons: vec![game_environment::Season {
+                storage_celsius: None,
                 name: "mild".into(),
                 duration: 1,
                 food_growth_per_thousand: 1000,
