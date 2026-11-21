@@ -974,6 +974,13 @@ lifecycle_period_millis = 3600000
 next_id = 25
 last_tick = 0
 
+[fauna.dispersal]
+corridors = [{ from = 1, to = 2, hunger_cost = 6 }, { from = 2, to = 1, hunger_cost = 9 }]
+policies = [
+    { species = 1, minimum_hunger = 12, minimum_age = 17520, initiative = 8, locus = 3, inherited_drive = 12, effort_weight = 30 },
+    { species = 2, minimum_hunger = 16, minimum_age = 17520, initiative = 5, locus = 3, inherited_drive = 8, effort_weight = 40 },
+]
+
 [[fauna.species]]
 id = 1
 name = "pilot grazer"
@@ -1592,6 +1599,7 @@ people = [{ person = 1, sociability = 400, diligence = 400 }, { person = 2, soci
 
 [gathering]
 elapsed_renewal = true
+elapsed_actions = true
 inherit_births = true
 max_hunger = 120
 policies = [{ person = 1, node = 1, willing = true }, { person = 2, node = 1, willing = true }, { person = 3, node = 1, willing = true }, { person = 4, node = 1, willing = true }, { person = 5, node = 1, willing = true }, { person = 6, node = 1, willing = true }, { person = 7, node = 1, willing = true }, { person = 8, node = 1, willing = true }, { person = 9, node = 1, willing = true }, { person = 10, node = 1, willing = true }, { person = 11, node = 1, willing = true }, { person = 12, node = 1, willing = true }, { person = 13, node = 1, willing = true }, { person = 14, node = 1, willing = true }, { person = 15, node = 1, willing = true }, { person = 16, node = 1, willing = true }, { person = 17, node = 1, willing = true }, { person = 18, node = 1, willing = true }, { person = 19, node = 1, willing = true }, { person = 20, node = 1, willing = true }, { person = 21, node = 1, willing = true }, { person = 22, node = 1, willing = true }, { person = 23, node = 1, willing = true }, { person = 24, node = 1, willing = true }, { person = 25, node = 1, willing = true }, { person = 26, node = 1, willing = true }, { person = 27, node = 1, willing = true }, { person = 28, node = 1, willing = true }, { person = 29, node = 1, willing = true }, { person = 30, node = 1, willing = true }, { person = 31, node = 1, willing = true }, { person = 32, node = 1, willing = true }, { person = 33, node = 1, willing = true }, { person = 34, node = 1, willing = true }, { person = 35, node = 1, willing = true }, { person = 36, node = 1, willing = true }, { person = 37, node = 1, willing = true }, { person = 38, node = 1, willing = true }, { person = 39, node = 1, willing = true }, { person = 40, node = 1, willing = true }, { person = 41, node = 1, willing = true }, { person = 42, node = 1, willing = true }, { person = 43, node = 1, willing = true }, { person = 44, node = 1, willing = true }, { person = 45, node = 1, willing = true }, { person = 46, node = 1, willing = true }, { person = 47, node = 1, willing = true }, { person = 48, node = 1, willing = true }, { person = 49, node = 2, willing = true }, { person = 50, node = 2, willing = true }, { person = 51, node = 2, willing = true }, { person = 52, node = 2, willing = true }, { person = 53, node = 2, willing = true }, { person = 54, node = 2, willing = true }, { person = 55, node = 2, willing = true }, { person = 56, node = 2, willing = true }, { person = 57, node = 2, willing = true }, { person = 58, node = 2, willing = true }, { person = 59, node = 2, willing = true }, { person = 60, node = 2, willing = true }, { person = 11, node = 5, willing = true }, { person = 12, node = 5, willing = true }]
@@ -2279,7 +2287,7 @@ willing = true
 [[personal_choices]]
 id = 1
 idle = 0
-preferences = [{ domain = 1, enabled = true, bias = 4 }, { domain = 2, enabled = true, bias = 15 }, { domain = 3, enabled = true, bias = 4 }, { domain = 4, enabled = true, bias = 3 }, { domain = 6, enabled = true, bias = 2 }, { domain = 7, enabled = true, bias = -19 }, { domain = 8, enabled = true, bias = 3 }, { domain = 9, enabled = true, bias = -14 }, { domain = 11, enabled = true, bias = 5 }, { domain = 17, enabled = true, bias = 1 }, { domain = 18, enabled = true, bias = 1 }, { domain = 19, enabled = true, bias = 1 }, { domain = 20, enabled = true, bias = 2 }, { domain = 21, enabled = true, bias = -14 }, { domain = 22, enabled = true, bias = -24 }]
+preferences = [{ domain = 1, enabled = true, bias = 4 }, { domain = 2, enabled = true, bias = 15 }, { domain = 3, enabled = true, bias = 4 }, { domain = 4, enabled = true, bias = 3 }, { domain = 6, enabled = true, bias = 2 }, { domain = 7, enabled = true, bias = -19 }, { domain = 8, enabled = true, bias = 3 }, { domain = 9, enabled = true, bias = -14 }, { domain = 11, enabled = true, bias = 5 }, { domain = 17, enabled = true, bias = 1 }, { domain = 18, enabled = true, bias = 1 }, { domain = 19, enabled = true, bias = 1 }, { domain = 20, enabled = true, bias = 2 }, { domain = 21, enabled = true, bias = -14 }, { domain = 22, enabled = true, bias = -24 }, { domain = 25, enabled = true, bias = 6 }]
 
 [[personal_choices]]
 id = 2
@@ -2294,7 +2302,7 @@ preferences = [{ domain = 1, enabled = true, bias = 4 }, { domain = 2, enabled =
 [[personal_choices]]
 id = 4
 idle = 0
-preferences = [{ domain = 1, enabled = true, bias = 4 }, { domain = 2, enabled = true, bias = 2 }, { domain = 3, enabled = true, bias = 4 }, { domain = 4, enabled = true, bias = 6 }, { domain = 6, enabled = true, bias = 8 }, { domain = 7, enabled = true, bias = -16 }, { domain = 8, enabled = true, bias = 3 }, { domain = 9, enabled = true, bias = -15 }, { domain = 11, enabled = true, bias = 5 }, { domain = 13, enabled = true, bias = 8 }, { domain = 17, enabled = true, bias = 1 }, { domain = 18, enabled = true, bias = 1 }, { domain = 19, enabled = true, bias = 1 }, { domain = 20, enabled = true, bias = 2 }, { domain = 21, enabled = true, bias = -17 }, { domain = 22, enabled = true, bias = -27 }]
+preferences = [{ domain = 1, enabled = true, bias = 4 }, { domain = 2, enabled = true, bias = 2 }, { domain = 3, enabled = true, bias = 4 }, { domain = 4, enabled = true, bias = 6 }, { domain = 6, enabled = true, bias = 8 }, { domain = 7, enabled = true, bias = -16 }, { domain = 8, enabled = true, bias = 3 }, { domain = 9, enabled = true, bias = -15 }, { domain = 11, enabled = true, bias = 5 }, { domain = 13, enabled = true, bias = 8 }, { domain = 17, enabled = true, bias = 1 }, { domain = 18, enabled = true, bias = 1 }, { domain = 19, enabled = true, bias = 1 }, { domain = 20, enabled = true, bias = 2 }, { domain = 21, enabled = true, bias = -17 }, { domain = 22, enabled = true, bias = -27 }, { domain = 26, enabled = true, bias = 6 }]
 
 [[personal_choices]]
 id = 5
