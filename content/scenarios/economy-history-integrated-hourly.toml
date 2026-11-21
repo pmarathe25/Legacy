@@ -120,7 +120,7 @@ health = 100
 hunger = 0
 willing_to_work = true
 seek_meals = true
-items = [{ id = 1003, good = "tool" }]
+items = [{ id = 1003, good = "tool" }, { id = 20003, good = "timber" }, { id = 21003, good = "tool" }, { id = 22003, good = "timber" }]
 recipe = "fixture-tool"
 
 [[people]]
@@ -130,7 +130,7 @@ health = 100
 hunger = 0
 willing_to_work = true
 seek_meals = true
-items = [{ id = 1004, good = "tool" }]
+items = [{ id = 1004, good = "tool" }, { id = 20004, good = "timber" }, { id = 21004, good = "tool" }, { id = 22004, good = "timber" }]
 recipe = "fixture-tool"
 
 [[people]]
@@ -2289,12 +2289,12 @@ preferences = [{ domain = 1, enabled = true, bias = 4 }, { domain = 2, enabled =
 [[personal_choices]]
 id = 3
 idle = 0
-preferences = [{ domain = 1, enabled = true, bias = 4 }, { domain = 2, enabled = true, bias = 15 }, { domain = 3, enabled = true, bias = 4 }, { domain = 4, enabled = true, bias = 5 }, { domain = 6, enabled = true, bias = 2 }, { domain = 7, enabled = true, bias = -17 }, { domain = 8, enabled = true, bias = 3 }, { domain = 9, enabled = true, bias = -12 }, { domain = 11, enabled = true, bias = 5 }, { domain = 17, enabled = true, bias = 1 }, { domain = 18, enabled = true, bias = 1 }, { domain = 19, enabled = true, bias = 1 }, { domain = 20, enabled = true, bias = 2 }, { domain = 21, enabled = true, bias = -16 }, { domain = 22, enabled = true, bias = -26 }]
+preferences = [{ domain = 1, enabled = true, bias = 4 }, { domain = 2, enabled = true, bias = 15 }, { domain = 3, enabled = true, bias = 4 }, { domain = 4, enabled = true, bias = 5 }, { domain = 6, enabled = true, bias = 8 }, { domain = 7, enabled = true, bias = -17 }, { domain = 8, enabled = true, bias = 3 }, { domain = 9, enabled = true, bias = -12 }, { domain = 11, enabled = true, bias = 5 }, { domain = 13, enabled = true, bias = 8 }, { domain = 17, enabled = true, bias = 1 }, { domain = 18, enabled = true, bias = 1 }, { domain = 19, enabled = true, bias = 1 }, { domain = 20, enabled = true, bias = 2 }, { domain = 21, enabled = true, bias = -16 }, { domain = 22, enabled = true, bias = -26 }]
 
 [[personal_choices]]
 id = 4
 idle = 0
-preferences = [{ domain = 1, enabled = true, bias = 4 }, { domain = 2, enabled = true, bias = 2 }, { domain = 3, enabled = true, bias = 4 }, { domain = 4, enabled = true, bias = 6 }, { domain = 6, enabled = true, bias = 2 }, { domain = 7, enabled = true, bias = -16 }, { domain = 8, enabled = true, bias = 3 }, { domain = 9, enabled = true, bias = -15 }, { domain = 11, enabled = true, bias = 5 }, { domain = 17, enabled = true, bias = 1 }, { domain = 18, enabled = true, bias = 1 }, { domain = 19, enabled = true, bias = 1 }, { domain = 20, enabled = true, bias = 2 }, { domain = 21, enabled = true, bias = -17 }, { domain = 22, enabled = true, bias = -27 }]
+preferences = [{ domain = 1, enabled = true, bias = 4 }, { domain = 2, enabled = true, bias = 2 }, { domain = 3, enabled = true, bias = 4 }, { domain = 4, enabled = true, bias = 6 }, { domain = 6, enabled = true, bias = 8 }, { domain = 7, enabled = true, bias = -16 }, { domain = 8, enabled = true, bias = 3 }, { domain = 9, enabled = true, bias = -15 }, { domain = 11, enabled = true, bias = 5 }, { domain = 13, enabled = true, bias = 8 }, { domain = 17, enabled = true, bias = 1 }, { domain = 18, enabled = true, bias = 1 }, { domain = 19, enabled = true, bias = 1 }, { domain = 20, enabled = true, bias = 2 }, { domain = 21, enabled = true, bias = -17 }, { domain = 22, enabled = true, bias = -27 }]
 
 [[personal_choices]]
 id = 5
@@ -2610,7 +2610,37 @@ person = 1
 capacity = 8
 retain = true
 reactions = { moved = 1, stalled = 0, broken = -2, contended = 0 }
-exploration = { moved = { load = 1 }, stalled = { force = 1 } }
+exploration = { moved = { load = 1 }, stalled = { force = 1, load = -2 } }
+
+[[mechanics.materials]]
+component = 1
+good = "timber"
+
+[[mechanics.capabilities]]
+person = 3
+max_force = 100
+max_distance = 100
+
+[[mechanics.capabilities]]
+person = 4
+max_force = 110
+max_distance = 100
+
+[[mechanics.memories]]
+person = 3
+capacity = 8
+retain = true
+design = { inputs = [{ component = 1, value = 9 }], extra_part_value = 5 }
+reactions = { moved = 4, stalled = -1, broken = -6 }
+exploration = { moved = { load = 2 }, stalled = { load = -2, distance = 1 } }
+
+[[mechanics.memories]]
+person = 4
+capacity = 8
+retain = true
+design = { inputs = [{ component = 2, value = 9 }], extra_part_value = -4 }
+reactions = { moved = 1, stalled = 3, broken = -5 }
+exploration = { moved = { load = 1 }, stalled = { force = 2, load = -1 } }
 
 [signals]
 catalog = "signals/basic.toml"
