@@ -2,7 +2,6 @@
 use game_economy::core_interval::{CoreHost, CoreHostSnapshot};
 use game_economy_player::interval::Player;
 use std::fs::{File, OpenOptions};
-use std::io::{self, BufRead, IsTerminal, Write};
 use std::path::Path;
 
 fn numbers<T: std::str::FromStr>(text: &str) -> Result<Vec<T>, String> {
@@ -11,7 +10,7 @@ fn numbers<T: std::str::FromStr>(text: &str) -> Result<Vec<T>, String> {
         .collect()
 }
 
-fn save(host: &CoreHost, path: &[&str]) -> Result<(), String> {
+pub(super) fn save(host: &CoreHost, path: &[&str]) -> Result<(), String> {
     let path = path.join(" ");
     let file = OpenOptions::new()
         .write(true)
@@ -23,7 +22,7 @@ fn save(host: &CoreHost, path: &[&str]) -> Result<(), String> {
     Ok(())
 }
 
-fn load(path: &[&str]) -> Result<CoreHost, String> {
+pub(super) fn load(path: &[&str]) -> Result<CoreHost, String> {
     let path = path.join(" ");
     let file = File::open(path.trim_matches('"')).map_err(|error| error.to_string())?;
     let snapshot: CoreHostSnapshot =
@@ -503,27 +502,11 @@ pub fn run(
             .ok_or("this scenario has no interval campaign")?;
     }
     println!("Interval player; enter help for commands.");
-    let stdin = io::stdin();
-    let interactive = stdin.is_terminal();
-    let mut lines = stdin.lock().lines();
-    loop {
-        if interactive {
-            print!("> ");
-            io::stdout().flush().map_err(|error| error.to_string())?;
-        }
-        let Some(line) = lines.next() else { break };
-        let line = line.map_err(|error| error.to_string())?;
-        let words: Vec<_> = line.split_whitespace().collect();
-        let result = if let Some(person) = person {
-            command(&mut host, person, &words)
+    crate::terminal::run(|words| {
+        if let Some(person) = person {
+            command(&mut host, person, words)
         } else {
-            campaign_command(&mut host, &words)
-        };
-        match result {
-            Ok(true) => {}
-            Ok(false) => break,
-            Err(error) => eprintln!("{error}"),
+            campaign_command(&mut host, words)
         }
-    }
-    Ok(())
+    })
 }

@@ -1,5 +1,7 @@
 //! Small interactive entry point for the composed economic simulation.
+mod interval_admin;
 mod interval_player;
+mod terminal;
 use game_economy::{Departure, Economy, PromiseDecision, PromiseProposal};
 use game_lots::Place;
 use std::io::{self, BufRead, IsTerminal, Write};
@@ -726,6 +728,7 @@ fn run() -> Result<(), String> {
     let mut args = std::env::args_os().skip(1);
     let mut player_mode = false;
     let mut boundary_player = false;
+    let mut boundary_admin = false;
     let mut interval_person = None;
     let mut interval_campaign = false;
     let mut scenario = None;
@@ -736,6 +739,8 @@ fn run() -> Result<(), String> {
             player_mode = true;
         } else if arg == "--whole-boundary-player" && !boundary_player {
             boundary_player = true;
+        } else if arg == "--whole-boundary" && !boundary_admin {
+            boundary_admin = true;
         } else if (arg == "--person" || arg == "--interval-player") && interval_person.is_none() {
             interval_person = Some(
                 args.next()
@@ -768,12 +773,13 @@ fn run() -> Result<(), String> {
     }
     let player_options = [
         player_mode,
+        boundary_admin,
         boundary_player,
         interval_campaign,
         interval_person.is_some(),
     ];
     if player_options.iter().filter(|&&selected| selected).count() > 1 {
-        return Err("choose one player mode".into());
+        return Err("choose one simulation mode".into());
     }
     if player_mode || interval_person.is_some() || interval_campaign {
         let scenario = scenario.unwrap_or_else(|| {
@@ -800,6 +806,9 @@ fn run() -> Result<(), String> {
             "content/scenarios/economy.toml"
         })
     });
+    if !boundary_admin && !boundary_player {
+        return interval_admin::run(&root, &scenario, seed, population.as_deref());
+    }
     let mut world = game_economy_cli::scenario_with_options(
         &scenario,
         &root.join("content"),
