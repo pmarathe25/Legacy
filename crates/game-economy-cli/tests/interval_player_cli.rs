@@ -193,3 +193,56 @@ fn interval_save_does_not_replace_an_existing_file() {
     assert_eq!(std::fs::read(&save).unwrap(), b"existing");
     std::fs::remove_file(save).unwrap();
 }
+
+#[test]
+fn a_player_can_assemble_and_test_their_own_carried_parts() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let token = format!("legacy-player-engineering-{}", std::process::id());
+    let scene = std::env::temp_dir().join(format!("{token}.toml"));
+    let authored =
+        std::fs::read_to_string(root.join("content/scenarios/economy-core-personal-design.toml"))
+            .unwrap();
+    std::fs::write(
+        &scene,
+        authored.replace(
+            "willing_to_work = false",
+            "controlled = true\nwilling_to_work = false",
+        ),
+    )
+    .unwrap();
+    let mut child = Command::new(env!("CARGO_BIN_EXE_game-economy-cli"))
+        .current_dir(root)
+        .args(["--person", "1"])
+        .arg(&scene)
+        .env("RAYON_NUM_THREADS", "2")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child.stdin.take().unwrap().write_all(
+        b"look\nassemble 7 1001:1:0:1000 1010:2:1001:1000\nassemble 7 1001:1:0:1000 1002:2:1001:1000\nlook\nexperiment 7 1002 201 100 10\nexperiment 7 1002 100 100 10\nquit\n"
+    ).unwrap();
+    let output = child.wait_with_output().unwrap();
+    std::fs::remove_file(&scene).unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stdout.contains("carried_item=1001"), "{stdout}");
+    assert!(stdout.contains("assembled=true"), "{stdout}");
+    assert!(stdout.contains("apparatus=7"), "{stdout}");
+    assert!(
+        stdout.contains("outcome=Moved") && stdout.contains("delivered_work="),
+        "{stdout}"
+    );
+    assert!(
+        stderr.contains("assembly requires an available actor and carried identified parts"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains(
+            "experiment requires an available person with capable effort and carried matching parts"
+        ),
+        "{stderr}"
+    );
+}

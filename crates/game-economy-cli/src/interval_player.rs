@@ -30,11 +30,30 @@ pub(super) fn load(path: &[&str]) -> Result<CoreHost, String> {
     CoreHost::resume(snapshot)
 }
 
+fn number<T: std::str::FromStr>(value: &str) -> Result<T, String> {
+    value.parse().map_err(|_| format!("invalid number {value}"))
+}
+
+fn part(specification: &str) -> Result<game_mechanics::Part, String> {
+    let fields: Vec<_> = specification.split(':').collect();
+    let [item, component, parent, share] = fields.as_slice() else {
+        return Err("expected ITEM:COMPONENT:PARENT:SHARE".into());
+    };
+    let parent: u64 = number(parent)?;
+    Ok(game_mechanics::Part {
+        id: number(item)?,
+        component: number(component)?,
+        parent: (parent != 0).then_some(parent),
+        share_per_mille: number(share)?,
+        broken: false,
+    })
+}
+
 fn command(host: &mut CoreHost, person: u64, words: &[&str]) -> Result<bool, String> {
     match words {
         [] => {}
         ["help"] => println!(
-            "look | wait MILLISECONDS | move REGION | walk stock|store ID | pause-walk | resume-walk | trip REGION VISIT_MILLISECONDS [food] | trip go|survey|back|cancel | trip leave-in MILLISECONDS | fight PERSON | join-fight BENEFICIARY OPPONENT | tactic wait|defend|retreat | tactic attack PERSON | tactic attack-site SITE | tactic move X Y | confine PERSON SITE | guard SITE | release PERSON | escape | build BLUEPRINT | demolish SITE | salvage SITE GOOD QUANTITY | gather NODE | eat GOOD | treat GOOD | wear GOOD | unwear | work RECIPE UNITS | stop JOB | stop-assist | rest on|off | word place|person|object ID SOUNDS | form SOUNDS MARKS | inscribe SOUNDS | read PAGE | recall PAGE | save PATH | load PATH | quit (SOUNDS and MARKS are comma-separated numbers)"
+            "look | wait MILLISECONDS | move REGION | walk stock|store ID | pause-walk | resume-walk | trip REGION VISIT_MILLISECONDS [food] | trip go|survey|back|cancel | trip leave-in MILLISECONDS | fight PERSON | join-fight BENEFICIARY OPPONENT | tactic wait|defend|retreat | tactic attack PERSON | tactic attack-site SITE | tactic move X Y | confine PERSON SITE | guard SITE | release PERSON | escape | build BLUEPRINT | demolish SITE | salvage SITE GOOD QUANTITY | gather NODE | assemble APPARATUS PART... | experiment APPARATUS OUTPUT FORCE DISTANCE LOAD | eat GOOD | treat GOOD | wear GOOD | unwear | work RECIPE UNITS | stop JOB | stop-assist | rest on|off | word place|person|object ID SOUNDS | form SOUNDS MARKS | inscribe SOUNDS | read PAGE | recall PAGE | save PATH | load PATH | quit (SOUNDS and MARKS are comma-separated numbers)"
         ),
         ["quit"] | ["exit"] => return Ok(false),
         ["look"] => {
@@ -52,7 +71,11 @@ fn command(host: &mut CoreHost, person: u64, words: &[&str]) -> Result<bool, Str
                 println!("nearby={} health={}", other.id, other.health);
             }
             for lot in &view.possessions {
-                println!("carried_good={} quantity={}", lot.good, lot.quantity);
+                if let Some(item) = lot.item {
+                    println!("carried_item={item} good={}", lot.good);
+                } else {
+                    println!("carried_good={} quantity={}", lot.good, lot.quantity);
+                }
             }
             for site in &view.accessible_sites {
                 if let Some(kind) = &site.kind {
@@ -70,6 +93,15 @@ fn command(host: &mut CoreHost, person: u64, words: &[&str]) -> Result<bool, Str
                     "resource={} good={} available={} yield={}",
                     node.id, node.good, node.available, node.yield_per_action
                 );
+            }
+            for apparatus in &view.carried_apparatus {
+                println!("apparatus={}", apparatus.id);
+                for part in apparatus.parts.iter() {
+                    println!(
+                        "part={} component={} parent={:?} share={} broken={}",
+                        part.id, part.component, part.parent, part.share_per_mille, part.broken
+                    );
+                }
             }
             if let Some(wound) = view.wound {
                 println!("wound_severity={}", wound.severity);
@@ -338,6 +370,36 @@ fn command(host: &mut CoreHost, person: u64, words: &[&str]) -> Result<bool, Str
         ["treat", good] => {
             let good = good.parse::<u32>().map_err(|_| "invalid good")?;
             println!("consumed={}", Player::new(host, person)?.treat_wound(good)?);
+        }
+        ["assemble", id, specs @ ..] if !specs.is_empty() => {
+            let parts = specs
+                .iter()
+                .map(|spec| part(spec))
+                .collect::<Result<Vec<_>, _>>()?;
+            let apparatus = game_mechanics::Apparatus {
+                id: number(id)?,
+                parts: parts.into(),
+            };
+            let assembled = Player::new(host, person)?.assemble(apparatus)?;
+            println!("assembled={assembled}");
+        }
+        ["experiment", id, output, force, distance, load] => {
+            let result = Player::new(host, person)?.experiment(game_mechanics::Experiment {
+                actor: person,
+                apparatus: number(id)?,
+                output_part: number(output)?,
+                input_force: number(force)?,
+                input_distance: number(distance)?,
+                load_force: number(load)?,
+            })?;
+            println!(
+                "outcome={:?} available_force={} travel={} delivered_work={} broken_parts={:?}",
+                result.outcome,
+                result.available_force,
+                result.travel,
+                result.delivered_work,
+                result.broken_parts
+            );
         }
         ["gather", node] => {
             let node = node.parse::<u64>().map_err(|_| "invalid resource node")?;

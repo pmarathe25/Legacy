@@ -1,6 +1,7 @@
 //! Player-controlled actions on the interval host, without administrative events.
 use game_economy::core_interval::{
-    CoreHost, CoreMarkInscription, CoreMarkObservation, CorePlayerView, WoundTreatment,
+    CoreHost, CoreMarkInscription, CoreMarkObservation, CorePlayerView, MechanicalApparatus,
+    MechanicalExperiment, MechanicalObservation, WoundTreatment,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -52,6 +53,21 @@ impl<'a> Player<'a> {
 
     pub fn gather(&mut self, node: u64) -> Result<Option<game_economy::GatheredResource>, String> {
         self.host.gather_controlled(self.person, node)
+    }
+
+    pub fn assemble(&mut self, apparatus: MechanicalApparatus) -> Result<bool, String> {
+        self.host
+            .assemble_controlled_apparatus(self.person, apparatus)
+    }
+
+    pub fn experiment(
+        &mut self,
+        request: MechanicalExperiment,
+    ) -> Result<MechanicalObservation, String> {
+        if request.actor != self.person {
+            return Err("experiment actor is outside your control".into());
+        }
+        self.host.experiment_controlled_apparatus(request)
     }
 
     pub fn walk(

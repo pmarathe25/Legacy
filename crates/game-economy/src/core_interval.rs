@@ -29,6 +29,10 @@ pub use game_economy_expeditions::elapsed_invitations::{
     Preference as ExpeditionInvitationPreference, Reply as ExpeditionReply,
     Response as ExpeditionReplyKind,
 };
+pub use game_mechanics::{
+    Apparatus as MechanicalApparatus, Experiment as MechanicalExperiment,
+    Observation as MechanicalObservation,
+};
 pub use host::{
     BarrierAction, CoreAssistRecord, CoreAssistSession, CoreChoiceEvent, CoreChoiceIntent,
     CoreChoiceOutcome, CoreConfinement, CoreConstructionResults, CoreDeliveryResults,

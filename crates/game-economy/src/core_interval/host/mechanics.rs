@@ -639,13 +639,59 @@ impl Runtime {
                         .custody(game_lots::Place::Person(request.actor)),
                     apparatus,
                     &self.materials,
-                    core.physical.tick(),
+                    core.physical.lot_instant(core.physical.tick()),
                 )
             })
     }
 }
 
 impl CoreHost {
+    pub(super) fn carried_apparatus(&self, person: u64) -> Vec<game_mechanics::Apparatus> {
+        let Some(owner) = &self.mechanics else {
+            return Vec::new();
+        };
+        let custody = self.core.physical.custody(game_lots::Place::Person(person));
+        let now = self.core.physical.lot_instant(self.core.physical.tick());
+        owner
+            .world
+            .apparatus()
+            .par_iter()
+            .filter(|device| carries_parts(custody, device, &owner.materials, now))
+            .cloned()
+            .collect()
+    }
+
+    /// Assemble the controlled person's chosen arrangement of their physical parts.
+    pub fn assemble_controlled_apparatus(
+        &mut self,
+        person: u64,
+        apparatus: game_mechanics::Apparatus,
+    ) -> Result<bool, String> {
+        self.controlled_person(person)?;
+        let assisting = self.assisting_people();
+        let outcomes = self.assemble_mechanical_apparatus(
+            &[game_mechanics::Assembly {
+                actor: person,
+                apparatus,
+            }],
+            &assisting,
+        )?;
+        Ok(outcomes.first().is_some_and(|row| row.accepted))
+    }
+
+    /// Apply a controlled person's trial through the ordinary mechanical owner.
+    pub fn experiment_controlled_apparatus(
+        &mut self,
+        request: game_mechanics::Experiment,
+    ) -> Result<game_mechanics::Observation, String> {
+        self.controlled_person(request.actor)?;
+        let assisting = self.assisting_people();
+        self.experiment_mechanics(&[request], &assisting)?
+            .into_iter()
+            .next()
+            .ok_or_else(|| "the chosen experiment produced no receipt".to_owned())
+    }
+
     /// A person may consider watching another person even if that person later
     /// chooses not to experiment; no activity is reserved by this preview.
     pub fn preview_mechanical_watching(
@@ -1103,7 +1149,7 @@ impl CoreHost {
                         .custody(game_lots::Place::Person(request.actor)),
                     &request.apparatus,
                     &owner.materials,
-                    tick,
+                    self.core.physical.lot_instant(tick),
                 )
         }) {
             return Err("assembly requires an available actor and carried identified parts".into());
