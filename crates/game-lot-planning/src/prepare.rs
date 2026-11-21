@@ -1,5 +1,5 @@
 //! Prepare expiry, deterministic capacity claims, and exact FEFO movements.
-use crate::{Batch, Draft};
+use crate::{Batch, Draft, TransactionTime};
 use game_lot_allocation as allocation;
 use game_lot_model::key;
 use game_lot_model::{
@@ -107,13 +107,39 @@ pub fn prepare(
     batch: Option<Batch<'_>>,
     advance: bool,
 ) -> Result<Draft, String> {
+    let tick = state
+        .tick
+        .checked_add(u64::from(advance))
+        .ok_or("lot tick overflow")?;
+    prepare_at(
+        state,
+        instance,
+        seed,
+        moves,
+        creations,
+        batch,
+        TransactionTime {
+            next_tick: tick,
+            at: tick,
+        },
+    )
+}
+
+pub fn prepare_at(
+    state: &State,
+    instance: u64,
+    seed: u64,
+    moves: &[Movement],
+    creations: &[Creation],
+    batch: Option<Batch<'_>>,
+    time: TransactionTime,
+) -> Result<Draft, String> {
     #[cfg(feature = "profile")]
     let mut phase = game_diagnostics::span("physical.general.setup");
-    let next = if advance {
-        state.tick.checked_add(1).ok_or("lot tick overflow")?
-    } else {
-        state.tick
-    };
+    if time.next_tick != state.tick && state.tick.checked_add(1) != Some(time.next_tick) {
+        return Err("invalid lot generation".into());
+    }
+    let instant = time.at;
     state
         .revision
         .checked_add(1)
@@ -223,12 +249,12 @@ pub fn prepare(
                 })
                 .transpose()?;
             let rank = if let Some(batch) = &batch {
-                game_genetics::random(seed, batch.move_owners[original], next)
+                game_genetics::random(seed, batch.move_owners[original], instant)
             } else {
                 game_genetics::random(
                     seed ^ place_seed(movement.from) ^ u64::from(movement.good),
                     movement.id,
-                    next,
+                    instant,
                 )
             };
             Ok(Claim {
@@ -269,7 +295,7 @@ pub fn prepare(
                 || creation.lot.item.is_some_and(|id| {
                     id == 0 || creation.lot.quantity != 1 || creation.lot.expires_at.is_some()
                 })
-                || creation.lot.expires_at.is_some_and(|at| at <= next)
+                || creation.lot.expires_at.is_some_and(|at| at <= instant)
             {
                 return Err("invalid created lot".to_string());
             }
@@ -284,7 +310,7 @@ pub fn prepare(
         .filter_map(|(index, container)| {
             container
                 .next_expiry
-                .is_some_and(|at| at <= next)
+                .is_some_and(|at| at <= instant)
                 .then_some(index)
         })
         .collect();
@@ -293,16 +319,19 @@ pub fn prepare(
         .flat_map(|&index| {
             let container = containers[index];
             container.lots.par_iter().filter_map(move |lot| {
-                lot.expires_at.filter(|&at| at <= next).map(|at| Spoilage {
-                    place: container.place,
-                    good: lot.good,
-                    quantity: lot.quantity,
-                    expires_at: at,
-                })
+                lot.expires_at
+                    .filter(|&at| at <= instant)
+                    .map(|at| Spoilage {
+                        place: container.place,
+                        good: lot.good,
+                        quantity: lot.quantity,
+                        expires_at: at,
+                        batch: lot.batch,
+                    })
             })
         })
         .collect();
-    spoiled.par_sort_unstable_by_key(|row| (row.place, row.good, row.expires_at));
+    spoiled.par_sort_unstable_by_key(|row| (row.place, row.good, row.expires_at, row.batch));
     #[cfg(feature = "profile")]
     {
         drop(phase);
@@ -318,7 +347,7 @@ pub fn prepare(
         let last = lots.partition_point(|lot| lot.good <= group[0].movement.good);
         let available: u64 = lots[first..last]
             .par_iter()
-            .filter(|lot| live(lot, next))
+            .filter(|lot| live(lot, instant))
             .map(|lot| lot.quantity)
             .sum();
         if group.len() == 1 {
@@ -358,7 +387,7 @@ pub fn prepare(
                         && group.iter().all(|claim| claim.movement.batch.is_some())
                     {
                         return reserve_distinct_batches(
-                            group, lots, first, last, next, &source_ok,
+                            group, lots, first, last, instant, &source_ok,
                         );
                     }
                     if let [claim] = group
@@ -367,7 +396,7 @@ pub fn prepare(
                         let item = claim.movement.item.expect("exact item group");
                         if let Some(i) = lots[first..last]
                             .iter()
-                            .position(|lot| lot.item == Some(item) && live(lot, next))
+                            .position(|lot| lot.item == Some(item) && live(lot, instant))
                         {
                             source_ok[claim.sorted].store(true, Ordering::Relaxed);
                             return vec![(claim.sorted, vec![(first + i, 1u64)])];
@@ -380,7 +409,7 @@ pub fn prepare(
                         let mut needed = claim.movement.quantity;
                         let mut pieces = Vec::new();
                         for (offset, lot) in lots[first..last].iter().enumerate() {
-                            if lot.batch != Some(batch) || !live(lot, next) {
+                            if lot.batch != Some(batch) || !live(lot, instant) {
                                 continue;
                             }
                             let quantity = needed.min(lot.quantity);
@@ -400,7 +429,7 @@ pub fn prepare(
                     }
                     let mut remaining: Vec<_> = lots[first..last]
                         .iter()
-                        .map(|lot| if live(lot, next) { lot.quantity } else { 0 })
+                        .map(|lot| if live(lot, instant) { lot.quantity } else { 0 })
                         .collect();
                     let index: HashMap<_, _> = lots[first..last]
                         .iter()
@@ -553,8 +582,8 @@ pub fn prepare(
             index: claims.len() + index,
             place: creation_destinations[index],
             rank: batch.as_ref().map_or_else(
-                || game_genetics::random(seed ^ place_seed(creation.to), creation.id, next),
-                |batch| game_genetics::random(seed, batch.creation_owners[index], next),
+                || game_genetics::random(seed ^ place_seed(creation.to), creation.id, instant),
+                |batch| game_genetics::random(seed, batch.creation_owners[index], instant),
             ),
             transaction: batch
                 .as_ref()
@@ -569,11 +598,11 @@ pub fn prepare(
         &containers,
         |index| {
             let container = containers[index];
-            if container.next_expiry.is_some_and(|at| at <= next) {
+            if container.next_expiry.is_some_and(|at| at <= instant) {
                 container
                     .lots
                     .par_iter()
-                    .filter(|lot| live(lot, next))
+                    .filter(|lot| live(lot, instant))
                     .map(|lot| lot.quantity)
                     .sum()
             } else {
@@ -741,7 +770,7 @@ pub fn prepare(
                 if last - first >= 2048 {
                     let lots: Vec<_> = stock[first..last]
                         .par_iter()
-                        .filter(|lot| live(lot, next))
+                        .filter(|lot| live(lot, instant))
                         .collect();
                     let amounts: Vec<_> = lots.par_iter().map(|lot| lot.quantity).collect();
                     let prefixes = allocation::prefixes(&amounts);
@@ -773,7 +802,7 @@ pub fn prepare(
                 let mut remaining = claim.movement.quantity;
                 let mut parts = Vec::new();
                 for lot in &stock[first..last] {
-                    if !live(lot, next) {
+                    if !live(lot, instant) {
                         continue;
                     }
                     let quantity = remaining.min(lot.quantity);
@@ -832,7 +861,7 @@ pub fn prepare(
             let last = stock.partition_point(|lot| lot.good <= group[0].movement.good);
             let lots: Vec<_> = stock[first..last]
                 .par_iter()
-                .filter(|lot| live(lot, next))
+                .filter(|lot| live(lot, instant))
                 .collect();
             let lot_amounts: Vec<_> = lots.par_iter().map(|lot| lot.quantity).collect();
             let lot_prefix = allocation::prefixes(&lot_amounts);
@@ -1001,7 +1030,7 @@ pub fn prepare(
                     .lots
                     .iter()
                     .enumerate()
-                    .filter(|(_, lot)| live(lot, next))
+                    .filter(|(_, lot)| live(lot, instant))
                 {
                     if good != Some(lot.good) {
                         good = Some(lot.good);
@@ -1062,7 +1091,7 @@ pub fn prepare(
                     .binary_search_by_key(&lot.good, |row| row.1)
                     .ok()
                     .map_or(0, |i| debits[d0 + i].2);
-                let quantity = if live(lot, next) {
+                let quantity = if live(lot, instant) {
                     lot.quantity
                         .checked_sub(debit)
                         .expect("validated lot debit")
@@ -1099,7 +1128,7 @@ pub fn prepare(
                 let mut lots = Vec::with_capacity(container.lots.len() + a1 - a0);
                 let mut good = None;
                 let mut remaining = 0;
-                for lot in container.lots.iter().filter(|lot| live(lot, next)) {
+                for lot in container.lots.iter().filter(|lot| live(lot, instant)) {
                     if good != Some(lot.good) {
                         good = Some(lot.good);
                         remaining = debits[d0..d1]
@@ -1149,7 +1178,7 @@ pub fn prepare(
             let live_lots: Vec<_> = container
                 .lots
                 .par_iter()
-                .filter(|lot| live(lot, next))
+                .filter(|lot| live(lot, instant))
                 .collect();
             let mut lots: Vec<Lot> = live_lots
                 .par_chunk_by(|a, b| a.good == b.good)
@@ -1219,11 +1248,73 @@ pub fn prepare(
         base_instance: instance,
         base_tick: state.tick,
         base_revision: state.revision,
-        next_tick: next,
+        next_tick: time.next_tick,
         changes: changes.into(),
         outcomes,
         spoiled,
         creations: creation_outcomes,
         transactions: transaction_outcomes,
     })
+}
+
+#[cfg(test)]
+mod time_tests {
+    use super::*;
+
+    #[test]
+    fn expiry_uses_the_explicit_instant_within_a_custody_generation() {
+        let state = State {
+            tick: 4,
+            revision: 12,
+            next_batch: Some(8),
+            containers: vec![
+                Container::new(
+                    Place::Person(1),
+                    2,
+                    vec![Lot {
+                        good: 1,
+                        quantity: 1,
+                        batch: Some(7),
+                        item: None,
+                        expires_at: Some(83),
+                    }],
+                )
+                .unwrap(),
+                Container::new(Place::Person(2), 2, Vec::new()).unwrap(),
+            ],
+        };
+        let movement = Movement {
+            id: 1,
+            from: Place::Person(1),
+            to: Some(Place::Person(2)),
+            good: 1,
+            quantity: 1,
+            batch: Some(7),
+            item: None,
+        };
+        let prepare = |instant| {
+            prepare_at(
+                &state,
+                1,
+                7,
+                &[movement],
+                &[],
+                None,
+                TransactionTime {
+                    at: instant,
+                    next_tick: 4,
+                },
+            )
+            .unwrap()
+        };
+        let before = prepare(82);
+        assert_eq!(before.next_tick, 4);
+        assert!(before.outcomes.iter().next().unwrap().accepted);
+        assert!(before.spoiled.is_empty());
+        let at_expiry = prepare(83);
+        assert_eq!(at_expiry.next_tick, 4);
+        assert!(!at_expiry.outcomes.iter().next().unwrap().accepted);
+        assert_eq!(at_expiry.spoiled[0].batch, Some(7));
+        assert_eq!(at_expiry.spoiled[0].expires_at, 83);
+    }
 }
