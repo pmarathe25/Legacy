@@ -477,8 +477,19 @@ fn campaign_command(host: &mut CoreHost, words: &[&str]) -> Result<bool, String>
     Ok(true)
 }
 
-pub fn run(root: &Path, scenario: &Path, person: Option<u64>) -> Result<(), String> {
-    let mut host = game_economy_cli::core_scenario(scenario, &root.join("content"))?;
+pub fn run(
+    root: &Path,
+    scenario: &Path,
+    person: Option<u64>,
+    seed: Option<u64>,
+    population: Option<&Path>,
+) -> Result<(), String> {
+    let mut host = game_economy_cli::core_scenario_with_options(
+        scenario,
+        &root.join("content"),
+        seed,
+        population,
+    )?;
     if let Some(person) = person {
         host.controlled_person(person)?;
     } else {

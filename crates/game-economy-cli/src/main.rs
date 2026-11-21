@@ -725,6 +725,7 @@ fn run() -> Result<(), String> {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let mut args = std::env::args_os().skip(1);
     let mut player_mode = false;
+    let mut boundary_player = false;
     let mut interval_person = None;
     let mut interval_campaign = false;
     let mut scenario = None;
@@ -733,7 +734,9 @@ fn run() -> Result<(), String> {
     while let Some(arg) = args.next() {
         if arg == "--player" && !player_mode {
             player_mode = true;
-        } else if arg == "--interval-player" && interval_person.is_none() {
+        } else if arg == "--whole-boundary-player" && !boundary_player {
+            boundary_player = true;
+        } else if (arg == "--person" || arg == "--interval-player") && interval_person.is_none() {
             interval_person = Some(
                 args.next()
                     .ok_or("missing controlled person")?
@@ -763,28 +766,35 @@ fn run() -> Result<(), String> {
             return Err("unexpected argument".into());
         }
     }
-    if interval_person.is_some() || interval_campaign {
-        if player_mode
-            || seed.is_some()
-            || population.is_some()
-            || (interval_campaign && interval_person.is_some())
-        {
-            return Err(
-                "interval player cannot be combined with player, seed, or population options"
-                    .into(),
-            );
-        }
+    let player_options = [
+        player_mode,
+        boundary_player,
+        interval_campaign,
+        interval_person.is_some(),
+    ];
+    if player_options.iter().filter(|&&selected| selected).count() > 1 {
+        return Err("choose one player mode".into());
+    }
+    if player_mode || interval_person.is_some() || interval_campaign {
         let scenario = scenario.unwrap_or_else(|| {
             root.join(if interval_campaign {
                 "content/scenarios/economy-succession.toml"
+            } else if player_mode {
+                "content/scenarios/economy-campaign.toml"
             } else {
                 "content/scenarios/economy-core-player.toml"
             })
         });
-        return interval_player::run(&root, &scenario, interval_person);
+        return interval_player::run(
+            &root,
+            &scenario,
+            interval_person,
+            seed,
+            population.as_deref(),
+        );
     }
     let scenario = scenario.unwrap_or_else(|| {
-        root.join(if player_mode {
+        root.join(if boundary_player {
             "content/scenarios/economy-campaign.toml"
         } else {
             "content/scenarios/economy.toml"
@@ -807,7 +817,7 @@ fn run() -> Result<(), String> {
         }
         let Some(line) = lines.next() else { break };
         let line = line.map_err(|error| error.to_string())?;
-        let result = if player_mode {
+        let result = if boundary_player {
             let words: Vec<_> = line.split_whitespace().collect();
             match words.as_slice() {
                 ["save", path] => game_economy_cli::save(&world, Path::new(path)).map(|()| true),
