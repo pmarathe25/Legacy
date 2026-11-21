@@ -994,7 +994,7 @@ lifespan = 262800
 gestation = 2920
 conception_one_in = 52560
 mate_desire = { base = 900, genetic_weight = 300, hunger_weight = -1 }
-mate_choice = { trait_locus = 0, preference_locus = 1, minimum_fit = 600, sample_size = 8 }
+mate_choice = { trait_locus = 0, preference_locus = 1, minimum_fit = 600, sample_size = 8, flexibility = { locus = 3, weight = 120 } }
 breeding_max_hunger = 60
 newborn_health = 100
 mutation_per_million = 10000

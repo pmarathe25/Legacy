@@ -1,6 +1,6 @@
 use game_fauna::{
     Animal, AnimalDeath, AnimalOpinion, Climate, DeathCause, Exposure, Fauna, Feeding, MateChoice,
-    MateDesire, Patch, Pregnancy, SocialResponse, Species,
+    MateDesire, MateFlexibility, Patch, Pregnancy, SocialResponse, Species,
 };
 use game_genetics::{Genome, Sex};
 use std::collections::HashSet;
@@ -125,6 +125,7 @@ fn wildlife_mates_evaluate_the_same_encounter_through_their_own_inherited_prefer
                     preference_locus: 1,
                     minimum_fit: 900,
                     sample_size: 2,
+                    flexibility: None,
                 });
                 assert!(
                     fauna
@@ -1558,4 +1559,48 @@ fn invalid_food_and_birth_overflow_leave_the_original_generation_unchanged() {
     assert!(state.advance(&[patch, patch], 7, 1).is_err());
     assert!(state.advance(&[patch], 7, 1).is_err());
     assert_eq!(state, before);
+}
+
+#[test]
+fn inherited_selectivity_changes_each_animals_own_response() {
+    let run = |workers, mate_flexibility| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut fauna = initial();
+                fauna.lifecycle_period_millis = Some(83);
+                fauna.animals[0].genome.alleles[1] = [300; 2];
+                fauna.animals[0].genome.alleles[2] = [1000; 2];
+                fauna.animals[1].genome.alleles[0] = [500; 2];
+                fauna.animals[1].genome.alleles[1] = [300; 2];
+                fauna.animals[1].genome.alleles[2] = [mate_flexibility; 2];
+                fauna.species[0].mate_choice = Some(MateChoice {
+                    trait_locus: 0,
+                    preference_locus: 1,
+                    minimum_fit: 900,
+                    sample_size: 1,
+                    flexibility: Some(MateFlexibility {
+                        locus: 2,
+                        weight: 200,
+                    }),
+                });
+                fauna
+                    .validate(&HashSet::from([1]), &HashSet::from([1]), 0)
+                    .unwrap();
+                let expected = fauna
+                    .advance_with_hunts(&[], &[], &[], &[], 7, 1)
+                    .unwrap()
+                    .fauna;
+                let draft = fauna.prepare_quiet(&[], 7, 1).unwrap().unwrap();
+                fauna.publish_quiet_validated(draft);
+                assert_eq!(fauna, expected);
+                fauna.animals[0].pregnancy.as_ref().map(|row| row.father)
+            })
+    };
+    assert_eq!(run(1, 500), None);
+    assert_eq!(run(4, 500), None);
+    assert_eq!(run(1, 1000), Some(2));
+    assert_eq!(run(4, 1000), Some(2));
 }

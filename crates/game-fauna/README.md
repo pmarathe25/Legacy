@@ -39,7 +39,11 @@ preferred expression, and `trait_locus` supplies the expression they notice in
 the other animal. The genetic loci range from 0 to 3. The two scores can differ.
 Each animal can decline below `minimum_fit`, and only `sample_size` local
 candidates are considered per choice. Offspring inherit the underlying traits
-through the existing reproduction model.
+through the existing reproduction model. Optional `flexibility = { locus = 3,
+weight = 120 }` changes each animal's minimum fit using its own expression.
+A neutral allele mean of 500 keeps the base minimum. Higher expression
+decreases the minimum by up to the configured weight, and lower expression
+increases it. Either animal can still decline.
 
 New deaths record the actual fatal effect at the last wildlife boundary. The
 history runners stream those receipts before the next wildlife phase replaces

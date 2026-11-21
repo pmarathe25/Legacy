@@ -7,7 +7,7 @@ pub use elapsed::Encounters;
 mod mortality;
 pub mod restraint;
 use game_genetics::{Genome, Sex, inherit, random};
-pub use mating::MateChoice;
+pub use mating::{MateChoice, MateFlexibility};
 pub use mortality::{AnimalDeath, DeathCause};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
