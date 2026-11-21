@@ -1,7 +1,8 @@
 //! Player-controlled actions on the interval host, without administrative events.
 use game_economy::core_interval::{
     CoreHost, CoreMarkInscription, CoreMarkObservation, CorePlayerView, CorePromiseReply,
-    EpisodeCue, MechanicalApparatus, MechanicalComparison, MechanicalExperiment, MechanicalObservation, RecalledEpisode,
+    CoreWorkInscription, CoreWorkObservation, EpisodeCue, MechanicalApparatus, MechanicalComparison,
+    MechanicalExperiment, MechanicalObservation, RecalledEpisode,
     WoundTreatment,
 };
 
@@ -327,6 +328,17 @@ impl<'a> Player<'a> {
     pub fn observe_marked_page(&self, item: u64) -> Result<CoreMarkObservation, String> {
         self.host.controlled_person(self.person)?;
         self.host.observe_marked_page(self.person, item)
+    }
+
+    pub fn compose(&mut self, words: Vec<Vec<u8>>) -> Result<Option<u64>, String> {
+        self.host.controlled_person(self.person)?;
+        let rows = self.host.inscribe_work(&[CoreWorkInscription { person: self.person, words }])?;
+        Ok(rows.first().and_then(|row| row.1))
+    }
+
+    pub fn observe_written_work(&self, item: u64) -> Result<CoreWorkObservation, String> {
+        self.host.controlled_person(self.person)?;
+        self.host.observe_written_work(self.person, item)
     }
 
     pub fn adopt_remembered_form(&mut self, page: u64) -> Result<(), String> {

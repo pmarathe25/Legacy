@@ -95,6 +95,7 @@ pub struct CorePlayerView {
     pub fatigue: Option<CorePlayerFatigue>,
     pub language: Option<CorePlayerLanguage>,
     pub marked_pages: Vec<CorePlayerMarkedPage>,
+    pub written_works: Vec<u64>,
 }
 
 impl CoreHost {
@@ -546,6 +547,12 @@ impl CoreHost {
                 })
                 .collect()
         });
+        let written_works = self.writing.as_ref().map_or_else(Vec::new, |owner| {
+            possessions.iter().filter_map(|lot| {
+                let item = lot.item?;
+                owner.page(item)?.work.as_ref().map(|_| item)
+            }).collect()
+        });
         Ok(CorePlayerView {
             tick: self.core.physical.tick(),
             offset_millis: self.core.elapsed_millis().ok_or("no physical interval")?,
@@ -578,6 +585,7 @@ impl CoreHost {
             fatigue,
             language,
             marked_pages,
+            written_works,
         })
     }
 }

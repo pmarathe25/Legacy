@@ -51,7 +51,7 @@ pub use host::{
     CoreRun, CoreRunEvent, CoreSchedule, CoreSeenPerson, CoreSharedApparatus, CoreSharedWork, CoreSiteChanges,
     CoreSites, CoreSkillCredit, CoreSkills, CoreSocial, CoreSocialResults, CoreStepper,
     CoreToolRepairResults, CoreTreatmentResults, CoreWorkIntent, CoreWritingPracticeResults,
-    CoreWritingResults, DecisionPhase, Incapacitation, MechanicalCapability,
+    CoreWritingResults, CoreWorkEdition, CoreWorkInscription, CoreWorkObservation, DecisionPhase, Incapacitation, MechanicalCapability,
     MechanicalCommunication, MechanicalDesignInput, MechanicalDesignPreferences,
     MechanicalExploration, MechanicalLoadMaterial, MechanicalLoadOutcome, MechanicalLoadPolicy,
     MechanicalLoadRequest, MechanicalLoadResult, MechanicalMaterial, MechanicalMemory,

@@ -1,6 +1,13 @@
 //! Personal text pages and physical reading.
 use super::*;
+mod works;
+pub use works::{CoreWorkEdition, CoreWorkInscription, CoreWorkObservation};
 use std::sync::Arc;
+
+enum GlyphPage {
+    Form(Vec<u32>),
+    Work(Vec<Vec<u32>>),
+}
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct CoreWritingResults {
     pub actors: Vec<u64>,
@@ -37,66 +44,76 @@ impl CoreHost {
         if choices.is_empty() {
             return Ok(Vec::new());
         }
-        u64::try_from(choices.len())
-            .map_err(|_| "writing action overflow")?
-            .checked_add(1)
-            .ok_or("writing action overflow")?;
-        let owner = self
-            .writing
-            .as_ref()
-            .ok_or("physical writing is disabled")?;
+        let forms = self.personal_glyph_forms()?;
+        let pages = choices.par_iter().map(|choice| {
+            let marks = forms.marks(choice.person, &choice.sounds)
+                .ok_or("writer has no chosen marks for that form")?;
+            Ok::<_, &str>((choice.person, GlyphPage::Form(marks.to_vec())))
+        }).collect::<Result<Vec<_>, _>>()?;
+        self.write_glyph_pages(pages)
+    }
+
+    fn personal_glyph_forms(&self) -> Result<&game_language::writing::Writing, String> {
         let language = self
             .social
             .as_ref()
             .and_then(|social| social.language.as_ref())
             .ok_or("personal language is disabled")?;
-        let forms = language
+        language
             .writing
-            .as_ref()
-            .ok_or("personal writing forms are disabled")?;
+            .as_deref()
+            .ok_or_else(|| "personal writing forms are disabled".into())
+    }
+
+    fn write_glyph_pages(&mut self, pages: Vec<(u64, GlyphPage)>) -> Result<Vec<(u64, Option<u64>)>, String> {
+        if pages.is_empty() {
+            return Ok(Vec::new());
+        }
+        u64::try_from(pages.len())
+            .map_err(|_| "writing action overflow")?
+            .checked_add(1)
+            .ok_or("writing action overflow")?;
+        let owner = self.writing.as_ref().ok_or("physical writing is disabled")?;
         let tick = self.writing_tick()?;
+        let now = self.core.simulated_millis();
         let busy = self.writing_busy(&[]);
-        let marks: Vec<Vec<u32>> = choices
+        pages
             .par_iter()
-            .map(|choice| {
+            .try_for_each(|(person, _)| {
                 let actor = self
                     .core
                     .people
-                    .binary_search_by_key(&choice.person, |person| person.id)
+                    .binary_search_by_key(person, |person| person.id)
                     .ok()
                     .map(|index| &self.core.people[index])
                     .ok_or("unknown writer")?;
                 if actor.health == 0
                     || actor.region.is_none()
                     || busy.binary_search(&actor.id).is_ok()
+                    || self.pastimes.as_ref().is_some_and(|pastimes| pastimes.session(actor.id).is_some())
                 {
                     return Err("writer cannot inscribe during their current activity");
                 }
-                forms
-                    .marks(choice.person, &choice.sounds)
-                    .map(<[u32]>::to_vec)
-                    .ok_or("writer has no chosen marks for that form")
-            })
-            .collect::<Result<_, _>>()
-            .map_err(str::to_owned)?;
+                Ok(())
+            })?;
         let start = owner
             .next_item
             .max(self.tool_wear.as_ref().map_or(1, |wear| wear.next_item));
         let items = self
             .core
             .physical
-            .next_unused_items(start, choices.len())
+            .next_unused_items(start, pages.len())
             .ok_or("item identity overflow")?;
         if items.last().is_some_and(|id| *id == u64::MAX) {
             return Err("item identity overflow".into());
         }
-        let actions: Vec<_> = choices
+        let actions: Vec<_> = pages
             .par_iter()
             .zip(items.par_iter())
             .enumerate()
-            .map(|(index, (choice, &item))| game_lot_runtime::WritingPage {
+            .map(|(index, ((person, _), &item))| game_lot_runtime::WritingPage {
                 action: index as u64 + 1,
-                writer: choice.person,
+                writer: *person,
                 paper: owner.paper,
                 paper_quantity: owner.paper_quantity,
                 ink: owner.ink,
@@ -113,20 +130,21 @@ impl CoreHost {
         outcomes.par_sort_unstable_by_key(|outcome| outcome.id);
         let accepted: Vec<_> = actions
             .par_iter()
-            .zip(marks.par_iter())
-            .filter_map(|(action, marks)| {
+            .zip(pages.into_par_iter())
+            .filter_map(|(action, (_, payload))| {
                 outcomes
                     .binary_search_by_key(&action.action, |outcome| outcome.id)
                     .ok()
                     .filter(|&index| outcomes[index].accepted)
-                    .map(|_| crate::WrittenPage {
-                        item: action.item,
-                        author: action.writer,
-                        script: 0,
-                        written_at: tick,
-                        claim: None,
-                        text: None,
-                        marks: Some(marks.clone()),
+                    .map(|_| {
+                        let (marks, work) = match payload {
+                            GlyphPage::Form(marks) => (Some(marks), None),
+                            GlyphPage::Work(forms) => (None, Some(crate::WrittenWork { created_at_millis: now, forms })),
+                        };
+                        crate::WrittenPage {
+                            item: action.item, author: action.writer, script: 0, written_at: tick,
+                            claim: None, text: None, marks, work,
+                        }
                     })
             })
             .collect();
@@ -143,16 +161,7 @@ impl CoreHost {
                 )
             })
             .collect();
-        let mut next = owner.clone();
-        if let Some(last) = accepted.last() {
-            next.next_item = next.next_item.max(last.item + 1);
-        }
-        if !accepted.is_empty() {
-            let mut pages: Vec<_> = owner.pages.par_iter().cloned().collect();
-            pages.par_extend(accepted.par_iter().cloned());
-            next.pages = Arc::new(pages);
-        }
-        let mut created = items.clone();
+        let mut created = items;
         created.par_sort_unstable();
         let other_updates: Vec<_> = physical
             .item_updates()
@@ -161,17 +170,21 @@ impl CoreHost {
             .copied()
             .collect();
         let tools = self.stage_tools(&[], None, &other_updates)?;
-        next.retire(&other_updates);
         if !accepted.is_empty() {
             self.core
                 .physical
                 .validate_interval_consumption(&physical)?;
             self.core.physical.commit_interval_consumption(physical)?;
         }
+        let writing = self.writing.as_mut().expect("writing validated");
+        if let Some(last) = accepted.last() {
+            writing.next_item = writing.next_item.max(last.item + 1);
+            Arc::make_mut(&mut writing.pages).extend(accepted);
+        }
+        writing.retire(&other_updates);
         if let Some(tools) = tools {
             self.tool_wear = Some(tools);
         }
-        self.writing = Some(next);
         self.work_checked_revision = None;
         Ok(results)
     }
@@ -182,6 +195,12 @@ impl CoreHost {
         person: u64,
         item: u64,
     ) -> Result<CoreMarkObservation, String> {
+        let page = self.held_written_page(person, item)?;
+        let marks = page.marks.as_ref().ok_or("page has no personal marks")?;
+        Ok(self.interpret_marks(person, marks))
+    }
+
+    fn held_written_page(&self, person: u64, item: u64) -> Result<&crate::WrittenPage, String> {
         let actor = self
             .core
             .people
@@ -200,12 +219,13 @@ impl CoreHost {
         {
             return Err("reader does not carry that page".into());
         }
-        let page = self
-            .writing
+        self.writing
             .as_ref()
             .and_then(|owner| owner.page(item))
-            .ok_or("unknown written page")?;
-        let marks = page.marks.as_ref().ok_or("page has no personal marks")?;
+            .ok_or_else(|| "unknown written page".into())
+    }
+
+    fn interpret_marks(&self, person: u64, marks: &[u32]) -> CoreMarkObservation {
         let mut meanings: Vec<_> = self
             .social
             .as_ref()
@@ -230,10 +250,10 @@ impl CoreHost {
             });
         meanings.sort_unstable();
         meanings.dedup();
-        Ok(CoreMarkObservation {
-            marks: marks.clone(),
+        CoreMarkObservation {
+            marks: marks.to_vec(),
             meanings,
-        })
+        }
     }
 
     fn writing_busy(&self, blocked: &[u64]) -> Vec<u64> {
@@ -482,6 +502,7 @@ impl CoreHost {
                         claim: None,
                         text: Some(text.clone()),
                         marks: None,
+                        work: None,
                     })
             })
             .collect();
@@ -667,6 +688,7 @@ impl CoreHost {
                         claim: Some(text.clone()),
                         text: None,
                         marks: None,
+                        work: None,
                     })
             })
             .collect();

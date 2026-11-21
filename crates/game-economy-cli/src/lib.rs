@@ -384,6 +384,8 @@ struct WritingConfig {
     #[serde(default)]
     text_authors: Vec<game_economy::WritingTextAuthor>,
     #[serde(default)]
+    compositions: Vec<game_economy::WritingComposition>,
+    #[serde(default)]
     text_retention: Vec<game_economy::TextRetention>,
     #[serde(default)]
     text_memories: Vec<game_economy::TextMemory>,
@@ -2026,6 +2028,7 @@ fn build_scenario(
                 practice: config.practice.into(),
                 text_templates: config.text_templates.into(),
                 text_authors: config.text_authors.into(),
+                compositions: config.compositions.into(),
                 text_retention: config.text_retention.into(),
                 text_memories: config.text_memories.into(),
             })

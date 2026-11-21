@@ -172,30 +172,36 @@ impl Pastimes {
                 if self.session(mind.person).is_some() {
                     return None;
                 }
-                let activity = mind
-                    .interests
-                    .iter()
-                    .filter_map(|interest| {
-                        let activity = self.activity(interest.activity)?;
-                        let recent = interest.last_completion.is_some_and(|at| {
-                            now.saturating_sub(at) < u128::from(activity.satisfaction_millis)
-                        });
-                        let value = interest.value.saturating_add(if recent {
-                            interest.recent_value
-                        } else {
-                            0
-                        });
-                        (value > mind.idle && usable(mind.person, activity)).then_some((
-                            value,
-                            std::cmp::Reverse(activity.id),
-                            activity,
-                        ))
-                    })
-                    .max_by_key(|(value, id, _)| (*value, *id))?
-                    .2;
+                let (_, activity) = self.preferred(mind, now, |activity| usable(mind.person, activity))?;
                 self.contemplate(mind.person, region, activity.id, now)
             })
             .collect()
+    }
+
+    fn preferred(
+        &self,
+        mind: &Mind,
+        now: u128,
+        usable: impl Fn(&Activity) -> bool,
+    ) -> Option<(i64, &Activity)> {
+        mind.interests.iter().filter_map(|interest| {
+            let activity = self.activity(interest.activity)?;
+            let recent = interest.last_completion.is_some_and(|at| {
+                now.saturating_sub(at) < u128::from(activity.satisfaction_millis)
+            });
+            let value = interest.value.saturating_add(if recent { interest.recent_value } else { 0 });
+            (value > mind.idle && usable(activity)).then_some((value, activity))
+        }).max_by_key(|(value, activity)| (*value, std::cmp::Reverse(activity.id)))
+    }
+
+    pub fn preferred_value(
+        &self,
+        person: u64,
+        now: u128,
+        usable: impl Fn(&Activity) -> bool,
+    ) -> Option<i64> {
+        let index = self.minds.binary_search_by_key(&person, |row| row.person).ok()?;
+        self.preferred(&self.minds[index], now, usable).map(|row| row.0)
     }
 
     pub fn contemplate(

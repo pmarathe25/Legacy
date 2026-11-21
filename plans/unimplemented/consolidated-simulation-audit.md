@@ -73,6 +73,10 @@ to track rates, deadlines, and behavior under different advance sizes. The
   who share exact spoken or written forms and show competing forms. A
   one-year integrated archive records adoption, adaptation, and explanations
   that did not result in an immediate adoption.
+- Works can consist of several of a person's own marked forms on one
+  identified physical page. Readers interpret each form through their own
+  sound and meaning associations. Characters can choose authorship over a
+  competing creative activity, and the archive records actual works.
 - Authored pastime catalogs provide song composition, instrument practice,
   and material-based painting. Characters can take up or stop an activity.
   Completion is dated by elapsed time and people can assign it different

@@ -173,4 +173,5 @@ pub use writing::{
     Study as WritingStudy, TextAuthor as WritingTextAuthor, TextTemplate as WritingTextTemplate,
     Writing,
 };
+pub use writing::{Composition as WritingComposition, Work as WrittenWork};
 pub use writing_memory::{TextMemory, TextRetention};

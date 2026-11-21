@@ -41,10 +41,27 @@ pub struct Writing {
     pub text_templates: Arc<Vec<TextTemplate>>,
     #[serde(default)]
     pub text_authors: Arc<Vec<TextAuthor>>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub compositions: Arc<Vec<Composition>>,
     #[serde(default)]
     pub text_retention: Arc<Vec<crate::TextRetention>>,
     #[serde(default)]
     pub text_memories: Arc<Vec<crate::TextMemory>>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Composition {
+    pub person: u64,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub words: Vec<Vec<u8>>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub topics: Vec<game_language::Meaning>,
+    pub value: i64,
+    #[serde(default)]
+    pub idle: i64,
+    #[serde(default)]
+    pub completed: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -140,7 +157,19 @@ pub struct Page {
     /// Visible marks chosen by the author; they carry no universal meaning.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub marks: Option<Vec<u32>>,
+    /// An ordered series of marked forms on this physical page.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub work: Option<Work>,
 }
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Work {
+    pub created_at_millis: u128,
+    pub forms: Vec<Vec<u32>>,
+}
+
+pub const MAX_WORK_FORMS: usize = 16;
 
 impl Writing {
     pub fn normalize_and_validate(
@@ -158,6 +187,7 @@ impl Writing {
         Arc::make_mut(&mut self.practice).par_sort_unstable_by_key(|row| row.person);
         Arc::make_mut(&mut self.text_templates).par_sort_unstable_by_key(|row| row.id);
         Arc::make_mut(&mut self.text_authors).par_sort_unstable_by_key(|row| row.person);
+        Arc::make_mut(&mut self.compositions).par_sort_unstable_by_key(|row| row.person);
         Arc::make_mut(&mut self.text_retention).par_sort_unstable_by_key(|row| row.person);
         Arc::make_mut(&mut self.text_memories)
             .par_sort_unstable_by_key(|row| (row.person, row.item));
@@ -220,14 +250,19 @@ impl Writing {
                 row.item == 0
                     || row.item >= self.next_item
                     || !people.contains(&row.author)
-                    || (row.script == 0) != row.marks.is_some()
+                    || (row.script == 0) != (row.marks.is_some() || row.work.is_some())
                     || row.written_at > tick
                     || usize::from(row.claim.is_some())
                         + usize::from(row.text.is_some())
                         + usize::from(row.marks.is_some())
+                        + usize::from(row.work.is_some())
                         != 1
                     || row.marks.as_ref().is_some_and(|marks| {
                         marks.is_empty() || marks.len() > 16 || marks.contains(&0)
+                    })
+                    || row.work.as_ref().is_some_and(|work| {
+                        !(2..=MAX_WORK_FORMS).contains(&work.forms.len())
+                            || work.forms.iter().any(|marks| marks.is_empty() || marks.len() > 16 || marks.contains(&0))
                     })
                     || row
                         .text
@@ -259,6 +294,13 @@ impl Writing {
                         .text_templates
                         .binary_search_by_key(&a.template, |t| t.id)
                         .is_err()
+            })
+            || self.compositions.par_windows(2).any(|rows| rows[0].person == rows[1].person)
+            || self.compositions.par_iter().any(|row| {
+                !people.contains(&row.person)
+                    || row.words.is_empty() == row.topics.is_empty()
+                    || !(2..=MAX_WORK_FORMS).contains(&row.words.len().max(row.topics.len()))
+                    || row.words.iter().any(|word| word.is_empty() || word.len() > 16)
             })
             || self
                 .text_retention
