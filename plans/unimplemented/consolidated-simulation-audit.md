@@ -36,11 +36,24 @@ to track rates, deadlines, and behavior under different advance sizes. The
   responses. History preserves attributed proposals, claimed readiness,
   beliefs, and outward adoption with or without approval. More types of
   personal cooperation and a shared elapsed review cadence remain open.
+- Voluntary gathering can publish at the personal decision instant. The
+  gathered yield enters physical custody before later decisions. The node
+  owner arbitrates competing requests and charges only accepted transfers.
+  A composed test covers renewal, competing gatherers, exact receipts, and
+  save/resume across worker counts and physical settlement intervals.
+- Private lexicons support remembered acquaintances. A speaker can name
+  someone from their own experience. A listener needs their own grounding
+  and can decline or adapt the form. Annual reports count the living people
+  who share exact spoken or written forms and show competing forms.
+- Reading and joining a reserved crew can compete with other personal
+  choices. An individual can decline to help even with free crew space.
+  Crew capacity is applied after choices. An accepted helper contributes
+  only their actual elapsed effort.
 - The 5,100-person benchmarks give identical ordered receipts across worker
-  counts. A focused observation comparison showed that one hour requested in
-  minutes staged 306,000 rows per physiology owner under every read mode.
-  An hourly request staged 5,100 with the same results. Reducing such dense
-  work is an open performance task.
+  counts. The original minute observation test staged 306,000 rows per
+  physiology owner. The sparse fatigue stage now skips every unchanged
+  fatigue row in this idle case. Vitals still stages 306,000 rows with minute
+  advances and 5,100 with one hourly advance.
 
 ## Working constraints
 
@@ -119,7 +132,7 @@ reports.
 
 | Area | Behavior to review and intended direction |
 | --- | --- |
-| Scheduler and ongoing work | Early phases such as meetings, delivery, reading, and help can reserve an actor before competing proposals are compared. Move discretionary actions into personal evaluation, including the option to idle or keep, interrupt, or abandon an activity. Respect prior commitments as motives and account for setup or interruption costs. Ordinary work and shared work already have some continuation or withdrawal support. |
+| Scheduler and ongoing work | Meetings and delivery can reserve an actor before competing proposals are compared. Reading and starting to help have personal-choice paths. Move remaining discretionary actions into shared evaluation, including an option to idle or keep, interrupt, or abandon an activity. Respect prior commitments as motives and account for setup or interruption costs. |
 | Rest and capability | Interval rest and resumption are now personal choices, and elapsed fatigue and exhaustion are physical effects in the integrated path. Keep that behavior, and broaden alternatives while occupied. Check remaining shared age or hunger gates on negotiation, delivery, agriculture, and work. Model relevant ability and risk directly. |
 | Meetings and pressure | Known local peers can be preferred by directed affinity, while incidental pairing chooses adjacent people from a seeded local order. Extend bounded deliberate approaches to aversion and goals. Separate an incidental encounter, a deliberate approach, and the receiver's response. Preserve refusal, compliance under pressure, and physical coercion. |
 | Teaching and language | Personal choice profiles can independently decline or rank practice lessons during encounters. Extend this to competition with other activities, comprehension, and incidental learning. Preserve exact recipe knowledge separately. Keep phoneme mappings and written marks personal and revisable, with choices about whether to explain, adopt, or modify them. |
