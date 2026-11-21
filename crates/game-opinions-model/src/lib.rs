@@ -281,6 +281,8 @@ pub struct Rules {
     /// Independent fear reduction per tick; zero preserves fear indefinitely.
     #[serde(default)]
     pub fear_decay_per_tick: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fear_decay: Option<FearDecay>,
     /// Personal obligation gained from directly receiving a gift.
     #[serde(default)]
     pub gratitude_gain: u64,
@@ -296,6 +298,13 @@ pub struct Rules {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub newborn_obligation_development: Option<ObligationDevelopment>,
 }
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FearDecay {
+    pub period_millis: u64,
+    pub amount: u64,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Opinion {

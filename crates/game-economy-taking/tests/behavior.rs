@@ -631,6 +631,7 @@ fn fear_can_motivate_an_unwilling_actor_and_the_target_uses_their_own_affinity()
             encounter_gain: 0,
             fear_per_damage: 0,
             fear_decay_per_tick: 0,
+            fear_decay: None,
             gratitude_gain: 0,
             obligation_relief: 0,
             minimum_report_trust: None,

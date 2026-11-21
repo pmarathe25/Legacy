@@ -388,6 +388,7 @@ mod merge_tests {
             newborn_obligation_development: None,
             fear_per_damage: 0,
             fear_decay_per_tick: 0,
+            fear_decay: None,
             gratitude_gain: 0,
             obligation_relief: 0,
         };
