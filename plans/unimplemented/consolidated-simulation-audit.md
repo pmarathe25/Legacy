@@ -32,6 +32,10 @@ to track rates, deadlines, and behavior under different advance sizes. The
   different selectivity within one species. The earlier elapsed history lost
   its grazer population after hunting removed six founders and none of the
   remaining local pairings met both animals' thresholds.
+- Wild stands support heritable plant strains, viable seed banks, finite
+  adult capacity, and local habitat selection without human activity.
+  Competing local variants and physical seed withdrawals are tested
+  across worker counts, elapsed partitions, and save/reload.
 - Conditional aid and work practices arise through individual proposals and
   responses. History preserves attributed proposals, claimed readiness,
   beliefs, and outward adoption with or without approval. More types of

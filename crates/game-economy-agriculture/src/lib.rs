@@ -10,6 +10,7 @@ pub mod provenance;
 pub mod reproduction;
 pub mod requests;
 pub mod soil;
+pub mod wild_plants;
 use game_economy_person::Person;
 use game_lot_content::Catalog;
 use game_lot_runtime::Events;

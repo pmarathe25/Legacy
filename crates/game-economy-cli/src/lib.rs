@@ -744,6 +744,8 @@ struct GatheringConfig {
     inherit_births: bool,
     nodes: Vec<ResourceConfig>,
     #[serde(default)]
+    wild_plants: Option<game_economy_agriculture::wild_plants::WildPlants>,
+    #[serde(default)]
     policies: Vec<game_economy::GatherPolicy>,
 }
 #[derive(Deserialize)]
@@ -2527,6 +2529,7 @@ fn build_scenario(
                 elapsed_actions: config.elapsed_actions,
                 inherit_births: config.inherit_births,
                 nodes,
+                wild_plants: config.wild_plants,
                 policies: config.policies,
             })
         })
@@ -2561,6 +2564,20 @@ fn build_scenario(
             )
         })
         .transpose()?;
+    let mut wild_strains: Vec<_> = gathering
+        .as_ref()
+        .and_then(|owner| owner.wild_plants.as_ref())
+        .into_iter()
+        .flat_map(|owner| &owner.stands)
+        .flat_map(|stand| stand.cohorts.iter().map(|row| row.strain))
+        .collect();
+    wild_strains.sort_unstable_by_key(|row| row.batch);
+    if wild_strains.windows(2).any(|rows| {
+        rows[0].batch == rows[1].batch && rows[0].alleles != rows[1].alleles
+    }) {
+        return Err("wild seed batch has conflicting genotypes".into());
+    }
+    wild_strains.dedup_by_key(|row| row.batch);
     let authored_seed_batches = scenario
         .cultivation
         .as_ref()
@@ -2581,8 +2598,15 @@ fn build_scenario(
             let genetics = state
                 .seed_genetics
                 .map(|mut genetics| {
-                    std::sync::Arc::make_mut(&mut genetics.strains)
-                        .sort_unstable_by_key(|row| row.batch);
+                    let strains = std::sync::Arc::make_mut(&mut genetics.strains);
+                    strains.extend(wild_strains.iter().copied());
+                    strains.sort_unstable_by_key(|row| row.batch);
+                    if strains.windows(2).any(|rows| {
+                        rows[0].batch == rows[1].batch && rows[0].alleles != rows[1].alleles
+                    }) {
+                        return Err("wild seed conflicts with a cultivated batch".into());
+                    }
+                    strains.dedup_by_key(|row| row.batch);
                     genetics.validate().map_err(str::to_owned)?;
                     Ok::<_, String>(std::sync::Arc::new(genetics))
                 })
@@ -2901,22 +2925,17 @@ fn build_scenario(
     if local_transport.is_some() {
         custody.containers.par_sort_unstable_by_key(|row| row.place);
     }
-    if let Some(genetics) = agriculture
+    let genetics = agriculture
         .as_ref()
         .and_then(|farm| farm.provenance.as_ref())
-        .and_then(|owner| owner.genetics.as_ref())
-    {
+        .and_then(|owner| owner.genetics.as_ref());
+    if genetics.is_some() || !wild_strains.is_empty() {
         let highest = custody
             .containers
             .par_iter()
             .flat_map_iter(|container| container.lots.iter().filter_map(|lot| lot.batch))
-            .chain(genetics.strains.par_iter().map(|strain| strain.batch))
-            .chain(
-                genetics
-                    .descendants
-                    .par_iter()
-                    .flat_map_iter(|chunk| chunk.iter().map(|row| row.batch)),
-            )
+            .chain(wild_strains.par_iter().map(|strain| strain.batch))
+            .chain(genetics.and_then(|owner| owner.highest_batch()).into_par_iter())
             .max();
         custody.next_batch = Some(highest.map_or(Ok(1), |id| {
             id.checked_add(1).ok_or("batch identity overflow")

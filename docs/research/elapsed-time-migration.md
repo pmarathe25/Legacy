@@ -107,6 +107,15 @@ and perceived effort affect that decision. A restrained animal stays where
 it is, and newborns stay at their delivery site. Crossing adds the authored
 hunger cost. The animal can graze and mate in the destination at subsequent
 opportunities. The history includes crossings with the actual elapsed time.
+An optional `gathering.wild_plants` defines a lifecycle period and seed-bank
+stands behind specific resource nodes. Stands update independently at elapsed
+deadlines. Heritable strains compete for the same adult capacity, and a
+strain's fit to the local habitat affects survival and establishment. Plants
+and viable seeds can disappear without any human action. A successful
+gathering withdrawal removes the identified strain from its seed bank and
+puts that same batch into the gatherer's custody. History retains changes to
+adults and viable seeds separately.
+
 Set `elapsed_spoilage = true` to date newly created physical lots in elapsed
 milliseconds. Preparation, travel, or storage transfer retains an existing lot\'s
 deadline. Spoilage wakes from an index of active deadlines and removes the due

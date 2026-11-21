@@ -28,6 +28,7 @@ pub struct Gathered {
     pub person: u64,
     pub good: u32,
     pub quantity: u64,
+    pub batch: Option<u64>,
 }
 
 /// Generate one fresh personal output per independently admitted gatherer.
@@ -50,16 +51,18 @@ pub fn prepare_gathered(
     outputs
         .par_iter()
         .map(|row| {
+            let mut creation = catalog.creation(
+                row.action,
+                Place::Person(row.person),
+                row.good,
+                row.quantity,
+                tick,
+            )?;
+            creation.lot.batch = row.batch;
             Ok(Transaction {
                 id: row.action,
                 movements: vec![],
-                creations: vec![catalog.creation(
-                    row.action,
-                    Place::Person(row.person),
-                    row.good,
-                    row.quantity,
-                    tick,
-                )?],
+                creations: vec![creation],
             })
         })
         .collect()

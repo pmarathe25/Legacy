@@ -9,6 +9,7 @@ pub(super) struct ElapsedProgress {
     pub incapacitations: Vec<scheduler::Incapacitation>,
     pub family_events: Vec<game_economy_family::FamilyEvent>,
     pub fauna: Option<CoreFaunaTransitions>,
+    pub wild_plants: Option<game_economy_agriculture::wild_plants::Cycle>,
     pub agreement_expiries: Vec<game_agreements::Event>,
     pub disease_events: Vec<game_disease::Event>,
     pub local_arrivals: Vec<game_economy_local_transport::walking::Event>,
@@ -34,6 +35,7 @@ struct ElapsedLimits {
     nutrition: Option<u64>,
     food_health: Option<u128>,
     fauna: Option<u64>,
+    wild_plants: Option<u64>,
     fear_relaxation: Option<u64>,
     agreement_expiry: Option<u64>,
 }
@@ -56,6 +58,7 @@ impl From<PreparedDeadline> for ElapsedLimits {
             nutrition: at(deadline.nutrition),
             food_health: at(deadline.food_health).map(u128::from),
             fauna: at(deadline.fauna),
+            wild_plants: at(deadline.wild_plants),
             fear_relaxation: at(deadline.fear_relaxation),
             agreement_expiry: at(deadline.agreement_expiry),
         }
@@ -80,6 +83,7 @@ impl ElapsedLimits {
             .and_then(|after| u64::try_from(after).ok());
         let disease = host.next_disease_deadline();
         let fauna = host.next_fauna_lifecycle();
+        let wild_plants = host.next_wild_plant_cycle();
         let fear_relaxation = host.next_fear_relaxation();
         let agreement_expiry = host.next_agreement_expiry();
         let mut limit = host.core.progress_limit(requested)?;
@@ -96,6 +100,7 @@ impl ElapsedLimits {
             host.next_social_encounter(),
             host.next_storage_temperature(),
             fauna,
+            wild_plants,
             fear_relaxation,
             agreement_expiry,
         ]
@@ -116,6 +121,7 @@ impl ElapsedLimits {
             nutrition: host.core.next_metabolism(),
             food_health: host.core.next_food_health(),
             fauna,
+            wild_plants,
             fear_relaxation,
             agreement_expiry,
         })
@@ -554,6 +560,9 @@ impl CoreHost {
             self.stage_fatal_assistance(&deaths, &durations, consumed)?;
         let paused_after_deaths = self.pause_incapacitated_rates(&deaths, &reductions, consumed)?;
         let mut renewal = self.stage_resource_renewal(consumed)?;
+        let wild = (limits.wild_plants == Some(consumed))
+            .then(|| self.stage_wild_plants(event_time, &mut renewal))
+            .transpose()?;
         let (fauna, fauna_transitions) = if limits.fauna == Some(consumed) {
             let (draft, transitions) = self.stage_elapsed_fauna(&mut renewal, event_time)?;
             (Some(draft), Some(transitions))
@@ -583,9 +592,11 @@ impl CoreHost {
             )?;
             let mut family_events = Vec::new();
             let mut local_arrivals = Vec::new();
+            let mut wild_plants = None;
             if advanced > 0 {
                 local_arrivals = self.publish_local_progress(local_progress);
                 self.publish_resource_renewal(renewal);
+                wild_plants = self.publish_wild_plants(wild);
                 self.publish_elapsed_fauna(fauna, fauna_transitions.as_ref());
                 self.relax_due_fear(limits.fear_relaxation == Some(advanced));
                 self.publish_crop_growth(growth);
@@ -644,6 +655,7 @@ impl CoreHost {
                 incapacitations,
                 family_events,
                 fauna: fauna_transitions,
+                wild_plants,
                 disease_events,
                 local_arrivals,
             });
@@ -787,6 +799,7 @@ impl CoreHost {
             delivery.as_ref().map(|delivery| delivery.physical()),
         )?;
         self.publish_resource_renewal(renewal);
+        let wild_plants = self.publish_wild_plants(wild);
         self.publish_elapsed_fauna(fauna, fauna_transitions.as_ref());
         self.relax_due_fear(limits.fear_relaxation == Some(advanced));
         let local_arrivals = self.publish_local_progress(local_progress);
@@ -852,6 +865,7 @@ impl CoreHost {
             incapacitations,
             family_events,
             fauna: fauna_transitions,
+            wild_plants,
             disease_events,
             local_arrivals,
         })

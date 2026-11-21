@@ -124,6 +124,68 @@ pub(super) fn sample(snapshot: &Value) -> Vec<Value> {
         }).collect()
 }
 
+pub(super) fn sample_wild(snapshot: &Value) -> Vec<Value> {
+    snapshot["gathering"]["wild_plants"]["stands"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|stand| {
+            let node = stand["node"].as_u64()?;
+            let cohorts: Vec<_> = stand["cohorts"]
+                .as_array()?
+                .iter()
+                .filter_map(|cohort| {
+                    Some(json!({
+                        "batch": cohort["strain"]["batch"].as_u64()?,
+                        "alleles": cohort["strain"]["alleles"].as_array()?,
+                        "adults": cohort["adults"].as_u64()?,
+                        "seeds": cohort["seeds"].as_u64()?,
+                    }))
+                })
+                .collect();
+            Some(json!({"node": node, "cohorts": cohorts}))
+        })
+        .collect()
+}
+
+pub(super) fn write_wild_history(text: &mut String, years: &Value) {
+    let mut observed = BTreeMap::new();
+    for row in years.as_array().into_iter().flatten() {
+        let Some(year) = row["year"].as_u64() else {
+            continue;
+        };
+        for stand in row["wild_plants"].as_array().into_iter().flatten() {
+            let Some(node) = stand["node"].as_u64() else {
+                continue;
+            };
+            for cohort in stand["cohorts"].as_array().into_iter().flatten() {
+                if let Some(batch) = cohort["batch"].as_u64() {
+                    let sample = (year, cohort);
+                    let range = observed.entry((node, batch)).or_insert((sample, sample));
+                    range.1 = sample;
+                }
+            }
+        }
+    }
+    if observed.is_empty() {
+        return;
+    }
+    text.push_str("## Wild plant populations\n\n");
+    for ((node, batch), ((first_year, opening), (year, latest))) in observed.into_iter().take(12) {
+        let alleles = &latest["alleles"];
+        let adults = &latest["adults"];
+        let seeds = &latest["seeds"];
+        if first_year == year {
+            writeln!(text, "- Stand {node}, strain {batch} {alleles}, held {adults} adult plants and {seeds} viable seeds in year {year}.").unwrap();
+        } else {
+            let before_adults = &opening["adults"];
+            let before_seeds = &opening["seeds"];
+            writeln!(text, "- Stand {node}, strain {batch} {alleles}, had {before_adults} adults and {before_seeds} viable seeds in year {first_year}. In year {year} it had {adults} adults and {seeds} viable seeds.").unwrap();
+        }
+    }
+    text.push('\n');
+}
+
 pub(super) fn write_history(text: &mut String, years: &Value) {
     let mut observed = BTreeMap::new();
     for row in years.as_array().into_iter().flatten() {
@@ -161,6 +223,24 @@ pub(super) fn write_history(text: &mut String, years: &Value) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reports_wild_adults_and_their_viable_seed_bank_separately() {
+        let sample_for = |adults, seeds| {
+            sample_wild(&json!({"gathering":{"wild_plants":{"stands":[
+                {"node":7,"cohorts":[{"strain":{"batch":19,"alleles":[4,8]},"adults":adults,"seeds":seeds}]}
+            ]}}}))
+        };
+        let samples = json!([
+            {"year":0,"wild_plants":sample_for(5,2)},
+            {"year":3,"wild_plants":sample_for(0,7)}
+        ]);
+        let mut report = String::new();
+        write_wild_history(&mut report, &samples);
+        assert!(report.contains("Stand 7, strain 19"));
+        assert!(report.contains("5 adults and 2 viable seeds in year 0"));
+        assert!(report.contains("In year 3 it had 0 adults and 7 viable seeds"));
+    }
 
     #[test]
     fn samples_physical_cohorts_and_omits_extinct_lineages_from_current_averages() {

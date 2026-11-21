@@ -1208,6 +1208,12 @@ impl CoreHost {
                 .collect();
             let view = core.physical.view(core.physical.tick())?;
             owner.validate(&people, &goods, &view)?;
+            owner.validate_wild_plants(core.simulated_millis(), core.physical.next_batch())?;
+            if owner.wild_plants.is_some() && environment.as_ref().is_some_and(|calendar| {
+                !calendar.seasons.is_empty() && calendar.season_unit_millis.is_none()
+            }) {
+                return Err("wild plant ecology requires an elapsed calendar".into());
+            }
         }
         if let Some(owner) = &fauna {
             let goods: HashSet<_> = core
@@ -1799,6 +1805,7 @@ impl CoreHost {
         let invocation = self.next_invocation_deadline();
         let care = self.next_elapsed_care();
         let fauna = self.next_fauna_lifecycle();
+        let wild_plants = self.next_wild_plant_cycle();
         let social = self.next_social_encounter();
         let storage_temperature = self.next_storage_temperature();
         let fear_relaxation = self.next_fear_relaxation();
@@ -1819,6 +1826,7 @@ impl CoreHost {
             invocation,
             care,
             fauna,
+            wild_plants,
             social,
             storage_temperature,
             fear_relaxation,
@@ -1851,6 +1859,7 @@ impl CoreHost {
                     invocation: invocation == Some(after_millis),
                     care: care == Some(after_millis),
                     fauna: fauna == Some(after_millis),
+                    wild_plants: wild_plants == Some(after_millis),
                     social: social == Some(after_millis),
                     storage_temperature: storage_temperature == Some(after_millis),
                     fear_relaxation: fear_relaxation == Some(after_millis),
@@ -1874,6 +1883,7 @@ impl CoreHost {
                 deadline.invocation = invocation == Some(after_millis);
                 deadline.care = care == Some(after_millis);
                 deadline.fauna = fauna == Some(after_millis);
+                deadline.wild_plants = wild_plants == Some(after_millis);
                 deadline.social = social == Some(after_millis);
                 deadline.storage_temperature = storage_temperature == Some(after_millis);
                 deadline.fear_relaxation = fear_relaxation == Some(after_millis);

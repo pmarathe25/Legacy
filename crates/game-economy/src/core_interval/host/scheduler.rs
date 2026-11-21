@@ -764,6 +764,7 @@ pub enum CoreRunEvent {
     Campaign(Vec<game_economy_campaign::elapsed::Event>),
     Care(CoreCareVisit),
     Fauna(CoreFaunaTransitions),
+    WildPlants(game_economy_agriculture::wild_plants::Cycle),
     InvocationWarning {
         at_millis: u128,
         warning: game_economy_campaign::InvocationWarning,
@@ -3761,6 +3762,7 @@ impl CoreHost {
                 && elapsed.disease_events.is_empty()
                 && elapsed.local_arrivals.is_empty()
                 && elapsed.fauna.is_none()
+                && elapsed.wild_plants.is_none()
                 && expiry.spoilage.is_empty()
                 && expiry.maturation.is_empty()
             {
@@ -3804,6 +3806,9 @@ impl CoreHost {
             if !elapsed.disease_events.is_empty() {
                 run.events
                     .push(CoreRunEvent::Disease(elapsed.disease_events));
+            }
+            if let Some(cycle) = elapsed.wild_plants {
+                run.events.push(CoreRunEvent::WildPlants(cycle));
             }
             if let Some(fauna) = elapsed.fauna
                 && (!fauna.births.is_empty()

@@ -7654,7 +7654,7 @@ fn irrigation_consumes_contested_water_and_gates_next_growth() {
         let mut fourth = combined.core.people[2].clone(); fourth.id = 4; combined.core.people.push(fourth);
         combined.core.physical.custody.containers.push(Container::new(Place::Person(4), 1, vec![]).unwrap());
         combined.core.physical.custody.containers.sort_by_key(|row| row.place);
-        combined.gathering = Some(game_economy::Gathering {elapsed_renewal: false, elapsed_actions: false, max_hunger: 10, inherit_births: false,
+        combined.gathering = Some(game_economy::Gathering { wild_plants: None, elapsed_renewal: false, elapsed_actions: false, max_hunger: 10, inherit_births: false,
             nodes: vec![game_economy::ResourceNode {id: 1, region: 1, good: 2, available: 1, capacity: 1, regrowth: 0, renewal_rate: None, renewal_remainder: 0, seasonal: false, yield_per_action: 1}],
             policies: vec![game_economy::GatherPolicy {person: 4, node: 1, willing: true, pressured_by: None, pressure_threshold: None}]});
         let mut combined = CoreHost::begin(combined, &[(1, 1)]).unwrap();
@@ -7733,6 +7733,7 @@ fn gathering_depletes_resources_into_real_personal_custody() {
                     .containers
                     .sort_by_key(|row| row.place);
                 let gathering = game_economy::Gathering {
+                    wild_plants: None,
                     elapsed_renewal: false,
                     elapsed_actions: false,
                     max_hunger: 10,
@@ -8907,6 +8908,7 @@ fn core_host_cultivation_benchmark() {
         }),
         agriculture: ((!gathering && !family_mode && !medical && !giving && !taking) || inheritance).then_some(agriculture),
         gathering: (gathering || inheritance).then(|| game_economy::Gathering {
+            wild_plants: None,
             elapsed_renewal: false, elapsed_actions: false, max_hunger: 10,
             inherit_births: inheritance,
             nodes: vec![game_economy::ResourceNode {
@@ -15668,7 +15670,7 @@ fn family_birth_custody_and_worker_death_commit_atomically() {
                     {"person": 1, "sociability": 200, "diligence": 0},
                     {"person": 2, "sociability": 800, "diligence": 1000}]
             })).unwrap());
-            inherited.gathering = Some(game_economy::Gathering { elapsed_renewal: false, elapsed_actions: false, max_hunger: 10, inherit_births: true,
+            inherited.gathering = Some(game_economy::Gathering { wild_plants: None, elapsed_renewal: false, elapsed_actions: false, max_hunger: 10, inherit_births: true,
                 nodes: vec![game_economy::ResourceNode { id: 1, region: 1, good: 2, available: 1,
                     capacity: 1, regrowth: 0, renewal_rate: None, renewal_remainder: 0, seasonal: false, yield_per_action: 1 }],
                 policies: vec![game_economy::GatherPolicy { person: 2, node: 1, willing: true,

@@ -114,10 +114,12 @@ impl CoreHost {
         season: Option<&game_environment::Season>,
         tick: u64,
     ) -> Result<CoreFaunaDraft, String> {
+        let wild = self.gathering.as_ref().and_then(|owner| owner.wild_plants.as_ref());
         let patches: Vec<_> = nodes
             .as_deref()
             .unwrap_or_default()
             .par_iter()
+            .filter(|node| wild.is_none_or(|owner| owner.stand(node.id).is_none()))
             .map(|node| game_fauna::Patch {
                 id: node.id,
                 region: node.region,

@@ -1602,7 +1602,7 @@ elapsed_renewal = true
 elapsed_actions = true
 inherit_births = true
 max_hunger = 120
-policies = [{ person = 1, node = 1, willing = true }, { person = 2, node = 1, willing = true }, { person = 3, node = 1, willing = true }, { person = 4, node = 1, willing = true }, { person = 5, node = 1, willing = true }, { person = 6, node = 1, willing = true }, { person = 7, node = 1, willing = true }, { person = 8, node = 1, willing = true }, { person = 9, node = 1, willing = true }, { person = 10, node = 1, willing = true }, { person = 11, node = 1, willing = true }, { person = 12, node = 1, willing = true }, { person = 13, node = 1, willing = true }, { person = 14, node = 1, willing = true }, { person = 15, node = 1, willing = true }, { person = 16, node = 1, willing = true }, { person = 17, node = 1, willing = true }, { person = 18, node = 1, willing = true }, { person = 19, node = 1, willing = true }, { person = 20, node = 1, willing = true }, { person = 21, node = 1, willing = true }, { person = 22, node = 1, willing = true }, { person = 23, node = 1, willing = true }, { person = 24, node = 1, willing = true }, { person = 25, node = 1, willing = true }, { person = 26, node = 1, willing = true }, { person = 27, node = 1, willing = true }, { person = 28, node = 1, willing = true }, { person = 29, node = 1, willing = true }, { person = 30, node = 1, willing = true }, { person = 31, node = 1, willing = true }, { person = 32, node = 1, willing = true }, { person = 33, node = 1, willing = true }, { person = 34, node = 1, willing = true }, { person = 35, node = 1, willing = true }, { person = 36, node = 1, willing = true }, { person = 37, node = 1, willing = true }, { person = 38, node = 1, willing = true }, { person = 39, node = 1, willing = true }, { person = 40, node = 1, willing = true }, { person = 41, node = 1, willing = true }, { person = 42, node = 1, willing = true }, { person = 43, node = 1, willing = true }, { person = 44, node = 1, willing = true }, { person = 45, node = 1, willing = true }, { person = 46, node = 1, willing = true }, { person = 47, node = 1, willing = true }, { person = 48, node = 1, willing = true }, { person = 49, node = 2, willing = true }, { person = 50, node = 2, willing = true }, { person = 51, node = 2, willing = true }, { person = 52, node = 2, willing = true }, { person = 53, node = 2, willing = true }, { person = 54, node = 2, willing = true }, { person = 55, node = 2, willing = true }, { person = 56, node = 2, willing = true }, { person = 57, node = 2, willing = true }, { person = 58, node = 2, willing = true }, { person = 59, node = 2, willing = true }, { person = 60, node = 2, willing = true }, { person = 11, node = 5, willing = true }, { person = 12, node = 5, willing = true }]
+policies = [{ person = 1, node = 1, willing = true }, { person = 2, node = 1, willing = true }, { person = 3, node = 1, willing = true }, { person = 4, node = 1, willing = true }, { person = 5, node = 1, willing = true }, { person = 6, node = 1, willing = true }, { person = 7, node = 1, willing = true }, { person = 8, node = 1, willing = true }, { person = 9, node = 1, willing = true }, { person = 10, node = 1, willing = true }, { person = 11, node = 1, willing = true }, { person = 12, node = 1, willing = true }, { person = 13, node = 1, willing = true }, { person = 14, node = 1, willing = true }, { person = 15, node = 1, willing = true }, { person = 16, node = 1, willing = true }, { person = 17, node = 1, willing = true }, { person = 18, node = 1, willing = true }, { person = 19, node = 1, willing = true }, { person = 20, node = 1, willing = true }, { person = 21, node = 1, willing = true }, { person = 22, node = 1, willing = true }, { person = 23, node = 1, willing = true }, { person = 24, node = 1, willing = true }, { person = 25, node = 1, willing = true }, { person = 26, node = 1, willing = true }, { person = 27, node = 1, willing = true }, { person = 28, node = 1, willing = true }, { person = 29, node = 1, willing = true }, { person = 30, node = 1, willing = true }, { person = 31, node = 1, willing = true }, { person = 32, node = 1, willing = true }, { person = 33, node = 1, willing = true }, { person = 34, node = 1, willing = true }, { person = 35, node = 1, willing = true }, { person = 36, node = 1, willing = true }, { person = 37, node = 1, willing = true }, { person = 38, node = 1, willing = true }, { person = 39, node = 1, willing = true }, { person = 40, node = 1, willing = true }, { person = 41, node = 1, willing = true }, { person = 42, node = 1, willing = true }, { person = 43, node = 1, willing = true }, { person = 44, node = 1, willing = true }, { person = 45, node = 1, willing = true }, { person = 46, node = 1, willing = true }, { person = 47, node = 1, willing = true }, { person = 48, node = 1, willing = true }, { person = 49, node = 2, willing = true }, { person = 50, node = 2, willing = true }, { person = 51, node = 2, willing = true }, { person = 52, node = 2, willing = true }, { person = 53, node = 2, willing = true }, { person = 54, node = 2, willing = true }, { person = 55, node = 2, willing = true }, { person = 56, node = 2, willing = true }, { person = 57, node = 2, willing = true }, { person = 58, node = 2, willing = true }, { person = 59, node = 2, willing = true }, { person = 60, node = 2, willing = true }, { person = 11, node = 5, willing = true }, { person = 12, node = 5, willing = true }, { person = 1, node = 6, willing = true }, { person = 49, node = 7, willing = true }]
 
 [[gathering.nodes]]
 id = 1
@@ -1654,6 +1654,49 @@ available = 1000
 capacity = 1000
 renewal_rate = { units = 2, per_millis = 3600000 }
 yield_per_action = 5
+
+[[gathering.nodes]]
+id = 6
+region = 1
+good = "grain-seed"
+available = 200
+capacity = 300
+yield_per_action = 1
+
+[[gathering.nodes]]
+id = 7
+region = 2
+good = "grain-seed"
+available = 200
+capacity = 300
+yield_per_action = 1
+
+[gathering.wild_plants]
+period_millis = 2592000000
+
+[[gathering.wild_plants.stands]]
+node = 6
+habitat = 0
+adult_capacity = 100
+seed_capacity = 300
+seed_survival = 900
+seed_per_adult = 4
+cohorts = [
+    { strain = { batch = 150, alleles = [0, 0] }, adults = 50, seeds = 100 },
+    { strain = { batch = 151, alleles = [1000, 1000] }, adults = 50, seeds = 100 }
+]
+
+[[gathering.wild_plants.stands]]
+node = 7
+habitat = 1000
+adult_capacity = 100
+seed_capacity = 300
+seed_survival = 900
+seed_per_adult = 4
+cohorts = [
+    { strain = { batch = 150, alleles = [0, 0] }, adults = 50, seeds = 100 },
+    { strain = { batch = 151, alleles = [1000, 1000] }, adults = 50, seeds = 100 }
+]
 
 [care]
 inherit_births = true

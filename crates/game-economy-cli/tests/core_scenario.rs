@@ -6424,6 +6424,7 @@ fn elapsed_resource_renewal_survives_subdivision_and_resume() {
                     .unwrap()
                     .id;
                 state.gathering = Some(game_economy::Gathering {
+                    wild_plants: None,
                     elapsed_renewal,
                     elapsed_actions: false,
                     max_hunger: 100,
@@ -6506,6 +6507,7 @@ fn gathering_is_chosen_then_settles_contended_physical_resources() {
             let mut state = host.snapshot();
             let grain = state.core.physical.goods.iter().find(|good| good.name == "grain").unwrap().id;
             state.gathering = Some(game_economy::Gathering {
+                wild_plants: None,
                 elapsed_renewal: false, elapsed_actions: false, max_hunger: 20, inherit_births: false,
                 nodes: vec![game_economy::ResourceNode { id: 1, region: 1, good: grain, available: 2, capacity: 2, regrowth: 0, renewal_rate: None, renewal_remainder: 0, seasonal: false, yield_per_action: 2 }, game_economy::ResourceNode { id: 2, region: 1, good: grain, available: 2, capacity: 2, regrowth: 0, renewal_rate: None, renewal_remainder: 0, seasonal: false, yield_per_action: 2 }],
                 policies: (1..=3).map(|person| game_economy::GatherPolicy { person, node: 1, willing: true, pressured_by: None, pressure_threshold: None }).chain(std::iter::once(game_economy::GatherPolicy { person: 1, node: 2, willing: true, pressured_by: None, pressure_threshold: None })).collect(),

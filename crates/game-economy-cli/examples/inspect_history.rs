@@ -635,7 +635,8 @@ fn inspect(path: &Path, focus: Focus, through_year: Option<u64>) -> Result<Value
                         )
                     });
                     let seed_lineages = cultivars::sample(state);
-                    samples.push(json!({"seed_lineages":seed_lineages,"year":year,"living_people":live_people,"living_animals":live_animals,"human_locus_means":human_means,"animal_locus_means":animal_means,"human_mate_desire_mean":human_desire,"animal_mate_desire_mean":animal_desire,"animal_species":animal_species}));
+                    let wild_plants = cultivars::sample_wild(state);
+                    samples.push(json!({"seed_lineages":seed_lineages,"wild_plants":wild_plants,"year":year,"living_people":live_people,"living_animals":live_animals,"human_locus_means":human_means,"animal_locus_means":animal_means,"human_mate_desire_mean":human_desire,"animal_mate_desire_mean":animal_desire,"animal_species":animal_species}));
                 }
                 if row["kind"] == "year" {
                     if let Some(events) = row["observations"].as_array() {
@@ -833,6 +834,7 @@ fn narrative(report: &Value, focus: Focus) -> String {
                 }
             }
             cultivars::write_history(&mut text, &report["genome_samples"]);
+            cultivars::write_wild_history(&mut text, &report["genome_samples"]);
             lexicon::write_history(&mut text, &report["chronicle"]["lexicon"]);
         }
         Focus::Person(person) => {

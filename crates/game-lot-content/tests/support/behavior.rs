@@ -33,6 +33,7 @@ fn personal_gathering_outputs_are_fresh_and_require_unique_actors() {
         person: 2,
         good: 1,
         quantity: 1,
+        batch: None,
     };
     let rows = prepare_gathered(&catalog, &[output], 7).unwrap();
     assert_eq!(rows[0].creations[0].to, Place::Person(2));

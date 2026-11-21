@@ -1,4 +1,5 @@
 //! Individual gathering from finite or renewable local physical resources.
+use game_economy_agriculture::wild_plants::WildPlants;
 use game_economy_person::Person;
 use game_lot_runtime::Events;
 use game_lots::{Place, View};
@@ -63,6 +64,8 @@ pub struct Gathering {
     #[serde(default)]
     pub inherit_births: bool,
     pub nodes: Vec<Node>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wild_plants: Option<WildPlants>,
     pub policies: Vec<Policy>,
 }
 impl Clone for Gathering {
@@ -73,6 +76,7 @@ impl Clone for Gathering {
             elapsed_actions: self.elapsed_actions,
             inherit_births: self.inherit_births,
             nodes: self.nodes.par_iter().cloned().collect(),
+            wild_plants: self.wild_plants.clone(),
             policies: self.policies.par_iter().cloned().collect(),
         }
     }
@@ -154,6 +158,33 @@ impl Gathering {
         Ok(Some(nodes))
     }
 
+    pub fn validate_wild_plants(&self, now: u128, next_batch: Option<u64>) -> Result<(), String> {
+        let Some(owner) = &self.wild_plants else {
+            return Ok(());
+        };
+        owner.validate(now)?;
+        if !self.elapsed_actions {
+            return Err("wild plants require elapsed gathering".into());
+        }
+        let nodes: std::collections::HashMap<_, _> =
+            self.nodes.par_iter().map(|node| (node.id, node)).collect();
+        if owner.stands.par_iter().any(|stand| {
+            nodes.get(&stand.node).is_none_or(|node| {
+                node.available != stand.available()
+                    || node.capacity != u64::from(stand.seed_capacity)
+                    || node.renewal_rate.is_some()
+                    || node.yield_per_action != 1
+                    || stand
+                        .cohorts
+                        .last()
+                        .is_some_and(|row| next_batch.is_none_or(|next| row.strain.batch >= next))
+            })
+        }) {
+            return Err("invalid gathering source for wild seeds".into());
+        }
+        Ok(())
+    }
+
     pub fn validate(
         &self,
         people: &HashSet<u64>,
@@ -210,9 +241,17 @@ impl Gathering {
 }
 pub struct Plan {
     pub actors: Vec<u64>,
-    records: Vec<(u64, u64, u64, u64)>,
+    records: Vec<Withdrawal>,
     elapsed_millis: u64,
 }
+struct Withdrawal {
+    node: u64,
+    action: u64,
+    quantity: u64,
+    person: u64,
+    batch: Option<u64>,
+}
+
 /// One person's possible local gathering action before resource arbitration.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -229,6 +268,8 @@ pub struct Harvested {
     pub node: u64,
     pub good: u32,
     pub quantity: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub batch: Option<u64>,
 }
 pub struct Context<'a> {
     pub owner: &'a Gathering,
@@ -393,7 +434,33 @@ impl Context<'_> {
                 let limit = usize::try_from(resource.available / resource.yield_per_action)
                     .unwrap_or(usize::MAX)
                     .min(group.len());
-                group[..limit].par_iter().map(move |row| (resource, row.2))
+                let mut end = 0;
+                let batches: Vec<_> = self
+                    .owner
+                    .wild_plants
+                    .as_ref()
+                    .and_then(|owner| owner.stand(resource.id))
+                    .into_iter()
+                    .flat_map(|stand| &stand.cohorts)
+                    .map(|row| {
+                        end += u64::from(row.seeds);
+                        (end, row.strain.batch)
+                    })
+                    .collect();
+                group[..limit]
+                    .par_iter()
+                    .enumerate()
+                    .map(move |(rank, row)| {
+                        let batch = batches.last().and_then(|&(available, _)| {
+                            let start = game_genetics::random(self.seed, resource.id, self.tick)
+                                % available;
+                            let slot = (start + rank as u64) % available;
+                            batches
+                                .get(batches.partition_point(|(end, _)| *end <= slot))
+                                .map(|&(_, batch)| batch)
+                        });
+                        (resource, row.2, batch)
+                    })
             })
             .collect();
         let count = u64::try_from(selected.len()).map_err(|_| "gathering action overflow")?;
@@ -401,13 +468,12 @@ impl Context<'_> {
         let records = selected
             .par_iter()
             .enumerate()
-            .map(|(i, (resource, actor))| {
-                (
-                    resource.id,
-                    base + i as u64,
-                    resource.yield_per_action,
-                    *actor,
-                )
+            .map(|(i, (resource, person, batch))| Withdrawal {
+                node: resource.id,
+                action: base + i as u64,
+                quantity: resource.yield_per_action,
+                person: *person,
+                batch: *batch,
             })
             .collect();
         Ok(Plan {
@@ -428,10 +494,10 @@ impl Plan {
             .par_iter()
             .filter_map(|row| {
                 decisions
-                    .get(&row.1)
+                    .get(&row.action)
                     .copied()
                     .unwrap_or(false)
-                    .then_some(row.3)
+                    .then_some(row.person)
             })
             .collect();
         let mut outcomes: Vec<_> = self
@@ -456,9 +522,10 @@ impl Plan {
                     .ok()?;
                 outcomes[index].1.then_some(Harvested {
                     person: output.person,
-                    node: row.0,
+                    node: row.node,
                     good: output.good,
                     quantity: output.quantity,
+                    batch: output.batch,
                 })
             })
             .collect()
@@ -469,13 +536,14 @@ impl Plan {
         nodes.par_sort_unstable_by_key(|node| node.id);
         self.records
             .par_iter()
-            .filter_map(|&(id, action, quantity, person)| {
-                let index = nodes.binary_search_by_key(&id, |node| node.id).ok()?;
+            .filter_map(|row| {
+                let index = nodes.binary_search_by_key(&row.node, |node| node.id).ok()?;
                 Some(game_lot_runtime::Gathered {
-                    action,
-                    person,
+                    action: row.action,
+                    person: row.person,
                     good: nodes[index].good,
-                    quantity,
+                    quantity: row.quantity,
+                    batch: row.batch,
                 })
             })
             .collect()
@@ -519,21 +587,47 @@ impl Plan {
         if decisions.par_windows(2).any(|w| w[0].id > w[1].id) {
             decisions.par_sort_unstable_by_key(|d| d.id);
         }
-        self.records.par_sort_unstable_by_key(|r| r.0);
+        self.records.par_sort_unstable_by_key(|r| (r.node, r.batch));
+        let accepted = |id| {
+            decisions
+                .binary_search_by_key(&id, |decision| decision.id)
+                .map(|index| decisions[index].accepted)
+                .map_err(|_| "missing gathering outcome")
+        };
+        let mut wild_plants = owner.wild_plants.clone();
+        if let Some(wild) = &mut wild_plants {
+            wild.stands.par_iter_mut().try_for_each(|stand| {
+                let start = self.records.partition_point(|row| row.node < stand.node);
+                let end = self.records.partition_point(|row| row.node <= stand.node);
+                let records = &self.records[start..end];
+                for cohort in &mut stand.cohorts {
+                    let batch = Some(cohort.strain.batch);
+                    let first = records.partition_point(|row| row.batch < batch);
+                    let last = records.partition_point(|row| row.batch <= batch);
+                    let used = records[first..last]
+                        .par_iter()
+                        .map(|row| accepted(row.action).map(u32::from))
+                        .try_reduce(
+                            || 0,
+                            |a, b| a.checked_add(b).ok_or("wild seed withdrawal overflow"),
+                        )?;
+                    cohort.seeds = cohort
+                        .seeds
+                        .checked_sub(used)
+                        .ok_or("wild seed bank overdrawn")?;
+                }
+                Ok::<_, &str>(())
+            })?;
+        }
         let nodes = owner
             .nodes
             .par_iter()
             .map(|node| -> Result<_, String> {
-                let start = self.records.partition_point(|r| r.0 < node.id);
-                let end = self.records.partition_point(|r| r.0 <= node.id);
+                let start = self.records.partition_point(|r| r.node < node.id);
+                let end = self.records.partition_point(|r| r.node <= node.id);
                 let gathered = self.records[start..end]
                     .par_iter()
-                    .map(|(_, id, amount, _)| {
-                        decisions
-                            .binary_search_by_key(id, |d| d.id)
-                            .map(|i| if decisions[i].accepted { *amount } else { 0 })
-                            .map_err(|_| "missing gathering outcome")
-                    })
+                    .map(|row| accepted(row.action).map(|yes| if yes { row.quantity } else { 0 }))
                     .try_reduce(
                         || 0u64,
                         |a, b| a.checked_add(b).ok_or("gathering quantity overflow"),
@@ -584,6 +678,7 @@ impl Plan {
             elapsed_actions: owner.elapsed_actions,
             inherit_births: owner.inherit_births,
             nodes,
+            wild_plants,
             policies: owner.policies.par_iter().cloned().collect(),
         })
     }

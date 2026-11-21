@@ -1,0 +1,81 @@
+
+seed = 7
+tick_millis = 900000
+decision_period_millis = 3600000
+stock_capacity = 300
+food_relief_divisor = 20
+elapsed_spoilage = true
+
+[rules]
+hunger_per_tick = 0
+meal_threshold = 5
+starvation_threshold = 50
+starvation_damage = 1
+max_health = 100
+carrying_capacity = 1
+max_work_hunger = 20
+
+[[regions]]
+id = 1
+stock = { grain-seed = 0 }
+
+[[regions]]
+id = 2
+stock = { grain-seed = 0 }
+
+[[people]]
+id = 1
+region = 1
+health = 100
+hunger = 0
+controlled = true
+willing_to_work = false
+seek_meals = false
+
+[gathering]
+elapsed_renewal = true
+elapsed_actions = true
+max_hunger = 30
+
+[[gathering.nodes]]
+id = 10
+region = 1
+good = "grain-seed"
+available = 200
+capacity = 300
+yield_per_action = 1
+
+[[gathering.nodes]]
+id = 20
+region = 2
+good = "grain-seed"
+available = 200
+capacity = 300
+yield_per_action = 1
+
+[gathering.wild_plants]
+period_millis = 2592000000
+
+[[gathering.wild_plants.stands]]
+node = 10
+habitat = 0
+adult_capacity = 100
+seed_capacity = 300
+seed_survival = 900
+seed_per_adult = 4
+cohorts = [
+    { strain = { batch = 150, alleles = [0, 0] }, adults = 50, seeds = 100 },
+    { strain = { batch = 151, alleles = [1000, 1000] }, adults = 50, seeds = 100 }
+]
+
+[[gathering.wild_plants.stands]]
+node = 20
+habitat = 1000
+adult_capacity = 100
+seed_capacity = 300
+seed_survival = 900
+seed_per_adult = 4
+cohorts = [
+    { strain = { batch = 150, alleles = [0, 0] }, adults = 50, seeds = 100 },
+    { strain = { batch = 151, alleles = [1000, 1000] }, adults = 50, seeds = 100 }
+]

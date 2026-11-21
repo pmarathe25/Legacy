@@ -1,5 +1,6 @@
 //! Renewable gathering into each individual's physical custody.
 use super::*;
+use game_economy_agriculture::wild_plants::{Cycle, WildPlants};
 
 struct GatheredCustody {
     outcomes: Vec<(u64, bool)>,
@@ -181,6 +182,57 @@ impl CoreHost {
 }
 
 impl CoreHost {
+    pub(super) fn next_wild_plant_cycle(&self) -> Option<u64> {
+        let owner = self.gathering.as_ref()?.wild_plants.as_ref()?;
+        let after = owner
+            .next_cycle()?
+            .checked_sub(self.core.simulated_millis())?;
+        u64::try_from(after).ok()
+    }
+
+    pub(super) fn stage_wild_plants(
+        &self,
+        now: u128,
+        nodes: &mut Option<Vec<crate::ResourceNode>>,
+    ) -> Result<(WildPlants, Cycle), String> {
+        let owner = self
+            .gathering
+            .as_ref()
+            .and_then(|owner| owner.wild_plants.as_ref())
+            .expect("due wild plant cycle");
+        let duration = owner.period_millis;
+        let exposure = self
+            .environment
+            .as_ref()
+            .and_then(|calendar| {
+                calendar.food_growth_exposure(now - u128::from(duration), duration)
+            })
+            .unwrap_or(u128::from(duration) * 1000);
+        let (next, cycle) = owner.prepare(now, exposure, self.core.seed)?;
+        nodes
+            .as_mut()
+            .expect("staged wild resources")
+            .par_iter_mut()
+            .for_each(|node| {
+                if let Some(stand) = next.stand(node.id) {
+                    node.available = stand.available();
+                }
+            });
+        Ok((next, cycle))
+    }
+
+    pub(super) fn publish_wild_plants(
+        &mut self,
+        draft: Option<(WildPlants, Cycle)>,
+    ) -> Option<Cycle> {
+        let (next, cycle) = draft?;
+        self.gathering
+            .as_mut()
+            .expect("staged wild plant owner")
+            .wild_plants = Some(next);
+        Some(cycle)
+    }
+
     pub(super) fn stage_resource_renewal(
         &self,
         millis: u64,
