@@ -50,6 +50,10 @@ impl<'a> Player<'a> {
         Ok(result.first().is_some_and(|outcome| outcome.departed))
     }
 
+    pub fn gather(&mut self, node: u64) -> Result<Option<game_economy::GatheredResource>, String> {
+        self.host.gather_controlled(self.person, node)
+    }
+
     pub fn walk(
         &mut self,
         destination: game_economy::LocalEndpoint,

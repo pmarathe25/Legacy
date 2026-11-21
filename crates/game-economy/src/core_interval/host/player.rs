@@ -47,6 +47,14 @@ pub struct CorePlayerSite {
     pub debris: Vec<game_lots::Lot>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CorePlayerResource {
+    pub id: u64,
+    pub good: u32,
+    pub available: u64,
+    pub yield_per_action: u64,
+}
+
 /// The controlled person's own state and physically accessible observations.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CorePlayerView {
@@ -62,6 +70,7 @@ pub struct CorePlayerView {
     pub possessions: Vec<game_lots::Lot>,
     pub nearby: Vec<CoreSeenPerson>,
     pub accessible_sites: Vec<CorePlayerSite>,
+    pub accessible_resources: Vec<CorePlayerResource>,
     pub wound: Option<CorePlayerWound>,
     pub job: Option<CorePlayerJob>,
     pub fatigue: Option<CorePlayerFatigue>,
@@ -350,6 +359,7 @@ impl CoreHost {
             .custody(game_lots::Place::Person(id))
             .map_or_else(Vec::new, |holder| holder.lots.clone());
         let mut accessible_sites = Vec::new();
+        let mut accessible_resources = Vec::new();
         if let Some(region) = person
             .region
             .filter(|&region| self.regional_stock_reachable(id, region))
@@ -389,6 +399,24 @@ impl CoreHost {
                 );
             }
             accessible_sites.par_sort_unstable_by_key(|site| site.id);
+            if let Some(owner) = self
+                .gathering
+                .as_ref()
+                .filter(|owner| owner.elapsed_actions)
+            {
+                accessible_resources = owner
+                    .nodes
+                    .par_iter()
+                    .filter(|node| node.region == region)
+                    .map(|node| CorePlayerResource {
+                        id: node.id,
+                        good: node.good,
+                        available: node.available,
+                        yield_per_action: node.yield_per_action,
+                    })
+                    .collect();
+                accessible_resources.par_sort_unstable_by_key(|node| node.id);
+            }
         }
         let wound = self
             .personal_conflict
@@ -480,6 +508,7 @@ impl CoreHost {
             possessions,
             nearby,
             accessible_sites,
+            accessible_resources,
             wound,
             job,
             fatigue,

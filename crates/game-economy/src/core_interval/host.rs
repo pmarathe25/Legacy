@@ -88,8 +88,8 @@ pub use offers::CoreSocialResults;
 pub use past_lives::CorePastLifeView;
 pub use personal_choice::{CoreChoiceEvent, CoreChoiceIntent, CoreChoiceOutcome, CoreWorkIntent};
 pub use player::{
-    CorePlayerFatigue, CorePlayerJob, CorePlayerLanguage, CorePlayerMarkedPage, CorePlayerSite,
-    CorePlayerView, CorePlayerWound, CoreSeenPerson,
+    CorePlayerFatigue, CorePlayerJob, CorePlayerLanguage, CorePlayerMarkedPage, CorePlayerResource,
+    CorePlayerSite, CorePlayerView, CorePlayerWound, CoreSeenPerson,
 };
 pub use purpose::CorePurpose;
 pub use requests::{CoreDeliveryResults, CoreRequestResults};

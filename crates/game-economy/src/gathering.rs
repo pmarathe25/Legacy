@@ -314,8 +314,10 @@ impl Context<'_> {
                 .ok()
                 .map(|i| nodes[i])
         };
-        let mut eligible: Vec<_> = self
-            .opportunities(if profiled.is_empty() {
+        let mut eligible: Vec<_> = if self.manual.is_some() {
+            Vec::new()
+        } else {
+            self.opportunities(if profiled.is_empty() {
                 self.owner.max_hunger
             } else {
                 u32::MAX
@@ -334,7 +336,8 @@ impl Context<'_> {
                         .is_some_and(|index| self.people[index].hunger <= self.owner.max_hunger)
                 }
             })
-            .collect();
+            .collect()
+        };
         // An unprofiled legacy actor with alternatives has not made a choice.
         if eligible
             .par_windows(2)
@@ -371,6 +374,7 @@ impl Context<'_> {
                 || person.health == 0
                 || person.region != Some(resource.region)
                 || person.hunger > self.owner.max_hunger
+                || self.busy.binary_search(&actor).is_ok()
             {
                 return Err("person cannot gather here".into());
             }

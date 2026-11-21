@@ -34,7 +34,7 @@ fn command(host: &mut CoreHost, person: u64, words: &[&str]) -> Result<bool, Str
     match words {
         [] => {}
         ["help"] => println!(
-            "look | wait MILLISECONDS | move REGION | walk stock|store ID | pause-walk | resume-walk | trip REGION VISIT_MILLISECONDS [food] | trip go|survey|back|cancel | trip leave-in MILLISECONDS | fight PERSON | join-fight BENEFICIARY OPPONENT | tactic wait|defend|retreat | tactic attack PERSON | tactic attack-site SITE | tactic move X Y | confine PERSON SITE | guard SITE | release PERSON | escape | build BLUEPRINT | demolish SITE | salvage SITE GOOD QUANTITY | eat GOOD | treat GOOD | wear GOOD | unwear | work RECIPE UNITS | stop JOB | stop-assist | rest on|off | word place|person|object ID SOUNDS | form SOUNDS MARKS | inscribe SOUNDS | read PAGE | recall PAGE | save PATH | load PATH | quit (SOUNDS and MARKS are comma-separated numbers)"
+            "look | wait MILLISECONDS | move REGION | walk stock|store ID | pause-walk | resume-walk | trip REGION VISIT_MILLISECONDS [food] | trip go|survey|back|cancel | trip leave-in MILLISECONDS | fight PERSON | join-fight BENEFICIARY OPPONENT | tactic wait|defend|retreat | tactic attack PERSON | tactic attack-site SITE | tactic move X Y | confine PERSON SITE | guard SITE | release PERSON | escape | build BLUEPRINT | demolish SITE | salvage SITE GOOD QUANTITY | gather NODE | eat GOOD | treat GOOD | wear GOOD | unwear | work RECIPE UNITS | stop JOB | stop-assist | rest on|off | word place|person|object ID SOUNDS | form SOUNDS MARKS | inscribe SOUNDS | read PAGE | recall PAGE | save PATH | load PATH | quit (SOUNDS and MARKS are comma-separated numbers)"
         ),
         ["quit"] | ["exit"] => return Ok(false),
         ["look"] => {
@@ -64,6 +64,12 @@ fn command(host: &mut CoreHost, person: u64, words: &[&str]) -> Result<bool, Str
                         site.id, lot.good, lot.quantity
                     );
                 }
+            }
+            for node in &view.accessible_resources {
+                println!(
+                    "resource={} good={} available={} yield={}",
+                    node.id, node.good, node.available, node.yield_per_action
+                );
             }
             if let Some(wound) = view.wound {
                 println!("wound_severity={}", wound.severity);
@@ -332,6 +338,14 @@ fn command(host: &mut CoreHost, person: u64, words: &[&str]) -> Result<bool, Str
         ["treat", good] => {
             let good = good.parse::<u32>().map_err(|_| "invalid good")?;
             println!("consumed={}", Player::new(host, person)?.treat_wound(good)?);
+        }
+        ["gather", node] => {
+            let node = node.parse::<u64>().map_err(|_| "invalid resource node")?;
+            if let Some(yielded) = Player::new(host, person)?.gather(node)? {
+                println!("gathered={} quantity={}", yielded.good, yielded.quantity);
+            } else {
+                println!("nothing gathered");
+            }
         }
         ["work", recipe, units] => {
             let recipe = recipe.parse::<u32>().map_err(|_| "invalid recipe")?;

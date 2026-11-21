@@ -151,7 +151,8 @@ mod purpose;
 mod recovery;
 pub use game_purpose::Purpose;
 pub use gathering::{
-    Gathering, Node as ResourceNode, Policy as GatherPolicy, RenewalRate as ResourceRenewalRate,
+    Gathering, Harvested as GatheredResource, Node as ResourceNode, Policy as GatherPolicy,
+    RenewalRate as ResourceRenewalRate,
 };
 pub use recovery::{ElapsedRecovery, Rules as RecoveryRules};
 mod state;

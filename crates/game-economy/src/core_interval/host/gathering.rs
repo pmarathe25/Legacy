@@ -1,6 +1,11 @@
 //! Renewable gathering into each individual's physical custody.
 use super::*;
 
+struct GatheredCustody {
+    outcomes: Vec<(u64, bool)>,
+    receipts: Vec<crate::gathering::Harvested>,
+}
+
 pub(super) struct CoreGathered {
     pub actors: Vec<u64>,
     pub choices: Vec<CoreChoiceEvent>,
@@ -12,6 +17,57 @@ impl CoreHost {
         self.gathering
             .as_ref()
             .is_some_and(|owner| owner.elapsed_actions)
+    }
+
+    /// Gather one local yield through the same resource and custody transaction as autonomous gathering.
+    pub fn gather_controlled(
+        &mut self,
+        person: u64,
+        node: u64,
+    ) -> Result<Option<crate::GatheredResource>, String> {
+        let actor = self.controlled_person(person)?;
+        let region = actor.region.ok_or("resources are outside physical reach")?;
+        if !self.regional_stock_reachable(person, region) {
+            return Err("resources are outside physical reach".into());
+        }
+        if self.assisting_people().binary_search(&person).is_ok() {
+            return Err("the controlled person is occupied".into());
+        }
+        if self.core.next_deadline(None)?.after_millis == 0 {
+            return Err("settle the current event before gathering".into());
+        }
+        let owner = self
+            .gathering
+            .as_ref()
+            .filter(|owner| owner.elapsed_actions)
+            .ok_or("elapsed gathering is disabled")?;
+        if !owner
+            .nodes
+            .par_iter()
+            .any(|site| site.id == node && site.region == region)
+        {
+            return Err("resources are outside physical reach".into());
+        }
+        let tick = self.core.physical.tick();
+        let busy = self.choice_busy(&[]);
+        let view = self.core.physical.view(tick)?;
+        let plan = crate::gathering::Context {
+            owner,
+            people: &self.core.people,
+            opinions: self.opinions.as_ref(),
+            busy: &busy,
+            view: &view,
+            tick_millis: 0,
+            seed: self.core.seed,
+            tick: self.core.decision_time_key(),
+            manual: Some((person, node)),
+        }
+        .prepare_selected(1, &[], &[])?;
+        Ok(self
+            .commit_gathered_custody(plan)?
+            .receipts
+            .into_iter()
+            .next())
     }
 
     pub(super) fn gather_at_decision(
@@ -64,19 +120,8 @@ impl CoreHost {
             manual: None,
         }
         .prepare_selected(1, &profiled, &selected)?;
-        let outputs = plan.carried_outputs(owner);
-        let physical = (!outputs.is_empty())
-            .then(|| {
-                self.core
-                    .physical
-                    .prepare_interval_gathering(&outputs, self.core.seed ^ round)
-            })
-            .transpose()?;
-        let transactions = physical
-            .as_ref()
-            .map_or(&[][..], |draft| draft.transactions());
-        let outcomes = plan.outcomes(transactions);
-        let receipts = plan.receipts(&outputs, &outcomes);
+        let mut actors = plan.actors.clone();
+        let GatheredCustody { outcomes, receipts } = self.commit_gathered_custody(plan)?;
         let choices = intents
             .par_iter()
             .filter(|row| row.key.domain == personal_choice::GATHERING)
@@ -97,20 +142,41 @@ impl CoreHost {
                     }),
             })
             .collect();
-        let mut actors = plan.actors.clone();
         actors.par_extend(selected.par_iter().map(|row| row.person));
         actors.par_sort_unstable();
         actors.dedup();
-        if let Some(physical) = physical {
-            let next = plan.publish_elapsed(owner, physical.transactions())?;
-            self.core.physical.commit_interval_consumption(physical)?;
-            self.gathering = Some(next);
-        }
         Ok(CoreGathered {
             actors,
             choices,
             receipts,
         })
+    }
+
+    fn commit_gathered_custody(
+        &mut self,
+        plan: crate::gathering::Plan,
+    ) -> Result<GatheredCustody, String> {
+        let owner = self.gathering.as_ref().expect("prepared gathering owner");
+        let outputs = plan.carried_outputs(owner);
+        if outputs.is_empty() {
+            return Ok(GatheredCustody {
+                outcomes: plan.outcomes(&[]),
+                receipts: Vec::new(),
+            });
+        }
+        let round = self.core.decision_time_key();
+        let physical = self
+            .core
+            .physical
+            .prepare_interval_gathering(&outputs, self.core.seed ^ round)?;
+        let outcomes = plan.outcomes(physical.transactions());
+        let receipts = plan.receipts(&outputs, &outcomes);
+        if !receipts.is_empty() {
+            let next = plan.publish_elapsed(owner, physical.transactions())?;
+            self.core.physical.commit_interval_consumption(physical)?;
+            self.gathering = Some(next);
+        }
+        Ok(GatheredCustody { outcomes, receipts })
     }
 }
 
