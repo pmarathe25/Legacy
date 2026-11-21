@@ -739,6 +739,8 @@ struct GatheringConfig {
     #[serde(default)]
     elapsed_renewal: bool,
     #[serde(default)]
+    elapsed_actions: bool,
+    #[serde(default)]
     inherit_births: bool,
     nodes: Vec<ResourceConfig>,
     #[serde(default)]
@@ -2522,6 +2524,7 @@ fn build_scenario(
             Ok(game_economy::Gathering {
                 max_hunger: config.max_hunger,
                 elapsed_renewal: config.elapsed_renewal,
+                elapsed_actions: config.elapsed_actions,
                 inherit_births: config.inherit_births,
                 nodes,
                 policies: config.policies,

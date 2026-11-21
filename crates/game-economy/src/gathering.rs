@@ -57,6 +57,9 @@ pub struct Gathering {
     /// Publish renewable growth as simulated time passes inside the interval.
     #[serde(default)]
     pub elapsed_renewal: bool,
+    /// Gather at personal decision opportunities rather than at physical settlement.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub elapsed_actions: bool,
     #[serde(default)]
     pub inherit_births: bool,
     pub nodes: Vec<Node>,
@@ -67,6 +70,7 @@ impl Clone for Gathering {
         Self {
             max_hunger: self.max_hunger,
             elapsed_renewal: self.elapsed_renewal,
+            elapsed_actions: self.elapsed_actions,
             inherit_births: self.inherit_births,
             nodes: self.nodes.par_iter().cloned().collect(),
             policies: self.policies.par_iter().cloned().collect(),
@@ -164,7 +168,8 @@ impl Gathering {
             .collect();
         nodes.par_sort_unstable();
         policies.par_sort_unstable();
-        if nodes.first() == Some(&0)
+        if (self.elapsed_actions && !self.elapsed_renewal)
+            || nodes.first() == Some(&0)
             || nodes.par_windows(2).any(|p| p[0] == p[1])
             || policies.par_windows(2).any(|p| p[0] == p[1])
             || self.nodes.par_iter().any(|n| {
@@ -212,6 +217,14 @@ pub struct Plan {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Opportunity {
+    pub person: u64,
+    pub node: u64,
+    pub good: u32,
+    pub quantity: u64,
+}
+/// An actual withdrawal and personal custody receipt.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Harvested {
     pub person: u64,
     pub node: u64,
     pub good: u32,
@@ -401,9 +414,8 @@ impl Context<'_> {
     }
 }
 impl Plan {
-    pub fn outcomes(&self, events: &Events) -> Vec<(u64, bool)> {
-        let decisions: std::collections::HashMap<_, _> = events
-            .physical_actions
+    pub fn outcomes(&self, decisions: &[game_lots::TransactionOutcome]) -> Vec<(u64, bool)> {
+        let decisions: std::collections::HashMap<_, _> = decisions
             .par_iter()
             .map(|row| (row.id, row.accepted))
             .collect();
@@ -426,6 +438,28 @@ impl Plan {
         outcomes.par_sort_unstable_by_key(|row| row.0);
         outcomes
     }
+    pub fn receipts(
+        &self,
+        outputs: &[game_lot_runtime::Gathered],
+        outcomes: &[(u64, bool)],
+    ) -> Vec<Harvested> {
+        self.records
+            .par_iter()
+            .zip(outputs.par_iter())
+            .filter_map(|(row, output)| {
+                let index = outcomes
+                    .binary_search_by_key(&output.person, |entry| entry.0)
+                    .ok()?;
+                outcomes[index].1.then_some(Harvested {
+                    person: output.person,
+                    node: row.0,
+                    good: output.good,
+                    quantity: output.quantity,
+                })
+            })
+            .collect()
+    }
+
     pub fn carried_outputs(&self, owner: &Gathering) -> Vec<game_lot_runtime::Gathered> {
         let mut nodes: Vec<_> = owner.nodes.par_iter().collect();
         nodes.par_sort_unstable_by_key(|node| node.id);
@@ -443,13 +477,41 @@ impl Plan {
             .collect()
     }
     pub fn publish(
-        mut self,
+        self,
         owner: &Gathering,
         events: &Events,
         season: Option<&crate::Season>,
         food_growth_exposure: Option<u128>,
     ) -> Result<Gathering, String> {
-        let mut decisions: Vec<_> = events.physical_actions.par_iter().collect();
+        self.publish_at(
+            owner,
+            &events.physical_actions,
+            events.tick,
+            season,
+            food_growth_exposure,
+        )
+    }
+
+    pub fn publish_elapsed(
+        self,
+        owner: &Gathering,
+        transactions: &[game_lots::TransactionOutcome],
+    ) -> Result<Gathering, String> {
+        if !owner.elapsed_renewal {
+            return Err("elapsed gathering requires elapsed resource renewal".into());
+        }
+        self.publish_at(owner, transactions, 0, None, None)
+    }
+
+    fn publish_at(
+        mut self,
+        owner: &Gathering,
+        transactions: &[game_lots::TransactionOutcome],
+        tick: u64,
+        season: Option<&crate::Season>,
+        food_growth_exposure: Option<u128>,
+    ) -> Result<Gathering, String> {
+        let mut decisions: Vec<_> = transactions.par_iter().collect();
         if decisions.par_windows(2).any(|w| w[0].id > w[1].id) {
             decisions.par_sort_unstable_by_key(|d| d.id);
         }
@@ -503,7 +565,7 @@ impl Plan {
                 } else {
                     next.available = after_gathering
                         .saturating_add(if node.seasonal {
-                            renewal(node.regrowth, factor, events.tick)
+                            renewal(node.regrowth, factor, tick)
                         } else {
                             node.regrowth
                         })
@@ -515,6 +577,7 @@ impl Plan {
         Ok(Gathering {
             max_hunger: owner.max_hunger,
             elapsed_renewal: owner.elapsed_renewal,
+            elapsed_actions: owner.elapsed_actions,
             inherit_births: owner.inherit_births,
             nodes,
             policies: owner.policies.par_iter().cloned().collect(),

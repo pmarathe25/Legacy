@@ -640,7 +640,7 @@ impl CoreHost {
         Ok(())
     }
 
-    fn choice_busy(&self, blocked: &[u64]) -> Vec<u64> {
+    pub(super) fn choice_busy(&self, blocked: &[u64]) -> Vec<u64> {
         let rest = self.blocked_with_rest(blocked);
         let mut busy = rest.as_deref().unwrap_or(blocked).to_vec();
         if let Some(schedule) = &self.schedule {

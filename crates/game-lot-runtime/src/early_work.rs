@@ -489,6 +489,42 @@ impl Runtime {
         })
     }
 
+    /// Stage personal yields from domain-validated withdrawals from resource nodes.
+    pub fn prepare_interval_gathering(
+        &self,
+        outputs: &[crate::Gathered],
+        seed: u64,
+    ) -> Result<IntervalConsumptionDraft, String> {
+        let interval = self
+            .work_interval
+            .as_ref()
+            .ok_or("no physical work interval")?;
+        if interval.tick != self.tick()
+            || interval.custody_revision != self.store.revision()
+            || interval.elapsed_millis >= self.tick_millis
+        {
+            return Err("invalid interval for gathering".into());
+        }
+        self.epoch
+            .checked_add(1)
+            .ok_or("physical work revision overflow")?;
+        let actions = game_lot_content::prepare_gathered(
+            &self.catalog,
+            outputs,
+            self.lot_instant(interval.tick),
+        )?;
+        let custody = self.store.prepare_transactions_now(seed, &actions)?;
+        if !custody.spoiled().is_empty() {
+            return Err("interval gathering cannot publish pending spoilage".into());
+        }
+        Ok(IntervalConsumptionDraft {
+            epoch: self.epoch,
+            tick: interval.tick,
+            offset_millis: interval.elapsed_millis,
+            custody,
+        })
+    }
+
     /// Stage identified pages and consume the writer's actual paper and ink atomically.
     pub fn prepare_interval_writing(
         &self,

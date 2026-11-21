@@ -20,7 +20,8 @@ const SELECTED_DOMAINS: u64 = BASE_DOMAINS
     | (1 << 18)
     | (1 << 19)
     | (1 << personal_choice::CONFINEMENT)
-    | (1 << personal_choice::READ_TEXT);
+    | (1 << personal_choice::READ_TEXT)
+    | (1 << personal_choice::GATHERING);
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "phase", rename_all = "snake_case")]
@@ -453,9 +454,17 @@ impl CoreSchedule {
         | DecisionPhase::ChosenMarkInscription { intents, .. }
         | DecisionPhase::ChosenRememberedForm { intents, .. } = &self.phase
         {
-            let Some(people) = &self.personal_choices else {
+            let people = self
+                .personal_choices
+                .as_deref()
+                .map_or(&[][..], |rows| rows.as_slice());
+            if self.personal_choices.is_none()
+                && !(matches!(self.phase, DecisionPhase::ChosenBatch { remaining, .. }
+                    if remaining == 1 << personal_choice::GATHERING)
+                    && intents.is_empty())
+            {
                 return Err("selected actions require personal choices".into());
-            };
+            }
             if intents
                 .par_windows(2)
                 .any(|rows| rows[0].actor >= rows[1].actor)
@@ -584,6 +593,11 @@ impl CoreSchedule {
                                     || intent.experiment_value != Some(1) || intent.second_movement.is_some()
                                     || form.sounds.is_empty() || form.sounds.len() > 16
                                     || form.marks.is_empty() || form.marks.len() > 16 || form.marks.contains(&0)
+                            }
+                            (personal_choice::GATHERING, None, None, None) => {
+                                intent.health_value.is_some() || intent.tool_damage.is_some()
+                                    || intent.meal_value.is_some() || intent.experiment_value.is_some()
+                                    || intent.second_movement.is_some()
                             }
                             (personal_choice::READ_TEXT, None, None, None) => {
                                 intent.health_value.is_some() || intent.tool_damage.is_some()
@@ -752,6 +766,10 @@ pub enum CoreRunEvent {
         lifespan_loss: u64,
     },
     PersonalChoices(Vec<CoreChoiceEvent>),
+    ElapsedGathering {
+        at_millis: u128,
+        events: Vec<crate::gathering::Harvested>,
+    },
     MechanicalExperiments(Vec<game_mechanics::Observation>),
     MechanicalLoads(Vec<MechanicalLoadResult>),
     MechanicalAssemblies(Vec<game_mechanics::AssemblyOutcome>),
@@ -910,6 +928,7 @@ impl CoreHost {
                     .is_some_and(|language| language.writing.is_some())
                 || self.tool_wear.is_some()
                 || self.food_search.is_some()
+                || self.gathers_at_decisions()
                 || (self
                     .writing
                     .as_ref()
@@ -946,7 +965,18 @@ impl CoreHost {
                     }))
         {
             DecisionPhase::ChooseLocal { meal_people }
-        } else if self.construction.is_some() {
+        } else if self.gathers_at_decisions() {
+            DecisionPhase::ChosenBatch {
+                meal_people,
+                intents: Arc::new(Vec::new()),
+                remaining: 1 << personal_choice::GATHERING,
+            }
+        } else {
+            self.unprofiled_local_activities(meal_people)
+        }
+    }
+    fn unprofiled_local_activities(&self, meal_people: Vec<u64>) -> DecisionPhase {
+        if self.construction.is_some() {
             DecisionPhase::Construction { meal_people }
         } else {
             self.after_construction(meal_people)
@@ -1880,12 +1910,15 @@ impl CoreHost {
                         if !pending.is_empty() {
                             self.record_personal_choices(&mut run, pending);
                         }
-                        let (actors, pending) = self.queue_gathering(&intents);
-                        meal_people.par_extend(actors);
-                        meal_people.par_sort_unstable();
-                        meal_people.dedup();
-                        if !pending.is_empty() {
-                            self.record_personal_choices(&mut run, pending);
+                        let gather_now = self.gathers_at_decisions();
+                        if !gather_now {
+                            let (actors, pending) = self.queue_gathering(&intents);
+                            meal_people.par_extend(actors);
+                            meal_people.par_sort_unstable();
+                            meal_people.dedup();
+                            if !pending.is_empty() {
+                                self.record_personal_choices(&mut run, pending);
+                            }
                         }
                         let intents = Arc::new(
                             intents
@@ -1893,10 +1926,9 @@ impl CoreHost {
                                 .filter(|intent| {
                                     !matches!(
                                         intent.key.domain,
-                                        personal_choice::CULTIVATION
-                                            | personal_choice::GATHERING
-                                            | personal_choice::REST
-                                    )
+                                        personal_choice::CULTIVATION | personal_choice::REST
+                                    ) && (gather_now
+                                        || intent.key.domain != personal_choice::GATHERING)
                                 })
                                 .collect::<Vec<_>>(),
                         );
@@ -1920,7 +1952,7 @@ impl CoreHost {
                                 })
                                 .is_ok()
                         });
-                        let optional_domains = intents
+                        let mut optional_domains = intents
                             .par_iter()
                             .map(|intent| {
                                 let domain =
@@ -1933,6 +1965,9 @@ impl CoreHost {
                                     & (SELECTED_DOMAINS & !BASE_DOMAINS)
                             })
                             .reduce(|| 0, |a, b| a | b);
+                        if gather_now {
+                            optional_domains |= 1 << personal_choice::GATHERING;
+                        }
                         let random = game_genetics::random(self.core.seed, 0x63686f696365, round);
                         let first = if has_work {
                             random % 4
@@ -2024,6 +2059,7 @@ impl CoreHost {
                             19,
                             personal_choice::CONFINEMENT,
                             personal_choice::READ_TEXT,
+                            personal_choice::GATHERING,
                         ]
                         .into_iter()
                         .filter(|domain| remaining & (1u64 << domain) != 0)
@@ -2036,6 +2072,34 @@ impl CoreHost {
                         })
                         .expect("validated nonempty batch");
                         let remaining = remaining & !(1u64 << domain);
+                        if domain == personal_choice::GATHERING {
+                            let mut meal_people = meal_people;
+                            let mut busy = blocked.to_vec();
+                            busy.extend(meal_people.iter().copied());
+                            busy.par_sort_unstable();
+                            busy.dedup();
+                            let harvested =
+                                attempt!('run, self.gather_at_decision(&busy, &intents));
+                            meal_people.par_extend(harvested.actors);
+                            meal_people.par_sort_unstable();
+                            meal_people.dedup();
+                            if !harvested.choices.is_empty() {
+                                self.record_personal_choices(&mut run, harvested.choices);
+                            }
+                            if !harvested.receipts.is_empty() {
+                                run.events.push(CoreRunEvent::ElapsedGathering {
+                                    at_millis: self.core.simulated_millis(),
+                                    events: harvested.receipts,
+                                });
+                            }
+                            let next = if schedule.personal_choices.is_some() {
+                                self.after_selected_batch(meal_people, intents, remaining)
+                            } else {
+                                self.unprofiled_local_activities(meal_people)
+                            };
+                            self.schedule.as_mut().expect("active schedule").phase = next;
+                            continue;
+                        }
                         if domain == personal_choice::READ_TEXT {
                             let mut meal_people = meal_people;
                             let mut busy = blocked.to_vec();

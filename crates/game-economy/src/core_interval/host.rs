@@ -3180,9 +3180,9 @@ impl CoreHost {
                     })
                     .collect()
             });
-        let gathering_outcomes = gathering
-            .as_ref()
-            .map_or_else(Vec::new, |(plan, _)| plan.outcomes(draft.events()));
+        let gathering_outcomes = gathering.as_ref().map_or_else(Vec::new, |(plan, _)| {
+            plan.outcomes(&draft.events().physical_actions)
+        });
         let settled_gathering: Vec<_> = self.schedule.as_ref().map_or_else(Vec::new, |schedule| {
             schedule
                 .pending_gathering

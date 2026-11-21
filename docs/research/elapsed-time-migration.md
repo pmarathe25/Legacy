@@ -72,7 +72,12 @@ fractions across boundaries. In an interval scenario, `gathering.elapsed_renewal
 credits new stock as time passes, before any withdrawal at the later boundary.
 Renewable nodes then require explicit rates and seasonal rates require an elapsed
 calendar if seasons are configured. Older saves retain settlement-based renewal.
-Gathering still uses boundary actions. Crop scenarios can set
+Set `gathering.elapsed_actions = true` alongside elapsed renewal to make local
+gathering settle at each character decision round. Offers compete with other
+personal choices. The gathering owner admits contenders per resource node
+and deducts stock only for successful deliveries into personal custody.
+The history records those transfers at their actual time. Scenes that omit
+this setting retain their boundary gathering cadence. Crop scenarios can set
 `cultivation.growth_unit_millis` to separate crop duration from settlement.
 The host integrates fractional growth up to season changes and ripening
 deadlines using the opening moisture and each seed cohort's seasonal traits.

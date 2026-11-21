@@ -203,6 +203,9 @@ fn run_steps(
                     *counts.entry("animal_deaths").or_default() += row.deaths.len() as u64;
                     ("animal_births", row.births.len())
                 }
+                CoreRunEvent::ElapsedGathering { events, .. } => {
+                    ("gathered_resources", events.len())
+                }
                 CoreRunEvent::PersonalChoices(rows) => {
                     for row in rows {
                         let domain = row.key.map_or(0, |key| key.domain);
