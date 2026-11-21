@@ -9767,7 +9767,7 @@ fn contested_resources_make_later_intentions_stale_without_substitution() {
 }
 
 #[test]
-fn unsupported_scenario_owners_are_reported() {
+fn importing_the_authored_campaign_keeps_control_guardians_and_invocation() {
     let root = root();
     let state = game_economy_cli::scenario(
         &root.join("content/scenarios/economy-campaign.toml"),
@@ -9775,8 +9775,19 @@ fn unsupported_scenario_owners_are_reported() {
     )
     .unwrap()
     .snapshot();
-    let error = game_economy::core_interval::CoreHostSnapshot::from_scenario(state).unwrap_err();
-    assert!(error.contains("campaign"), "{error}");
+    let snapshot = game_economy::core_interval::CoreHostSnapshot::from_scenario(state).unwrap();
+    let campaign = snapshot.campaign.as_ref().unwrap();
+    assert_eq!(campaign.controlled(), Some(1));
+    assert_eq!(
+        campaign
+            .guardians
+            .iter()
+            .map(|row| row.person)
+            .collect::<Vec<_>>(),
+        [99, 100]
+    );
+    assert!(campaign.costs.is_some());
+    assert!(snapshot.personal_conflict.unwrap().tactical.is_some());
 }
 
 #[test]

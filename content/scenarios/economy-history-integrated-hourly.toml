@@ -7,6 +7,7 @@ travel_unit_millis = 3600000
 fatigue_rate_period_millis = 3600000
 elapsed_fatigue = true
 decision_period_millis = 3600000
+combat_round_millis = 60000
 on_site_meals = true
 stock_capacity = 100000
 food_relief_divisor = 1
@@ -1785,7 +1786,10 @@ give = { barley = 1 }
 receive = { bread = 1 }
 
 [work_sites]
-sites = [{ id = 1, region = 1, kind = "workshop", capacity = 3 }]
+sites = [
+    { id = 1, region = 1, kind = "workshop", capacity = 3 },
+    { id = 2, region = 2, kind = "cell", capacity = 2 },
+]
 [[work_sites.requirements]]
 recipe = "fixture-tool"
 kind = "workshop"
@@ -1811,6 +1815,22 @@ id = 1
 region = 1
 name = "Food store"
 capacity = 500
+
+[local_transport.walking.elapsed]
+unit_millis = 60000
+
+[[local_transport.walking.routes]]
+region = 1
+from = { kind = "stock" }
+to = { kind = "store", id = 1 }
+ticks = 15
+
+[[local_transport.walking.routes]]
+region = 1
+from = { kind = "store", id = 1 }
+to = { kind = "stock" }
+ticks = 15
+
 [[local_transport.policies]]
 person = 1
 region = 1
@@ -2051,6 +2071,51 @@ assert_outputs = true
 [agreements]
 next_id = 1
 policies = [{ person = 16, accept = true, honor = true }]
+
+[confinement]
+cells = [{ site = 2, resistance = 3, allow_supplies = true }]
+capture_policies = [{ person = 50, target = 51, site = 2, willing = true }]
+escape = [
+    { person = 50, willing = false, effort = 4 },
+    { person = 51, willing = true, effort = 2 },
+]
+
+[missions]
+next_id = 2
+
+[[missions.entries]]
+id = 1
+person = 18
+origin = 1
+destination = 2
+visit_ticks = 6
+phase = "ready"
+objective = { kind = "observe_food" }
+
+[campaign.lineage]
+started = 0
+waiting_since = 0
+
+[combat]
+damage = 3
+reactions = [{ person = 56, response = "retreat" }]
+
+[combat.map_rules]
+width = 20
+height = 20
+obstacle_count = 0
+max_obstacle_size = 1
+movement = 3
+attack_range = 3
+
+[[opinions.sensitivities]]
+person = 55
+confrontation = { enabled = true, trust_at_most = -2, fear_at_most = 0, interval = 8760 }
+
+[[opinions.records]]
+observer = 55
+target = 56
+trust = -3
 
 [animal_feelings]
 [[animal_feelings.minds]]

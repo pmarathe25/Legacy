@@ -4,6 +4,8 @@ use std::collections::BTreeMap;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
+#[path = "history_support/chronicle.rs"]
+mod chronicle;
 
 #[derive(Clone, Copy)]
 enum Focus {
@@ -94,10 +96,18 @@ struct ObservationSink<'a> {
     focal_mechanics: &'a mut Vec<Value>,
     focal_strikes: &'a mut Vec<Value>,
     focal_meetings: &'a mut Vec<Value>,
+    chronicle: &'a mut chronicle::Chronicle,
 }
 impl ObservationSink<'_> {
     fn record(&mut self, events: &[Value], year: u64) -> Result<(), String> {
         for event in events {
+            if !matches!(self.focus, Focus::Animal(_)) {
+                let person = match self.focus {
+                    Focus::Person(id) => Some(id),
+                    _ => None,
+                };
+                self.chronicle.observe(event, year, person);
+            }
             if event["kind"] == "animal_deaths" {
                 for death in event["events"].as_array().into_iter().flatten() {
                     if let Some(cause) = death["cause"].as_str() {
@@ -345,6 +355,7 @@ fn inspect(path: &Path, focus: Focus) -> Result<Value, String> {
     let mut focal_choices = Vec::new();
     let mut focal_mechanics = Vec::new();
     let mut focal_strikes = Vec::new();
+    let mut chronicle = chronicle::Chronicle::default();
     let mut previous_year = None;
     let mut pending_year = None;
     let mut batch_has_family_events = false;
@@ -366,6 +377,7 @@ fn inspect(path: &Path, focus: Focus) -> Result<Value, String> {
                 focal_mechanics: &mut focal_mechanics,
                 focal_strikes: &mut focal_strikes,
                 focal_meetings: &mut focal_meetings,
+                chronicle: &mut chronicle,
             };
             sink.record($events, $year)?;
         }};
@@ -412,7 +424,7 @@ fn inspect(path: &Path, focus: Focus) -> Result<Value, String> {
                     metadata_corrections.push("The source metadata incorrectly says animal parentage is absent. Animals born in these runs have recorded parent IDs; founders may not.");
                 }
                 expected_years = row["years_requested"].as_u64();
-                metadata = json!({"calendar":row["calendar"],"tick_millis":row["tick_millis"],"ticks_per_year":row["ticks_per_year"],"seed":row["seed"],"git_revision":row["git_revision"],"git_revision_scope":row["git_revision_scope"],"tracked_source_modified":row["tracked_source_modified"],"executable":row["executable"],"source_kind":row["source_kind"],"limitations":row["limitations"]});
+                metadata = json!({"calendar":row["calendar"],"tick_millis":row["tick_millis"],"step_millis":row["step_millis"],"ticks_per_year":row["ticks_per_year"],"seed":row["seed"],"git_revision":row["git_revision"],"git_revision_scope":row["git_revision_scope"],"tracked_source_modified":row["tracked_source_modified"],"executable":row["executable"],"source_kind":row["source_kind"],"limitations":row["limitations"]});
             }
             Some("complete") => {
                 if pending_year.is_some() {
@@ -442,6 +454,9 @@ fn inspect(path: &Path, focus: Focus) -> Result<Value, String> {
                     years += 1;
                 }
                 let state = row.get("snapshot").ok_or("history row has no snapshot")?;
+                if matches!(focus, Focus::Summary) {
+                    chronicle.snapshot(state, year, row["kind"] == "initial");
+                }
                 let people = state.pointer("/family/members").and_then(Value::as_array);
                 let fauna = state.pointer("/fauna/animals").and_then(Value::as_array);
                 let live_people = state
@@ -631,14 +646,14 @@ fn inspect(path: &Path, focus: Focus) -> Result<Value, String> {
     let scope = json!({"source":path,"complete":complete,"first_year":first_year,"last_year":last_year,"annual_records":years,"metadata":metadata,"metadata_corrections":metadata_corrections});
     match focus {
         Focus::Summary => Ok(
-            json!({"scope":scope,"peak_people":{"year":peak_people.0,"count":peak_people.1},"peak_animals":{"year":peak_animals.0,"count":peak_animals.1},"first_zero_people":human_zero,"first_zero_animals":animal_zero,"animal_deaths_by_cause":animal_deaths,"animal_species_history":species_history.iter().map(|(id,(name,year,count,zero))|json!({"species":id,"name":name,"peak":{"year":year,"count":count},"first_zero":zero})).collect::<Vec<_>>(),"family_totals":totals,"recorded_meetings":meeting_count,"most_recorded_meetings":ranking.iter().map(|(person,count)|json!({"person":person,"count":count})).collect::<Vec<_>>(),"genome_samples":samples,"interpretation":"Meeting counts do not establish leadership; changes in allele means do not establish selection or causation."}),
+            json!({"scope":scope,"peak_people":{"year":peak_people.0,"count":peak_people.1},"peak_animals":{"year":peak_animals.0,"count":peak_animals.1},"first_zero_people":human_zero,"first_zero_animals":animal_zero,"animal_deaths_by_cause":animal_deaths,"animal_species_history":species_history.iter().map(|(id,(name,year,count,zero))|json!({"species":id,"name":name,"peak":{"year":year,"count":count},"first_zero":zero})).collect::<Vec<_>>(),"family_totals":totals,"recorded_meetings":meeting_count,"most_recorded_meetings":ranking.iter().map(|(person,count)|json!({"person":person,"count":count})).collect::<Vec<_>>(),"genome_samples":samples,"chronicle":chronicle.summary(),"interpretation":"Meeting counts do not establish leadership; changes in allele means do not establish selection or causation."}),
         ),
         Focus::Person(person) => {
             if focal_first.is_none() {
                 return Err(format!("person {person} was not found in this history"));
             }
             Ok(
-                json!({"scope":scope,"person":person,"first_observed_year":focal_first,"last_year_alive":focal_last_alive,"last_recorded_person_state":focal_person_state,"last_recorded_family_state":focal_last,"family_events":focal_events,"incapacitations":focal_incapacitations,"opinion_changes":focal_opinions,"language_events":focal_language,"signal_events":focal_signals,"signal_learning":focal_signal_learning,"recipe_learning":focal_recipe_learning,"personal_choices":focal_choices,"mechanical_experiments":focal_mechanics,"personal_strikes":focal_strikes,"recorded_meetings":focal_meetings}),
+                json!({"scope":scope,"person":person,"first_observed_year":focal_first,"last_year_alive":focal_last_alive,"last_recorded_person_state":focal_person_state,"last_recorded_family_state":focal_last,"family_events":focal_events,"incapacitations":focal_incapacitations,"opinion_changes":focal_opinions,"language_events":focal_language,"signal_events":focal_signals,"signal_learning":focal_signal_learning,"recipe_learning":focal_recipe_learning,"personal_choices":focal_choices,"mechanical_experiments":focal_mechanics,"personal_strikes":focal_strikes,"recorded_meetings":focal_meetings,"chronicle":chronicle.selected()}),
             )
         }
         Focus::Animal(animal) => {
@@ -790,6 +805,7 @@ fn narrative(report: &Value, focus: Focus) -> String {
                     writeln!(text, "At tick {tick}, a mechanical experiment involving them recorded the outcome `{outcome}`.\n").unwrap();
                 }
             }
+            chronicle::write_person(&mut text, &report["chronicle"], simulated_time);
         }
         Focus::Animal(animal) => {
             writeln!(text, "# Animal {animal}\n").unwrap();
@@ -829,6 +845,9 @@ fn narrative(report: &Value, focus: Focus) -> String {
                 .unwrap();
             }
         }
+    }
+    if matches!(focus, Focus::Summary) {
+        chronicle::write_world(&mut text, &report["chronicle"]);
     }
     if let (Some(first), Some(last)) = (scope["first_year"].as_u64(), scope["last_year"].as_u64()) {
         writeln!(

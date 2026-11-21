@@ -98,6 +98,7 @@ fn run(
     years: u64,
     workers: usize,
     resume: bool,
+    requested_step_millis: Option<u64>,
 ) -> Result<(), String> {
     let (mut host, scenario_text) = if resume {
         let file = File::open(source).map_err(|e| e.to_string())?;
@@ -117,6 +118,10 @@ fn run(
         return Err("the history tick must divide a 365-day year exactly".into());
     }
     let ticks_per_year = YEAR_MILLIS / tick_millis;
+    let step_millis = requested_step_millis.unwrap_or(tick_millis);
+    if step_millis == 0 {
+        return Err("history advance size must be positive".into());
+    }
     if years == 0 {
         return Err("years must be positive".into());
     }
@@ -138,8 +143,8 @@ fn run(
         .map_err(|e| e.to_string())?;
     let mut writer = BufWriter::new(file);
     let mut limitations = vec![
-        "production and decisions are quantized to the scenario tick",
-        "scientific invention, political and organizational history, artificial selection, and several other features are not implemented",
+        "event times and autonomous decision cadence are defined by the enabled systems",
+        "the archive covers modeled discoveries and an incomplete range of scientific, institutional, and selection behaviors",
         "observations include only selected event types; snapshots are retained annually",
     ];
     if !resume
@@ -164,7 +169,7 @@ fn run(
     }
     line(
         &mut writer,
-        &json!({"kind":"metadata","schema":2,"years_requested":years,"start_year":start_year,"tick_millis":tick_millis,"ticks_per_year":ticks_per_year,"calendar":"365-day years","seed":initial.core.seed,"workers":workers,"git_revision":revision(root),"git_revision_scope":"checkout at run time; executable build provenance is not verified","tracked_source_modified":tracked_changes(root),"executable":std::env::current_exe().ok(),"source":source,"source_kind":if resume {"checkpoint"} else {"scenario"},"scenario":scenario_text,"limitations":limitations}),
+        &json!({"kind":"metadata","schema":2,"years_requested":years,"start_year":start_year,"tick_millis":tick_millis,"step_millis":step_millis,"ticks_per_year":ticks_per_year,"calendar":"365-day years","seed":initial.core.seed,"workers":workers,"git_revision":revision(root),"git_revision_scope":"checkout at run time; executable build provenance is not verified","tracked_source_modified":tracked_changes(root),"executable":std::env::current_exe().ok(),"source":source,"source_kind":if resume {"checkpoint"} else {"scenario"},"scenario":scenario_text,"limitations":limitations}),
     )?;
     line(
         &mut writer,
@@ -180,33 +185,34 @@ fn run(
         let mut observation_batch = Vec::new();
         let mut previous_step_animals = previous_animals.clone();
         for step in 0..ticks_per_year {
-            let result = match host.advance_continuous(tick_millis, &[]) {
-                Ok(result) => result,
-                Err(error) => {
-                    line(
-                        &mut writer,
-                        &json!({"kind":"failure","year":year,"message":error}),
-                    )?;
-                    return Err(format!("year {year}: {error}"));
+            let mut remaining = tick_millis;
+            while remaining > 0 {
+                let elapsed = remaining.min(step_millis);
+                let result = host.advance_continuous(elapsed, &[]).and_then(|result| {
+                    if let Some(error) = result.failure {
+                        return Err(error);
+                    }
+                    let expected_boundaries = u64::from(elapsed == remaining);
+                    if result.elapsed_millis != elapsed || result.boundaries != expected_boundaries
+                    {
+                        return Err("unexpected elapsed time or boundary count".into());
+                    }
+                    Ok(result.events)
+                });
+                match result {
+                    Ok(events) => {
+                        observation_batch.extend(observations(&events, &mut observation_tick))
+                    }
+                    Err(error) => {
+                        line(
+                            &mut writer,
+                            &json!({"kind":"failure","year":year,"message":error}),
+                        )?;
+                        return Err(format!("year {year}: {error}"));
+                    }
                 }
-            };
-            if let Some(error) = &result.failure {
-                line(
-                    &mut writer,
-                    &json!({"kind":"failure","year":year,"message":error}),
-                )?;
-                return Err(format!("year {year}: {error}"));
+                remaining -= elapsed;
             }
-            if result.elapsed_millis != tick_millis || result.boundaries != 1 {
-                line(
-                    &mut writer,
-                    &json!({"kind":"failure","year":year,"message":"unexpected elapsed time or boundary count"}),
-                )?;
-                return Err(format!(
-                    "year {year}: unexpected elapsed time or boundary count"
-                ));
-            }
-            observation_batch.extend(observations(&result.events, &mut observation_tick));
             let opinion_events = host.take_opinion_events();
             if !opinion_events.is_empty() {
                 observation_batch.push(json!({"kind":"opinion_changes", "events":opinion_events}));
@@ -350,9 +356,9 @@ fn run(
 fn main() -> Result<(), String> {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let mut args = std::env::args_os().skip(1);
-    let first = args
-        .next()
-        .ok_or("usage: history [--resume] SCENARIO_OR_CHECKPOINT OUTPUT [YEARS] [WORKERS]")?;
+    let first = args.next().ok_or(
+        "usage: history [--resume] SCENARIO_OR_CHECKPOINT OUTPUT [YEARS] [WORKERS] [STEP_MILLIS]",
+    )?;
     let resume = first == "--resume";
     let source = if resume {
         PathBuf::from(args.next().ok_or("missing checkpoint path")?)
@@ -381,14 +387,22 @@ fn main() -> Result<(), String> {
         })
         .transpose()?
         .unwrap_or(1);
-    if years == 0 || workers == 0 || args.next().is_some() {
-        return Err("years and workers must be positive, with no extra arguments".into());
+    let step_millis = args
+        .next()
+        .map(|arg| {
+            arg.to_string_lossy()
+                .parse::<u64>()
+                .map_err(|_| "invalid history step duration")
+        })
+        .transpose()?;
+    if years == 0 || workers == 0 || step_millis == Some(0) || args.next().is_some() {
+        return Err("years, workers, and advance size must be positive".into());
     }
     rayon::ThreadPoolBuilder::new()
         .num_threads(workers)
         .build()
         .map_err(|e| e.to_string())?
-        .install(|| run(&root, &source, &output, years, workers, resume))
+        .install(|| run(&root, &source, &output, years, workers, resume, step_millis))
 }
 
 #[cfg(test)]
@@ -434,7 +448,7 @@ mod tests {
                 .unwrap()
                 .replace("tick_millis = 900000", "tick_millis = 31536000000");
         fs::write(&scenario, text).unwrap();
-        run(&root, &scenario, &output, 1, 1, false).unwrap();
+        run(&root, &scenario, &output, 1, 1, false, None).unwrap();
         let rows = records(&output);
         let strike = rows
             .iter()
@@ -495,7 +509,7 @@ mod tests {
             .num_threads(1)
             .build()
             .unwrap()
-            .install(|| run(&root, &scenario, &output, 2, 1, false))
+            .install(|| run(&root, &scenario, &output, 2, 1, false, None))
             .unwrap();
         let rows = records(&output);
         assert!(rows.iter().filter(|row| row["kind"] == "year").any(|row| {
@@ -531,7 +545,7 @@ mod tests {
             .num_threads(1)
             .build()
             .unwrap()
-            .install(|| run(&root, &scenario, &output, 1, 1, false))
+            .install(|| run(&root, &scenario, &output, 1, 1, false, None))
             .unwrap();
         let rows = records(&output);
         let event = rows
@@ -579,7 +593,7 @@ mod tests {
             .num_threads(1)
             .build()
             .unwrap()
-            .install(|| run(&root, &scenario, &output, 2, 1, false))
+            .install(|| run(&root, &scenario, &output, 2, 1, false, None))
             .unwrap();
         let rows = records(&output);
         let event = rows
@@ -618,7 +632,7 @@ mod tests {
             .num_threads(1)
             .build()
             .unwrap()
-            .install(|| run(&root, &scenario, &output, 1, 1, false))
+            .install(|| run(&root, &scenario, &output, 1, 1, false, None))
             .unwrap();
         let rows = records(&output);
         assert!(rows.iter().filter(|row| row["kind"] == "year").any(|row| {
@@ -654,7 +668,7 @@ mod tests {
             .num_threads(1)
             .build()
             .unwrap()
-            .install(|| run(&root, &scenario, &output, 1, 1, false))
+            .install(|| run(&root, &scenario, &output, 1, 1, false, None))
             .unwrap();
         let rows = records(&output);
         assert!(rows.iter().filter(|row| row["kind"] == "year").any(|row| {
@@ -688,7 +702,7 @@ mod tests {
                 .num_threads(workers)
                 .build()
                 .unwrap()
-                .install(|| run(&root, &scenario, path, 2, workers, false))
+                .install(|| run(&root, &scenario, path, 2, workers, false, None))
                 .unwrap();
         }
         let serial = records(&one);
@@ -933,7 +947,17 @@ mod tests {
                 .num_threads(workers)
                 .build()
                 .unwrap()
-                .install(|| run(&root, &scenario, path, years, workers, false))
+                .install(|| {
+                    run(
+                        &root,
+                        &scenario,
+                        path,
+                        years,
+                        workers,
+                        false,
+                        (workers == 6).then_some(YEAR_MILLIS / 3 + 17),
+                    )
+                })
                 .unwrap();
         }
         let first = records(&one);
@@ -978,6 +1002,7 @@ mod tests {
                     1,
                     6,
                     true,
+                    None,
                 )
             })
             .unwrap();
@@ -1007,7 +1032,7 @@ mod tests {
             .num_threads(6)
             .build()
             .unwrap()
-            .install(|| run(&root, &scenario, &output, 25, 6, false))
+            .install(|| run(&root, &scenario, &output, 25, 6, false, None))
             .unwrap();
         let rows = records(&output);
         let later_meeting = rows.iter().filter(|row| row["kind"] == "year").any(|row| {
