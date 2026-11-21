@@ -34,6 +34,10 @@ pub struct Outcome {
 
 impl Context<'_> {
     pub fn prepare(self) -> Outcome {
+        self.prepare_selected(None)
+    }
+
+    pub fn prepare_selected(self, selected: Option<&[u64]>) -> Outcome {
         if self.owner.capture_policies.is_empty() {
             return Outcome {
                 participants: vec![],
@@ -89,6 +93,9 @@ impl Context<'_> {
             .capture_policies
             .par_iter()
             .filter_map(|policy| {
+                if selected.is_some_and(|people| people.binary_search(&policy.person).is_err()) {
+                    return None;
+                }
                 let actor = find(policy.person)?;
                 let target = find(policy.target)?;
                 let &(region, _) = slots.get(&policy.site)?;

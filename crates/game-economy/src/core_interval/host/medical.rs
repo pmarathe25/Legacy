@@ -74,7 +74,7 @@ impl CoreHost {
         let view = self.core.physical.view(tick)?;
         let locations = game_economy_person::travel::Colocation::new(self.core.travel.as_ref());
         let communication = game_economy_confinement::Communication {
-            before: None,
+            before: self.confinement(),
             after: None,
         };
         let resting = self

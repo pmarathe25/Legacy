@@ -61,6 +61,23 @@ impl<'a> Player<'a> {
         self.host.pause_controlled_walk(self.person, paused)
     }
 
+    pub fn confine(&mut self, target: u64, site: u64) -> Result<bool, String> {
+        self.host
+            .confine_controlled_target(self.person, target, site)
+    }
+
+    pub fn guard(&mut self, site: u64) -> Result<(), String> {
+        self.host.guard_controlled_cell(self.person, site)
+    }
+
+    pub fn release(&mut self, target: u64) -> Result<bool, String> {
+        self.host.release_controlled_target(self.person, target)
+    }
+
+    pub fn escape(&mut self) -> Result<bool, String> {
+        self.host.attempt_controlled_escape(self.person)
+    }
+
     pub fn eat(&mut self, good: u32) -> Result<bool, String> {
         self.host.controlled_person(self.person)?;
         self.host.eat_controlled(self.person, good)

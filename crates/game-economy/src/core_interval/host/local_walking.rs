@@ -23,11 +23,16 @@ impl CoreHost {
     }
 
     pub(super) fn regional_stock_reachable(&self, person: u64, region: u64) -> bool {
-        self.walking()
-            .is_none_or(|walking| walking.stock_reachable(person, region))
+        self.held_at(person).is_none()
+            && self
+                .walking()
+                .is_none_or(|walking| walking.stock_reachable(person, region))
     }
 
     pub(super) fn local_partition(&self, person: u64) -> (u64, u64) {
+        if let Some(site) = self.held_at(person) {
+            return (3, site);
+        }
         match self.local_location(person) {
             Some(Location::At {
                 endpoint: Endpoint::Store { id },
@@ -64,9 +69,9 @@ impl CoreHost {
     }
 
     pub(super) fn block_away_from_stock(&self, busy: &[u64]) -> Option<Vec<u64>> {
-        let walking = self.walking()?;
-        let mut excluded: Vec<_> = walking
-            .positions
+        let mut excluded: Vec<_> = self
+            .walking()
+            .map_or(&[][..], |owner| owner.positions.as_slice())
             .par_iter()
             .filter_map(|position| {
                 (!matches!(
@@ -79,6 +84,9 @@ impl CoreHost {
                 .then_some(position.person)
             })
             .collect();
+        if let Some(owner) = self.confinement() {
+            excluded.par_extend(owner.holds.par_iter().map(|hold| hold.person));
+        }
         if excluded.is_empty() {
             return None;
         }
@@ -89,13 +97,15 @@ impl CoreHost {
     }
 
     fn can_walk(&self, person: u64) -> bool {
-        self.core
-            .people
-            .binary_search_by_key(&person, |row| row.id)
-            .ok()
-            .is_some_and(|index| {
-                self.core.people[index].health > 0 && self.core.people[index].region.is_some()
-            })
+        self.held_at(person).is_none()
+            && self
+                .core
+                .people
+                .binary_search_by_key(&person, |row| row.id)
+                .ok()
+                .is_some_and(|index| {
+                    self.core.people[index].health > 0 && self.core.people[index].region.is_some()
+                })
     }
 
     pub(super) fn next_local_arrival(&self) -> Option<u64> {
@@ -142,7 +152,7 @@ impl CoreHost {
         progress.arrivals
     }
 
-    fn local_walk_exclusions(&self, blocked: &[u64]) -> Vec<u64> {
+    pub(super) fn local_walk_exclusions(&self, blocked: &[u64]) -> Vec<u64> {
         let resting = self.blocked_with_rest(blocked);
         let mut busy = resting.as_deref().unwrap_or(blocked).to_vec();
         busy.par_extend(self.core.physical.work().par_iter().filter_map(|row| {
@@ -150,6 +160,15 @@ impl CoreHost {
         }));
         if let Some(shared) = &self.shared_work {
             busy.par_extend(shared.sessions.par_iter().map(|row| row.event.person));
+        }
+        if let Some(schedule) = &self.schedule {
+            busy.par_extend(
+                schedule
+                    .pending_cultivation
+                    .par_iter()
+                    .map(|row| row.person),
+            );
+            busy.par_extend(schedule.pending_gathering.par_iter().map(|row| row.person));
         }
         busy.par_sort_unstable();
         busy.dedup();
@@ -164,7 +183,12 @@ impl CoreHost {
             return Ok(Vec::new());
         };
         let tick = self.core.physical.tick();
-        let busy = self.local_walk_exclusions(blocked);
+        let mut busy = self.local_walk_exclusions(blocked);
+        if let Some(owner) = self.confinement() {
+            busy.par_extend(owner.holds.par_iter().map(|hold| hold.person));
+            busy.par_sort_unstable();
+            busy.dedup();
+        }
         let claims = self.claims.as_ref().map(game_economy_claims::Claims::index);
         let view = self.core.physical.view(tick)?;
         let mut choices = game_economy_local_transport::walking::personal_requests(
@@ -253,6 +277,9 @@ impl CoreHost {
             || self.core.next_deadline(None)?.after_millis == 0
         {
             return Err("publish pending interval events before walking".into());
+        }
+        if self.held_at(person).is_some() {
+            return Err("a physical barrier blocks walking".into());
         }
         let actor = self
             .core

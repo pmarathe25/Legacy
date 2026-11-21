@@ -15,7 +15,7 @@ fn command(host: &mut CoreHost, person: u64, words: &[&str]) -> Result<bool, Str
     match words {
         [] => {}
         ["help"] => println!(
-            "look | wait MILLISECONDS | move REGION | walk stock|store ID | pause-walk | resume-walk | eat GOOD | treat GOOD | work RECIPE UNITS | stop JOB | stop-assist | rest on|off | word place|person|object ID SOUNDS | form SOUNDS MARKS | inscribe SOUNDS | read PAGE | recall PAGE | save PATH | load PATH | quit (SOUNDS and MARKS are comma-separated numbers)"
+            "look | wait MILLISECONDS | move REGION | walk stock|store ID | pause-walk | resume-walk | confine PERSON SITE | guard SITE | release PERSON | escape | eat GOOD | treat GOOD | work RECIPE UNITS | stop JOB | stop-assist | rest on|off | word place|person|object ID SOUNDS | form SOUNDS MARKS | inscribe SOUNDS | read PAGE | recall PAGE | save PATH | load PATH | quit (SOUNDS and MARKS are comma-separated numbers)"
         ),
         ["quit"] | ["exit"] => return Ok(false),
         ["look"] => {
@@ -46,6 +46,9 @@ fn command(host: &mut CoreHost, person: u64, words: &[&str]) -> Result<bool, Str
             }
             if let Some(location) = view.local_location {
                 println!("local_location={location:?}");
+            }
+            if let Some(site) = view.held_at {
+                println!("held_at={site}");
             }
             for report in view.route_reports {
                 let observed = report.observed_at_millis.map_or_else(
@@ -120,6 +123,24 @@ fn command(host: &mut CoreHost, person: u64, words: &[&str]) -> Result<bool, Str
                 Player::new(host, person)?.pause_walk(words[0] == "pause-walk")?
             );
         }
+        ["confine", target, site] => {
+            let target = target.parse::<u64>().map_err(|_| "invalid person")?;
+            let site = site.parse::<u64>().map_err(|_| "invalid site")?;
+            println!(
+                "confined={}",
+                Player::new(host, person)?.confine(target, site)?
+            );
+        }
+        ["guard", site] => {
+            let site = site.parse::<u64>().map_err(|_| "invalid site")?;
+            Player::new(host, person)?.guard(site)?;
+            println!("guarded={site}");
+        }
+        ["release", target] => {
+            let target = target.parse::<u64>().map_err(|_| "invalid person")?;
+            println!("released={}", Player::new(host, person)?.release(target)?);
+        }
+        ["escape"] => println!("escaped={}", Player::new(host, person)?.escape()?),
         ["eat", good] => {
             let good = good.parse::<u32>().map_err(|_| "invalid good")?;
             println!("consumed={}", Player::new(host, person)?.eat(good)?);

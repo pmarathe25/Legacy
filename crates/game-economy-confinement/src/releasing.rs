@@ -99,6 +99,10 @@ fn opening_results(mut selected: Vec<Choice>, guards: &[(u64, u128)]) -> Vec<(Ch
 impl Context<'_> {
     /// Select one available actor per captive and remove only those actual holds.
     pub fn prepare(self) -> Vec<u64> {
+        self.prepare_selected(None)
+    }
+
+    pub fn prepare_selected(self, selected: Option<&[u64]>) -> Vec<u64> {
         let need_opinions = self
             .owner
             .release_policies
@@ -112,6 +116,9 @@ impl Context<'_> {
             .release_policies
             .par_iter()
             .filter_map(|policy| {
+                if selected.is_some_and(|people| people.binary_search(&policy.person).is_err()) {
+                    return None;
+                }
                 let actor = &self.people[ordered_index(self.people, policy.person, |p| p.id)?];
                 let hold = &self.owner.holds
                     [ordered_index(&self.owner.holds, policy.target, |h| h.person)?];

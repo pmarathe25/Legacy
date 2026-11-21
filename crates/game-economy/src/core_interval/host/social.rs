@@ -226,7 +226,7 @@ impl CoreHost {
             .map_or_else(Vec::new, |owner| owner.inquiry_meetings(tick));
         let partition = |person| self.local_partition(person);
         let contact = |a, b| self.same_local_endpoint(a, b);
-        let walking = self.walking().is_some();
+        let walking = self.walking().is_some() || self.confinement().is_some();
         let mut next = opening.prepare(
             &self.core.people,
             &mut people,

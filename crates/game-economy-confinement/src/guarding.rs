@@ -28,6 +28,10 @@ pub struct Plan {
 
 impl Context<'_> {
     pub fn prepare(self) -> Result<Plan, String> {
+        self.prepare_selected(None)
+    }
+
+    pub fn prepare_selected(self, selected: Option<&[u64]>) -> Result<Plan, String> {
         let find = |id| ordered_index(self.people, id, |person| person.id).map(|i| &self.people[i]);
         let site = |id| {
             self.sites
@@ -60,6 +64,9 @@ impl Context<'_> {
             .guard_policies
             .par_iter()
             .filter_map(|policy| {
+                if selected.is_some_and(|people| people.binary_search(&policy.person).is_err()) {
+                    return None;
+                }
                 let person = find(policy.person)?;
                 let location = site(policy.site)?;
                 let pressured = policy

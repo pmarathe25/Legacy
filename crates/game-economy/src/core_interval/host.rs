@@ -8,6 +8,7 @@ mod animal_handling;
 mod animal_products;
 mod animal_restraints;
 mod claims;
+mod confinement;
 mod conflict;
 mod construction;
 mod dependent_care;
@@ -45,6 +46,7 @@ mod tools;
 mod treatment;
 mod writing;
 mod written_social;
+pub use confinement::{BarrierAction, CoreConfinement};
 pub use conflict::{
     CorePersonalConflict, PersonalAttackPolicy, PersonalDefensePolicy, PersonalHarm,
     PersonalStrikeReaction, StrikeCapability, StrikeFeeling, StrikeInterpretation, WoundCarePolicy,
@@ -1382,6 +1384,22 @@ impl CoreHost {
                 maintenance.enroll(&owner.facilities);
             }
         }
+        if let Some(state) = personal_conflict
+            .as_ref()
+            .and_then(|owner| owner.confinement.as_ref())
+        {
+            let sites = &sites
+                .as_ref()
+                .ok_or("confinement requires physical sites")?
+                .facilities;
+            state.validate(
+                &core,
+                sites,
+                local_transport
+                    .as_ref()
+                    .and_then(|owner| owner.walking.as_ref()),
+            )?;
+        }
         if let Some(owner) = &mut construction {
             if owner.maintenance.is_some()
                 || !owner.demolition.is_empty()
@@ -1809,7 +1827,7 @@ impl CoreHost {
         actions: &[game_lots::Transaction],
     ) -> Result<game_lot_runtime::PhysicalOutcomes, String> {
         use game_lots::Place;
-        if self.walking().is_some()
+        if (self.walking().is_some() || self.confinement().is_some())
             && actions.par_iter().any(|action| {
                 action
                     .movements
@@ -3157,6 +3175,7 @@ impl CoreHost {
         });
         self.core.validate_settlement(&draft)?;
         let events = self.core.commit_settlement(draft)?;
+        self.remove_deceased_holds();
         if let Some(learning) = signal_learning {
             learning.apply_validated(
                 self.social
@@ -3224,6 +3243,7 @@ impl CoreHost {
             self.gathering = Some(owner);
         }
         let newborns = if let Some(family) = family {
+            self.enroll_confined_births(&family.births);
             if let Some(care) = &mut self.dependent_care {
                 game_economy_work::care::inherit(care, &family.owner, &family.newborns);
             }

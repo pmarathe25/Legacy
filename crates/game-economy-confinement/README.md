@@ -15,3 +15,19 @@ The family owner receives the cell partition at the start and end of each bounda
 Optional `release_policies` express individual intentions to free a particular person. An available, capable person at the cell can act from willingness or their own fear or obligation toward `pressured_by`; competing releases select one actor deterministically. The action consumes the actor's time, including when resisted. A guard may personally choose `oppose_opening` to resist outsiders as well as escapes; the default is false. Escape-only guards' effort is allocated to escape first, followed by flexible guards' effort, and any remaining flexible effort opposes openings. Controlled opening takes priority over autonomous openings, whose remaining opposition is allocated deterministically across attempts. Effort is spent only once. Administrative `guard-opening PERSON on|off` changes this preference, and `release-choice PERSON on|off` changes release willingness without eliminating personal pressure.
 
 An existing cell or a constructed `cell_kinds` entry can set `allow_supplies = true` to represent an opening through which possessions and food requests can pass. A captive may ask for food or give possessions through that opening, or to another occupant of the same cell, if they are not occupied by an escape attempt, personal treatment, or another chosen action. The recipient decides independently whether to respond. Gifts and promised deliveries from outside require the opening while the recipient is held, and ordinary transfers still check actual custody and carrying capacity. A caregiver in the same cell can provide dependent care and use carried food, but cannot fetch stock outside the barrier. An opening does not permit a person to leave or provide in-person care through the barrier.
+
+## Interval host
+
+An interval scenario can author `[confinement]` with cells tied to physical
+`work_sites`. A person's capture, guard, release, and escape policies express
+that person's choices. Physical capacity and opposing effort decide the
+outcomes. A held person retains carried supplies and can still choose actions
+within their physical reach. A child delivered inside a cell shares their
+mother's location. An incapacitated immortal remains inside during recovery.
+
+The interval player has `confine PERSON SITE`, `guard SITE`, `release PERSON`,
+and `escape`. The player view shows a person's own hold. Scheduled attempts
+record their exact elapsed time in history. On the decision cadence, a
+personal profile can rank barrier actions alongside other opportunities or
+decline them. Use domain 24 for confinement preferences and action keys 1
+through 4 for capture, guard, release, and escape, respectively.

@@ -127,6 +127,13 @@ fn run_steps(
                     )?;
                     ("local_walking", events.len())
                 }
+                CoreRunEvent::Confinement { at_millis, events } => {
+                    write_line(
+                        &mut writer,
+                        &json!({"kind":"confinement","step":step,"at_millis":at_millis,"events":events}),
+                    )?;
+                    ("confinement", events.len())
+                }
                 CoreRunEvent::Disease(rows) => {
                     write_line(
                         &mut writer,

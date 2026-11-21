@@ -17,7 +17,8 @@ const SELECTED_DOMAINS: u64 = (1 << 1)
     | (1 << 16)
     | (1 << 17)
     | (1 << 18)
-    | (1 << 19);
+    | (1 << 19)
+    | (1 << personal_choice::CONFINEMENT);
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "phase", rename_all = "snake_case")]
@@ -121,6 +122,11 @@ pub enum DecisionPhase {
         remaining: u64,
     },
     ChosenAttack {
+        meal_people: Vec<u64>,
+        intents: Arc<Vec<CoreChoiceIntent>>,
+        remaining: u64,
+    },
+    ChosenConfinement {
         meal_people: Vec<u64>,
         intents: Arc<Vec<CoreChoiceIntent>>,
         remaining: u64,
@@ -369,6 +375,7 @@ impl CoreSchedule {
             | DecisionPhase::ChosenMechanicalLoad { remaining, .. }
             | DecisionPhase::ChosenMechanicalDesign { remaining, .. }
             | DecisionPhase::ChosenAttack { remaining, .. }
+            | DecisionPhase::ChosenConfinement { remaining, .. }
             | DecisionPhase::ChosenWoundCare { remaining, .. }
             | DecisionPhase::ChosenWrittenForm { remaining, .. }
             | DecisionPhase::ChosenMarkInscription { remaining, .. }
@@ -403,6 +410,7 @@ impl CoreSchedule {
             DecisionPhase::ChosenMechanicalLoad { .. } => Some(12),
             DecisionPhase::ChosenMechanicalDesign { .. } => Some(13),
             DecisionPhase::ChosenAttack { .. } => Some(15),
+            DecisionPhase::ChosenConfinement { .. } => Some(personal_choice::CONFINEMENT),
             DecisionPhase::ChosenWoundCare { .. } => Some(16),
             DecisionPhase::ChosenWrittenForm { .. } => Some(17),
             DecisionPhase::ChosenMarkInscription { .. } => Some(18),
@@ -428,6 +436,7 @@ impl CoreSchedule {
         | DecisionPhase::ChosenMechanicalLoad { intents, .. }
         | DecisionPhase::ChosenMechanicalDesign { intents, .. }
         | DecisionPhase::ChosenAttack { intents, .. }
+        | DecisionPhase::ChosenConfinement { intents, .. }
         | DecisionPhase::ChosenWoundCare { intents, .. }
         | DecisionPhase::ChosenWrittenForm { intents, .. }
         | DecisionPhase::ChosenMarkInscription { intents, .. }
@@ -448,6 +457,7 @@ impl CoreSchedule {
                         || (intent.key.domain != personal_choice::MECHANICAL_DESIGN && intent.assembly.is_some())
                         || (intent.key.domain != personal_choice::MECHANICAL_WATCH && intent.watch.is_some())
                         || (intent.key.domain != personal_choice::PERSONAL_ATTACK && intent.strike.is_some())
+                        || (intent.key.domain != personal_choice::CONFINEMENT && intent.barrier.is_some())
                         || (!matches!(intent.key.domain, personal_choice::WRITTEN_FORM | personal_choice::MARK_INSCRIPTION | personal_choice::REMEMBERED_FORM) && intent.written_form.is_some())
                         || match (
                             intent.key.domain,
@@ -564,6 +574,12 @@ impl CoreSchedule {
                                     || form.sounds.is_empty() || form.sounds.len() > 16
                                     || form.marks.is_empty() || form.marks.len() > 16 || form.marks.contains(&0)
                             }
+                            (personal_choice::CONFINEMENT, None, None, None) => {
+                                intent.health_value.is_some() || intent.tool_damage.is_some()
+                                    || intent.meal_value.is_some() || intent.experiment_value.is_some()
+                                    || intent.second_movement.is_some()
+                                    || intent.barrier.is_none_or(|action| action.choice_key() != intent.key.action)
+                            }
                             _ => true,
                         }
                         || people
@@ -605,6 +621,7 @@ impl CoreSchedule {
         | DecisionPhase::ChosenMechanicalLoad { meal_people, .. }
         | DecisionPhase::ChosenMechanicalDesign { meal_people, .. }
         | DecisionPhase::ChosenAttack { meal_people, .. }
+        | DecisionPhase::ChosenConfinement { meal_people, .. }
         | DecisionPhase::ChosenWoundCare { meal_people, .. }
         | DecisionPhase::ChosenWrittenForm { meal_people, .. }
         | DecisionPhase::ChosenMarkInscription { meal_people, .. }
@@ -670,6 +687,10 @@ pub enum CoreRunEvent {
     LocalWalking {
         at_millis: u128,
         events: Vec<game_economy_local_transport::walking::Event>,
+    },
+    Confinement {
+        at_millis: u128,
+        events: Vec<game_economy_confinement::Event>,
     },
     PersonalChoices(Vec<CoreChoiceEvent>),
     MechanicalExperiments(Vec<game_mechanics::Observation>),
@@ -1659,6 +1680,9 @@ impl CoreHost {
                         let has_attacks = intents
                             .par_iter()
                             .any(|intent| intent.key.domain == personal_choice::PERSONAL_ATTACK);
+                        let has_barriers = intents
+                            .par_iter()
+                            .any(|intent| intent.key.domain == personal_choice::CONFINEMENT);
                         let has_wound_care = intents
                             .par_iter()
                             .any(|intent| intent.key.domain == personal_choice::WOUND_CARE);
@@ -1687,6 +1711,7 @@ impl CoreHost {
                             || has_mechanical_loads
                             || has_mechanical_designs
                             || has_attacks
+                            || has_barriers
                             || has_wound_care
                             || has_written_forms
                             || has_mark_inscriptions
@@ -1716,6 +1741,9 @@ impl CoreHost {
                             }
                             if has_attacks {
                                 remaining |= 1 << 15;
+                            }
+                            if has_barriers {
+                                remaining |= 1 << personal_choice::CONFINEMENT;
                             }
                             if has_wound_care {
                                 remaining |= 1 << 16;
@@ -1790,17 +1818,35 @@ impl CoreHost {
                         remaining,
                     } => {
                         let round = self.core.decision_time_key();
-                        let domain = [1u32, 2, 3, 4, 6, 7, 8, 9, 10, 12, 13, 15, 16, 17, 18, 19]
-                            .into_iter()
-                            .filter(|domain| remaining & (1u64 << domain) != 0)
-                            .min_by_key(|domain| {
-                                game_genetics::random(
-                                    self.core.seed,
-                                    0x6163746976697479,
-                                    round ^ u64::from(*domain),
-                                )
-                            })
-                            .expect("validated nonempty batch");
+                        let domain = [
+                            1u32,
+                            2,
+                            3,
+                            4,
+                            6,
+                            7,
+                            8,
+                            9,
+                            10,
+                            12,
+                            13,
+                            15,
+                            16,
+                            17,
+                            18,
+                            19,
+                            personal_choice::CONFINEMENT,
+                        ]
+                        .into_iter()
+                        .filter(|domain| remaining & (1u64 << domain) != 0)
+                        .min_by_key(|domain| {
+                            game_genetics::random(
+                                self.core.seed,
+                                0x6163746976697479,
+                                round ^ u64::from(*domain),
+                            )
+                        })
+                        .expect("validated nonempty batch");
                         let remaining = remaining & !(1u64 << domain);
                         self.schedule.as_mut().expect("active schedule").phase = match domain {
                             1 => DecisionPhase::ChosenConstruction {
@@ -1891,6 +1937,11 @@ impl CoreHost {
                                 remaining,
                             },
                             19 => DecisionPhase::ChosenRememberedForm {
+                                meal_people,
+                                intents,
+                                remaining,
+                            },
+                            personal_choice::CONFINEMENT => DecisionPhase::ChosenConfinement {
                                 meal_people,
                                 intents,
                                 remaining,
@@ -2180,6 +2231,76 @@ impl CoreHost {
                                 harm,
                             });
                         }
+                        if !choices.is_empty() {
+                            choices.par_sort_unstable_by_key(|event| event.actor);
+                            self.record_personal_choices(&mut run, choices);
+                        }
+                        self.schedule.as_mut().expect("active schedule").phase =
+                            self.after_selected_batch(meal_people, intents, remaining);
+                    }
+                    DecisionPhase::ChosenConfinement {
+                        mut meal_people,
+                        intents,
+                        remaining,
+                    } => {
+                        let mut busy = blocked.to_vec();
+                        busy.extend(meal_people.iter().copied());
+                        busy.par_sort_unstable();
+                        busy.dedup();
+                        let people = schedule.personal_choices.as_ref().expect("choice profile");
+                        let (blocked_choice, mut choices) = attempt!('run, self.choice_blocked(&busy, people, &intents, personal_choice::CONFINEMENT));
+                        let selected: Vec<_> = intents
+                            .par_iter()
+                            .filter(|intent| {
+                                intent.key.domain == personal_choice::CONFINEMENT
+                                    && blocked_choice.binary_search(&intent.actor).is_err()
+                            })
+                            .map(|intent| {
+                                (
+                                    intent.actor,
+                                    intent.barrier.expect("validated barrier choice"),
+                                )
+                            })
+                            .collect();
+                        busy.par_extend(
+                            intents
+                                .par_iter()
+                                .filter(|intent| intent.key.domain != personal_choice::CONFINEMENT)
+                                .map(|intent| intent.actor),
+                        );
+                        busy.par_sort_unstable();
+                        busy.dedup();
+                        let (participants, events) =
+                            attempt!('run, self.act_on_barriers(&busy, &selected));
+                        if !selected.is_empty() {
+                            let acted: HashSet<_> =
+                                events.par_iter().filter_map(|event| event.actor).collect();
+                            choices.par_extend(selected.par_iter().map(|&(actor, action)| {
+                                CoreChoiceEvent {
+                                    tick: self.core.physical.tick(),
+                                    offset_millis: offset,
+                                    actor,
+                                    key: Some(game_personal_choice::Key {
+                                        domain: personal_choice::CONFINEMENT,
+                                        action: action.choice_key(),
+                                    }),
+                                    outcome: if acted.contains(&actor) {
+                                        CoreChoiceOutcome::Accepted
+                                    } else {
+                                        CoreChoiceOutcome::Denied
+                                    },
+                                }
+                            }));
+                        }
+                        if !events.is_empty() {
+                            run.events.push(CoreRunEvent::Confinement {
+                                at_millis: self.core.simulated_millis(),
+                                events,
+                            });
+                        }
+                        meal_people.extend(participants);
+                        meal_people.par_sort_unstable();
+                        meal_people.dedup();
                         if !choices.is_empty() {
                             choices.par_sort_unstable_by_key(|event| event.actor);
                             self.record_personal_choices(&mut run, choices);
@@ -3105,6 +3226,19 @@ impl CoreHost {
                         busy.extend(meal_people);
                         busy.par_sort_unstable();
                         busy.dedup();
+                        let (participants, events) =
+                            attempt!('run, self.act_on_barriers(&busy, &[]));
+                        if !events.is_empty() {
+                            run.events.push(CoreRunEvent::Confinement {
+                                at_millis: self.core.simulated_millis(),
+                                events,
+                            });
+                        }
+                        if !participants.is_empty() {
+                            busy.extend(participants);
+                            busy.par_sort_unstable();
+                            busy.dedup();
+                        }
                         let walking = attempt!('run, self.walk_autonomously(&busy));
                         if !walking.is_empty() {
                             run.events.push(CoreRunEvent::LocalWalking {

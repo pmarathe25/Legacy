@@ -49,6 +49,8 @@ impl CoreHost {
         );
         busy.par_sort_unstable();
         busy.dedup();
+        let held = self.block_held(&busy);
+        let busy = held.as_deref().unwrap_or(&busy);
         let view = self.core.physical.view(tick)?;
         let claims_index = self.claims.as_ref().map(game_economy_claims::Claims::index);
         let context = game_economy_local_transport::Context {
@@ -57,7 +59,7 @@ impl CoreHost {
             view: &view,
             opinions: self.opinions.as_ref(),
             claims: claims_index.as_ref(),
-            busy: &busy,
+            busy,
             max_hunger,
             manual: None,
             walking: owner.walking.as_ref(),
@@ -66,7 +68,7 @@ impl CoreHost {
         let plan = if needs.is_empty() {
             context.prepare(1)?
         } else {
-            context.prepare_with_goals(1, &self.goal_carry_context(owner, &view, &busy, &needs))?
+            context.prepare_with_goals(1, &self.goal_carry_context(owner, &view, busy, &needs))?
         };
         if plan.actions.is_empty() {
             return Ok(CoreLocalTransportResults::default());

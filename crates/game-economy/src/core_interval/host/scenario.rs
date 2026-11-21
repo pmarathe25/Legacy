@@ -12,7 +12,6 @@ impl CoreHostSnapshot {
         }
         let mut unsupported = Vec::new();
         for (name, present) in [
-            ("confinement", state.confinement.is_some()),
             ("missions", state.missions.is_some()),
             ("campaign", state.campaign.is_some()),
             ("combat", state.combat.is_some()),
@@ -78,7 +77,10 @@ impl CoreHostSnapshot {
         });
         Ok(Self {
             mechanics: None,
-            personal_conflict: None,
+            personal_conflict: state.confinement.take().map(|owner| CorePersonalConflict {
+                confinement: Some(CoreConfinement::new(owner)),
+                ..Default::default()
+            }),
             core: CoreSnapshot {
                 seed: state.seed,
                 physical: state.physical,

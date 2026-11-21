@@ -107,6 +107,7 @@ impl CoreHost {
                 tick,
                 now,
                 &feelings,
+                Some(&|person| self.local_partition(person)),
             )?
         } else {
             None
@@ -172,8 +173,11 @@ impl CoreHost {
         staged: ElapsedFamilyFrame,
     ) -> Vec<game_economy_family::FamilyEvent> {
         let FamilyFrame {
-            owner, newborns, ..
+            owner,
+            newborns,
+            births,
         } = staged.frame;
+        self.enroll_confined_births(&births);
         if let Some(care) = &mut self.dependent_care {
             game_economy_work::care::inherit(care, &owner, &newborns);
         }
@@ -375,7 +379,7 @@ impl CoreHost {
             self.core.seed,
             tick,
             personal_meals,
-            None,
+            Some(&|person| self.local_partition(person)),
             Some(&feelings),
             Some(self.core.simulated_millis()),
         )?;
@@ -431,14 +435,15 @@ impl CoreHost {
                 until,
             )?;
         }
-        let births = if self.health.as_ref().is_some_and(|health| {
-            !health.owner.cases.is_empty()
-                && health
-                    .owner
-                    .strains
-                    .iter()
-                    .any(|strain| strain.birth_transmission_per_million > 0)
-        }) {
+        let births = if self.confinement().is_some()
+            || self.health.as_ref().is_some_and(|health| {
+                !health.owner.cases.is_empty()
+                    && health
+                        .owner
+                        .strains
+                        .iter()
+                        .any(|strain| strain.birth_transmission_per_million > 0)
+            }) {
             next.births
                 .par_iter()
                 .map(|birth| (birth.id, birth.mother))

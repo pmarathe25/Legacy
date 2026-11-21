@@ -1210,6 +1210,163 @@ target = 1
 }
 
 #[test]
+fn confinement_records_capture_and_guarded_escape_and_preserves_physical_reach() {
+    use game_economy::core_interval::{CoreChoiceOutcome, CoreHost, CoreRunEvent};
+    use game_lots::{Movement, Place, Transaction};
+    use game_personal_choice::{Person, Preference};
+
+    let root = root();
+    let template =
+        std::fs::read_to_string(root.join("content/scenarios/economy-core-local-carry.toml"))
+            .unwrap();
+    let mut source = template.split_once("[[people]]").unwrap().0.replacen(
+        "seed = 7",
+        "seed = 7\ndecision_period_millis = 100",
+        1,
+    );
+    for id in 1..=3 {
+        source.push_str(&format!("\n[[people]]\nid = {id}\nregion = 1\nhealth = 100\nhunger = 0\nwilling_to_work = false\nseek_meals = false\n"));
+    }
+    source.push_str(
+        r#"
+[work_sites]
+sites = [{ id = 1, region = 1, kind = "cell", capacity = 2 }]
+requirements = []
+
+[confinement]
+cells = [{ site = 1, resistance = 3 }]
+escape = [
+    { person = 1, willing = false, effort = 3 },
+    { person = 2, willing = true, effort = 2 },
+    { person = 3, willing = false, effort = 2 },
+]
+capture_policies = [{ person = 1, target = 2, site = 1, willing = true }]
+guard_policies = [{ person = 3, site = 1, willing = true, oppose_opening = true }]
+"#,
+    );
+    let path = std::env::temp_dir().join(format!(
+        "legacy-core-confinement-{}.toml",
+        std::process::id()
+    ));
+    std::fs::write(&path, source).unwrap();
+    let loaded = game_economy_cli::core_scenario(&path, &root.join("content"));
+    std::fs::remove_file(path).unwrap();
+    let opening = loaded.unwrap().snapshot();
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut host = CoreHost::resume(opening.clone()).unwrap();
+                let first = host.advance_continuous(100, &[]).unwrap();
+                assert_eq!(first.failure, None);
+                assert!(first.events.iter().any(
+                    |event| matches!(event, CoreRunEvent::Confinement {at_millis: 0, events}
+                if events.iter().any(|row| row.person == 2 && row.actor == Some(1)))
+                ));
+                assert_eq!(host.held_at(2), Some(1));
+                let saved = host.snapshot();
+                let grain = saved
+                    .core
+                    .physical
+                    .goods
+                    .iter()
+                    .find(|good| good.name == "grain")
+                    .unwrap()
+                    .id;
+                let attempt = Transaction {
+                    id: 1,
+                    movements: vec![Movement {
+                        id: 1,
+                        batch: None,
+                        item: None,
+                        from: Place::Stock {
+                            region: 1,
+                            good: grain,
+                        },
+                        to: Some(Place::Person(2)),
+                        good: grain,
+                        quantity: 1,
+                    }],
+                    creations: Vec::new(),
+                };
+                assert!(host.transfer_goods(&[attempt]).is_err());
+                assert_eq!(host.snapshot(), saved);
+                let mut saved = saved;
+                let confinement = saved
+                    .personal_conflict
+                    .as_mut()
+                    .unwrap()
+                    .confinement
+                    .as_mut()
+                    .unwrap();
+                assert_eq!(confinement.owner.cells[0].resistance, 3);
+                confinement.owner.guard_policies[0].willing = false;
+                let mut host = CoreHost::resume(
+                    serde_json::from_str(&serde_json::to_string(&saved).unwrap()).unwrap(),
+                )
+                .unwrap();
+                for step in [83, 17, 29, 71] {
+                    assert_eq!(host.advance_continuous(step, &[]).unwrap().failure, None);
+                }
+                assert_eq!(host.held_at(2), None);
+                host.snapshot()
+            })
+    };
+    assert_eq!(run(1), run(4));
+
+    for (enabled, idle, chooses_capture) in [(false, 0, false), (true, 20, false), (true, 0, true)]
+    {
+        let mut host = CoreHost::resume(opening.clone()).unwrap();
+        host.enable_personal_choices(vec![Person {
+            id: 1,
+            idle,
+            act_on_tie: false,
+            preferences: vec![Preference {
+                domain: 24,
+                enabled,
+                bias: 10,
+                weight: 0,
+            }],
+            actions: Vec::new(),
+        }])
+        .unwrap();
+        let first = host.advance_continuous(100, &[]).unwrap();
+        assert_eq!(first.failure, None);
+        assert_eq!(host.held_at(2), chooses_capture.then_some(1));
+        assert_eq!(
+            first.events.iter().any(
+                |event| matches!(event, CoreRunEvent::PersonalChoices(choices)
+                    if choices.iter().any(|choice| choice.actor == 1
+                        && choice.key.is_some_and(|key| key.domain == 24)
+                        && choice.outcome == CoreChoiceOutcome::Accepted)
+                )
+            ),
+            chooses_capture
+        );
+    }
+
+    let mut controlled = opening;
+    controlled
+        .core
+        .people
+        .iter_mut()
+        .for_each(|person| person.controlled = true);
+    let mut host = CoreHost::resume(controlled).unwrap();
+    assert!(host.confine_controlled_target(1, 2, 1).unwrap());
+    assert_eq!(host.player_view(2).unwrap().held_at, Some(1));
+    assert!(host.player_view(2).unwrap().nearby.is_empty());
+    assert!(host.attempt_controlled_escape(2).is_err());
+    assert_eq!(host.advance_continuous(1, &[]).unwrap().failure, None);
+    host.guard_controlled_cell(3, 1).unwrap();
+    assert!(!host.attempt_controlled_escape(2).unwrap());
+    assert_eq!(host.advance_continuous(1, &[]).unwrap().failure, None);
+    assert!(host.release_controlled_target(1, 2).unwrap());
+    assert_eq!(host.held_at(2), None);
+}
+
+#[test]
 fn people_can_choose_to_eat_at_stock_with_full_cargo_and_compete_for_one_portion() {
     use game_economy::core_interval::{CoreChoiceOutcome, CoreHost, CoreRunEvent};
     use game_lots::Place;
@@ -8859,6 +9016,7 @@ fn stale_saved_carrying_intention_is_reported_without_substituting_an_action() {
         intents: std::sync::Arc::new(vec![CoreChoiceIntent {
             fatigue_value: None,
             strike: None,
+            barrier: None,
             written_form: None,
             watch: None,
             assembly: None,

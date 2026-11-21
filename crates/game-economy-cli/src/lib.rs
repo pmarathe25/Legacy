@@ -1063,6 +1063,12 @@ pub fn core_scenario_with_options(
             .elapsed_damage_remainders = Some(Vec::new());
     }
     if let Some(owner) = &mut personal_conflict {
+        if owner.confinement.is_none() {
+            owner.confinement = snapshot
+                .personal_conflict
+                .as_mut()
+                .and_then(|old| old.confinement.take());
+        }
         owner
             .attacks
             .sort_unstable_by_key(|row| (row.actor, row.id));
@@ -1075,7 +1081,9 @@ pub fn core_scenario_with_options(
             wounds.remedies.sort_unstable_by_key(|row| row.good);
         }
     }
-    snapshot.personal_conflict = personal_conflict;
+    if personal_conflict.is_some() {
+        snapshot.personal_conflict = personal_conflict;
+    }
     if let Some(config) = work_capabilities {
         let mut requirements = config
             .requirements

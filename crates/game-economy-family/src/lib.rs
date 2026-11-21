@@ -475,9 +475,15 @@ pub fn choose_conceptions_elapsed(
     tick: u64,
     now: u128,
     feelings: &(dyn Fn(u64, u64) -> MateFeelings + Sync),
+    partition: Option<&(dyn Fn(u64) -> ContactPartition + Sync)>,
 ) -> Result<Option<ElapsedFamilyDraft>, String> {
     family
-        .choose_conceptions_elapsed(&View::new(people, None, Some(feelings)), seed, tick, now)
+        .choose_conceptions_elapsed(
+            &View::new(people, partition, Some(feelings)),
+            seed,
+            tick,
+            now,
+        )
         .map_err(str::to_owned)
 }
 

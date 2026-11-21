@@ -513,6 +513,9 @@ impl CoreHost {
                 if let Some(delivery) = delivery {
                     family_events = self.publish_elapsed_family(delivery);
                 }
+                if !deaths.is_empty() {
+                    self.remove_deceased_holds();
+                }
             }
             return Ok(ElapsedProgress {
                 millis: advanced,
@@ -702,6 +705,9 @@ impl CoreHost {
         }
         let family_events =
             delivery.map_or_else(Vec::new, |delivery| self.publish_elapsed_family(delivery));
+        if !deaths.is_empty() {
+            self.remove_deceased_holds();
+        }
         if let Some(owner) = staged_shared {
             self.shared_work = Some(owner);
         } else {

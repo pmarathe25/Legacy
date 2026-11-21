@@ -155,7 +155,7 @@ impl CoreHost {
         max_hunger: u32,
         personal: bool,
     ) -> Result<Vec<(u64, bool)>, String> {
-        if self.walking().is_some()
+        if (self.walking().is_some() || self.confinement().is_some())
             && starts
                 .par_iter()
                 .any(|(start, _)| !self.regional_stock_reachable(start.worker, start.region))

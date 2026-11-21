@@ -150,6 +150,7 @@ impl CoreHost {
         }
         self.claims = claims;
         self.sites = Some(sites);
+        self.enroll_built_barriers(&published);
         self.construction = Some(next);
         self.work_checked_revision = None;
         Ok(CoreConstructionResults {

@@ -26,6 +26,7 @@ pub(super) const GATHERING: u32 = 20;
 pub(super) const REST: u32 = 21;
 pub(super) const RESUME: u32 = 22;
 pub(super) const PRACTICE_LESSON: u32 = 23;
+pub(super) const CONFINEMENT: u32 = 24;
 
 fn index_by_person<T>(rows: &[T], id: u64, key: impl Fn(&T) -> u64) -> Option<usize> {
     rows.first()
@@ -61,6 +62,8 @@ pub struct CoreWorkIntent {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CoreChoiceIntent {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub barrier: Option<BarrierAction>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub written_form: Option<game_language::writing::Association>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -103,7 +106,7 @@ impl CoreChoiceIntent {
         if self.key.domain == GATHERING {
             return 1;
         }
-        if self.cultivation.is_some() {
+        if self.cultivation.is_some() || self.barrier.is_some() {
             return 1;
         }
         if let Some(value) = self
@@ -850,6 +853,7 @@ impl CoreHost {
                             domain: GATHERING,
                             action: opportunity.node,
                         },
+                        barrier: None,
                         written_form: None,
                         strike: None,
                         watch: None,
@@ -904,6 +908,7 @@ impl CoreHost {
                 .into_par_iter()
                 .map(|opportunity| CoreChoiceIntent {
                     fatigue_value: None,
+                    barrier: None,
                     written_form: None,
                     strike: None,
                     watch: None,
@@ -983,6 +988,7 @@ impl CoreHost {
                         });
                         CoreChoiceIntent {
                             fatigue_value: None,
+                            barrier: None,
                             written_form: None,
                             strike: None,
                             watch: None,
@@ -1023,15 +1029,17 @@ impl CoreHost {
                 let _span = game_diagnostics::span("choice.preview.carrying");
                 let needs = self.goal_fetch_needs(owner);
                 let view = view.as_ref().expect("carrying view");
-                let goal = (!needs.is_empty())
-                    .then(|| self.goal_carry_context(owner, view, &busy, &needs));
+                let held = self.block_held(&busy);
+                let busy = held.as_deref().unwrap_or(&busy);
+                let goal =
+                    (!needs.is_empty()).then(|| self.goal_carry_context(owner, view, busy, &needs));
                 let opportunities = game_economy_local_transport::Context {
                     owner,
                     people: &self.core.people,
                     view,
                     opinions: self.opinions.as_ref(),
                     claims: claims.as_ref(),
-                    busy: &busy,
+                    busy,
                     max_hunger: u32::MAX,
                     manual: None,
                     walking: owner.walking.as_ref(),
@@ -1041,6 +1049,7 @@ impl CoreHost {
                     .into_par_iter()
                     .map(|opportunity| CoreChoiceIntent {
                         fatigue_value: None,
+                        barrier: None,
                         written_form: None,
                         strike: None,
                         watch: None,
@@ -1097,6 +1106,7 @@ impl CoreHost {
                 .into_par_iter()
                 .map(|opportunity| CoreChoiceIntent {
                     fatigue_value: None,
+                    barrier: None,
                     written_form: None,
                     strike: None,
                     watch: None,
@@ -1147,6 +1157,7 @@ impl CoreHost {
                     .into_par_iter()
                     .map(|opportunity| CoreChoiceIntent {
                         fatigue_value: None,
+                        barrier: None,
                         written_form: None,
                         strike: None,
                         watch: None,
@@ -1210,6 +1221,7 @@ impl CoreHost {
                     .into_par_iter()
                     .map(|policy| CoreChoiceIntent {
                         fatigue_value: None,
+                        barrier: None,
                         written_form: None,
                         strike: None,
                         watch: None,
@@ -1265,6 +1277,7 @@ impl CoreHost {
                         domain: PERSONAL_ATTACK,
                         action: policy.id,
                     },
+                    barrier: None,
                     written_form: None,
                     strike: Some(game_personal_conflict::Strike {
                         actor: policy.actor,
@@ -1311,6 +1324,7 @@ impl CoreHost {
                 .into_par_iter()
                 .map(|policy| CoreChoiceIntent {
                     fatigue_value: None,
+                    barrier: None,
                     written_form: None,
                     strike: None,
                     actor: policy.observer,
@@ -1365,6 +1379,7 @@ impl CoreHost {
                 .into_par_iter()
                 .map(|assembly| CoreChoiceIntent {
                     fatigue_value: None,
+                    barrier: None,
                     written_form: None,
                     strike: None,
                     watch: None,
@@ -1405,6 +1420,7 @@ impl CoreHost {
                     .into_par_iter()
                     .map(|policy| CoreChoiceIntent {
                         fatigue_value: None,
+                        barrier: None,
                         written_form: None,
                         strike: None,
                         watch: None,
@@ -1492,6 +1508,7 @@ impl CoreHost {
                             index_by_person(&self.core.people, id, |p| p.id).expect("known person");
                         CoreChoiceIntent {
                             fatigue_value: None,
+                            barrier: None,
                             written_form: None,
                             strike: None,
                             watch: None,
@@ -1564,6 +1581,7 @@ impl CoreHost {
                     movement.id = 0;
                     CoreChoiceIntent {
                         fatigue_value: None,
+                        barrier: None,
                         written_form: None,
                         strike: None,
                         watch: None,
@@ -1608,6 +1626,7 @@ impl CoreHost {
                     .expect("known person");
                 CoreChoiceIntent {
                     fatigue_value: None,
+                    barrier: None,
                     written_form: None,
                     strike: None,
                     watch: None,
@@ -1671,6 +1690,7 @@ impl CoreHost {
             .into_par_iter()
             .map(|opportunity| CoreChoiceIntent {
                 fatigue_value: None,
+                barrier: None,
                 written_form: None,
                 strike: None,
                 watch: None,
@@ -1802,6 +1822,7 @@ impl CoreHost {
                             item: None,
                             batch: None,
                         }),
+                        barrier: None,
                         written_form: None,
                         strike: None,
                         watch: None,
@@ -1883,6 +1904,7 @@ impl CoreHost {
                                             domain: WRITTEN_FORM,
                                             action,
                                         },
+                                        barrier: None,
                                         written_form: Some(game_language::writing::Association {
                                             sounds: word.sounds.clone(),
                                             marks: vec![mark],
@@ -1958,6 +1980,7 @@ impl CoreHost {
                                             domain: MARK_INSCRIPTION,
                                             action,
                                         },
+                                        barrier: None,
                                         written_form: Some(form.clone()),
                                         strike: None,
                                         watch: None,
@@ -2036,6 +2059,7 @@ impl CoreHost {
                                     domain: REMEMBERED_FORM,
                                     action: observation.page,
                                 },
+                                barrier: None,
                                 written_form: Some(game_language::writing::Association {
                                     sounds: sounds.clone(),
                                     marks: observation.marks.clone(),
@@ -2122,6 +2146,7 @@ impl CoreHost {
                             action: 1,
                         },
                         fatigue_value: Some(i64::from(fatigue)),
+                        barrier: None,
                         written_form: None,
                         strike: None,
                         watch: None,
@@ -2140,6 +2165,33 @@ impl CoreHost {
                 })
                 .collect();
             intents.par_extend(rest);
+        }
+        if domain.is_none_or(|domain| domain == CONFINEMENT) {
+            intents.par_extend(self.barrier_choices(&busy).into_par_iter().map(
+                |(actor, action)| CoreChoiceIntent {
+                    actor,
+                    key: Key {
+                        domain: CONFINEMENT,
+                        action: action.choice_key(),
+                    },
+                    barrier: Some(action),
+                    written_form: None,
+                    strike: None,
+                    watch: None,
+                    assembly: None,
+                    cultivation: None,
+                    mechanical_load: None,
+                    movement: None,
+                    second_movement: None,
+                    work: None,
+                    experiment: None,
+                    experiment_value: None,
+                    meal_value: None,
+                    tool_damage: None,
+                    health_value: None,
+                    fatigue_value: None,
+                },
+            ));
         }
         if intents
             .par_windows(2)
@@ -2239,6 +2291,7 @@ impl CoreHost {
                         && current[i].assembly == intent.assembly
                         && current[i].watch == intent.watch
                         && current[i].strike == intent.strike
+                        && current[i].barrier == intent.barrier
                         && current[i].written_form == intent.written_form
                 });
                 (intent, found)

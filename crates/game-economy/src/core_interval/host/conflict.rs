@@ -100,6 +100,8 @@ pub struct WoundCarePolicy {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CorePersonalConflict {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub confinement: Option<super::CoreConfinement>,
     #[serde(default)]
     pub attacks: Vec<PersonalAttackPolicy>,
     #[serde(default)]
@@ -518,9 +520,10 @@ impl CoreHost {
                 || actor.is_none_or(|person| person.health == 0)
                 || target.is_none_or(|person| person.health == 0)
                 || actor.zip(target).is_none_or(|(actor, target)| {
-                    locations
-                        .region((actor.id, actor.region), (target.id, target.region))
-                        .is_none()
+                    !self.same_local_endpoint(actor.id, target.id)
+                        || locations
+                            .region((actor.id, actor.region), (target.id, target.region))
+                            .is_none()
                 })
         }) || defenses.par_iter().any(|defense| {
             self.core
@@ -676,6 +679,7 @@ impl CoreHost {
             });
             self.core.generation = generation;
             self.work_checked_revision = None;
+            self.remove_deceased_holds();
         }
         if let Some(staged) = opinions.take() {
             self.opinions = Some(staged);
@@ -747,9 +751,10 @@ impl CoreHost {
                     && actor.is_some_and(|person| !person.controlled && person.health > 0)
                     && target.is_some_and(|person| person.health > 0)
                     && actor.zip(target).is_some_and(|(actor, target)| {
-                        locations
-                            .region((actor.id, actor.region), (target.id, target.region))
-                            .is_some()
+                        self.same_local_endpoint(actor.id, target.id)
+                            && locations
+                                .region((actor.id, actor.region), (target.id, target.region))
+                                .is_some()
                     })
             })
             .copied()

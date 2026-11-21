@@ -4,7 +4,7 @@ The intended long-run use includes advancing a world for centuries, for example 
 
 ## Current limitations
 
-The interval host rejects combat, confinement, missions, and campaign state, as well as some demolition, goal-directed construction, local walking, and taking escalation. Its history runner records selected event types and annual snapshots rather than every decision or causal event. Scientific invention, artificial selection, and recognition of political or organizational histories are not implemented. The expanded monthly scenario configures each owner the interval host currently exposes, but configured policies need not produce activity. Its care cadence, conception rate, environment, and resource renewal are exploratory settings, not validated demographic or ecological estimates. Existing human partnership matching can be configured with directed individual feelings and may be independent of conception; old scenarios can still select the earlier matching behavior.
+The interval host supports physical confinement, local walking, and subjective mating, including conception independent of an exclusive partnership. Scheduled captures, guard actions, releases, and escapes have elapsed timestamps in the history stream. Tactical combat, missions, campaign state, and portions of the building lifecycle remain on the whole-boundary path. The history runner records selected events and annual snapshots. It includes observations of mechanical experiments and identifiable cultivated seed cohorts. Political and organizational histories still require analysis of the evidence. Scenario settings for conception, care, climate, and resource renewal are exploratory.
 
 ## People and collective patterns
 
