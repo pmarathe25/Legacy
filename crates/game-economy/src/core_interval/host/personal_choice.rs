@@ -1375,28 +1375,31 @@ impl CoreHost {
             Ok(self
                 .preview_mechanical_designs(&designers, &busy)?
                 .into_par_iter()
-                .map(|assembly| CoreChoiceIntent {
-                    fatigue_value: None,
-                    barrier: None,
-                    written_form: None,
-                    strike: None,
-                    watch: None,
-                    actor: assembly.actor,
-                    key: Key {
-                        domain: MECHANICAL_DESIGN,
-                        action: assembly.apparatus.id,
-                    },
-                    assembly: Some(assembly),
-                    cultivation: None,
-                    mechanical_load: None,
-                    movement: None,
-                    second_movement: None,
-                    work: None,
-                    experiment: None,
-                    experiment_value: Some(1),
-                    meal_value: None,
-                    tool_damage: None,
-                    health_value: None,
+                .map(|assembly| {
+                    let value = self.mechanical_design_value(&assembly);
+                    CoreChoiceIntent {
+                        fatigue_value: None,
+                        barrier: None,
+                        written_form: None,
+                        strike: None,
+                        watch: None,
+                        actor: assembly.actor,
+                        key: Key {
+                            domain: MECHANICAL_DESIGN,
+                            action: assembly.apparatus.id,
+                        },
+                        assembly: Some(assembly),
+                        cultivation: None,
+                        mechanical_load: None,
+                        movement: None,
+                        second_movement: None,
+                        work: None,
+                        experiment: None,
+                        experiment_value: Some(value),
+                        meal_value: None,
+                        tool_damage: None,
+                        health_value: None,
+                    }
                 })
                 .collect())
         };

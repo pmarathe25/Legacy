@@ -195,6 +195,7 @@ impl Chronicle {
                 | "tactical"
                 | "confinement"
                 | "mechanical_experiments"
+                | "mechanical_assemblies"
                 | "work_requests"
                 | "maturation"
                 | "recipe_learning"
@@ -424,6 +425,9 @@ fn classify(kind: &str, row: &Value) -> Option<Receipt> {
         ("tactical", "withdrew") => "tactical withdrawals",
         ("confinement", "confined") => "captures",
         ("confinement", "released") => "releases from holds",
+        ("mechanical_assemblies", _) if row["accepted"].as_bool() == Some(true) => {
+            "mechanical apparatus assembled"
+        }
         ("mechanical_experiments", _) => match row["outcome"].as_str()? {
             "moved" => "mechanical tests that moved a load",
             "stalled" => "mechanical tests that stalled",

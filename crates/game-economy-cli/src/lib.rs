@@ -1603,6 +1603,11 @@ pub fn core_scenario_with_options(
             .policies
             .sort_unstable_by_key(|row| (row.experiment.actor, row.id));
         mechanics.memories.sort_unstable_by_key(|row| row.person);
+        for memory in &mut mechanics.memories {
+            if let Some(design) = &mut memory.design {
+                design.inputs.sort_unstable_by_key(|row| row.component);
+            }
+        }
         mechanics.apparatus.sort_unstable_by_key(|row| row.id);
         for machine in &mut mechanics.apparatus {
             std::sync::Arc::make_mut(&mut machine.parts).sort_unstable_by_key(|part| part.id);

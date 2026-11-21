@@ -1,5 +1,6 @@
 //! Mechanical apparatus tied to real identified personal possessions.
 use super::*;
+mod design;
 use std::collections::HashMap;
 
 fn indexed<T>(rows: &[T], id: u64, key: impl Fn(&T) -> u64) -> Option<&T> {
@@ -225,7 +226,24 @@ pub struct MechanicalWatchPolicy {
     pub value: i64,
 }
 
-/// A person's bounded recollection of their own actual experiments.
+/// The value a person assigns to a recognizable component as the input of a design.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MechanicalDesignInput {
+    pub component: u32,
+    pub value: i64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MechanicalDesignPreferences {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub inputs: Vec<MechanicalDesignInput>,
+    #[serde(default)]
+    pub extra_part_value: i64,
+}
+
+/// A person's retained experiments and interests in potential designs.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct MechanicalMemory {
@@ -233,6 +251,8 @@ pub struct MechanicalMemory {
     pub capacity: usize,
     #[serde(default)]
     pub retain: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub design: Option<MechanicalDesignPreferences>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reactions: Option<MechanicalReactions>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -271,6 +291,7 @@ pub(super) struct Runtime {
     world: game_mechanics::World,
     part_ids: Vec<u64>,
     materials: Vec<MechanicalMaterial>,
+    materials_by_good: Vec<MechanicalMaterial>,
     load_materials: Vec<MechanicalLoadMaterial>,
     load_policies: Vec<MechanicalLoadPolicy>,
     watch_policies: Vec<MechanicalWatchPolicy>,
@@ -421,6 +442,19 @@ impl CoreMechanics {
             || self.memories.par_iter().any(|memory| {
                 memory.person == 0
                     || !(1..=64).contains(&memory.capacity)
+                    || memory.design.as_ref().is_some_and(|policy| {
+                        policy
+                            .inputs
+                            .windows(2)
+                            .any(|pair| pair[0].component >= pair[1].component)
+                            || policy.inputs.iter().any(|input| {
+                                self.world
+                                    .catalog
+                                    .components
+                                    .binary_search_by_key(&input.component, |row| row.id)
+                                    .is_err()
+                            })
+                    })
                     || memory.observations.len() > memory.capacity
                     || memory.testimony.len() > memory.capacity
                     || memory.witnessed.len() > memory.capacity
@@ -546,10 +580,13 @@ impl CoreMechanics {
         if part_ids.par_windows(2).any(|rows| rows[0] > rows[1]) {
             part_ids.par_sort_unstable();
         }
+        let mut materials_by_good = self.materials.clone();
+        materials_by_good.sort_unstable_by_key(|row| (row.good, row.component));
         Ok(Runtime {
             world,
             part_ids,
             materials: self.materials,
+            materials_by_good,
             load_materials: self.load_materials,
             load_policies: self.load_policies,
             watch_policies: self.watch_policies,
@@ -940,7 +977,7 @@ impl CoreHost {
                             let mut experiment = game_mechanics::Experiment {
                                 actor,
                                 apparatus: machine.id,
-                                output_part: machine.parts.last()?.id,
+                                output_part: owner.world.terminal_part(machine.id)?,
                                 input_force: capability.max_force.min(100),
                                 input_distance: capability.max_distance.min(100),
                                 load_force: 1,
@@ -1020,119 +1057,6 @@ impl CoreHost {
                     Some(trials)
                 })()
                 .unwrap_or_default()
-            })
-            .collect())
-    }
-
-    /// Form a bounded candidate from each willing designer's carried parts.
-    /// Component ratings are not inspected while choosing a design.
-    pub fn preview_mechanical_designs(
-        &self,
-        designers: &[u64],
-        occupied: &[u64],
-    ) -> Result<Vec<game_mechanics::Assembly>, String> {
-        if designers.par_windows(2).any(|row| row[0] >= row[1])
-            || occupied.par_windows(2).any(|row| row[0] >= row[1])
-        {
-            return Err("invalid mechanical design people".into());
-        }
-        let Some(owner) = &self.mechanics else {
-            return Ok(Vec::new());
-        };
-        let tick = self.core.physical.tick();
-        let offset = self.core.elapsed_millis().ok_or("no physical interval")?;
-        let rest = self.blocked_with_rest(occupied);
-        let occupied = rest.as_deref().unwrap_or(occupied);
-        let active: HashSet<_> = self
-            .core
-            .physical
-            .work()
-            .par_iter()
-            .filter(|row| row.phase == game_lot_runtime::Phase::Working)
-            .map(|row| row.job.worker)
-            .collect();
-        let mut materials = owner.materials.clone();
-        materials.par_sort_unstable_by_key(|row| (row.good, row.component));
-        Ok(designers
-            .par_iter()
-            .filter_map(|&actor| {
-                let person = indexed(&self.core.people, actor, |row| row.id)?;
-                if person.controlled
-                    || person.health == 0
-                    || person.region.is_none()
-                    || occupied.binary_search(&actor).is_ok()
-                    || active.contains(&actor)
-                {
-                    return None;
-                }
-                let container = self
-                    .core
-                    .physical
-                    .custody(game_lots::Place::Person(actor))?;
-                let (first, second) = container
-                    .lots
-                    .iter()
-                    .filter_map(|lot| {
-                        let item = lot.item?;
-                        if owner.owns_part(item)
-                            || lot.expires_at.is_some_and(|expires| expires <= tick)
-                        {
-                            return None;
-                        }
-                        let index = materials.partition_point(|row| row.good < lot.good);
-                        let component = materials
-                            .get(index)
-                            .filter(|row| row.good == lot.good)?
-                            .component;
-                        let rank = game_genetics::random(
-                            self.core.seed,
-                            actor ^ tick.rotate_left(17),
-                            item ^ offset,
-                        );
-                        Some((rank, item, component))
-                    })
-                    .fold((None, None), |(first, second), candidate| {
-                        if first.is_none_or(|value| candidate < value) {
-                            (Some(candidate), first)
-                        } else if second.is_none_or(|value| candidate < value) {
-                            (first, Some(candidate))
-                        } else {
-                            (first, second)
-                        }
-                    });
-                let mut parts = [first?, second?];
-                parts.sort_unstable_by_key(|row| row.1);
-                let id = game_genetics::random(
-                    self.core.seed,
-                    0x6d65636864657369 ^ actor,
-                    tick ^ offset,
-                )
-                .max(1);
-                if indexed(owner.world.apparatus(), id, |row| row.id).is_some() {
-                    return None;
-                }
-                Some(game_mechanics::Assembly {
-                    actor,
-                    apparatus: game_mechanics::Apparatus {
-                        id,
-                        parts: std::sync::Arc::new(vec![
-                            game_mechanics::Part {
-                                id: parts[0].1,
-                                component: parts[0].2,
-                                parent: None,
-                                share_per_mille: 1000,
-                                broken: false,
-                            },
-                            game_mechanics::Part {
-                                id: parts[1].1,
-                                component: parts[1].2,
-                                parent: Some(parts[0].1),
-                                share_per_mille: 1000,
-                                broken: false,
-                            },
-                        ]),
-                    },
-                })
             })
             .collect())
     }

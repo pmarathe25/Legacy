@@ -61,3 +61,14 @@ counts. On one development machine, 50,000 independent apparatus took 14.4,
 experiments competing for one apparatus, the corresponding times were 2.12,
 1.21, 0.78 and 0.84 ms. These measurements cover this owner alone, not item
 custody or the full simulation.
+
+Apparatus use stable physical part IDs. The mechanical owner compiles a
+parent-before-child solve order from actual connections. Separately assembled
+apparatus can be evaluated concurrently, and overloads affect the identified
+physical parts that received the load.
+
+In scenarios, a person's optional `mechanics.memories.design` preferences let
+them rank recognizable input components with `inputs = [{ component = 1,
+value = 5 }]` and value larger visible assemblies with `extra_part_value`.
+They can compare those alternatives with other local choices. Trials reveal
+the actual force, travel, and breakage.

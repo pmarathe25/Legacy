@@ -1386,6 +1386,7 @@ fn independent_physical_mechanics_benchmark() {
         memories: if retain {
             (2..=people_count)
                 .map(|person| MechanicalMemory {
+                    design: None,
                     person,
                     capacity: 4,
                     retain: true,
