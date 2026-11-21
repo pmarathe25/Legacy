@@ -82,11 +82,57 @@ fn animal_species_samples(animals: &[Value], species: &[Value]) -> Vec<Value> {
     }).collect()
 }
 
+#[derive(Default)]
+struct WildlifeMortality {
+    all: BTreeMap<String, u64>,
+    identified: BTreeMap<u64, u64>,
+    pending: BTreeMap<u64, Vec<String>>,
+    by_species: BTreeMap<u64, BTreeMap<String, u64>>,
+}
+
+impl WildlifeMortality {
+    fn death(&mut self, animal: Option<u64>, cause: &str) {
+        *self.all.entry(cause.to_owned()).or_default() += 1;
+        let Some(animal) = animal else {
+            return;
+        };
+        if let Some(&species) = self.identified.get(&animal) {
+            *self
+                .by_species
+                .entry(species)
+                .or_default()
+                .entry(cause.to_owned())
+                .or_default() += 1;
+        } else {
+            self.pending
+                .entry(animal)
+                .or_default()
+                .push(cause.to_owned());
+        }
+    }
+
+    fn identify(&mut self, animals: &[Value]) {
+        for animal in animals {
+            let (Some(id), Some(species)) = (animal["id"].as_u64(), animal["species"].as_u64())
+            else {
+                continue;
+            };
+            self.identified.insert(id, species);
+            if let Some(causes) = self.pending.remove(&id) {
+                let totals = self.by_species.entry(species).or_default();
+                for cause in causes {
+                    *totals.entry(cause).or_default() += 1;
+                }
+            }
+        }
+    }
+}
+
 struct ObservationSink<'a> {
     focus: Focus,
     meetings: &'a mut BTreeMap<u64, u64>,
     meeting_count: &'a mut u64,
-    animal_deaths: &'a mut BTreeMap<String, u64>,
+    animal_deaths: &'a mut WildlifeMortality,
     focal_events: &'a mut Vec<Value>,
     focal_incapacitations: &'a mut Vec<Value>,
     focal_opinions: &'a mut Vec<Value>,
@@ -121,7 +167,7 @@ impl ObservationSink<'_> {
                 };
                 for death in deaths.as_array().into_iter().flatten() {
                     if let Some(cause) = death["cause"].as_str() {
-                        *self.animal_deaths.entry(cause.to_owned()).or_default() += 1;
+                        self.animal_deaths.death(death["animal"].as_u64(), cause);
                     }
                     if let Focus::Animal(animal) = self.focus
                         && death["animal"].as_u64() == Some(animal)
@@ -360,7 +406,7 @@ fn inspect(path: &Path, focus: Focus, through_year: Option<u64>) -> Result<Value
     let mut samples = Vec::new();
     let mut meetings: BTreeMap<u64, u64> = BTreeMap::new();
     let mut meeting_count = 0u64;
-    let mut animal_deaths = BTreeMap::new();
+    let mut animal_deaths = WildlifeMortality::default();
     let mut focal_meetings = Vec::new();
     let mut focal_first = None;
     let mut focal_last_alive = None;
@@ -541,6 +587,9 @@ fn inspect(path: &Path, focus: Focus, through_year: Option<u64>) -> Result<Value
                 if !state["family"].is_null() {
                     totals = state["family"]["totals"].clone();
                 }
+                if let Some(animals) = fauna {
+                    animal_deaths.identify(animals);
+                }
                 if matches!(focus, Focus::Summary) {
                     let human_means = people.and_then(|items| {
                         genome_means(
@@ -676,7 +725,7 @@ fn inspect(path: &Path, focus: Focus, through_year: Option<u64>) -> Result<Value
     let scope = json!({"source":path,"complete":complete,"first_year":first_year,"last_year":last_year,"annual_records":years,"metadata":metadata,"metadata_corrections":metadata_corrections});
     match focus {
         Focus::Summary => Ok(
-            json!({"scope":scope,"peak_people":{"year":peak_people.0,"count":peak_people.1},"peak_animals":{"year":peak_animals.0,"count":peak_animals.1},"first_zero_people":human_zero,"first_zero_animals":animal_zero,"animal_deaths_by_cause":animal_deaths,"animal_species_history":species_history.iter().map(|(id,(name,year,count,zero))|json!({"species":id,"name":name,"peak":{"year":year,"count":count},"first_zero":zero})).collect::<Vec<_>>(),"family_totals":totals,"recorded_meetings":meeting_count,"most_recorded_meetings":ranking.iter().map(|(person,count)|json!({"person":person,"count":count})).collect::<Vec<_>>(),"genome_samples":samples,"chronicle":chronicle.summary(),"interpretation":"Meeting counts do not establish leadership; changes in allele means do not establish selection or causation."}),
+            json!({"scope":scope,"peak_people":{"year":peak_people.0,"count":peak_people.1},"peak_animals":{"year":peak_animals.0,"count":peak_animals.1},"first_zero_people":human_zero,"first_zero_animals":animal_zero,"animal_deaths_by_cause":animal_deaths.all,"animal_species_history":species_history.iter().map(|(id,(name,year,count,zero))|json!({"species":id,"name":name,"peak":{"year":year,"count":count},"first_zero":zero,"recorded_deaths":animal_deaths.by_species.get(id)})).collect::<Vec<_>>(),"family_totals":totals,"recorded_meetings":meeting_count,"most_recorded_meetings":ranking.iter().map(|(person,count)|json!({"person":person,"count":count})).collect::<Vec<_>>(),"genome_samples":samples,"chronicle":chronicle.summary(),"interpretation":"Meeting counts do not establish leadership; changes in allele means do not establish selection or causation."}),
         ),
         Focus::Person(person) => {
             if focal_first.is_none() {
@@ -757,6 +806,29 @@ fn narrative(report: &Value, focus: Focus) -> String {
                     .unwrap();
                 }
                 text.push_str("\n\n");
+                if let Some(deaths) = species["recorded_deaths"].as_object() {
+                    let counts = deaths
+                        .iter()
+                        .filter_map(|(cause, count)| {
+                            let count = count.as_u64()?;
+                            let cause = if cause == "hunted" {
+                                "hunting".to_owned()
+                            } else {
+                                cause.replace('_', " ")
+                            };
+                            Some(format!("{count} from {cause}"))
+                        })
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    if !counts.is_empty() {
+                        writeln!(
+                            text,
+                            "Recorded deaths for {} include {counts}.\n",
+                            species["name"].as_str().unwrap_or("this species"),
+                        )
+                        .unwrap();
+                    }
+                }
             }
             cultivars::write_history(&mut text, &report["genome_samples"]);
         }
@@ -1071,6 +1143,10 @@ mod tests {
         assert_eq!(summary["first_zero_people"], 2);
         assert_eq!(summary["first_zero_animals"], 2);
         assert_eq!(summary["animal_species_history"][0]["first_zero"], 2);
+        assert_eq!(
+            summary["animal_species_history"][0]["recorded_deaths"]["starvation"],
+            1
+        );
         assert_eq!(summary["recorded_meetings"], 1);
         assert_eq!(summary["genome_samples"][0]["human_locus_means"][0], 150.0);
         assert_eq!(
