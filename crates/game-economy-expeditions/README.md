@@ -42,6 +42,15 @@ threshold. A response creates an independent trip for the recipient. The
 recipient may have their own return preference and can abandon the trip.
 Synchronized departures remain a follow-up.
 
+With `[[expedition_invitation_initiatives]]`, a person with a ready itinerary
+can choose to invite a reachable companion from a short list of known people.
+The sender compares each choice with their own value for leaving without an
+invitation. When several offers reach someone at the same time, the receiver's
+willingness, felt pressure, and directed affinity determine which reply is
+considered. An accepted offer creates the recipient's own itinerary. An offer
+to a controlled person stays in their inbox. Expedition history records the
+offer and any immediate reply.
+
 An individual delivery plan can include a goal to collect the missing cargo
 from reachable regional stock or from a personally known store. The traveler
 chooses whether to pursue the detour. Local arrival and physical transfer are

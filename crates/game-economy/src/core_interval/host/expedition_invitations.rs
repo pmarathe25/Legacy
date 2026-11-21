@@ -4,11 +4,28 @@ use game_economy_expeditions::{
     elapsed::Stage,
     elapsed_invitations::{Invitation, Offer, Reply, Response},
 };
+use std::collections::HashMap;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CoreExpeditionOffer {
     pub invitation: Invitation,
     pub response: Option<Reply>,
+}
+
+#[derive(Clone, Copy)]
+struct Proposal {
+    offer: Offer,
+    reply: Option<(Response, bool)>,
+    rank: (u8, std::cmp::Reverse<i32>, u64, u64),
+}
+
+impl Proposal {
+    fn admit(self, best: &mut HashMap<u64, Self>) {
+        let winner = best.entry(self.offer.recipient).or_insert(self);
+        if self.rank < winner.rank {
+            *winner = self;
+        }
+    }
 }
 
 impl CoreHost {
@@ -60,7 +77,11 @@ impl CoreHost {
         let response = if beneficiary.controlled {
             None
         } else {
-            Some(self.decide_expedition_invitation(&invite))
+            Some(self.decide_expedition_invitation(
+                &invite,
+                self.expedition(target).is_some(),
+                self.opinions.as_ref().map(|owner| owner.index()).as_ref(),
+            ))
         };
         let now = self.core.simulated_millis();
         let mut next = self.expeditions.clone().expect("itinerary checked");
@@ -85,8 +106,135 @@ impl CoreHost {
         })
     }
 
-    fn decide_expedition_invitation(&self, offer: &Offer) -> (Response, bool) {
-        if self.expedition(offer.recipient).is_some() {
+    pub(super) fn offer_autonomous_expeditions(
+        &mut self,
+        busy: &[u64],
+    ) -> Result<Vec<ExpeditionEvent>, String> {
+        let Some(owner) = self
+            .expeditions
+            .as_ref()
+            .filter(|owner| !owner.invitations.initiatives.is_empty())
+        else {
+            return Ok(Vec::new());
+        };
+        let active: HashMap<_, _> = owner
+            .itineraries
+            .par_iter()
+            .filter(|row| row.stage.active())
+            .map(|row| (row.person, row))
+            .collect();
+        let pending = owner.invitations.pending_pairs();
+        let opinions = self.opinions.as_ref().map(|owner| owner.index());
+        let affinity = |observer, target| {
+            opinions
+                .as_ref()
+                .map_or(0, |row| row.affinity(observer, target))
+        };
+        let local = |id| {
+            let person = self
+                .core
+                .people
+                .binary_search_by_key(&id, |row| row.id)
+                .ok()
+                .map(|i| &self.core.people[i])?;
+            (person.health > 0 && busy.binary_search(&id).is_err()).then_some(person)
+        };
+        let seed = self.core.seed ^ self.core.decision_time_key();
+        let winners = owner
+            .invitations
+            .initiatives
+            .par_iter()
+            .filter_map(|profile| {
+                let actor = local(profile.person)?;
+                let trip = *active.get(&actor.id)?;
+                if actor.controlled
+                    || actor.region != Some(trip.origin)
+                    || trip.stage != Stage::Ready
+                    || !trip.go_on
+                    || !owner.invitations.may_offer(actor.id, trip.id)
+                {
+                    return None;
+                }
+                let recipient = profile
+                    .companions
+                    .iter()
+                    .filter_map(|choice| {
+                        let peer = local(choice.person)?;
+                        let value = choice.value.saturating_add(
+                            i64::from(choice.affinity_weight)
+                                * i64::from(affinity(actor.id, peer.id)),
+                        );
+                        (value > profile.idle
+                            && peer.region == actor.region
+                            && !pending.contains(&(trip.id, peer.id))
+                            && self.same_local_endpoint(actor.id, peer.id))
+                        .then_some((value, game_genetics::random(seed, actor.id, peer.id), peer))
+                    })
+                    .max_by_key(|row| (row.0, row.1, row.2.id))?
+                    .2;
+                let invite = Offer {
+                    inviter: actor.id,
+                    recipient: recipient.id,
+                    itinerary: trip.id,
+                    origin: trip.origin,
+                    destination: trip.destination,
+                    visit_millis: trip.visit_millis,
+                };
+                let reply = (!recipient.controlled).then(|| {
+                    self.decide_expedition_invitation(
+                        &invite,
+                        active.contains_key(&recipient.id),
+                        opinions.as_ref(),
+                    )
+                });
+                let response_priority = match reply {
+                    None | Some((Response::Joined, _)) => 0,
+                    Some((Response::JoinedUnderPressure, _)) => 1,
+                    _ => 2,
+                };
+                Some(Proposal {
+                    offer: invite,
+                    reply,
+                    rank: (
+                        response_priority,
+                        std::cmp::Reverse(affinity(recipient.id, actor.id)),
+                        game_genetics::random(seed, recipient.id, actor.id),
+                        actor.id,
+                    ),
+                })
+            })
+            .fold(HashMap::new, |mut best, proposal| {
+                proposal.admit(&mut best);
+                best
+            })
+            .reduce(HashMap::new, |mut left, mut right| {
+                if left.len() < right.len() {
+                    std::mem::swap(&mut left, &mut right);
+                }
+                for proposal in right.into_values() {
+                    proposal.admit(&mut left);
+                }
+                left
+            });
+        let mut batch: Vec<_> = winners
+            .into_values()
+            .map(|row| (row.offer, row.reply))
+            .collect();
+        batch.par_sort_unstable_by_key(|row| row.0.recipient);
+        let now = self.core.simulated_millis();
+        self.expeditions
+            .as_mut()
+            .expect("expeditions checked")
+            .offer_separate_trips(&batch, now)
+    }
+
+    fn decide_expedition_invitation(
+        &self,
+        offer: &Offer,
+        has_itinerary: bool,
+        opinions: Option<&game_opinions::Index<'_>>,
+    ) -> (Response, bool) {
+        if has_itinerary {
             return (Response::Declined, false);
         }
         let owner = self.expeditions.as_ref().expect("itinerary checked");
@@ -116,9 +264,9 @@ impl CoreHost {
             .expeditions
             .as_ref()
             .and_then(|owner| owner.invitation_pressure)
-            .zip(self.opinions.as_ref())
+            .zip(opinions)
             .is_some_and(|(threshold, opinions)| {
-                let (fear, duty) = opinions.index().feelings(offer.recipient, offer.inviter);
+                let (fear, duty) = opinions.feelings(offer.recipient, offer.inviter);
                 fear.saturating_add(duty) >= threshold
             });
         let response = if fear_or_duty {

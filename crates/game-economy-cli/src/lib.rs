@@ -47,6 +47,9 @@ struct Scenario {
     expedition_invitation_preferences:
         Vec<game_economy::core_interval::ExpeditionInvitationPreference>,
     #[serde(default)]
+    expedition_invitation_initiatives:
+        Vec<game_economy::core_interval::ExpeditionInvitationInitiative>,
+    #[serde(default)]
     on_site_meals: bool,
     stock_capacity: u64,
     food_relief_divisor: u32,
@@ -1042,6 +1045,8 @@ pub fn core_scenario_with_options(
     let invocation_period_millis = authored.invocation_period_millis;
     let mut expedition_invitation_preferences =
         std::mem::take(&mut authored.expedition_invitation_preferences);
+    let mut expedition_invitation_initiatives =
+        std::mem::take(&mut authored.expedition_invitation_initiatives);
     let on_site_meals = authored.on_site_meals;
     let fatigue_rate_period_millis = authored.fatigue_rate_period_millis;
     let elapsed_fatigue = authored.elapsed_fatigue;
@@ -1129,6 +1134,19 @@ pub fn core_scenario_with_options(
             .ok_or("invitation preferences require expeditions")?
             .invitations
             .preferences = expedition_invitation_preferences;
+    }
+    if !expedition_invitation_initiatives.is_empty() {
+        expedition_invitation_initiatives.sort_unstable_by_key(|row| row.person);
+        for row in &mut expedition_invitation_initiatives {
+            row.companions
+                .sort_unstable_by_key(|companion| companion.person);
+        }
+        snapshot
+            .expeditions
+            .as_mut()
+            .ok_or("invitation initiatives require expeditions")?
+            .invitations
+            .initiatives = expedition_invitation_initiatives;
     }
     if let Some(config) = work_capabilities {
         let mut requirements = config
@@ -1555,7 +1573,10 @@ fn build_scenario(
     if scenario.invocation_period_millis.is_some() && !interval_features {
         return Err("elapsed invocation costs require the interval simulation host".into());
     }
-    if !scenario.expedition_invitation_preferences.is_empty() && !interval_features {
+    if (!scenario.expedition_invitation_preferences.is_empty()
+        || !scenario.expedition_invitation_initiatives.is_empty())
+        && !interval_features
+    {
         return Err(
             "expedition invitation preferences require the interval simulation host".into(),
         );

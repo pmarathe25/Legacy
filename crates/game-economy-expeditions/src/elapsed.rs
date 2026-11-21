@@ -1,5 +1,5 @@
 //! Personal itineraries driven by accepted travel, observations, and elapsed time.
-use crate::elapsed_invitations::Invitations;
+use crate::elapsed_invitations::{Invitations, Offer, Response};
 use crate::{DeliveryAcquisition, DeliveryPreference, Missions, Objective};
 use game_economy_person::{Person, travel};
 use rayon::prelude::*;
@@ -20,7 +20,7 @@ pub enum Stage {
 }
 
 impl Stage {
-    fn active(self) -> bool {
+    pub fn active(self) -> bool {
         !matches!(self, Self::Completed | Self::Abandoned | Self::Died)
     }
 
@@ -67,6 +67,12 @@ pub enum EventKind {
         good: u32,
         quantity: u64,
         from: game_lots::Place,
+    },
+    Invitation {
+        invite: u64,
+        recipient: u64,
+        response: Option<Response>,
+        joined_itinerary: Option<u64>,
     },
 }
 
@@ -140,6 +146,23 @@ pub struct TravelContext<'a> {
 }
 
 impl Itinerary {
+    fn new(id: u64, plan: Plan) -> Self {
+        Self {
+            id,
+            person: plan.person,
+            origin: plan.origin,
+            destination: plan.destination,
+            visit_millis: plan.visit_millis,
+            go_on: true,
+            head_home: plan.head_home,
+            stage: Stage::Ready,
+            objective: plan.objective,
+            objective_met: false,
+            delivery_preference: None,
+            visited_supply_store: None,
+        }
+    }
+
     pub fn supply_need(&self) -> Option<SupplyNeed> {
         if !self.go_on
             || !matches!(
@@ -308,23 +331,113 @@ impl Expeditions {
         }
         let id = self.next_id;
         self.next_id = id.checked_add(1).ok_or("expedition ID overflow")?;
-        let itinerary = Itinerary {
-            id,
-            person: plan.person,
-            origin: plan.origin,
-            destination: plan.destination,
-            visit_millis: plan.visit_millis,
-            go_on: true,
-            head_home: plan.head_home,
-            stage: Stage::Ready,
-            objective: plan.objective,
-            objective_met: false,
-            delivery_preference: None,
-            visited_supply_store: None,
-        };
+        let itinerary = Itinerary::new(id, plan);
         let event = itinerary.event(now, plan.origin, EventKind::Planned);
         self.itineraries.push(itinerary);
         Ok(event)
+    }
+
+    /// Publish disjoint responses to offers selected from the same opening frame.
+    pub fn offer_separate_trips(
+        &mut self,
+        offers: &[(Offer, Option<(Response, bool)>)],
+        now: u128,
+    ) -> Result<Vec<Event>, String> {
+        if offers.is_empty() {
+            return Ok(Vec::new());
+        }
+        let invitations = self.invitations.prepare_offers(offers, now)?;
+        let senders: HashSet<_> = offers.par_iter().map(|row| row.0.inviter).collect();
+        let recipients: HashSet<_> = offers.par_iter().map(|row| row.0.recipient).collect();
+        let active: HashSet<_> = self
+            .itineraries
+            .par_iter()
+            .filter(|row| row.stage.active())
+            .map(|row| row.person)
+            .collect();
+        if senders.len() != offers.len() || recipients.len() != offers.len() {
+            return Err(
+                "expedition offers in the frame must have disjoint senders and recipients".into(),
+            );
+        }
+        let mut next_id = self.next_id;
+        let join_ids: Vec<_> = offers
+            .iter()
+            .map(|(_, reply)| {
+                if matches!(
+                    reply,
+                    Some((Response::Joined | Response::JoinedUnderPressure, _))
+                ) {
+                    let id = next_id;
+                    next_id = next_id.checked_add(1).ok_or("expedition ID overflow")?;
+                    Ok(Some(id))
+                } else {
+                    Ok(None)
+                }
+            })
+            .collect::<Result<_, &str>>()?;
+        let prepared: Vec<_> = invitations
+            .par_iter()
+            .zip(offers)
+            .zip(join_ids)
+            .map(|((invitation, (_, reply)), joined_itinerary)| {
+                let source = &self.itineraries[self
+                    .itineraries
+                    .binary_search_by_key(&invitation.itinerary, |row| row.id)
+                    .map_err(|_| "unknown inviting itinerary")?];
+                if source.person != invitation.inviter
+                    || source.stage != Stage::Ready
+                    || source.origin != invitation.origin
+                    || source.destination != invitation.destination
+                    || source.visit_millis != invitation.visit_millis
+                {
+                    return Err("expedition invitation differs from the sender's itinerary".into());
+                }
+                let joined = match (joined_itinerary, reply) {
+                    (Some(id), Some((_, head_home))) => {
+                        if active.contains(&invitation.recipient) {
+                            return Err(
+                                "expedition recipient already has an active itinerary".into()
+                            );
+                        }
+                        Some(Itinerary::new(
+                            id,
+                            invitation.personal_plan(invitation.origin, *head_home),
+                        ))
+                    }
+                    (_, Some((Response::Withdrawn, _))) => {
+                        return Err(
+                            "an opening invitation cannot be withdrawn by a recipient".into()
+                        );
+                    }
+                    _ => None,
+                };
+                let note = source.event(
+                    now,
+                    invitation.origin,
+                    EventKind::Invitation {
+                        invite: invitation.id,
+                        recipient: invitation.recipient,
+                        response: reply.map(|row| row.0),
+                        joined_itinerary,
+                    },
+                );
+                Ok((note, joined, reply.is_none().then_some(*invitation)))
+            })
+            .collect::<Result<_, String>>()?;
+        let mut events = Vec::with_capacity(offers.len());
+        let mut pending = Vec::new();
+        for (note, joined, notification) in prepared {
+            events.push(note);
+            if let Some(row) = joined {
+                events.push(row.event(now, row.origin, EventKind::Planned));
+                self.itineraries.push(row);
+            }
+            pending.extend(notification);
+        }
+        self.next_id = next_id;
+        self.invitations.commit_offers(&invitations, &pending);
+        Ok(events)
     }
 
     pub fn record_supply_store_attempts(&mut self, attempts: &mut [(u64, u64)]) {
