@@ -29,6 +29,7 @@ fn transfer(id: u64, from: u64, to: u64, quantity: u64) -> Transaction {
 fn generic_transfers_preserve_batch_through_split_merge_and_resume() {
     let mut store = Store::compile(State {
         next_batch: None,
+        expiry_millis: None,
         tick: 0,
         revision: 0,
         containers: vec![
@@ -69,6 +70,7 @@ fn generic_transfers_preserve_batch_through_split_merge_and_resume() {
 fn rejected_transfer_and_expiry_do_not_reassign_batches() {
     let initial = State {
         next_batch: None,
+        expiry_millis: None,
         tick: 0,
         revision: 0,
         containers: vec![
@@ -109,6 +111,7 @@ fn shared_source_arbitration_keeps_actual_cohorts_with_each_winner() {
             .install(|| {
                 let mut store = Store::compile(State {
                     next_batch: None,
+                    expiry_millis: None,
                     tick: 0,
                     revision: 0,
                     containers: vec![
@@ -178,6 +181,7 @@ fn invalid_batch_cannot_be_created_or_combined_with_a_unique_item() {
     assert!(Container::new(Place::Person(1), 10, vec![mixed.clone()]).is_err());
     let store = Store::compile(State {
         next_batch: None,
+        expiry_millis: None,
         tick: 0,
         revision: 0,
         containers: vec![Container::new(Place::Person(1), 10, vec![]).unwrap()],
@@ -201,6 +205,7 @@ fn invalid_batch_cannot_be_created_or_combined_with_a_unique_item() {
 fn batch_creation_is_published_only_with_the_atomic_physical_action() {
     let initial = State {
         next_batch: None,
+        expiry_millis: None,
         tick: 0,
         revision: 0,
         containers: vec![
@@ -265,6 +270,7 @@ fn batch_provenance_scaling() {
     );
     let initial = State {
         next_batch: None,
+        expiry_millis: None,
         tick: 0,
         revision: 0,
         containers,
@@ -304,6 +310,7 @@ fn batch_provenance_scaling() {
 fn concurrent_fan_in_keeps_different_batches_separate() {
     let mut store = Store::compile(State {
         next_batch: None,
+        expiry_millis: None,
         tick: 0,
         revision: 0,
         containers: vec![
@@ -333,6 +340,7 @@ fn concurrent_fan_in_keeps_different_batches_separate() {
 fn exact_batch_selection_draws_only_requested_cohorts_and_can_span_expiries() {
     let initial = State {
         next_batch: None,
+        expiry_millis: None,
         tick: 0,
         revision: 0,
         containers: vec![
@@ -373,6 +381,7 @@ fn exact_batch_selection_draws_only_requested_cohorts_and_can_span_expiries() {
 fn generic_and_targeted_batch_claims_compete_in_seeded_order() {
     let initial = State {
         next_batch: None,
+        expiry_millis: None,
         tick: 0,
         revision: 0,
         containers: vec![
@@ -431,6 +440,7 @@ fn generic_and_targeted_batch_claims_compete_in_seeded_order() {
 fn targeted_batch_rejects_missing_insufficient_or_invalid_requests() {
     let initial = State {
         next_batch: None,
+        expiry_millis: None,
         tick: 0,
         revision: 0,
         containers: vec![
@@ -499,6 +509,7 @@ fn independent_targeted_fast_path_matches_general_arbiter() {
     );
     let initial = State {
         next_batch: None,
+        expiry_millis: None,
         tick: 0,
         revision: 0,
         containers,
@@ -556,6 +567,7 @@ fn concentrated_distinct_batch_scaling() {
         .extend((2..=count + 1).map(|id| Container::new(Place::Person(id), 2, vec![]).unwrap()));
     let initial = State {
         next_batch: None,
+        expiry_millis: None,
         tick: 0,
         revision: 0,
         containers,
@@ -619,6 +631,7 @@ fn parallel_batch_groups_match_ordered_reference_for_contested_and_missing_batch
         .extend((2..=count + 2).map(|id| Container::new(Place::Person(id), 10, vec![]).unwrap()));
     let initial = State {
         next_batch: None,
+        expiry_millis: None,
         tick: 0,
         revision: 0,
         containers,
@@ -682,6 +695,7 @@ fn large_exact_source_update_preserves_unselected_and_expires_old_batches() {
     }
     let mut store = Store::compile(State {
         next_batch: None,
+        expiry_millis: None,
         tick: 0,
         revision: 0,
         containers,
@@ -712,6 +726,7 @@ fn expiry_index_follows_custody_preserves_batch_and_rebuilds_on_load() {
             .install(|| {
                 let mut store = Store::compile(State {
                     next_batch: Some(9),
+                    expiry_millis: None,
                     tick: 0,
                     revision: 0,
                     containers: vec![
@@ -753,4 +768,72 @@ fn expiry_index_follows_custody_preserves_batch_and_rebuilds_on_load() {
             })
     };
     assert_eq!(run(1), run(4));
+}
+
+#[test]
+fn elapsed_expiry_is_atomic_and_independent_of_custody_ticks() {
+    let state = State {
+        next_batch: Some(9),
+        expiry_millis: None,
+        tick: 4,
+        revision: 0,
+        containers: vec![
+            Container::new(
+                Place::Person(1),
+                10,
+                vec![cohort(7, 3, Some(83)), cohort(8, 4, Some(84))],
+            )
+            .unwrap(),
+            Container::new(Place::Person(2), 10, Vec::new()).unwrap(),
+        ],
+    };
+    let run = |workers, stops: &[u64]| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut store = Store::compile_elapsed(state.clone(), 80).unwrap();
+                assert!(store.prepare_expiry_at(84).is_err());
+                let stale = store
+                    .prepare_transactions_now(1, &[transfer(1, 1, 2, 3)])
+                    .unwrap();
+                for &at in stops {
+                    let advance = store.prepare_expiry_at(at).unwrap();
+                    assert!(store.commit_expiry_at(advance).unwrap().is_empty());
+                }
+                assert_eq!(store.revision(), 0);
+                assert!(store.commit(stale).is_err());
+                let ready = store
+                    .prepare_transactions_now(1, &[transfer(1, 1, 2, 3)])
+                    .unwrap();
+                assert!(ready.transactions()[0].accepted);
+                store.commit(ready).unwrap();
+                let resumed = store.export();
+                store = Store::compile_elapsed(resumed, 82).unwrap();
+
+                let expiry = store.prepare_expiry_at(83).unwrap();
+                assert_eq!(expiry.spoiled()[0].batch, Some(7));
+                assert_eq!(expiry.spoiled()[0].place, Place::Person(2));
+                let expiry = store.commit_expiry_at(expiry).unwrap();
+                assert_eq!(store.tick(), 4);
+                assert_eq!(store.revision(), 2);
+                assert_eq!(store.elapsed_millis(), Some(83));
+                assert_eq!(
+                    store
+                        .view(5)
+                        .unwrap()
+                        .container(Place::Person(1))
+                        .unwrap()
+                        .quantity(1),
+                    4
+                );
+                let advance = store.prepare_transactions(1, &[]).unwrap();
+                assert!(store.commit(advance).unwrap().1.is_empty());
+                assert_eq!(store.tick(), 5);
+                assert_eq!(store.next_expiry(), Some(84));
+                (expiry, store.export())
+            })
+    };
+    assert_eq!(run(1, &[82]), run(4, &[81, 82]));
 }

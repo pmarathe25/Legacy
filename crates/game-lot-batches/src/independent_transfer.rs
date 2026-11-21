@@ -212,6 +212,7 @@ fn prepare_rows(
     } else {
         state.tick
     };
+    let instant = state.expiry_millis.unwrap_or(next);
     state
         .revision
         .checked_add(1)
@@ -321,16 +322,18 @@ fn prepare_rows(
         state
             .containers
             .par_iter()
-            .filter(|c| c.next_expiry.is_some_and(|at| at <= next))
+            .filter(|c| c.next_expiry.is_some_and(|at| at <= instant))
             .flat_map_iter(|c| {
                 c.lots.iter().filter_map(move |lot| {
-                    lot.expires_at.filter(|&at| at <= next).map(|at| Spoilage {
-                        place: c.place,
-                        good: lot.good,
-                        quantity: lot.quantity,
-                        expires_at: at,
-                        batch: lot.batch,
-                    })
+                    lot.expires_at
+                        .filter(|&at| at <= instant)
+                        .map(|at| Spoilage {
+                            place: c.place,
+                            good: lot.good,
+                            quantity: lot.quantity,
+                            expires_at: at,
+                            batch: lot.batch,
+                        })
                 })
             })
             .collect()
@@ -360,13 +363,13 @@ fn prepare_rows(
             for row in chunk {
                 let source = &state.containers[row.source];
                 let destination = &state.containers[row.destination];
-                let live_used: u64 = if destination.next_expiry.is_none_or(|at| at > next) {
+                let live_used: u64 = if destination.next_expiry.is_none_or(|at| at > instant) {
                     destination.used
                 } else {
                     destination
                         .lots
                         .iter()
-                        .filter(|lot| lot.expires_at.is_none_or(|at| at > next))
+                        .filter(|lot| lot.expires_at.is_none_or(|at| at > instant))
                         .map(|lot| lot.quantity)
                         .sum()
                 };
@@ -376,7 +379,7 @@ fn prepare_rows(
                     .filter(|lot| {
                         lot.good == row.movement.good
                             && row.movement.batch.is_none_or(|id| lot.batch == Some(id))
-                            && lot.expires_at.is_none_or(|at| at > next)
+                            && lot.expires_at.is_none_or(|at| at > instant)
                     })
                     .map(|lot| lot.quantity)
                     .sum();
@@ -390,7 +393,7 @@ fn prepare_rows(
                     }
                     if lot.good == row.movement.good
                         && row.movement.batch.is_none_or(|id| lot.batch == Some(id))
-                        && lot.expires_at.is_none_or(|at| at > next)
+                        && lot.expires_at.is_none_or(|at| at > instant)
                     {
                         let quantity = remaining.min(lot.quantity);
                         lots.push(Lot {
@@ -405,12 +408,12 @@ fn prepare_rows(
                 }
                 debug_assert_eq!(remaining, 0);
                 let end = lots.len();
-                if accepted || source.next_expiry.is_some_and(|at| at <= next) {
+                if accepted || source.next_expiry.is_some_and(|at| at <= instant) {
                     sources.push((
                         row.source,
                         after_selected(
                             source,
-                            next,
+                            instant,
                             row.movement.good,
                             if accepted { row.movement.quantity } else { 0 },
                             row.movement.batch,
@@ -418,10 +421,10 @@ fn prepare_rows(
                         ),
                     ));
                 }
-                if accepted || destination.next_expiry.is_some_and(|at| at <= next) {
+                if accepted || destination.next_expiry.is_some_and(|at| at <= instant) {
                     destinations.push((
                         row.destination,
-                        after(destination, next, 0, 0, &lots[begin..end]),
+                        after(destination, instant, 0, 0, &lots[begin..end]),
                     ));
                 }
                 headers.push((row.movement.id, accepted, begin..end));
@@ -471,7 +474,7 @@ fn prepare_rows(
             .par_iter()
             .enumerate()
             .filter_map(|(index, container)| {
-                (container.next_expiry.is_some_and(|at| at <= next)
+                (container.next_expiry.is_some_and(|at| at <= instant)
                     && endpoints.as_ref().map_or_else(
                         || {
                             rows.binary_search_by_key(&index, |row| row.source).is_err()
@@ -481,7 +484,7 @@ fn prepare_rows(
                         },
                         |endpoints| endpoints.binary_search(&index).is_err(),
                     ))
-                .then(|| (index, after(container, next, 0, 0, &[])))
+                .then(|| (index, after(container, instant, 0, 0, &[])))
             })
             .collect()
     };

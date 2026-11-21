@@ -1,6 +1,6 @@
 //! One indexed expiration deadline per nonempty perishable container.
 use game_lot_model::{Container, Place, Spoilage, State};
-use game_lot_planning::Draft;
+use game_lot_planning::{Draft, TransactionTime};
 use rayon::prelude::*;
 use std::collections::BTreeSet;
 
@@ -38,11 +38,12 @@ impl ExpiryIndex {
         }
     }
 
-    pub fn idle(&self, state: &State, instance: u64, advance: bool) -> Result<Draft, String> {
-        let next = state
-            .tick
-            .checked_add(u64::from(advance))
-            .ok_or("lot tick overflow")?;
+    pub fn prepare(
+        &self,
+        state: &State,
+        instance: u64,
+        time: TransactionTime,
+    ) -> Result<Draft, String> {
         state
             .revision
             .checked_add(1)
@@ -51,20 +52,20 @@ impl ExpiryIndex {
             base_instance: instance,
             base_tick: state.tick,
             base_revision: state.revision,
-            next_tick: next,
+            next_tick: time.next_tick,
             changes: Default::default(),
             outcomes: Default::default(),
             spoiled: Vec::new(),
             creations: Vec::new(),
             transactions: Vec::new(),
         };
-        if self.next().is_none_or(|deadline| deadline > next) {
+        if self.next().is_none_or(|deadline| deadline > time.at) {
             return Ok(draft);
         }
         let due: Vec<_> = self
             .due
             .iter()
-            .take_while(|&&(at, _)| at <= next)
+            .take_while(|&&(at, _)| at <= time.at)
             .map(|&(_, place)| place)
             .collect();
         let mut replacements: Vec<_> = due
@@ -78,7 +79,7 @@ impl ExpiryIndex {
                 let mut receipts = Vec::new();
                 let mut lots = Vec::with_capacity(old.lots.len());
                 for lot in &old.lots {
-                    if let Some(at) = lot.expires_at.filter(|&at| at <= next) {
+                    if let Some(at) = lot.expires_at.filter(|&at| at <= time.at) {
                         receipts.push(Spoilage {
                             place: *place,
                             good: lot.good,

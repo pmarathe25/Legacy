@@ -395,7 +395,11 @@ impl CoreHost {
                             if holder.lots[start..]
                                 .iter()
                                 .take_while(|lot| lot.good == good)
-                                .any(|lot| lot.expires_at.is_none_or(|expires| expires > tick))
+                                .any(|lot| {
+                                    lot.expires_at.is_none_or(|expires| {
+                                        expires > self.core.physical.lot_instant(tick)
+                                    })
+                                })
                             {
                                 topics.push(preference.meaning);
                             }

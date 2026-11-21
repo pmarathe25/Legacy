@@ -33,6 +33,9 @@ struct Scenario {
     /// Integrate fatigue and exhaustion at elapsed activity transitions.
     #[serde(default)]
     elapsed_fatigue: bool,
+    /// Date perishables in elapsed milliseconds and remove them at their deadlines.
+    #[serde(default)]
+    elapsed_spoilage: bool,
     /// Autonomous decision cadence, independent of the physical quantum.
     #[serde(default)]
     decision_period_millis: Option<u64>,
@@ -2188,7 +2191,11 @@ fn build_scenario(
             stock.quantity = *quantity;
         }
     }
-    let catalog = Catalog::from_tick_millis(&production.goods, scenario.tick_millis)?;
+    let catalog = if scenario.elapsed_spoilage {
+        Catalog::from_elapsed_millis(&production.goods)?
+    } else {
+        Catalog::from_tick_millis(&production.goods, scenario.tick_millis)?
+    };
     let environment = scenario
         .environment
         .map(|config| resolve_environment(config, &goods))
@@ -2518,6 +2525,7 @@ fn build_scenario(
         })
         .transpose()?;
     let mut custody = catalog.fresh_world(&production.inventories, 0)?;
+    custody.expiry_millis = scenario.elapsed_spoilage.then_some(0);
     if !authored_seed_batches.is_empty() {
         let farm = agriculture
             .as_ref()

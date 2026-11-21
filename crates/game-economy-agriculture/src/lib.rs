@@ -395,9 +395,9 @@ pub struct Context<'a> {
     pub claims: Option<&'a game_economy_claims::Index<'a>>,
     pub busy: &'a [u64],
     pub contact_blocked: &'a [u64],
-    pub goods: &'a [Good],
+    pub catalog: &'a Catalog,
     pub view: &'a View,
-    pub tick_millis: u64,
+    pub lot_instant: u64,
     pub tick: u64,
     pub manual: Option<(u64, u64)>,
     pub manual_response: Option<(u64, u64, bool)>,
@@ -461,7 +461,6 @@ impl Context<'_> {
         } else {
             None
         };
-        let catalog = Catalog::from_tick_millis(self.goods, self.tick_millis)?;
         let mut crops: Vec<_> = self.agriculture.crops.par_iter().collect();
         if crops.par_windows(2).any(|p| p[0].id > p[1].id) {
             crops.par_sort_unstable_by_key(|c| c.id);
@@ -771,7 +770,7 @@ impl Context<'_> {
                     ),
                     Phase::Ripe => {
                         let mut creations = vec![
-                            catalog.creation(
+                            self.catalog.creation(
                                 action,
                                 Place::Stock {
                                     region: field.region,
@@ -784,7 +783,7 @@ impl Context<'_> {
                                     .map_or(crop.output_quantity, |soil| {
                                         soil.yield_quantity(field.id, crop.output_quantity)
                                     }),
-                                self.tick,
+                                self.lot_instant,
                             )?,
                         ];
                         if let Some(owner) = &self.agriculture.provenance
@@ -804,7 +803,7 @@ impl Context<'_> {
                                 .as_ref()
                                 .ok_or("missing mature seed offspring")?;
                             for child in offspring {
-                                let mut creation = catalog.creation(
+                                let mut creation = self.catalog.creation(
                                     action,
                                     Place::Stock {
                                         region: field.region,
@@ -812,7 +811,7 @@ impl Context<'_> {
                                     },
                                     crop.seed,
                                     child.quantity,
-                                    self.tick,
+                                    self.lot_instant,
                                 )?;
                                 creation.lot.batch = Some(child.batch);
                                 creations.push(creation);

@@ -507,7 +507,11 @@ impl Runtime {
         self.epoch
             .checked_add(1)
             .ok_or("physical work revision overflow")?;
-        let mut actions = game_lot_content::prepare_writing(&self.catalog, pages, interval.tick)?;
+        let mut actions = game_lot_content::prepare_writing(
+            &self.catalog,
+            pages,
+            self.lot_instant(interval.tick),
+        )?;
         renumber_operations(&mut actions)?;
         let custody = self.store.prepare_transactions_now(seed, &actions)?;
         if !custody.spoiled().is_empty() {
@@ -812,13 +816,13 @@ impl Runtime {
         Ok(results)
     }
     /// Stage only already completed, admitted work without advancing the tick.
-    /// Early perishable output is unsupported until lots have finer timestamps.
+    /// Perishables use the actual completion instant in elapsed custody.
     /// Callers must exclude jobs whose outputs require separately owned item
     /// identities: this physical-only operation creates fungible lots.
     pub fn prepare_early_work(&self, seed: u64) -> Result<Option<EarlyWorkDraft>, String> {
         self.prepare_early_work_with_identified(seed, None)
     }
-    /// Stage nonperishable early output, optionally allocating identified
+    /// Stage early output, optionally allocating identified
     /// goods for a separately staged item owner.
     pub fn prepare_early_work_with_identified(
         &self,
@@ -867,13 +871,16 @@ impl Runtime {
             drop(phase);
             phase = game_diagnostics::span("physical.early.plan");
         }
-        let mut finished = game_lot_work::finish(&rows, &self.catalog, self.tick())?;
-        if finished.transactions.par_iter().any(|transaction| {
-            transaction
-                .creations
-                .iter()
-                .any(|creation| creation.lot.expires_at.is_some())
-        }) {
+        let mut finished =
+            game_lot_work::finish(&rows, &self.catalog, self.lot_instant(self.tick()))?;
+        if self.elapsed_expiry_time().is_none()
+            && finished.transactions.par_iter().any(|transaction| {
+                transaction
+                    .creations
+                    .iter()
+                    .any(|creation| creation.lot.expires_at.is_some())
+            })
+        {
             return Err("early perishable production is unsupported".into());
         }
         let identified_plan = identified
@@ -914,8 +921,7 @@ impl Runtime {
                 .collect()
         });
         let next_produced_item = identified_plan.map(|plan| plan.next_item);
-        // Early work exposes acceptance, not cohort receipts, and must not
-        // silently publish unrelated expiry before the scheduled boundary.
+        // The elapsed owner publishes expiry before work at the same instant.
         let (_, spoiled) = custody.take_outcome_batch();
         if !spoiled.is_empty() {
             return Err("early work cannot publish pending spoilage".into());

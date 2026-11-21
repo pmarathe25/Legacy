@@ -1753,6 +1753,7 @@ impl CoreHost {
                 deadline = CoreDeadline {
                     after_millis,
                     quantum: false,
+                    expiry: false,
                     work: false,
                     arrival: false,
                     hunger: false,

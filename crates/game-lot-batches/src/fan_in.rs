@@ -88,6 +88,7 @@ fn prepare_rows(
     } else {
         state.tick
     };
+    let instant = state.expiry_millis.unwrap_or(next);
     state
         .revision
         .checked_add(1)
@@ -180,7 +181,7 @@ fn prepare_rows(
                 .lots
                 .iter()
                 .filter(|lot| {
-                    lot.good == row.movement.good && lot.expires_at.is_none_or(|at| at > next)
+                    lot.good == row.movement.good && lot.expires_at.is_none_or(|at| at > instant)
                 })
                 .map(|lot| u128::from(lot.quantity))
                 .sum();
@@ -197,13 +198,13 @@ fn prepare_rows(
     }
     let contested = amounts.par_chunk_by(|a, b| a.0 == b.0).any(|group| {
         let container = &state.containers[group[0].0];
-        let used: u128 = if container.next_expiry.is_none_or(|at| at > next) {
+        let used: u128 = if container.next_expiry.is_none_or(|at| at > instant) {
             u128::from(container.used)
         } else {
             container
                 .lots
                 .par_iter()
-                .filter(|lot| lot.expires_at.is_none_or(|at| at > next))
+                .filter(|lot| lot.expires_at.is_none_or(|at| at > instant))
                 .map(|lot| u128::from(lot.quantity))
                 .sum()
         };
@@ -216,13 +217,13 @@ fn prepare_rows(
             .containers
             .par_iter()
             .map(|container| {
-                if container.next_expiry.is_none_or(|at| at > next) {
+                if container.next_expiry.is_none_or(|at| at > instant) {
                     container.used
                 } else {
                     container
                         .lots
                         .par_iter()
-                        .filter(|lot| lot.expires_at.is_none_or(|at| at > next))
+                        .filter(|lot| lot.expires_at.is_none_or(|at| at > instant))
                         .map(|lot| lot.quantity)
                         .sum()
                 }
@@ -265,16 +266,18 @@ fn prepare_rows(
     let mut spoiled: Vec<_> = state
         .containers
         .par_iter()
-        .filter(|container| container.next_expiry.is_some_and(|at| at <= next))
+        .filter(|container| container.next_expiry.is_some_and(|at| at <= instant))
         .flat_map_iter(|container| {
             container.lots.iter().filter_map(move |lot| {
-                lot.expires_at.filter(|&at| at <= next).map(|at| Spoilage {
-                    place: container.place,
-                    good: lot.good,
-                    quantity: lot.quantity,
-                    expires_at: at,
-                    batch: lot.batch,
-                })
+                lot.expires_at
+                    .filter(|&at| at <= instant)
+                    .map(|at| Spoilage {
+                        place: container.place,
+                        good: lot.good,
+                        quantity: lot.quantity,
+                        expires_at: at,
+                        batch: lot.batch,
+                    })
             })
         })
         .collect();
@@ -297,7 +300,8 @@ fn prepare_rows(
                     if remaining == 0 {
                         break;
                     }
-                    if lot.good == row.movement.good && lot.expires_at.is_none_or(|at| at > next) {
+                    if lot.good == row.movement.good && lot.expires_at.is_none_or(|at| at > instant)
+                    {
                         let quantity = remaining.min(lot.quantity);
                         let part = Lot {
                             batch: lot.batch,
@@ -317,12 +321,12 @@ fn prepare_rows(
                     id: row.transaction,
                     accepted,
                 });
-                if accepted || source.next_expiry.is_some_and(|at| at <= next) {
+                if accepted || source.next_expiry.is_some_and(|at| at <= instant) {
                     changes.push((
                         row.source,
                         after(
                             source,
-                            next,
+                            instant,
                             row.movement.good,
                             if accepted { row.movement.quantity } else { 0 },
                             &[],
@@ -370,7 +374,7 @@ fn prepare_rows(
             let mut lots: Vec<_> = container
                 .lots
                 .par_iter()
-                .filter(|lot| lot.expires_at.is_none_or(|at| at > next))
+                .filter(|lot| lot.expires_at.is_none_or(|at| at > instant))
                 .cloned()
                 .chain(group.par_iter().map(|row| row.1.clone()))
                 .collect();
@@ -416,10 +420,10 @@ fn prepare_rows(
     if !spoiled.is_empty() {
         changes.par_extend(state.containers.par_iter().enumerate().filter_map(
             |(index, container)| {
-                (container.next_expiry.is_some_and(|at| at <= next)
+                (container.next_expiry.is_some_and(|at| at <= instant)
                     && sources.binary_search(&index).is_err()
                     && changed_destinations.binary_search(&index).is_err())
-                .then(|| (index, after(container, next, 0, 0, &[])))
+                .then(|| (index, after(container, instant, 0, 0, &[])))
             },
         ));
     }

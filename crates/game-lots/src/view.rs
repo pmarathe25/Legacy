@@ -34,20 +34,25 @@ impl View {
             .map(|index| &self.containers[index])
     }
 }
-pub fn prepare(state: &State, boundary: u64) -> Result<View, String> {
-    prepare_rows(state, boundary, &state.containers)
+pub fn prepare(state: &State, boundary: u64, instant: u64) -> Result<View, String> {
+    prepare_rows(state, boundary, instant, &state.containers)
 }
 /// A view containing only regional stock, with the same expiry boundary.
-pub fn prepare_stocks(state: &State, boundary: u64) -> Result<View, String> {
+pub fn prepare_stocks(state: &State, boundary: u64, instant: u64) -> Result<View, String> {
     let start = state
         .containers
         .partition_point(|row| row.place < (Place::Stock { region: 0, good: 0 }));
     let end = state
         .containers
         .partition_point(|row| row.place < Place::Person(0));
-    prepare_rows(state, boundary, &state.containers[start..end])
+    prepare_rows(state, boundary, instant, &state.containers[start..end])
 }
-fn prepare_rows(state: &State, boundary: u64, rows: &[Container]) -> Result<View, String> {
+fn prepare_rows(
+    state: &State,
+    boundary: u64,
+    instant: u64,
+    rows: &[Container],
+) -> Result<View, String> {
     if boundary != state.tick && state.tick.checked_add(1) != Some(boundary) {
         return Err("invalid physical view boundary".into());
     }
@@ -61,7 +66,7 @@ fn prepare_rows(state: &State, boundary: u64, rows: &[Container]) -> Result<View
                     .filter_map(|group| {
                         let quantity = group
                             .par_iter()
-                            .filter(|lot| lot.expires_at.is_none_or(|at| at > boundary))
+                            .filter(|lot| lot.expires_at.is_none_or(|at| at > instant))
                             .map(|lot| lot.quantity)
                             .sum();
                         (quantity > 0).then_some(Balance {
@@ -84,7 +89,7 @@ fn prepare_rows(state: &State, boundary: u64, rows: &[Container]) -> Result<View
             let mut goods: Vec<Balance> = Vec::new();
             let mut used = 0;
             for lot in &container.lots {
-                if lot.expires_at.is_some_and(|at| at <= boundary) {
+                if lot.expires_at.is_some_and(|at| at <= instant) {
                     continue;
                 }
                 used += lot.quantity;

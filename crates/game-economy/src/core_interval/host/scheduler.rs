@@ -662,6 +662,10 @@ pub enum CoreRunEvent {
     Arrivals(CoreArrivals),
     Deferred(Vec<u64>),
     Work(game_lot_runtime::EarlyWorkEvents),
+    Spoilage {
+        at_millis: u128,
+        lots: Vec<game_lots::Spoilage>,
+    },
     Meals(Vec<(u64, u32)>),
     Treatments(Vec<game_lots::TransactionOutcome>),
     Provisions(Vec<game_lots::TransactionOutcome>),
@@ -1025,46 +1029,48 @@ impl CoreHost {
                     handled = true;
                 }
                 if deadline.work {
-                    let perishable: HashSet<_> = self
-                        .core
-                        .physical
-                        .goods()
-                        .par_iter()
-                        .filter_map(|good| {
-                            good.food
-                                .as_ref()
-                                .and_then(|food| food.shelf_days.map(|_| good.id))
-                        })
-                        .collect();
-                    let rates = &self
-                        .core
-                        .physical
-                        .work_interval()
-                        .expect("active interval")
-                        .rates;
-                    let defer: Vec<_> = self
-                        .core
-                        .physical
-                        .work()
-                        .par_iter()
-                        .filter(|row| {
-                            row.phase == game_lot_runtime::Phase::Working
-                                && row.job.remaining == 0
-                                && rates
-                                    .binary_search_by_key(&row.job.id, |rate| rate.0)
-                                    .is_ok()
-                                && row
-                                    .job
-                                    .outputs
-                                    .iter()
-                                    .any(|output| perishable.contains(&output.good))
-                        })
-                        .map(|row| row.job.id)
-                        .collect();
-                    if !defer.is_empty() {
-                        attempt!('run, self.defer_work(self.core.physical.tick(), offset, &defer));
-                        run.events.push(CoreRunEvent::Deferred(defer));
-                        handled = true;
+                    if self.core.physical.elapsed_expiry_time().is_none() {
+                        let perishable: HashSet<_> = self
+                            .core
+                            .physical
+                            .goods()
+                            .par_iter()
+                            .filter_map(|good| {
+                                good.food
+                                    .as_ref()
+                                    .and_then(|food| food.shelf_days.map(|_| good.id))
+                            })
+                            .collect();
+                        let rates = &self
+                            .core
+                            .physical
+                            .work_interval()
+                            .expect("active interval")
+                            .rates;
+                        let defer: Vec<_> = self
+                            .core
+                            .physical
+                            .work()
+                            .par_iter()
+                            .filter(|row| {
+                                row.phase == game_lot_runtime::Phase::Working
+                                    && row.job.remaining == 0
+                                    && rates
+                                        .binary_search_by_key(&row.job.id, |rate| rate.0)
+                                        .is_ok()
+                                    && row
+                                        .job
+                                        .outputs
+                                        .iter()
+                                        .any(|output| perishable.contains(&output.good))
+                            })
+                            .map(|row| row.job.id)
+                            .collect();
+                        if !defer.is_empty() {
+                            attempt!('run, self.defer_work(self.core.physical.tick(), offset, &defer));
+                            run.events.push(CoreRunEvent::Deferred(defer));
+                            handled = true;
+                        }
                     }
                     if let Some(events) = attempt!('run, self.publish_early_work()) {
                         run.events.push(CoreRunEvent::Work(events));
@@ -3444,6 +3450,13 @@ impl CoreHost {
             }
             let elapsed =
                 attempt!('run, self.progress_with_activity(step, external_blocked, Some(plan)));
+            let spoiled = self.core.physical.take_elapsed_spoilage();
+            if !spoiled.is_empty() {
+                run.events.push(CoreRunEvent::Spoilage {
+                    at_millis: self.core.simulated_millis(),
+                    lots: spoiled,
+                });
+            }
             if !elapsed.incapacitations.is_empty() {
                 run.events.push(CoreRunEvent::Incapacitations {
                     at_millis: self.core.simulated_millis(),

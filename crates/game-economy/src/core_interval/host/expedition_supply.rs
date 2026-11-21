@@ -61,7 +61,7 @@ impl CoreHost {
                 let cargo = self.core.physical.custody(Place::Person(row.person))?;
                 let desired = need
                     .desired
-                    .saturating_sub(Self::available_supply(cargo, need.good, tick));
+                    .saturating_sub(self.available_supply(cargo, need.good, tick));
                 let amount = desired.min(cargo.capacity.saturating_sub(cargo.used));
                 let motivated = need.choice.willing
                     || need
@@ -77,11 +77,14 @@ impl CoreHost {
             .collect()
     }
 
-    fn available_supply(cargo: &game_lots::Container, good: u32, tick: u64) -> u64 {
+    fn available_supply(&self, cargo: &game_lots::Container, good: u32, tick: u64) -> u64 {
+        let instant = self.core.physical.lot_instant(tick);
         cargo
             .lots
             .iter()
-            .filter(|lot| lot.good == good && lot.expires_at.is_none_or(|deadline| deadline > tick))
+            .filter(|lot| {
+                lot.good == good && lot.expires_at.is_none_or(|deadline| deadline > instant)
+            })
             .map(|lot| lot.quantity)
             .sum()
     }
@@ -120,7 +123,7 @@ impl CoreHost {
                         .core
                         .physical
                         .custody(Place::Inventory(store))
-                        .is_some_and(|cargo| Self::available_supply(cargo, need.good, tick) != 0);
+                        .is_some_and(|cargo| self.available_supply(cargo, need.good, tick) != 0);
                     if seek && available {
                         return None;
                     }
@@ -142,9 +145,7 @@ impl CoreHost {
                                 region,
                                 good: need.good,
                             })
-                            .is_some_and(|cargo| {
-                                Self::available_supply(cargo, need.good, tick) != 0
-                            })
+                            .is_some_and(|cargo| self.available_supply(cargo, need.good, tick) != 0)
                     {
                         return None;
                     }
@@ -202,7 +203,7 @@ impl CoreHost {
                     _ => return None,
                 };
                 let stock = self.core.physical.custody(from)?;
-                let quantity = Self::available_supply(stock, need.good, tick).min(amount);
+                let quantity = self.available_supply(stock, need.good, tick).min(amount);
                 (quantity != 0).then_some((
                     row.person,
                     SupplyAcquisition {
