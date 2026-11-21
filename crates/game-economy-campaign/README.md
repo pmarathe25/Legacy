@@ -9,6 +9,11 @@ current lifespan, or suspend control. A successor has their own possessions
 and relationships. Corporeal guardians use ordinary journeys and make their
 own mentorship judgments.
 
+An unattended history follows the same lineage while releasing player inputs.
+Each incarnation continues choosing food, work, and relationships when there
+is no player. This setting survives checkpoints. Interactive campaigns still
+hand control to the successor when they are born.
+
 Start a headless session with `cargo run -p game-economy-cli -- --interval-campaign SCENARIO`.
 Use `campaign` to inspect the lineage, `invoke PAST_LIVES` to invoke recorded
 lives, and `accept-cost REVISION` or `dismiss` to respond to a warning.

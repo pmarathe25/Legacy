@@ -16,6 +16,19 @@ pub struct CoreCampaignView {
 }
 
 impl CoreHost {
+    /// Release authored player inputs for an unattended simulation and keep the lineage.
+    pub fn detach_player_control(&mut self) -> Result<(), String> {
+        if let Some(campaign) = &mut self.campaign {
+            campaign.become_observer()?;
+        }
+        self.core
+            .people
+            .par_iter_mut()
+            .for_each(|person| person.controlled = false);
+        self.work_checked_revision = None;
+        Ok(())
+    }
+
     fn campaign_now(&self) -> Result<u64, String> {
         u64::try_from(self.core.simulated_millis()).map_err(|_| "campaign time overflow".into())
     }
