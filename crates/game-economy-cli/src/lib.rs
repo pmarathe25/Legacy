@@ -925,6 +925,9 @@ struct SoilAmendmentConfig {
     good: String,
     quantity: u64,
     fertility_gain: u64,
+    #[serde(default)]
+    elapsed_actions: bool,
+    #[serde(default)]
     choices: Vec<game_economy_agriculture::amendment::Choice>,
 }
 #[derive(Deserialize)]
@@ -2028,6 +2031,7 @@ fn build_scenario(
                 .ok_or_else(|| format!("unknown soil amendment good {}", config.good))?,
             quantity: config.quantity,
             fertility_gain: config.fertility_gain,
+            elapsed_actions: config.elapsed_actions,
             choices: config.choices,
             events: vec![],
         });

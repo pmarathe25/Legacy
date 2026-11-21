@@ -351,7 +351,10 @@ impl CoreHost {
         let Some((agriculture, soil, amendment)) = self.agriculture.as_ref().and_then(|farm| {
             farm.soil
                 .as_ref()
-                .and_then(|soil| soil.amendment.as_ref().map(|owner| (farm, soil, owner)))
+                .and_then(|soil| {
+                    soil.amendment.as_ref().filter(|owner| !owner.elapsed_actions)
+                        .map(|owner| (farm, soil, owner))
+                })
         }) else {
             return Ok(None);
         };
@@ -416,7 +419,6 @@ impl CoreHost {
                 claims: claims.as_ref(),
                 opinions: self.opinions.as_ref(),
                 view: &view,
-                max_hunger: self.core.rules.max_work_hunger,
                 seed: self.core.seed,
                 tick,
                 manual: None,

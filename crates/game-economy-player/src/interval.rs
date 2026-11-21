@@ -64,6 +64,10 @@ impl<'a> Player<'a> {
             .cultivate_controlled(self.person, field, carried_batch)
     }
 
+    pub fn amend(&mut self, field: u64) -> Result<bool, String> {
+        self.host.amend_controlled(self.person, field)
+    }
+
     pub fn promise(
         &mut self,
         recipient: u64,

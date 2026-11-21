@@ -246,6 +246,7 @@ impl Chronicle {
                 | "confinement"
                 | "mechanical_experiments"
                 | "mechanical_assemblies"
+                | "soil_amendments"
                 | "work_requests"
                 | "maturation"
                 | "recipe_learning"
@@ -499,6 +500,9 @@ fn classify(kind: &str, row: &Value) -> Option<Receipt> {
             "broke" => "mechanical tests that broke a part",
             _ => return None,
         },
+        ("soil_amendments", _) if row["accepted"].as_bool() == Some(true) => {
+            "soil amendments completed"
+        }
         ("agreement_expiry", "defaulted") => "unfulfilled agreements that expired",
         ("agreement_expiry", "withdrawn") => "unaccepted proposals that expired",
         ("personal_practices", "aid_proposed") => "individual aid proposals",

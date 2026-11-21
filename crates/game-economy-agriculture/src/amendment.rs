@@ -39,6 +39,8 @@ pub struct Amendment {
     pub good: u32,
     pub quantity: u64,
     pub fertility_gain: u64,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub elapsed_actions: bool,
     #[serde(default)]
     pub choices: Vec<Choice>,
     #[serde(default)]
@@ -50,6 +52,7 @@ impl Clone for Amendment {
             good: self.good,
             quantity: self.quantity,
             fertility_gain: self.fertility_gain,
+            elapsed_actions: self.elapsed_actions,
             choices: self.choices.par_iter().cloned().collect(),
             events: self.events.par_iter().cloned().collect(),
         }
@@ -65,7 +68,6 @@ pub struct Context<'a> {
     pub claims: Option<&'a Index<'a>>,
     pub opinions: Option<&'a game_opinions::Opinions>,
     pub view: &'a View,
-    pub max_hunger: u32,
     pub seed: u64,
     pub tick: u64,
     pub manual: Option<&'a Choice>,
@@ -108,6 +110,19 @@ impl Amendment {
         Ok(())
     }
     pub fn prepare(&self, context: Context<'_>, base: u64) -> Result<Plan, String> {
+        self.prepare_inner(context, base, true)
+    }
+
+    pub fn prepare_manual(&self, context: Context<'_>) -> Result<Plan, String> {
+        self.prepare_inner(context, 1, false)
+    }
+
+    fn prepare_inner(
+        &self,
+        context: Context<'_>,
+        base: u64,
+        include_policies: bool,
+    ) -> Result<Plan, String> {
         let Context {
             soil,
             agriculture,
@@ -118,14 +133,18 @@ impl Amendment {
             claims,
             opinions,
             view,
-            max_hunger: _,
             seed,
             tick,
             manual,
         } = context;
+        let choices = if include_policies {
+            &self.choices[..]
+        } else {
+            &[]
+        };
         let opinions = opinions
             .filter(|_| {
-                self.choices
+                choices
                     .par_iter()
                     .any(|choice| !choice.willing && choice.pressured_by.is_some())
             })
@@ -134,8 +153,7 @@ impl Amendment {
         if fields.par_windows(2).any(|pair| pair[0].id > pair[1].id) {
             fields.par_sort_unstable_by_key(|row| row.id);
         }
-        let mut rows: Vec<_> = self
-            .choices
+        let mut rows: Vec<_> = choices
             .par_iter()
             .filter(|choice| manual.is_none_or(|selected| selected.person != choice.person))
             .chain(manual.into_par_iter())
@@ -255,8 +273,23 @@ impl Amendment {
         })
     }
     pub fn publish(&self, soil: &mut Soil, plan: Plan, outcomes: &Events, tick: u64) {
-        let events: Vec<_> = plan
-            .rows
+        soil.amendment = Some(Self {
+            good: self.good,
+            quantity: self.quantity,
+            fertility_gain: self.fertility_gain,
+            elapsed_actions: self.elapsed_actions,
+            choices: self.choices.par_iter().cloned().collect(),
+            events: Vec::new(),
+        });
+        soil.apply_amendments(plan.outcomes(outcomes, tick));
+    }
+}
+pub struct Plan {
+    rows: Vec<(u64, u64, Transaction, Use)>,
+}
+impl Plan {
+    pub fn outcomes(&self, outcomes: &Events, tick: u64) -> Vec<Event> {
+        self.rows
             .par_iter()
             .map(|(person, field, action, _)| Event {
                 tick,
@@ -268,34 +301,9 @@ impl Amendment {
                     .ok()
                     .is_some_and(|i| outcomes.physical_actions[i].accepted),
             })
-            .collect();
-        let mut accepted: Vec<_> = events
-            .par_iter()
-            .filter(|row| row.accepted)
-            .map(|row| row.field)
-            .collect();
-        accepted.par_sort_unstable();
-        soil.fields.par_iter_mut().for_each(|row| {
-            if accepted.binary_search(&row.field).is_ok() {
-                row.fertility = row
-                    .fertility
-                    .saturating_add(self.fertility_gain)
-                    .min(soil.capacity);
-            }
-        });
-        soil.amendment = Some(Self {
-            good: self.good,
-            quantity: self.quantity,
-            fertility_gain: self.fertility_gain,
-            choices: self.choices.par_iter().cloned().collect(),
-            events,
-        });
+            .collect()
     }
-}
-pub struct Plan {
-    rows: Vec<(u64, u64, Transaction, Use)>,
-}
-impl Plan {
+
     pub fn len(&self) -> usize {
         self.rows.len()
     }

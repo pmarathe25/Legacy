@@ -92,6 +92,10 @@ Soil can author `cultivation.soil.recovery_clock.period_millis` as a duration
 for each `recovery_per_fallow` quantity. Only time spent fallow restores
 fertility. Fractional recovery survives save/reload and planting; harvest
 still depletes fertility when it succeeds.
+Set `soil_amendment.elapsed_actions = true` to evaluate each person's chosen
+soil treatment at their decision time. Contenders share field and stock
+limits, and fertility increases only when the material leaves custody.
+Archived outcomes carry the actual elapsed time.
 
 `fauna.lifecycle_period_millis` gives wildlife a fixed ecological cadence.
 At each deadline the wildlife owner stages age, hunger, finite grazing, climate

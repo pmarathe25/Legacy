@@ -59,6 +59,7 @@ pub struct CorePlayerResource {
 pub struct CorePlayerField {
     pub id: u64,
     pub phase: game_economy_agriculture::Phase,
+    pub fertility: Option<u64>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -437,7 +438,11 @@ impl CoreHost {
             if let Some(farm) = self
                 .agriculture
                 .as_ref()
-                .filter(|farm| farm.growth_clock.is_some())
+                .filter(|farm| {
+                    farm.growth_clock.is_some()
+                        || farm.soil.as_ref().and_then(|soil| soil.amendment.as_ref())
+                            .is_some_and(|owner| owner.elapsed_actions)
+                })
             {
                 accessible_fields = farm
                     .fields
@@ -446,6 +451,10 @@ impl CoreHost {
                     .map(|field| CorePlayerField {
                         id: field.id,
                         phase: field.phase,
+                        fertility: farm.soil.as_ref().and_then(|soil| {
+                            soil.fields.binary_search_by_key(&field.id, |row| row.field)
+                                .ok().map(|slot| soil.fields[slot].fertility)
+                        }),
                     })
                     .collect();
                 accessible_fields.par_sort_unstable_by_key(|field| field.id);
