@@ -147,8 +147,13 @@ pub(super) fn write_history(text: &mut String, years: &Value) {
     text.push_str("## Cultivated seed lineages\n\n");
     for ((first_year, first, _), (year, last, seed)) in observed.into_values().take(8) {
         let name = seed["name"].as_str().unwrap_or("Unnamed seed");
-        writeln!(text, "- The mean tracked allele value for {name} was {first:.1} in year {first_year} and {last:.1} in year {year}. That last sample contains {} units with known alleles across {} stored batches.",
-            seed["stored"]["units_with_genetics"], seed["stored"]["identified_batches"]).unwrap();
+        let units = &seed["stored"]["units_with_genetics"];
+        let batches = &seed["stored"]["identified_batches"];
+        if first_year == year {
+            writeln!(text, "- In year {year}, {name} had a mean tracked allele value of {last:.1} across {units} stored units in {batches} batches.").unwrap();
+        } else {
+            writeln!(text, "- The mean tracked allele value for {name} was {first:.1} in year {first_year} and {last:.1} in year {year}. The latest sample covers {units} stored units in {batches} batches.").unwrap();
+        }
     }
     text.push('\n');
 }

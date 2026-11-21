@@ -541,7 +541,7 @@ fn inspect(path: &Path, focus: Focus, through_year: Option<u64>) -> Result<Value
                 if !state["family"].is_null() {
                     totals = state["family"]["totals"].clone();
                 }
-                if year % 50 == 0 || first_year == Some(year) {
+                if matches!(focus, Focus::Summary) {
                     let human_means = people.and_then(|items| {
                         genome_means(
                             items
