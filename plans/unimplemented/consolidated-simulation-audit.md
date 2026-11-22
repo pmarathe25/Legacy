@@ -159,6 +159,16 @@ to track rates, deadlines, and behavior under different advance sizes. The
   in different group sizes. Statements retain the scope and precision of the
   original observation. A composed test checks that a third person can
   accept that partial count with its original evidence still attached.
+- Food seekers can weigh their own remembered amounts, route estimates,
+  testimony, and the option of staying. At an intermediate region they
+  can compare the next leg with newly observed supplies. A composed
+  scenario gives four people the same reports and observes a long trip,
+  a short trip, a decision to stay, and a decision to stop midway.
+- Elapsed incapacity receipts identify the physical effect that reduced
+  a person's remaining health to zero. The archive dates and attributes
+  those receipts and preserves uncertainty when reading older histories.
+  Existing starvation, illness, natural death, and deprivation tests
+  compare exact deadlines, and the history test checks personal attribution.
 - A target's active defense follows their explicit personal response.
   Unspecified, prevented, and deliberately passive reactions can wait.
   Physical protection remains effective according to actual equipment.
@@ -283,7 +293,7 @@ reports.
 | Dependent care | Directed personal preferences let parents and non-parents choose care based on affinity, fear, felt obligation, and hunger. Visits, food transfers, and neglect can run on independent elapsed deadlines. Each child can develop a different disposition to feeling obligated from the care they experience. Add discovery of other local children through experience and put visits in the same evaluation as other opportunities. |
 | Trade and agreements | Recipients rank physically feasible offers using their own values and social incentives before arbitration. Personal incentives can assign signed weights to affinity, fear, trust, and obligation. Expand bounded known counterparties and decisions based on perceived feasibility. Refusal and withdrawal are available. An actor can claim to have goods or make a promise without verified custody. Actual settlement requires the goods and respects capacity and conservation. |
 | Observation and testimony | A remembered food estimate can remain private. A person can choose to share it or respond to their own pressure threshold. They may deliberately misstate a quantity for an individual listener. The receiver can apply their own trust policy. Records preserve the witness, observation time, counting scope, and immediate speaker. Extend comparable perception and evidence to other resources and physical situations. |
-| Meals, search, and travel | The personal choice round ranks individual foods. Optional on-site meals let people choose locally accessible stock portions that their cargo cannot fit. Legacy meal selection takes the first qualifying food. Food search favors reported quantity before distance, may use exact local stock to abandon a search, and can use the authored map directly. Ordinary legs then progress without a travel reconsideration option. Extend personal destination, exposure, and information preferences. Reconsider at real decision points, including between legs. Keep physical progress, route closures, and observation of failures. |
+| Meals, search, and travel | The personal choice round ranks individual foods. Optional on-site meals let people choose locally accessible stock portions that their cargo cannot fit. Food seekers with a travel profile can weigh personal evidence and reconsider at waypoints. Broaden this choice to exposure risk and competition with other activities. Older meal and search policies still have shared defaults. Keep physical progress, route closures, and observations of failures. |
 | Purpose | Signed appraisals can interpret completed work and the outcomes of individual choice domains. Deprivation and its physical effects support an elapsed clock. Expand receipt coverage to care, discoveries, and social activities as those move into personal evaluation. Add appraisal development through experience. |
 | Animals | Keep individual handling, affinity, restraint, and escape responses. Animal mate selection uses inherited desire, individual preferences, and circumstances. Age, hunger, grazing, and births can follow a separate elapsed ecological cadence. Model physical separation within regions. Preserve ecological pressure, conception, and inheritance. |
 | Expeditions, campaign, and tactical reactions | During migration, replace general sociability as the proxy for joining a mission with each participant's mission-specific judgment. Preserve choices to coordinate, split, stop, stay, or return. Keep authored guardian loyalty, supernatural sensing, and player reincarnation mechanics. Make pursuing, mentoring, judging readiness, and responding to requests individual actions. Player lineage does not confer political authority. Review default tactical defense on being targeted as an active decision, while preserving physical defenses, surrender, and withdrawal. |
