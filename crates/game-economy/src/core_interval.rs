@@ -39,6 +39,7 @@ pub use game_mechanics::{
     Observation as MechanicalObservation,
 };
 pub use game_mechanics::inquiry::{Comparison as MechanicalComparison, Conclusion as MechanicalConclusion};
+pub use game_pastimes::Practice as PastimePractice;
 pub use host::{
     BarrierAction, CoreAssistRecord, CoreAssistSession, CoreChoiceEvent, CoreChoiceIntent,
     CoreChoiceOutcome, CoreConfinement, CoreConstructionResults, CoreCrewStart,

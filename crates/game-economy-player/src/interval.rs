@@ -2,7 +2,7 @@
 use game_economy::core_interval::{
     CoreHost, CoreMarkInscription, CoreMarkObservation, CorePlayerView, CorePromiseReply,
     CoreWorkInscription, CoreWorkObservation, EpisodeCue, MechanicalApparatus, MechanicalComparison,
-    MechanicalExperiment, MechanicalObservation, RecalledEpisode,
+    MechanicalExperiment, MechanicalObservation, PastimePractice, RecalledEpisode,
     WoundTreatment,
 };
 
@@ -90,6 +90,10 @@ impl<'a> Player<'a> {
 
     pub fn available_pastimes(&self) -> Result<Vec<(u32, String)>, String> {
         self.host.available_pastimes(self.person)
+    }
+
+    pub fn pastime_practice(&self) -> Result<&[PastimePractice], String> {
+        self.host.pastime_practice_controlled(self.person)
     }
 
     pub fn start_pastime(&mut self, activity: u32) -> Result<bool, String> {
