@@ -1042,6 +1042,7 @@ impl CoreHost {
                 let goal =
                     (!needs.is_empty()).then(|| self.goal_carry_context(owner, view, busy, &needs));
                 let opportunities = game_economy_local_transport::Context {
+                    now: self.core.simulated_millis(),
                     owner,
                     people: &self.core.people,
                     view,

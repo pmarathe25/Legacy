@@ -18,6 +18,8 @@ pub struct Preference {
     pub destinations: Vec<Destination>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub own_cellar: Option<OwnCellar>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub visits: Option<VisitPreference>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -44,6 +46,37 @@ pub struct OwnCellar {
 pub struct KnownCellar {
     pub store: u64,
     pub built_celsius: i16,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct VisitPreference {
+    pub attention: i32,
+    #[serde(default)]
+    pub idle: i32,
+    #[serde(default)]
+    pub store_value: i32,
+    #[serde(default)]
+    pub walking_cost_per_hour: u32,
+    pub max_age_millis: std::num::NonZeroU64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub observed: Option<Observation>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Observation {
+    pub store: u64,
+    pub celsius: i16,
+    pub at_millis: u128,
+}
+
+impl VisitPreference {
+    fn recall(self, now: u128) -> Option<Observation> {
+        let observed = self.observed?;
+        (now.checked_sub(observed.at_millis)? <= u128::from(self.max_age_millis.get()))
+            .then_some(observed)
+    }
 }
 
 impl Preference {
@@ -78,11 +111,19 @@ impl Preference {
                 value: profile.value,
             })
         });
+        let visited = self.visits.and_then(|profile| {
+            let observed = profile.recall(context.now)?;
+            Some(Destination {
+                store: observed.store,
+                value: profile.store_value,
+            })
+        });
         let (score, store, quantity) = self
             .destinations
             .iter()
             .copied()
             .chain(own)
+            .chain(visited)
             .filter_map(|destination| {
                 let id = destination.store;
                 if context.walking.is_some_and(|walking| {
@@ -121,25 +162,43 @@ impl Preference {
         context: &Context<'_>,
         walking: &walking::Walking,
     ) -> Option<walking::Request> {
-        let profile = self.own_cellar?;
-        let known = profile.known?;
         self.available(context)?;
-        let destination = Endpoint::Store { id: known.store };
-        let remaining = walking.millis_to(self.person, self.region, destination)?;
-        let from = Place::Person(self.person);
-        let value = self.storage_value(
-            profile.value,
-            (context.storage_celsius)(from),
-            known.built_celsius,
-        );
-        let cost = u128::from(remaining) * u128::from(profile.walking_cost_per_hour) / 3_600_000;
-        (i128::from(value) - cost as i128 > i128::from(self.keep_value)).then_some(
-            walking::Request {
-                person: self.person,
-                region: self.region,
-                destination,
-            },
-        )
+        let own = self.own_cellar.and_then(|profile| {
+            let known = profile.known?;
+            Some((
+                known.store,
+                known.built_celsius,
+                profile.value,
+                profile.walking_cost_per_hour,
+            ))
+        });
+        let visited = self.visits.and_then(|profile| {
+            let observed = profile.recall(context.now)?;
+            Some((
+                observed.store,
+                observed.celsius,
+                profile.store_value,
+                profile.walking_cost_per_hour,
+            ))
+        });
+        let carried = (context.storage_celsius)(Place::Person(self.person));
+        let (_, std::cmp::Reverse(store)) = own
+            .into_iter()
+            .chain(visited)
+            .filter_map(|(store, temperature, value, walking_cost)| {
+                let endpoint = Endpoint::Store { id: store };
+                let remaining = walking.millis_to(self.person, self.region, endpoint)?;
+                let cost = u128::from(remaining) * u128::from(walking_cost) / 3_600_000;
+                let score =
+                    i128::from(self.storage_value(value, carried, temperature)) - cost as i128;
+                (score > i128::from(self.keep_value)).then_some((score, std::cmp::Reverse(store)))
+            })
+            .max()?;
+        Some(walking::Request {
+            person: self.person,
+            region: self.region,
+            destination: Endpoint::Store { id: store },
+        })
     }
 }
 

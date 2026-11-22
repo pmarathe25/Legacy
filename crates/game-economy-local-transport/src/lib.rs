@@ -134,6 +134,38 @@ impl LocalTransport {
         });
     }
 
+    pub fn remember_visited_stores(
+        &mut self,
+        arrivals: &[walking::Event],
+        now: u128,
+        temperature: impl Fn(Place) -> i16 + Sync,
+    ) {
+        if self.preservation.is_empty() {
+            return;
+        }
+        let updates: Vec<_> = arrivals.par_iter().filter_map(|arrival| {
+            let Endpoint::Store { id } = arrival.destination else { return None };
+            if arrival.outcome != walking::Outcome::Arrived {
+                return None;
+            }
+            let index = self.preservation.binary_search_by_key(&arrival.person, |row| row.person).ok()?;
+            let preference = &self.preservation[index];
+            let profile = preference.visits?;
+            if profile.attention <= profile.idle {
+                return None;
+            }
+            let store = &self.stores[self.stores.binary_search_by_key(&id, |row| row.id).ok()?];
+            (preference.region == store.region).then(|| (index, preservation::Observation {
+                store: id,
+                celsius: temperature(Place::Inventory(id)),
+                at_millis: now,
+            }))
+        }).collect();
+        for (index, observed) in updates {
+            self.preservation[index].visits.as_mut().expect("prepared observer").observed = Some(observed);
+        }
+    }
+
     fn valid_goal_search(&self, search: &goal::SearchPreference) -> bool {
         let Some(first) = self
             .stores
@@ -193,6 +225,7 @@ impl LocalTransport {
         goods: &HashSet<u32>,
         view: &View,
         tick: u64,
+        now: u128,
     ) -> Result<(), String> {
         let regions: HashSet<_> = view
             .regions().iter().copied().collect();
@@ -215,7 +248,14 @@ impl LocalTransport {
                 let mut stores = HashSet::new();
                 !people.contains(&p.person) || !goods.contains(&p.good) || p.quantity == 0 || !regions.contains(&p.region)
                     || self.policies.binary_search_by_key(&p.person, |row| row.person).is_ok()
-                    || p.destinations.is_empty() && p.own_cellar.is_none()
+                    || p.destinations.is_empty() && p.own_cellar.is_none() && p.visits.is_none()
+                    || p.visits.is_some_and(|profile| {
+                        self.walking.as_ref().is_none_or(|walking| walking.elapsed.is_none())
+                            || profile.observed.is_some_and(|observed| {
+                                observed.at_millis > now
+                                    || !endpoint(Endpoint::Store { id: observed.store }, p.region, p.good, p.person)
+                            })
+                    })
                     || p.own_cellar.and_then(|profile| profile.known).is_some_and(|known| {
                         self.stores.binary_search_by_key(&known.store, |row| row.id)
                             .ok().map(|index| &self.stores[index]).is_none_or(|store| {
@@ -282,6 +322,7 @@ pub struct Plan {
     rows: Vec<Choice>,
 }
 pub struct Context<'a> {
+    pub now: u128,
     pub owner: &'a LocalTransport,
     pub people: &'a [Person],
     pub view: &'a View,

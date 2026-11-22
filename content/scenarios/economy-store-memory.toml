@@ -1,0 +1,96 @@
+# Each character may notice storage conditions during their own visit.
+seed = 51
+tick_millis = 3600000
+decision_period_millis = 17
+elapsed_spoilage = true
+stock_capacity = 20
+food_relief_divisor = 20
+
+[rules]
+hunger_rate = { units = 0, per_millis = 60000 }
+meal_threshold = 20
+starvation_threshold = 50
+max_health = 100
+max_work_hunger = 30
+carrying_capacity = 20
+
+[[regions]]
+id = 1
+storage = {}
+stock = {}
+
+[storage_climate]
+ambient_celsius = 20
+places = [{ place = { kind = "inventory", id = 50 }, celsius = 4 }]
+
+[[people]]
+id = 1
+region = 1
+health = 100
+hunger = 0
+willing_to_work = false
+seek_meals = false
+controlled = true
+goods = { bread = 2 }
+
+[[people]]
+id = 2
+region = 1
+health = 100
+hunger = 0
+willing_to_work = false
+seek_meals = false
+controlled = true
+goods = { bread = 2 }
+
+[[people]]
+id = 3
+region = 1
+health = 100
+hunger = 0
+willing_to_work = false
+seek_meals = false
+controlled = true
+goods = { bread = 2 }
+
+[[local_transport.stores]]
+id = 50
+region = 1
+name = "Cold shelf"
+capacity = 8
+
+[local_transport.walking]
+routes = [
+    { region = 1, from = { kind = "stock" }, to = { kind = "store", id = 50 }, duration_millis = 23 },
+    { region = 1, from = { kind = "store", id = 50 }, to = { kind = "stock" }, duration_millis = 23 },
+]
+
+[local_transport.walking.elapsed]
+unit_millis = 1000
+
+[[local_transport.preservation]]
+person = 1
+region = 1
+good = "bread"
+quantity = 2
+cooling_value_per_degree = 1
+keep_value = 3
+visits = { attention = 10, max_age_millis = 1000 }
+
+[[local_transport.preservation]]
+person = 2
+region = 1
+good = "bread"
+quantity = 2
+cooling_value_per_degree = 1
+keep_value = 3
+visits = { attention = -1, max_age_millis = 1000 }
+
+[[local_transport.preservation]]
+person = 3
+region = 1
+good = "bread"
+quantity = 2
+cooling_value_per_degree = 1
+keep_value = 3
+visits = { attention = 10, max_age_millis = 25 }

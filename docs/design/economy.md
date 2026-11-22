@@ -4,6 +4,11 @@
 
 ## Physical goods and social rights
 
+An optional storage preference lets a person pay attention to temperature
+when they reach a store. A remembered observation can motivate another visit
+within its elapsed retention period. Actual temperature and capacity govern
+the later deposit decision.
+
 Every physical good has one physical location at a time: an area store, a building's storage, a character's carried inventory, a vehicle, or a shipment. Travel moves its carrier and cargo together. A good cannot be in a warehouse and on a cart simultaneously.
 
 Track these independently:
