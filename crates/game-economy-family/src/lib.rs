@@ -3,7 +3,7 @@ mod birth_placement;
 pub use birth_placement::BirthPlacement;
 use game_economy_person::{Person, travel::Travel};
 use game_families::LifeInput;
-pub use game_families::{Birth, BirthBatch, ElapsedFamilyDraft, Families, FamilyEvent};
+pub use game_families::{Birth, BirthBatch, ElapsedFamilyDraft, Families, FamilyEvent, familiarity};
 pub use game_family_model::MateFeelings;
 use game_family_model::{ContactPartition, PhysicalView};
 use rayon::prelude::*;

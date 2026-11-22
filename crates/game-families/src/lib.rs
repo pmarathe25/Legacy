@@ -1,4 +1,5 @@
 //! Individual life history and hereditary state. Workers return drafts, never callbacks.
+pub mod familiarity;
 mod lifetimes;
 mod phase;
 pub use game_family_model::{
@@ -62,6 +63,8 @@ pub struct Families {
     pub rules: FamilyRules,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub traits: Option<Arc<TraitCatalog>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub familiarity: Option<Arc<familiarity::Familiarity>>,
     pub members: Vec<Member>,
     pub next_id: u64,
     #[serde(default)]

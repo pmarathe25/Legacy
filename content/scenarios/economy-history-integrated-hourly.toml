@@ -642,6 +642,9 @@ review_partnerships = true
 mate_desire_locus = 11
 loci = [{ id = 11, name = "courtship-drive", default_alleles = [500, 500] }, { id = 27, name = "work-vigor", default_alleles = [500, 500] }]
 
+[family.familiarity]
+default_learning = { before_age = 52560, visits = 3 }
+
 [family.rules]
 adult_age = 140160
 min_work_age = 140160
@@ -663,13 +666,13 @@ subjective_mating = true
 id = 1
 age = 166440
 genome = { sex = "Female", alleles = [[720,740], [310,510], [405,605], [510,710]], mate_desire = [367, 401], named_loci = [{ locus = 11, alleles = [367, 401] }, { locus = 27, alleles = [310, 510] }] }
-mate_preference = { desire = 650, genetic_weight = 150, affinity_weight = 4, trust_weight = 2, fear_weight = 3, obligation_weight = 2, attraction_weight = 60, hunger_weight = -1, minimum = -20 }
+mate_preference = { desire = 650, genetic_weight = 150, affinity_weight = 4, trust_weight = 2, fear_weight = 3, obligation_weight = 2, childhood_weight = -35, attraction_weight = 60, hunger_weight = -1, minimum = -20 }
 
 [[family.members]]
 id = 2
 age = 175200
 genome = { sex = "Male", alleles = [[740,760], [320,520], [410,610], [520,720]], mate_desire = [434, 502], named_loci = [{ locus = 11, alleles = [434, 502] }, { locus = 27, alleles = [320, 520] }] }
-mate_preference = { desire = 750, genetic_weight = 200, affinity_weight = 8, trust_weight = 1, fear_weight = -2, obligation_weight = 0, attraction_weight = 100, hunger_weight = -1, minimum = -40 }
+mate_preference = { desire = 750, genetic_weight = 200, affinity_weight = 8, trust_weight = 1, fear_weight = -2, obligation_weight = 0, childhood_weight = 15, attraction_weight = 100, hunger_weight = -1, minimum = -40 }
 
 [[family.members]]
 id = 3

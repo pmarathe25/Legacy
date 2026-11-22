@@ -1331,6 +1331,16 @@ impl CoreHost {
             {
                 owner.members.par_sort_unstable_by_key(|member| member.id);
             }
+            if let Some(familiarity) = &mut owner.familiarity {
+                let familiarity = std::sync::Arc::make_mut(familiarity);
+                familiarity.normalize();
+                familiarity.validate(
+                    owner.rules.adult_age,
+                    core.simulated_millis(),
+                    |id| owner.members.binary_search_by_key(&id, |row| row.id).is_ok(),
+                    |id| core.people.binary_search_by_key(&id, |row| row.id).is_ok(),
+                )?;
+            }
             if let Some(calendar) = &mut owner.elapsed_lifetimes {
                 let now = core.simulated_millis();
                 calendar.initialize(&owner.rules, &owner.members, now)?;

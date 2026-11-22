@@ -77,6 +77,15 @@ fn observations(events: &[CoreRunEvent], current_tick: &mut u64) -> Vec<Value> {
         } else if let Some(row) = observation(event, current_tick) {
             recorded.push(row);
         }
+        if let CoreRunEvent::Care(visit) = event
+            && !visit.recognized.is_empty()
+        {
+            recorded.push(json!({
+                "kind": "care_recognitions",
+                "at_millis": visit.at_millis,
+                "events": visit.recognized,
+            }));
+        }
     }
     recorded
 }
@@ -857,6 +866,7 @@ mod tests {
                     trust_weight: 0,
                     fear_weight: 0,
                     obligation_weight: 0,
+                    childhood_weight: 0,
                     attraction_weight: 0,
                     female_attraction: 0,
                     male_attraction: 0,
