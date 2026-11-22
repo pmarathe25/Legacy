@@ -117,6 +117,15 @@ to track rates, deadlines, and behavior under different advance sizes. The
   An authored diploid locus can influence individual courtship desire.
   Inherited variants survive saves, and annual history measures allele
   values among living characters.
+- Wildlife species can bind named loci to their courtship and climate
+  responses. Tests cover exposure deaths, offspring inheriting real parental
+  alleles, worker-count invariance, and the elapsed host across saves. The
+  archive tracks each species separately and dates the first checkpoint
+  with no living members after a recorded population.
+- After an actual visit, children can independently gain or lose affinity
+  and trust, feel fear, or feel no obligation toward the identified
+  caregiver. A missed visit can affect developmental outlook without
+  attributing the absence to a specific person.
 - An empirical investigator can value expected motion, stall, or uncertainty
   differently when choosing a trial. Expedition invitations can offer a
   rendezvous alongside the trip. The recipient can choose whether to accept
@@ -207,7 +216,7 @@ reports.
 | Production, knowledge, and work | Workshop recipes support several outputs or byproducts. Multiple recipes per character, specific recipe teaching, and practice across creative activities have interval slices. Extend choice and practice across work, and keep exact recipe knowledge distinct from skill and personal preferences. |
 | Reach and apparatus | Regional colocation is a coarse default and mechanically usable parts currently often have to be in one actor's custody. Use shared physical reach and access semantics for installed, carried, and jointly used equipment. Broaden bounded design generation beyond the first compatible component mapping. Preserve identity, wear, breakage, loads, and separate judgments about claims, permission, and cooperation. |
 | Nutrition, diets, and crops | Authored food rejects unsupported nutrient names, and interval scenarios can set exact metabolism deadlines. The nutrient types are still fixed. Design an extensible nutrient catalog, wider diets and preferences, multiple seed or crop outputs, and meaningful byproducts. Exercise a new food, diet, and crop archetype defined in content. |
-| Genetics and expressive traits | Families can author named diploid loci and bind one to personally weighted courtship desire. Extend data-defined expression to other abilities and to wildlife. Keep inheritance and selection reproducible and retain compact storage and provenance. |
+| Genetics and expressive traits | Human families and wildlife support named diploid loci, with bindings for courtship desire and wildlife hardiness. Extend data-defined expression to other abilities. Keep inheritance, mutation, and selection reproducible and retain compact storage and provenance. |
 | Time and system registration | Use explicit units and distinguish simulated time, the caller's advance size, physical deadlines, and decision cadence. Follow the [elapsed-time notes](../../docs/research/elapsed-time-migration.md) for save compatibility and hazard clocks. Reduce central enumerations and fixed-width domain masks where they make independent owner additions costly. Keep typed, batched owner boundaries and use efficient declared schedules or dispatch where useful. |
 
 ## Autonomy follow-ups
