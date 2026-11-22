@@ -1031,6 +1031,7 @@ policies = [
 [[fauna.species]]
 id = 1
 name = "pilot grazer"
+traits = { mate_desire_locus = 11, loci = [{ id = 11, name = "courtship-drive", default_alleles = [500, 500] }] }
 newborn_social_response = { feed_affinity = 2, minimum = -10, maximum = 10, capacity = 8 }
 newborn_handling_response = { willing = true, on_accept = 0, on_refuse = 0 }
 newborn_restraint_response = { resistance = 1, escape_willing = true, escape_effort = 1 }
@@ -1057,6 +1058,8 @@ mutation_step = 15
 [[fauna.species]]
 id = 2
 name = "berry browser"
+hardiness_trait = 18
+traits = { mate_desire_locus = 11, loci = [{ id = 11, name = "courtship-drive", default_alleles = [500, 500] }, { id = 18, name = "winter-hardiness", default_alleles = [500, 500] }] }
 food_good = "wild-berries"
 intake = 2
 hunger_per_tick = 1
@@ -1088,7 +1091,7 @@ region = 1
 age = 35040
 health = 100
 hunger = 0
-genome = { sex = "Female", alleles = [[715,735], [260,460], [355,555], [460,660]], mate_desire = [369, 410] }
+genome = { sex = "Female", alleles = [[715,735], [260,460], [355,555], [460,660]], mate_desire = [369, 410], named_loci = [{ locus = 11, alleles = [369, 410] }] }
 social_response = { feed_affinity = 2, minimum = -10, maximum = 10, capacity = 8 }
 handling_response = { willing = true, on_accept = 0, on_refuse = 0 }
 restraint_response = { resistance = 1, escape_willing = true, escape_effort = 1 }
@@ -1100,7 +1103,7 @@ region = 1
 age = 43800
 health = 100
 hunger = 0
-genome = { sex = "Male", alleles = [[730,750], [270,470], [360,560], [470,670]], mate_desire = [436, 511] }
+genome = { sex = "Male", alleles = [[730,750], [270,470], [360,560], [470,670]], mate_desire = [436, 511], named_loci = [{ locus = 11, alleles = [436, 511] }] }
 social_response = { feed_affinity = 2, minimum = -10, maximum = 10, capacity = 8 }
 handling_response = { willing = true, on_accept = 0, on_refuse = 0 }
 restraint_response = { resistance = 1, escape_willing = true, escape_effort = 1 }
@@ -1112,7 +1115,7 @@ region = 1
 age = 52560
 health = 100
 hunger = 0
-genome = { sex = "Female", alleles = [[745,765], [280,480], [365,565], [480,680]], mate_desire = [503, 612] }
+genome = { sex = "Female", alleles = [[745,765], [280,480], [365,565], [480,680]], mate_desire = [503, 612], named_loci = [{ locus = 11, alleles = [503, 612] }] }
 social_response = { feed_affinity = 2, minimum = -10, maximum = 10, capacity = 8 }
 handling_response = { willing = true, on_accept = 0, on_refuse = 0 }
 restraint_response = { resistance = 1, escape_willing = true, escape_effort = 1 }
@@ -1124,7 +1127,7 @@ region = 1
 age = 26280
 health = 100
 hunger = 0
-genome = { sex = "Male", alleles = [[760,780], [290,490], [370,570], [490,690]], mate_desire = [570, 312] }
+genome = { sex = "Male", alleles = [[760,780], [290,490], [370,570], [490,690]], mate_desire = [570, 312], named_loci = [{ locus = 11, alleles = [570, 312] }] }
 social_response = { feed_affinity = 2, minimum = -10, maximum = 10, capacity = 8 }
 handling_response = { willing = true, on_accept = 0, on_refuse = 0 }
 restraint_response = { resistance = 1, escape_willing = true, escape_effort = 1 }
@@ -1136,7 +1139,7 @@ region = 1
 age = 35040
 health = 100
 hunger = 0
-genome = { sex = "Female", alleles = [[775,795], [300,500], [375,575], [500,700]], mate_desire = [637, 413] }
+genome = { sex = "Female", alleles = [[775,795], [300,500], [375,575], [500,700]], mate_desire = [637, 413], named_loci = [{ locus = 11, alleles = [637, 413] }] }
 social_response = { feed_affinity = 2, minimum = -10, maximum = 10, capacity = 8 }
 handling_response = { willing = true, on_accept = 0, on_refuse = 0 }
 restraint_response = { resistance = 1, escape_willing = true, escape_effort = 1 }
@@ -1148,7 +1151,7 @@ region = 1
 age = 43800
 health = 100
 hunger = 0
-genome = { sex = "Male", alleles = [[790,810], [310,510], [380,580], [510,710]], mate_desire = [303, 514] }
+genome = { sex = "Male", alleles = [[790,810], [310,510], [380,580], [510,710]], mate_desire = [303, 514], named_loci = [{ locus = 11, alleles = [303, 514] }] }
 social_response = { feed_affinity = 2, minimum = -10, maximum = 10, capacity = 8 }
 handling_response = { willing = true, on_accept = 0, on_refuse = 0 }
 restraint_response = { resistance = 1, escape_willing = true, escape_effort = 1 }
@@ -1160,7 +1163,7 @@ region = 2
 age = 52560
 health = 100
 hunger = 0
-genome = { sex = "Female", alleles = [[805,825], [320,520], [385,585], [520,720]], mate_desire = [370, 615] }
+genome = { sex = "Female", alleles = [[805,825], [320,520], [385,585], [520,720]], mate_desire = [370, 615], named_loci = [{ locus = 11, alleles = [370, 615] }] }
 social_response = { feed_affinity = 2, minimum = -10, maximum = 10, capacity = 8 }
 handling_response = { willing = true, on_accept = 0, on_refuse = 0 }
 restraint_response = { resistance = 1, escape_willing = true, escape_effort = 1 }
@@ -1172,7 +1175,7 @@ region = 2
 age = 26280
 health = 100
 hunger = 0
-genome = { sex = "Male", alleles = [[820,840], [330,530], [390,590], [530,730]], mate_desire = [437, 315] }
+genome = { sex = "Male", alleles = [[820,840], [330,530], [390,590], [530,730]], mate_desire = [437, 315], named_loci = [{ locus = 11, alleles = [437, 315] }] }
 social_response = { feed_affinity = 2, minimum = -10, maximum = 10, capacity = 8 }
 handling_response = { willing = true, on_accept = 0, on_refuse = 0 }
 restraint_response = { resistance = 1, escape_willing = true, escape_effort = 1 }
@@ -1184,7 +1187,7 @@ region = 2
 age = 35040
 health = 100
 hunger = 0
-genome = { sex = "Female", alleles = [[835,855], [340,540], [395,595], [540,740]], mate_desire = [504, 416] }
+genome = { sex = "Female", alleles = [[835,855], [340,540], [395,595], [540,740]], mate_desire = [504, 416], named_loci = [{ locus = 11, alleles = [504, 416] }] }
 social_response = { feed_affinity = 2, minimum = -10, maximum = 10, capacity = 8 }
 handling_response = { willing = true, on_accept = 0, on_refuse = 0 }
 restraint_response = { resistance = 1, escape_willing = true, escape_effort = 1 }
@@ -1196,7 +1199,7 @@ region = 2
 age = 43800
 health = 100
 hunger = 0
-genome = { sex = "Male", alleles = [[850,870], [350,550], [400,600], [550,750]], mate_desire = [571, 517] }
+genome = { sex = "Male", alleles = [[850,870], [350,550], [400,600], [550,750]], mate_desire = [571, 517], named_loci = [{ locus = 11, alleles = [571, 517] }] }
 social_response = { feed_affinity = 2, minimum = -10, maximum = 10, capacity = 8 }
 handling_response = { willing = true, on_accept = 0, on_refuse = 0 }
 restraint_response = { resistance = 1, escape_willing = true, escape_effort = 1 }
@@ -1208,7 +1211,7 @@ region = 2
 age = 52560
 health = 100
 hunger = 0
-genome = { sex = "Female", alleles = [[865,885], [360,560], [405,605], [560,760]], mate_desire = [638, 618] }
+genome = { sex = "Female", alleles = [[865,885], [360,560], [405,605], [560,760]], mate_desire = [638, 618], named_loci = [{ locus = 11, alleles = [638, 618] }] }
 social_response = { feed_affinity = 2, minimum = -10, maximum = 10, capacity = 8 }
 handling_response = { willing = true, on_accept = 0, on_refuse = 0 }
 restraint_response = { resistance = 1, escape_willing = true, escape_effort = 1 }
@@ -1220,7 +1223,7 @@ region = 2
 age = 26280
 health = 100
 hunger = 0
-genome = { sex = "Male", alleles = [[880,900], [370,570], [410,610], [570,770]], mate_desire = [304, 318] }
+genome = { sex = "Male", alleles = [[880,900], [370,570], [410,610], [570,770]], mate_desire = [304, 318], named_loci = [{ locus = 11, alleles = [304, 318] }] }
 social_response = { feed_affinity = 2, minimum = -10, maximum = 10, capacity = 8 }
 handling_response = { willing = true, on_accept = 0, on_refuse = 0 }
 restraint_response = { resistance = 1, escape_willing = true, escape_effort = 1 }
@@ -1233,7 +1236,7 @@ region = 1
 age = 26280
 health = 100
 hunger = 0
-genome = { sex = "Female", alleles = [[700,800], [676,676], [400,600], [500,700]], mate_desire = [500,500] }
+genome = { sex = "Female", alleles = [[700,800], [676,676], [400,600], [500,700]], mate_desire = [500,500], named_loci = [{ locus = 11, alleles = [500, 500] }, { locus = 18, alleles = [676, 676] }] }
 social_response = { feed_affinity = 2, minimum = -10, maximum = 10, capacity = 8 }
 handling_response = { willing = true, on_accept = 0, on_refuse = 0 }
 restraint_response = { resistance = 1, escape_willing = true, escape_effort = 1 }
@@ -1245,7 +1248,7 @@ region = 1
 age = 35040
 health = 100
 hunger = 0
-genome = { sex = "Male", alleles = [[700,800], [755,755], [400,600], [500,700]], mate_desire = [500,500] }
+genome = { sex = "Male", alleles = [[700,800], [755,755], [400,600], [500,700]], mate_desire = [500,500], named_loci = [{ locus = 11, alleles = [500, 500] }, { locus = 18, alleles = [755, 755] }] }
 social_response = { feed_affinity = 2, minimum = -10, maximum = 10, capacity = 8 }
 handling_response = { willing = true, on_accept = 0, on_refuse = 0 }
 restraint_response = { resistance = 1, escape_willing = true, escape_effort = 1 }
@@ -1257,7 +1260,7 @@ region = 1
 age = 17520
 health = 100
 hunger = 0
-genome = { sex = "Female", alleles = [[700,800], [834,834], [400,600], [500,700]], mate_desire = [500,500] }
+genome = { sex = "Female", alleles = [[700,800], [834,834], [400,600], [500,700]], mate_desire = [500,500], named_loci = [{ locus = 11, alleles = [500, 500] }, { locus = 18, alleles = [834, 834] }] }
 social_response = { feed_affinity = 2, minimum = -10, maximum = 10, capacity = 8 }
 handling_response = { willing = true, on_accept = 0, on_refuse = 0 }
 restraint_response = { resistance = 1, escape_willing = true, escape_effort = 1 }
@@ -1269,7 +1272,7 @@ region = 1
 age = 26280
 health = 100
 hunger = 0
-genome = { sex = "Male", alleles = [[700,800], [312,312], [400,600], [500,700]], mate_desire = [500,500] }
+genome = { sex = "Male", alleles = [[700,800], [312,312], [400,600], [500,700]], mate_desire = [500,500], named_loci = [{ locus = 11, alleles = [500, 500] }, { locus = 18, alleles = [312, 312] }] }
 social_response = { feed_affinity = 2, minimum = -10, maximum = 10, capacity = 8 }
 handling_response = { willing = true, on_accept = 0, on_refuse = 0 }
 restraint_response = { resistance = 1, escape_willing = true, escape_effort = 1 }
@@ -1281,7 +1284,7 @@ region = 1
 age = 35040
 health = 100
 hunger = 0
-genome = { sex = "Female", alleles = [[700,800], [391,391], [400,600], [500,700]], mate_desire = [500,500] }
+genome = { sex = "Female", alleles = [[700,800], [391,391], [400,600], [500,700]], mate_desire = [500,500], named_loci = [{ locus = 11, alleles = [500, 500] }, { locus = 18, alleles = [391, 391] }] }
 social_response = { feed_affinity = 2, minimum = -10, maximum = 10, capacity = 8 }
 handling_response = { willing = true, on_accept = 0, on_refuse = 0 }
 restraint_response = { resistance = 1, escape_willing = true, escape_effort = 1 }
@@ -1293,7 +1296,7 @@ region = 1
 age = 17520
 health = 100
 hunger = 0
-genome = { sex = "Male", alleles = [[700,800], [470,470], [400,600], [500,700]], mate_desire = [500,500] }
+genome = { sex = "Male", alleles = [[700,800], [470,470], [400,600], [500,700]], mate_desire = [500,500], named_loci = [{ locus = 11, alleles = [500, 500] }, { locus = 18, alleles = [470, 470] }] }
 social_response = { feed_affinity = 2, minimum = -10, maximum = 10, capacity = 8 }
 handling_response = { willing = true, on_accept = 0, on_refuse = 0 }
 restraint_response = { resistance = 1, escape_willing = true, escape_effort = 1 }
@@ -1305,7 +1308,7 @@ region = 2
 age = 26280
 health = 100
 hunger = 0
-genome = { sex = "Female", alleles = [[700,800], [549,549], [400,600], [500,700]], mate_desire = [500,500] }
+genome = { sex = "Female", alleles = [[700,800], [549,549], [400,600], [500,700]], mate_desire = [500,500], named_loci = [{ locus = 11, alleles = [500, 500] }, { locus = 18, alleles = [549, 549] }] }
 social_response = { feed_affinity = 2, minimum = -10, maximum = 10, capacity = 8 }
 handling_response = { willing = true, on_accept = 0, on_refuse = 0 }
 restraint_response = { resistance = 1, escape_willing = true, escape_effort = 1 }
@@ -1317,7 +1320,7 @@ region = 2
 age = 35040
 health = 100
 hunger = 0
-genome = { sex = "Male", alleles = [[700,800], [628,628], [400,600], [500,700]], mate_desire = [500,500] }
+genome = { sex = "Male", alleles = [[700,800], [628,628], [400,600], [500,700]], mate_desire = [500,500], named_loci = [{ locus = 11, alleles = [500, 500] }, { locus = 18, alleles = [628, 628] }] }
 social_response = { feed_affinity = 2, minimum = -10, maximum = 10, capacity = 8 }
 handling_response = { willing = true, on_accept = 0, on_refuse = 0 }
 restraint_response = { resistance = 1, escape_willing = true, escape_effort = 1 }
@@ -1329,7 +1332,7 @@ region = 2
 age = 17520
 health = 100
 hunger = 0
-genome = { sex = "Female", alleles = [[700,800], [707,707], [400,600], [500,700]], mate_desire = [500,500] }
+genome = { sex = "Female", alleles = [[700,800], [707,707], [400,600], [500,700]], mate_desire = [500,500], named_loci = [{ locus = 11, alleles = [500, 500] }, { locus = 18, alleles = [707, 707] }] }
 social_response = { feed_affinity = 2, minimum = -10, maximum = 10, capacity = 8 }
 handling_response = { willing = true, on_accept = 0, on_refuse = 0 }
 restraint_response = { resistance = 1, escape_willing = true, escape_effort = 1 }
@@ -1341,7 +1344,7 @@ region = 2
 age = 26280
 health = 100
 hunger = 0
-genome = { sex = "Male", alleles = [[700,800], [786,786], [400,600], [500,700]], mate_desire = [500,500] }
+genome = { sex = "Male", alleles = [[700,800], [786,786], [400,600], [500,700]], mate_desire = [500,500], named_loci = [{ locus = 11, alleles = [500, 500] }, { locus = 18, alleles = [786, 786] }] }
 social_response = { feed_affinity = 2, minimum = -10, maximum = 10, capacity = 8 }
 handling_response = { willing = true, on_accept = 0, on_refuse = 0 }
 restraint_response = { resistance = 1, escape_willing = true, escape_effort = 1 }
@@ -1353,7 +1356,7 @@ region = 2
 age = 35040
 health = 100
 hunger = 0
-genome = { sex = "Female", alleles = [[700,800], [264,264], [400,600], [500,700]], mate_desire = [500,500] }
+genome = { sex = "Female", alleles = [[700,800], [264,264], [400,600], [500,700]], mate_desire = [500,500], named_loci = [{ locus = 11, alleles = [500, 500] }, { locus = 18, alleles = [264, 264] }] }
 social_response = { feed_affinity = 2, minimum = -10, maximum = 10, capacity = 8 }
 handling_response = { willing = true, on_accept = 0, on_refuse = 0 }
 restraint_response = { resistance = 1, escape_willing = true, escape_effort = 1 }
@@ -1365,7 +1368,7 @@ region = 2
 age = 17520
 health = 100
 hunger = 0
-genome = { sex = "Male", alleles = [[700,800], [343,343], [400,600], [500,700]], mate_desire = [500,500] }
+genome = { sex = "Male", alleles = [[700,800], [343,343], [400,600], [500,700]], mate_desire = [500,500], named_loci = [{ locus = 11, alleles = [500, 500] }, { locus = 18, alleles = [343, 343] }] }
 social_response = { feed_affinity = 2, minimum = -10, maximum = 10, capacity = 8 }
 handling_response = { willing = true, on_accept = 0, on_refuse = 0 }
 restraint_response = { resistance = 1, escape_willing = true, escape_effort = 1 }

@@ -1,4 +1,4 @@
-//! Summarize recorded allele values at authored loci among living people.
+//! Summarize recorded allele values at authored loci in living populations.
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 
@@ -12,93 +12,166 @@ struct Sample {
 
 struct Series {
     name: String,
+    species: Option<String>,
     first: Sample,
     latest: Sample,
+    empty_at: Option<u64>,
 }
 
-#[derive(Default)]
-pub(super) struct History {
-    loci: BTreeMap<u64, Series>,
+struct Cohort<'snapshot> {
+    species: Option<(u64, &'snapshot str)>,
+    loci: BTreeMap<u64, Locus<'snapshot>>,
+    living: u64,
 }
 
-impl History {
-    pub(super) fn observe(&mut self, state: &Value, year: u64) {
-        let Some(loci) = state
-            .pointer("/family/traits/loci")
-            .and_then(Value::as_array)
-        else {
-            return;
-        };
-        let Some(members) = state.pointer("/family/members").and_then(Value::as_array) else {
-            return;
-        };
-        let mut traits: BTreeMap<_, _> = loci
+struct Locus<'snapshot> {
+    name: &'snapshot str,
+    default: [u64; 2],
+    difference: i128,
+    variants: u64,
+}
+
+impl<'snapshot> Cohort<'snapshot> {
+    fn new(traits: &'snapshot Value, species: Option<(u64, &'snapshot str)>) -> Option<Self> {
+        let loci = traits["loci"]
+            .as_array()?
             .iter()
             .filter_map(|row| {
                 Some((
                     row["id"].as_u64()?,
-                    (
-                        row["name"].as_str()?,
-                        allele_pair(&row["default_alleles"])?,
-                        0i128,
-                        0u64,
-                    ),
+                    Locus {
+                        name: row["name"].as_str()?,
+                        default: allele_pair(&row["default_alleles"])?,
+                        difference: 0,
+                        variants: 0,
+                    },
                 ))
             })
             .collect();
-        let mut living = 0u64;
-        for person in members
-            .iter()
-            .filter(|row| row["alive"].as_bool().unwrap_or(true))
+        Some(Self {
+            species,
+            loci,
+            living: 0,
+        })
+    }
+
+    fn add_living(&mut self, actor: &Value) {
+        self.living += 1;
+        for variant in actor
+            .pointer("/genome/named_loci")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
         {
-            living += 1;
-            for variant in person
-                .pointer("/genome/named_loci")
-                .and_then(Value::as_array)
-                .into_iter()
-                .flatten()
-            {
-                let Some(id) = variant["locus"].as_u64() else {
-                    continue;
-                };
-                let Some(pair) = allele_pair(&variant["alleles"]) else {
-                    continue;
-                };
-                if let Some((_, default, difference, count)) = traits.get_mut(&id)
-                    && pair != *default
-                {
-                    *difference += allele_sum(pair) - allele_sum(*default);
-                    *count += 1;
-                }
+            let Some(locus) = variant["locus"]
+                .as_u64()
+                .and_then(|id| self.loci.get_mut(&id))
+            else {
+                continue;
+            };
+            let Some(pair) = allele_pair(&variant["alleles"]) else {
+                continue;
+            };
+            if pair != locus.default {
+                locus.difference += allele_sum(pair) - allele_sum(locus.default);
+                locus.variants += 1;
             }
         }
-        if living == 0 {
+    }
+}
+
+#[derive(Default)]
+pub(super) struct History {
+    loci: BTreeMap<(Option<u64>, u64), Series>,
+}
+
+impl History {
+    pub(super) fn observe(&mut self, state: &Value, year: u64) {
+        if let Some(mut people) = Cohort::new(&state["family"]["traits"], None) {
+            for person in state["family"]["members"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter(|row| row["alive"].as_bool().unwrap_or(true))
+            {
+                people.add_living(person);
+            }
+            self.finish(year, people);
+        }
+        let fauna = &state["fauna"];
+        let mut cohorts: BTreeMap<_, _> = fauna["species"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|row| {
+                let id = row["id"].as_u64()?;
+                let name = row["name"].as_str()?;
+                Some((id, Cohort::new(&row["traits"], Some((id, name)))?))
+            })
+            .collect();
+        if cohorts.is_empty() {
             return;
         }
-        for (id, (name, default, difference, variants)) in traits {
-            let mean = (allele_sum(default) * i128::from(living) + difference) as f64
-                / (2.0 * living as f64);
+        for animal in fauna["animals"].as_array().into_iter().flatten() {
+            if animal["health"].as_u64().is_some_and(|health| health > 0)
+                && let Some(cohort) = animal["species"]
+                    .as_u64()
+                    .and_then(|id| cohorts.get_mut(&id))
+            {
+                cohort.add_living(animal);
+            }
+        }
+        for cohort in cohorts.into_values() {
+            self.finish(year, cohort);
+        }
+    }
+
+    fn finish(&mut self, year: u64, cohort: Cohort<'_>) {
+        for (id, locus) in cohort.loci {
+            let key = (cohort.species.map(|row| row.0), id);
+            if cohort.living == 0 {
+                if let Some(row) = self.loci.get_mut(&key) {
+                    row.empty_at.get_or_insert(year);
+                }
+                continue;
+            }
+            let mean = (allele_sum(locus.default) * i128::from(cohort.living) + locus.difference)
+                as f64
+                / (2.0 * cohort.living as f64);
             let sample = Sample {
                 year,
                 mean,
-                people: living,
-                variants,
+                people: cohort.living,
+                variants: locus.variants,
             };
             self.loci
-                .entry(id)
-                .and_modify(|row| row.latest = sample)
+                .entry(key)
+                .and_modify(|row| {
+                    row.latest = sample;
+                    row.empty_at = None;
+                })
                 .or_insert_with(|| Series {
-                    name: name.to_owned(),
+                    name: locus.name.to_owned(),
+                    species: cohort.species.map(|row| row.1.to_owned()),
                     first: sample,
                     latest: sample,
+                    empty_at: None,
                 });
         }
     }
 
     pub(super) fn summary(&self) -> Vec<Value> {
-        self.loci.iter().map(|(&locus, row)| {
+        self.loci.iter().map(|(&(species, locus), row)| {
             let sample = |row: Sample| json!({ "year": row.year, "mean": row.mean, "people": row.people, "variants": row.variants });
-            json!({ "locus": locus, "name": row.name, "first": sample(row.first), "latest": sample(row.latest) })
+            let mut value = json!({ "locus": locus, "name": row.name, "first": sample(row.first), "latest": sample(row.latest) });
+            if let Some(species) = species {
+                value["species"] = json!(species);
+                value["species_name"] = json!(row.species);
+            }
+            if let Some(year) = row.empty_at {
+                value["first_year_without_living_members"] = json!(year);
+            }
+            value
         }).collect()
     }
 }
@@ -140,5 +213,39 @@ mod tests {
                 "latest": { "year": 5, "mean": 400.0, "people": 1, "variants": 0 }
             })]
         );
+    }
+
+    #[test]
+    fn wildlife_loci_are_tracked_by_species_and_report_empty_cohorts() {
+        let mut history = History::default();
+        let traits =
+            json!({ "loci": [{ "id": 18, "name": "hardiness", "default_alleles": [300, 500] }] });
+        let snapshot = |grazer_health| {
+            json!({
+                "fauna": {
+                    "species": [
+                        { "id": 1, "name": "grazer", "traits": traits },
+                        { "id": 2, "name": "browser", "traits": traits },
+                    ],
+                    "animals": [
+                        { "species": 1, "health": grazer_health, "genome": {
+                            "named_loci": [{ "locus": 18, "alleles": [900, 900] }]
+                        }},
+                        { "species": 2, "health": 100, "genome": {} },
+                    ]
+                }
+            })
+        };
+        history.observe(&snapshot(100), 0);
+        history.observe(&snapshot(0), 3);
+        let records = history.summary();
+        assert_eq!(records.len(), 2);
+        assert_eq!(records[0]["species_name"], "grazer");
+        assert_eq!(records[0]["latest"]["mean"], 900.0);
+        assert_eq!(records[0]["latest"]["year"], 0);
+        assert_eq!(records[0]["first_year_without_living_members"], 3);
+        assert_eq!(records[1]["species_name"], "browser");
+        assert_eq!(records[1]["latest"]["mean"], 400.0);
+        assert_eq!(records[1]["latest"]["year"], 3);
     }
 }

@@ -7,7 +7,8 @@ mod mating;
 pub use elapsed::Encounters;
 mod mortality;
 pub mod restraint;
-use game_genetics::{Genome, Sex, inherit, random};
+use game_genetics::{Genome, Inheritance, Sex, TraitCatalog, random};
+use std::sync::Arc;
 pub use mating::{MateChoice, MateFlexibility};
 pub use mortality::{AnimalDeath, DeathCause};
 use rayon::prelude::*;
@@ -36,6 +37,11 @@ pub struct Species {
     pub mate_desire: Option<MateDesire>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mate_choice: Option<MateChoice>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub traits: Option<Arc<TraitCatalog>>,
+    /// An authored locus can express the tolerance used by the existing climate model.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hardiness_trait: Option<u32>,
     pub breeding_max_hunger: u32,
     pub newborn_health: u32,
     #[serde(default)]
@@ -66,12 +72,26 @@ pub struct MateDesire {
 }
 
 impl Species {
+    fn child_genome(&self, mother: &Animal, father: &Genome, seed: u64, time: u64) -> Genome {
+        Inheritance {
+            seed,
+            mother: mother.id,
+            time,
+            mutation_per_million: self.mutation_per_million,
+            mutation_step: self.mutation_step,
+        }.child(&mother.genome, father, self.traits.as_deref())
+    }
+
     fn seeks_mate(&self, animal: &Animal, age: u64, hunger: u32, seed: u64, tick: u64) -> bool {
         age >= self.adult_age
             && age < self.fertile_until
             && hunger <= self.breeding_max_hunger
             && self.mate_desire.is_none_or(|desire| {
-                let expression = i128::from(animal.genome.expressed_mate_desire()) - 500;
+                let expressed = self.traits.as_ref().map_or_else(
+                    || animal.genome.expressed_mate_desire(),
+                    |catalog| catalog.mate_desire(&animal.genome),
+                );
+                let expression = i128::from(expressed) - 500;
                 let score = i128::from(desire.base)
                     + expression * i128::from(desire.genetic_weight) / 500
                     + i128::from(hunger) * i128::from(desire.hunger_weight);
@@ -666,15 +686,7 @@ impl Fauna {
                     age: 0,
                     health: s.newborn_health,
                     hunger: 0,
-                    genome: inherit(
-                        &mother.genome,
-                        &pregnancy.father_genome,
-                        seed,
-                        mother.id,
-                        tick,
-                        s.mutation_per_million,
-                        s.mutation_step,
-                    ),
+                    genome: s.child_genome(mother, &pregnancy.father_genome, seed, tick),
                     pregnancy: None,
                     parents: Some([mother.id, pregnancy.father]),
                     social_response: s.newborn_social_response.clone(),
@@ -948,9 +960,14 @@ impl Fauna {
                     || s.newborn_health > s.max_health
                     || s.mutation_per_million > 1_000_000
                     || s.mutation_step > 1000
-                    || s.climate
-                        .as_ref()
-                        .is_some_and(|climate| climate.hardiness_locus >= 4)
+                    || s.traits.as_ref().is_some_and(|catalog| !catalog.validate())
+                    || s.hardiness_trait.is_some_and(|id| {
+                        s.climate.is_none() || !s.traits.as_ref().is_some_and(|catalog| {
+                            catalog.loci.binary_search_by_key(&id, |locus| locus.id).is_ok()
+                        })
+                    })
+                    || (s.hardiness_trait.is_none()
+                        && s.climate.as_ref().is_some_and(|climate| climate.hardiness_locus >= 4))
                     || s.hunting.as_ref().is_some_and(|yield_| {
                         !goods.contains(&yield_.good)
                             || yield_.quantity == 0
@@ -980,7 +997,9 @@ impl Fauna {
                         || a.health > s.max_health
                         || a.genome.alleles.iter().flatten().any(|value| *value > 1000)
                         || a.genome.mate_desire.iter().any(|value| *value > 1000)
-                        || a.genome.named_loci.is_some()
+                        || s.traits.as_ref().map_or(a.genome.named_loci.is_some(), |catalog| {
+                            !catalog.validate_variants(&a.genome)
+                        })
                         || a.social_response
                             .as_ref()
                             .map_or(!a.opinions.is_empty(), |response| {
@@ -1303,15 +1322,7 @@ impl Fauna {
                     age: 0,
                     health: s.newborn_health,
                     hunger: 0,
-                    genome: inherit(
-                        &mother.genome,
-                        &pregnancy.father_genome,
-                        seed,
-                        mother.id,
-                        tick,
-                        s.mutation_per_million,
-                        s.mutation_step,
-                    ),
+                    genome: s.child_genome(mother, &pregnancy.father_genome, seed, tick),
                     pregnancy: None,
                     parents: Some([mother.id, pregnancy.father]),
                     social_response: s.newborn_social_response.clone(),

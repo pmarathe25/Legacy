@@ -287,3 +287,46 @@ genome = { sex = "Male", alleles = [[900,900], [500,500], [500,500], [500,500]] 
     assert_eq!(whole.1.animals[1].hunger, 3);
     assert_eq!(whole.2[0].available, 3);
 }
+
+#[test]
+fn named_wildlife_traits_survive_elapsed_birth_and_save_resume() {
+    use game_economy::core_interval::{CoreHost, CoreRunEvent};
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let opening = game_economy_cli::core_scenario(
+        &root.join("content/scenarios/economy-fauna-named-traits.toml"),
+        &root.join("content"),
+    )
+    .unwrap()
+    .snapshot();
+    let run = |workers, steps: &[u64]| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut host = CoreHost::resume(opening.clone()).unwrap();
+                let mut births = Vec::new();
+                for elapsed in steps {
+                    let result = host.advance_continuous(*elapsed, &[]).unwrap();
+                    assert_eq!(result.failure, None);
+                    for event in result.events {
+                        if let CoreRunEvent::Fauna(receipt) = event {
+                            births.extend(receipt.births.iter().map(|id| (receipt.at_millis, *id)));
+                        }
+                    }
+                    let bytes = serde_json::to_vec(&host.snapshot()).unwrap();
+                    host = CoreHost::resume(serde_json::from_slice(&bytes).unwrap()).unwrap();
+                }
+                let fauna = host.snapshot().fauna.unwrap();
+                assert_eq!(births, [(300, 4)]);
+                assert!(fauna.animals[2].pregnancy.is_none());
+                let offspring = &fauna.animals[3];
+                assert_eq!(offspring.parents, Some([1, 2]));
+                let traits = fauna.species[0].traits.as_ref().unwrap();
+                assert_eq!(traits.expression(&offspring.genome, 12), Some(1000));
+                assert_eq!(traits.expression(&offspring.genome, 18), Some(800));
+                (fauna, births)
+            })
+    };
+    assert_eq!(run(1, &[300]), run(6, &[53, 168, 79]));
+}
