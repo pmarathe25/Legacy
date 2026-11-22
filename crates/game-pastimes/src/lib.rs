@@ -1,6 +1,7 @@
 //! Personally chosen elapsed leisure and creative practice.
 mod attendance;
 mod culture;
+pub mod music;
 mod training;
 pub use culture::{
     Attendance, Culture, Heard, Interest as ListeningInterest, Listener, Presentation, Venue,
@@ -129,6 +130,9 @@ impl Pastimes {
                         self.session(row.performer)
                             .is_none_or(|session| !row.follows(session))
                             || self.session(row.listener).is_some()
+                    })
+                    || culture.music.as_ref().is_some_and(|music| {
+                        !music.valid(people, &self.active, &|id| self.activity(id).is_some(), now)
                     })
             })
             || self
@@ -283,6 +287,17 @@ impl Pastimes {
 
     /// All selected rows have passed physical custody, including consumable inputs.
     pub fn start(&mut self, selected: Vec<Session>) -> Vec<Event> {
+        self.start_with_seed(selected, 0)
+    }
+
+    pub fn start_with_seed(&mut self, selected: Vec<Session>, seed: u64) -> Vec<Event> {
+        if let Some(music) = self
+            .culture
+            .as_mut()
+            .and_then(|culture| culture.music.as_mut())
+        {
+            music.open(&selected, seed);
+        }
         let events = selected
             .par_iter()
             .map(|row| Event {
@@ -307,6 +322,9 @@ impl Pastimes {
             culture
                 .attendance
                 .retain(|attendance| attendance.performer != person);
+            if let Some(music) = &mut culture.music {
+                music.stop(person);
+            }
         }
         Some(Event {
             person,

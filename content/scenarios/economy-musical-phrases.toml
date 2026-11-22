@@ -1,0 +1,77 @@
+# Three listeners decide what to do with a new musical phrase.
+seed = 57
+tick_millis = 3600000
+decision_period_millis = 200000
+stock_capacity = 100
+food_relief_divisor = 20
+
+[rules]
+hunger_rate = { units = 0, per_millis = 1 }
+meal_threshold = 5
+starvation_threshold = 50
+max_health = 100
+carrying_capacity = 10
+max_work_hunger = 20
+
+[[regions]]
+id = 1
+storage = {}
+stock = {}
+
+[[people]]
+id = 1
+region = 1
+health = 100
+hunger = 0
+willing_to_work = false
+seek_meals = false
+goods = { "reed-pipe" = 1 }
+
+[[people]]
+id = 2
+region = 1
+health = 100
+hunger = 0
+willing_to_work = false
+seek_meals = false
+goods = { "reed-pipe" = 1 }
+
+[[people]]
+id = 3
+region = 1
+health = 100
+hunger = 0
+willing_to_work = false
+seek_meals = false
+
+[[people]]
+id = 4
+region = 1
+health = 100
+hunger = 0
+willing_to_work = false
+seek_meals = false
+
+[pastimes]
+catalogs = ["pastimes/daily.toml"]
+activities = { "play-reed-pipe" = 1 }
+minds = [
+    { person = 1, interests = [{ activity = 1, value = 9, recent_value = -20 }] },
+    { person = 2, interests = [{ activity = 1, value = -2, heard_value = 7, recent_value = -20 }] },
+]
+
+[pastimes.culture]
+presentations = [{ person = 1, activity = 1 }]
+listeners = [
+    { person = 2, minimum_millis = 300000, interests = [{ activity = 1, value = 8 }] },
+    { person = 3, minimum_millis = 300000, interests = [{ activity = 1, value = 8 }] },
+    { person = 4, minimum_millis = 300000, interests = [{ activity = 1, value = 8 }] },
+]
+
+[pastimes.culture.music]
+profiles = [
+    { person = 1, activity = 1, palette = [2, 3, 4], compose_value = 9 },
+    { person = 2, activity = 1, palette = [2, 3, 4], adopt_value = 10, replay_value = 12, listen_millis = 550000 },
+    { person = 3, activity = 1, palette = [2, 3, 4, 5], adopt_value = 3, vary_value = 12, listen_millis = 550000 },
+    { person = 4, activity = 1, palette = [2, 3, 4], adopt_value = -1 },
+]

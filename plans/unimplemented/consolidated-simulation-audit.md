@@ -135,7 +135,12 @@ to track rates, deadlines, and behavior under different advance sizes. The
   the ending. Hearing receipts give the actual listening duration when
   known, and memory can change later interest in the activity. Worker
   determinism covers 4,096 listeners both in one venue and in separate
-  venues. Emergent shared musical forms remain open.
+  venues. Musicians can now compose and replay phrases within their own
+  instrumental palette. Sustained listeners may adopt the same phrase, vary it,
+  or disregard it. The musical-phrases fixture follows one performed phrase
+  through all three choices and its later replay, with matching behavior across
+  worker counts, time partitions, and save boundaries. The main history includes
+  optional musical preferences and its archive can narrate transmission.
 - Bounded private episodes come from actual meetings and completed creative
   activities. Attention and memory length can differ across people. Recall
   fades by elapsed time and precise dates can become uncertain. Explicit

@@ -96,6 +96,13 @@ listeners = [
     { person = 37, minimum_millis = 120000, interests = [{ activity = 2, value = -4 }] },
 ]
 
+[pastimes.culture.music]
+profiles = [
+    { person = 34, activity = 2, palette = [1, 3, 5], compose_value = 9, replay_value = 5 },
+    { person = 33, activity = 2, palette = [1, 3, 5], adopt_value = 6, listen_millis = 120000 },
+    { person = 36, activity = 2, palette = [1, 3, 5, 7], adopt_value = 2, vary_value = 7, listen_millis = 180000 },
+]
+
 [rules]
 hunger_rate = { units = 1, per_millis = 3600000 }
 meal_threshold = 48

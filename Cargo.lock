@@ -1060,6 +1060,7 @@ dependencies = [
 name = "game-pastimes"
 version = "0.2.0"
 dependencies = [
+ "game-genetics",
  "game-production-model",
  "rayon",
  "serde",
