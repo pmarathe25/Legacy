@@ -6028,7 +6028,7 @@ fn observed_signals_can_become_personally_chosen_spoken_topics() {
 #[test]
 fn namesake_form_uses_the_speakers_directed_affinity_in_the_host() {
     use game_economy::core_interval::CoreHost;
-    fn run(workers: usize, affinity: i32) -> serde_json::Value {
+    fn run(workers: usize, affinity: i32, remembers_similar_name: bool) -> serde_json::Value {
         rayon::ThreadPoolBuilder::new()
             .num_threads(workers)
             .build()
@@ -6042,21 +6042,31 @@ fn namesake_form_uses_the_speakers_directed_affinity_in_the_host() {
                 .unwrap()
                 .snapshot();
                 opening.opinions.as_mut().unwrap().records[0].affinity = affinity;
+                if remembers_similar_name {
+                    let speaker = &mut opening.social.as_mut().unwrap().language.as_mut().unwrap().minds[0];
+                    speaker.naming.as_mut().unwrap().novel_value = None;
+                    speaker.words.insert(0, game_language::Word {
+                        meaning: game_language::Meaning::Person(1),
+                        sounds: vec![2, 2],
+                    });
+                }
                 let mut host = CoreHost::resume(opening).unwrap();
                 assert_eq!(host.advance_continuous(900_001, &[]).unwrap().failure, None);
                 let snapshot = host.snapshot();
-                let event = &snapshot
+                let events = &snapshot
                     .social
                     .as_ref()
                     .unwrap()
                     .language
                     .as_ref()
                     .unwrap()
-                    .events[0];
-                if affinity > 0 {
-                    assert_eq!(event.sounds, vec![2, 2, 2]);
+                    .events;
+                if remembers_similar_name && affinity == 12 {
+                    assert!(events.is_empty());
+                } else if affinity > 0 {
+                    assert_eq!(events[0].sounds, vec![2, 2, 2]);
                 } else {
-                    assert_eq!(event.sounds.len(), 2);
+                    assert_eq!(events[0].sounds.len(), 2);
                 }
                 let resumed = CoreHost::resume(
                     serde_json::from_str(&serde_json::to_string(&snapshot).unwrap()).unwrap(),
@@ -6066,8 +6076,10 @@ fn namesake_form_uses_the_speakers_directed_affinity_in_the_host() {
                 serde_json::to_value(snapshot).unwrap()
             })
     }
-    assert_eq!(run(1, 100), run(4, 100));
-    assert_eq!(run(1, -100), run(4, -100));
+    assert_eq!(run(1, 100, false), run(4, 100, false));
+    assert_eq!(run(1, -100, false), run(4, -100, false));
+    assert_eq!(run(1, 12, true), run(4, 12, true));
+    assert_eq!(run(1, 100, true), run(4, 100, true));
 }
 
 #[test]

@@ -35,7 +35,7 @@ person = 1
 initiative = 1000
 adoption = 1000
 words = [{ meaning = { kind = "person", id = 3 }, sounds = [2, 2, 2] }]
-naming = { idle = 0, novel_value = 5, confusion_weight = 10, namesakes = [{ person = 3, value = 0, affinity_weight = 1000 }] }
+naming = { idle = 0, novel_value = 5, confusion_weight = 10, near_confusion_weight = 4, namesakes = [{ person = 3, value = 0, affinity_weight = 1000 }] }
 [[language.minds]]
 person = 2
 initiative = 1000
