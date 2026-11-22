@@ -50,6 +50,7 @@ fn unpartitioned(
         retire: Vec::new(),
         item_updates: Vec::new(),
         batch_next: None,
+        temperatures: None,
     }
 }
 fn quantity(state: &State, place: Place, good: u32, expiry: Option<u64>) -> u64 {
