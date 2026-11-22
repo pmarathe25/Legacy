@@ -2543,6 +2543,7 @@ fn interval_player_sees_only_local_people_and_rechecks_control() {
                 state.core.people[0].controlled = true;
                 state.core.people[2].region = Some(2);
                 let good = state.core.physical.goods[0].id;
+                state.core.physical.region_ids = Some([1, 2].into());
                 state
                     .core
                     .physical
@@ -10551,6 +10552,7 @@ fn personal_practice_can_report_false_readiness_without_creating_goods() {
             assert_eq!(recipient.used, 0);
             let mut moved = result.clone();
             moved.core.people[0].region = Some(2);
+            moved.core.physical.region_ids = Some([1, 2].into());
             moved.core.physical.custody.containers.push(game_lots::Container::new(
                 game_lots::Place::Stock { region: 2, good: bread }, 100, vec![],
             ).unwrap());
