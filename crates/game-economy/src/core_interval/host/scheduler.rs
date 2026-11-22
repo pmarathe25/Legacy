@@ -1310,6 +1310,9 @@ impl CoreHost {
                 run.boundary = true;
                 break;
             }
+            // These pre-reuse checks only observe whole vital values. A new
+            // hook that changes physiology must materialize before mutating it
+            // and discard the prepared segment.
             let expedition_events = self.expedition_time_events();
             let expedition_events_were_empty = expedition_events.is_empty();
             if !expedition_events_were_empty {

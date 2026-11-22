@@ -75,8 +75,13 @@ fn projected_vitals_survive_reload_and_still_publish_exact_starvation() {
                     let expected = dense.advance_continuous(elapsed, &[]).unwrap();
                     assert_eq!(actual, expected);
                     all_events.extend(actual.events);
-                        assert_eq!(steps.snapshot(), dense.snapshot());
-                        assert_eq!(steps.person(id).as_ref(), dense.core().person(id));
+                    assert_eq!(steps.snapshot(), dense.snapshot());
+                    assert_eq!(steps.person(id).as_ref(), dense.core().person(id));
+                    if elapsed == 219 {
+                        let exposed = steps.host().core();
+                        assert_eq!(exposed.person(id), dense.core().person(id));
+                        assert_eq!(exposed.next_deadline(None), dense.core().next_deadline(None));
+                    }
                 }
                 assert_eq!(steps.simulated_millis(), instant - 350);
                 let snapshot = steps.snapshot();
@@ -84,13 +89,21 @@ fn projected_vitals_survive_reload_and_still_publish_exact_starvation() {
             });
             assert_eq!(host.snapshot(), dense.snapshot());
             let mut resumed = CoreHost::resume(saved).unwrap();
+            let advanced = dense.advance_continuous(7, &[]).unwrap();
+            assert_eq!(advanced, resumed.advance_continuous(7, &[]).unwrap());
+            let interrupted = host.observe_continuously(&[], |steps| {
+                assert_eq!(steps.advance(7).unwrap(), advanced);
+                Err::<(), _>("observer interrupted")
+            });
+            assert_eq!(interrupted, Err("observer interrupted"));
+            assert_eq!(host.snapshot(), dense.snapshot());
             let finishing = host.observe_continuously(&[], |steps| {
-                let run = steps.advance(350).unwrap();
+                let run = steps.advance(343).unwrap();
                 assert_eq!(steps.host().core().person(id).unwrap().health, 0);
                 run
             });
-            assert_eq!(finishing, dense.advance_continuous(350, &[]).unwrap());
-            assert_eq!(finishing, resumed.advance_continuous(350, &[]).unwrap());
+            assert_eq!(finishing, dense.advance_continuous(343, &[]).unwrap());
+            assert_eq!(finishing, resumed.advance_continuous(343, &[]).unwrap());
             assert!(finishing.events.iter().any(|event| matches!(event,
                 game_economy::core_interval::CoreRunEvent::Incapacitations { at_millis, people }
                     if *at_millis == instant && people.iter().any(|row| row.person == id && row.died)
