@@ -230,10 +230,14 @@ pub struct Context<'a> {
 }
 impl Context<'_> {
     pub fn prepare(&self) -> Plan {
+        let elapsed_delay = self.owner.retry_millis.or_else(|| {
+            self.travel.travel_unit_millis.map(|unit| u128::from(unit) * u128::from(self.owner.retry_ticks))
+        });
         let route_review = RouteReview {
             tick: self.stock_time.tick,
-            elapsed: self.stock_time.millis().zip(self.travel.travel_unit_millis),
+            elapsed: self.stock_time.millis().zip(elapsed_delay),
             delay: self.owner.retry_ticks,
+            legacy_tick_millis: self.owner.retry_millis.and(self.stock_time.tick_millis()),
         };
         let portions: HashMap<_, _> = self
             .goods

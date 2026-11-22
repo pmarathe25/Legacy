@@ -230,21 +230,53 @@ pub fn routes(travel: &Travel, destinations: &[u64]) -> HashMap<(u64, u64), (u64
 #[derive(Clone, Copy)]
 pub struct RouteReview {
     pub tick: u64,
-    /// Current simulated time and milliseconds per authored travel unit.
-    pub elapsed: Option<(u128, u64)>,
+    /// Current simulated time and the delay before a recheck, both in milliseconds.
+    pub elapsed: Option<(u128, u128)>,
     pub delay: u64,
+    /// Interpret old reports at their custody boundary when a delay uses elapsed time.
+    pub legacy_tick_millis: Option<u64>,
 }
 
 impl RouteReview {
     pub fn permits(self, report: &RouteObservation) -> bool {
-        report.open
-            || match self.elapsed.zip(report.observed_at_millis) {
-                Some(((now, unit), at)) => {
-                    now.saturating_sub(at) >= u128::from(self.delay) * u128::from(unit)
-                }
-                None => self.tick.saturating_sub(report.observed_at) >= self.delay,
-            }
+        if report.open {
+            return true;
+        }
+        let observed_millis = report.observed_at_millis.or_else(|| {
+            self.legacy_tick_millis.map(|period| u128::from(report.observed_at) * u128::from(period))
+        });
+        match self.elapsed.zip(observed_millis) {
+            Some(((now, delay), at)) => now.saturating_sub(at) >= delay,
+            None => self.tick.saturating_sub(report.observed_at) >= self.delay,
+        }
     }
+}
+
+#[cfg(test)]
+#[test]
+fn explicit_route_recheck_accepts_exact_and_legacy_observation_dates() {
+    let mut report = RouteObservation {
+        person: 1,
+        source: 1,
+        destination: 2,
+        open: false,
+        observed_at: 3,
+        observed_at_millis: Some(122),
+        estimated_ticks: Some(1),
+        witness: None,
+        learned_from: None,
+    };
+    let review = |now| RouteReview {
+        tick: 4,
+        elapsed: Some((now, 77)),
+        delay: 0,
+        legacy_tick_millis: Some(40),
+    };
+    assert!(!review(198).permits(&report));
+    assert!(review(199).permits(&report));
+    report.observed_at_millis = None;
+    assert!(!review(196).permits(&report));
+    assert!(review(197).permits(&report));
 }
 
 pub fn known_paths(
@@ -260,6 +292,7 @@ pub fn known_paths(
             tick: now,
             elapsed: None,
             delay: retry_ticks,
+            legacy_tick_millis: None,
         },
     )
 }
