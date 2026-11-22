@@ -821,9 +821,7 @@ impl CoreHost {
                     !owner.policies.is_empty() || !owner.goal_builders.is_empty()
                 }))
             || (domain.is_none_or(|domain| domain == CARRYING)
-                && self.local_transport.as_ref().is_some_and(|owner| {
-                    !owner.policies.is_empty() || !owner.goal_fetchers.is_empty()
-                }))
+                && self.local_transport.as_ref().is_some_and(|owner| owner.has_choices()))
             || (domain.is_none_or(|domain| domain == GATHERING)
                 && self
                     .gathering
@@ -1033,7 +1031,7 @@ impl CoreHost {
         let carrying = || -> Vec<CoreChoiceIntent> {
             if domain.is_none_or(|domain| domain == CARRYING)
                 && let Some(owner) = &self.local_transport
-                && (!owner.policies.is_empty() || !owner.goal_fetchers.is_empty())
+                && owner.has_choices()
             {
                 #[cfg(feature = "profile")]
                 let _span = game_diagnostics::span("choice.preview.carrying");
@@ -1053,6 +1051,7 @@ impl CoreHost {
                     max_hunger: u32::MAX,
                     manual: None,
                     walking: owner.walking.as_ref(),
+                    storage_celsius: &|place| self.core.physical.storage_celsius(place),
                 }
                 .opportunities(goal.as_ref());
                 let rows: Vec<_> = opportunities

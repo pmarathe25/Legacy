@@ -436,9 +436,23 @@ struct LocalTransportConfig {
     #[serde(default)]
     policies: Vec<LocalTransportPolicyConfig>,
     #[serde(default)]
+    preservation: Vec<StoragePreferenceConfig>,
+    #[serde(default)]
     goal_fetchers: Vec<game_economy::GoalFetchPreference>,
     #[serde(default)]
     walking: Option<game_economy::LocalWalking>,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StoragePreferenceConfig {
+    person: u64,
+    region: u64,
+    good: String,
+    quantity: u64,
+    cooling_value_per_degree: i32,
+    #[serde(default)]
+    keep_value: i32,
+    destinations: Vec<game_economy::StorageDestination>,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -2899,6 +2913,23 @@ fn build_scenario(
             Ok::<_, String>(game_economy::LocalTransport {
                 stores,
                 policies,
+                preservation: config
+                    .preservation
+                    .into_iter()
+                    .map(|row| {
+                        Ok(game_economy::StoragePreference {
+                            person: row.person,
+                            region: row.region,
+                            good: *goods.get(row.good.as_str()).ok_or_else(|| {
+                                format!("unknown storage preference good {}", row.good)
+                            })?,
+                            quantity: row.quantity,
+                            cooling_value_per_degree: row.cooling_value_per_degree,
+                            keep_value: row.keep_value,
+                            destinations: row.destinations,
+                        })
+                    })
+                    .collect::<Result<Vec<_>, String>>()?,
                 goal_fetchers: config.goal_fetchers,
                 events: vec![],
                 walking: config.walking,

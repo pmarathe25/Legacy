@@ -1,0 +1,126 @@
+# Each carrier decides whether to use reachable storage and which temperature to prefer.
+seed = 42
+tick_millis = 3600000
+decision_period_millis = 1000
+elapsed_spoilage = true
+stock_capacity = 30
+food_relief_divisor = 20
+
+[rules]
+hunger_rate = { units = 0, per_millis = 60000 }
+meal_threshold = 20
+starvation_threshold = 50
+max_health = 100
+max_work_hunger = 30
+carrying_capacity = 10
+
+[[regions]]
+id = 1
+storage = {}
+
+[storage_climate]
+ambient_celsius = 20
+aging_rates = [
+    { from_celsius = -50, per_thousand = 500 },
+    { from_celsius = 12, per_thousand = 1000 },
+    { from_celsius = 30, per_thousand = 2000 },
+]
+places = [
+    { place = { kind = "inventory", id = 1 }, celsius = 4 },
+    { place = { kind = "inventory", id = 2 }, celsius = 32 },
+]
+
+[[people]]
+id = 1
+region = 1
+health = 100
+hunger = 0
+seek_meals = false
+willing_to_work = false
+controlled = true
+
+[[people]]
+id = 2
+region = 1
+health = 100
+hunger = 0
+seek_meals = false
+willing_to_work = false
+goods = { bread = 2 }
+
+[[people]]
+id = 3
+region = 1
+health = 100
+hunger = 0
+seek_meals = false
+willing_to_work = false
+goods = { bread = 2 }
+
+[[people]]
+id = 4
+region = 1
+health = 100
+hunger = 0
+seek_meals = false
+willing_to_work = false
+goods = { bread = 2 }
+
+[[people]]
+id = 5
+region = 1
+health = 100
+hunger = 0
+seek_meals = false
+willing_to_work = false
+goods = { bread = 2 }
+
+[[local_transport.stores]]
+id = 1
+name = "Cellar"
+region = 1
+capacity = 2
+
+[[local_transport.stores]]
+id = 2
+name = "Warm shelf"
+region = 1
+capacity = 10
+
+[[local_transport.preservation]]
+person = 2
+region = 1
+good = "bread"
+quantity = 2
+cooling_value_per_degree = 1
+destinations = [{ store = 1 }, { store = 2 }]
+
+[[local_transport.preservation]]
+person = 3
+region = 1
+good = "bread"
+quantity = 2
+cooling_value_per_degree = -1
+destinations = [{ store = 1 }, { store = 2 }]
+
+[[local_transport.preservation]]
+person = 4
+region = 1
+good = "bread"
+quantity = 2
+cooling_value_per_degree = 1
+keep_value = 30
+destinations = [{ store = 1 }, { store = 2 }]
+
+[[local_transport.preservation]]
+person = 5
+region = 1
+good = "bread"
+quantity = 2
+cooling_value_per_degree = 1
+destinations = [{ store = 1 }, { store = 2 }]
+
+[[personal_choices]]
+id = 3
+idle = 0
+preferences = [{ domain = 2, enabled = true, bias = 10 }]

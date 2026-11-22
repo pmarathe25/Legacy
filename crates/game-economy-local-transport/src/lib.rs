@@ -1,5 +1,6 @@
 //! Distinct local stores and personal choices to carry goods between them.
 pub mod goal;
+pub mod preservation;
 pub mod walking;
 use game_economy_claims::{Index as Claims, Use};
 use game_economy_person::Person;
@@ -72,6 +73,8 @@ pub struct LocalTransport {
     #[serde(default)]
     pub policies: Vec<Policy>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub preservation: Vec<preservation::Preference>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub goal_fetchers: Vec<goal::Preference>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub events: Vec<Event>,
@@ -84,6 +87,7 @@ impl Clone for LocalTransport {
         Self {
             stores: self.stores.par_iter().cloned().collect(),
             policies: self.policies.par_iter().cloned().collect(),
+            preservation: self.preservation.par_iter().cloned().collect(),
             goal_fetchers: self.goal_fetchers.par_iter().cloned().collect(),
             events: self.events.par_iter().cloned().collect(),
             walking: self.walking.clone(),
@@ -91,6 +95,12 @@ impl Clone for LocalTransport {
     }
 }
 impl LocalTransport {
+    pub fn has_choices(&self) -> bool {
+        !self.policies.is_empty()
+            || !self.goal_fetchers.is_empty()
+            || !self.preservation.is_empty()
+    }
+
     fn valid_goal_search(&self, search: &goal::SearchPreference) -> bool {
         let Some(first) = self
             .stores
@@ -128,6 +138,7 @@ impl LocalTransport {
         Self {
             stores: self.stores.par_iter().cloned().collect(),
             policies: self.policies.par_iter().cloned().collect(),
+            preservation: self.preservation.par_iter().cloned().collect(),
             goal_fetchers: self.goal_fetchers.par_iter().cloned().collect(),
             events: self.events.par_iter().cloned().collect(),
             walking: None,
@@ -137,6 +148,7 @@ impl LocalTransport {
         self.stores.par_sort_unstable_by_key(|store| store.id);
         self.policies
             .par_sort_unstable_by_key(|policy| policy.person);
+        self.preservation.par_sort_unstable_by_key(|policy| policy.person);
         self.goal_fetchers
             .par_sort_unstable_by_key(|policy| policy.person);
         if let Some(walking) = &mut self.walking {
@@ -165,6 +177,17 @@ impl LocalTransport {
             || self.stores.par_iter().any(|s| s.id == 0 || s.name.is_empty() || !regions.contains(&s.region) || view.container(Place::Inventory(s.id)).is_none())
             || view.containers.par_iter().any(|c| matches!(c.place, Place::Inventory(id) if self.stores.binary_search_by_key(&id, |s| s.id).is_err()))
             || self.policies.par_windows(2).any(|w| w[0].person >= w[1].person)
+            || self.preservation.par_windows(2).any(|w| w[0].person >= w[1].person)
+            || self.preservation.par_iter().any(|p| {
+                let mut stores = HashSet::new();
+                !people.contains(&p.person) || !goods.contains(&p.good) || p.quantity == 0
+                    || self.policies.binary_search_by_key(&p.person, |row| row.person).is_ok()
+                    || p.destinations.is_empty()
+                    || p.destinations.iter().any(|row| {
+                        !stores.insert(row.store)
+                            || !endpoint(Endpoint::Store { id: row.store }, p.region, p.good, p.person)
+                    })
+            })
             || self.goal_fetchers.par_windows(2).any(|w| w[0].person >= w[1].person)
             || self.goal_fetchers.par_iter().any(|p| !people.contains(&p.person) || p.max_quantity == 0
                 || p.search.as_ref().is_some_and(|search| !self.valid_goal_search(search)))
@@ -227,6 +250,7 @@ pub struct Context<'a> {
     pub max_hunger: u32,
     pub manual: Option<Manual>,
     pub walking: Option<&'a walking::Walking>,
+    pub storage_celsius: &'a (dyn Fn(Place) -> i16 + Sync),
 }
 impl Context<'_> {
     fn personal_choice(
@@ -322,7 +346,9 @@ impl Context<'_> {
 
     /// Actors with a currently executable personal carrying choice.
     pub fn ready_people(&self, candidates: &[u64]) -> Vec<u64> {
-        if candidates.is_empty() || self.owner.policies.is_empty() {
+        if candidates.is_empty()
+            || (self.owner.policies.is_empty() && self.owner.preservation.is_empty())
+        {
             return Vec::new();
         }
         let needs_opinions = candidates.par_iter().any(|person| {
@@ -338,12 +364,21 @@ impl Context<'_> {
         candidates
             .par_iter()
             .filter_map(|person| {
-                let policy = &self.owner.policies[self
-                    .owner
+                self.owner
                     .policies
                     .binary_search_by_key(person, |p| p.person)
-                    .ok()?];
-                self.personal_choice(policy, opinions.as_ref())
+                    .ok()
+                    .and_then(|index| {
+                        self.personal_choice(&self.owner.policies[index], opinions.as_ref())
+                    })
+                    .or_else(|| {
+                        let index = self
+                            .owner
+                            .preservation
+                            .binary_search_by_key(person, |p| p.person)
+                            .ok()?;
+                        self.owner.preservation[index].choose(self)
+                    })
                     .map(|choice| choice.person)
             })
             .collect()
@@ -357,13 +392,17 @@ impl Context<'_> {
             .any(|policy| policy.pressure_threshold.is_some())
             .then(|| self.opinions.map(Opinions::index))
             .flatten();
-        let rows: Vec<_> = self
-            .owner
+        self.owner
             .policies
             .par_iter()
             .filter_map(|p| self.personal_choice(p, opinions.as_ref()))
-            .collect();
-        rows
+            .chain(
+                self.owner
+                    .preservation
+                    .par_iter()
+                    .filter_map(|p| p.choose(self)),
+            )
+            .collect()
     }
 
     /// Direct policy opportunities without physical transactions; excludes manual requests.
@@ -404,6 +443,7 @@ impl Context<'_> {
 
     pub fn prepare(&self, base: u64) -> Result<Plan, String> {
         if self.manual.is_none()
+            && self.owner.preservation.is_empty()
             && self
                 .owner
                 .policies

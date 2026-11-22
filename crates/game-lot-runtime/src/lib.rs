@@ -156,6 +156,10 @@ impl Runtime {
         self.store.ambient_celsius()
     }
 
+    pub fn storage_celsius(&self, place: Place) -> i16 {
+        self.store.storage_celsius(place)
+    }
+
     /// Reproject exposed lots from their exact age at the committed custody instant.
     pub fn change_ambient_temperature(&mut self, celsius: i16) -> Result<bool, String> {
         if self.store.ambient_celsius() == Some(celsius) {

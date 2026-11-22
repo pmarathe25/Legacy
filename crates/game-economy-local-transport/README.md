@@ -26,6 +26,13 @@ endpoint is regional stock or a named store; movement and physical access
 still apply. This expresses a possible choice rather than automatically
 replenishing a person's supplies.
 
+`[[local_transport.preservation]]` lets a carrier decide whether to
+deposit a particular carried good. They compare the temperatures of
+reachable stores on their own destination list. An individual can favor
+cooling, favor warmth, or keep carrying the good. Storage capacity is
+arbitrated by the physical lot owner, and accepted transfers keep the
+lot's remaining age while changing how fast it ages.
+
 Optional individual goal-fetching preferences allow people to seek missing inputs for their own active work goals in observed stores in their current region. They carry and deposit the actual goods across separate boundaries, can stop at any time, and do not gain knowledge of remote stores. Existing direct work choices take precedence.
 
 When personal input planning is enabled, the search also follows bounded recipe dependencies to locate supplies for intermediate work. Cycles and the number of alternatives explored per person are bounded, and available alternatives rotate between reviews.
