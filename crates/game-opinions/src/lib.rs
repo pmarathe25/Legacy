@@ -51,6 +51,27 @@ pub struct Index<'a> {
     rules: &'a Rules,
     records: IndexRecords<'a>,
 }
+
+pub struct MeetingFilter<'a> {
+    index: Index<'a>,
+    profiles: Vec<&'a Sensitivity>,
+}
+
+impl MeetingFilter<'_> {
+    pub fn accepts(&self, person: u64, partner: u64) -> bool {
+        let Ok(index) = self.profiles.binary_search_by_key(&person, |row| row.person) else {
+            return true;
+        };
+        let profile = self.profiles[index];
+        let directed = profile.relationship_cases.iter().find(|row| row.target == partner);
+        let floor = directed.and_then(|row| row.social_affinity_floor).or(profile.social_affinity_floor);
+        floor.is_none_or(|floor| {
+            let weight = directed.and_then(|row| row.social_affinity_weight)
+                .or(profile.social_affinity_weight).unwrap_or(1);
+            i64::from(self.index.affinity(person, partner)) * i64::from(weight) >= floor
+        })
+    }
+}
 enum IndexRecords<'a> {
     Ordered(&'a [Opinion]),
     Indexed(Vec<&'a Opinion>),
@@ -133,6 +154,20 @@ impl Index<'_> {
     }
 }
 impl Opinions {
+    pub fn meeting_filter(&self) -> Option<MeetingFilter<'_>> {
+        let mut profiles: Vec<_> = self.sensitivities.par_iter().filter(|profile| {
+            profile.social_affinity_floor.is_some()
+                || profile.relationship_cases.iter().any(|row| row.social_affinity_floor.is_some())
+        }).collect();
+        if profiles.is_empty() {
+            return None;
+        }
+        if profiles.par_windows(2).any(|rows| rows[0].person > rows[1].person) {
+            profiles.par_sort_unstable_by_key(|row| row.person);
+        }
+        Some(MeetingFilter { index: self.index(), profiles })
+    }
+
     pub fn tracks_care_reactions(&self) -> bool {
         self.sensitivities.par_iter().any(care::has_reaction)
     }
@@ -437,6 +472,7 @@ impl Opinions {
                 affinity_pressured_encounter: None,
                 meeting_trust: None,
                 social_affinity_weight: None,
+                social_affinity_floor: None,
                 affinity_stock_use: None,
                 affinity_site_use: None,
                 affinity_field_use: None,

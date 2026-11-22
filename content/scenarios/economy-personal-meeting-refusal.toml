@@ -1,0 +1,70 @@
+# General willingness and a decision about this particular person are independent.
+seed = 31
+tick_millis = 1000
+decision_period_millis = 300
+social_period_millis = 41
+stock_capacity = 100
+food_relief_divisor = 20
+
+[rules]
+hunger_rate = { units = 0, per_millis = 1000 }
+meal_threshold = 10
+starvation_threshold = 50
+max_health = 100
+carrying_capacity = 20
+max_work_hunger = 40
+
+[[regions]]
+id = 1
+stock = {}
+
+[[people]]
+id = 1
+region = 1
+health = 100
+hunger = 0
+willing_to_work = false
+seek_meals = false
+
+[[people]]
+id = 2
+region = 1
+health = 100
+hunger = 0
+willing_to_work = false
+seek_meals = false
+
+[dynamics.social]
+participants = [{ person = 1, willing = true }, { person = 2, willing = true }]
+pressures = [{ person = 2, fear_at_least = 5 }]
+
+[dynamics.social.rules]
+min_health = 1
+max_hunger = 100
+familiarity_gain = 1
+familiarity_max = 10
+
+[opinions.rules]
+minimum = -20
+maximum = 20
+initial = 0
+fulfilled_gain = 0
+default_loss = 0
+affinity = { limit = 20 }
+
+[[opinions.records]]
+observer = 1
+target = 2
+trust = 0
+affinity = 8
+
+[[opinions.records]]
+observer = 2
+target = 1
+trust = 0
+affinity = -8
+
+[[opinions.sensitivities]]
+person = 2
+social_affinity_floor = 0
+relationship_cases = [{ target = 1, social_affinity_weight = 1 }]

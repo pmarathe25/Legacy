@@ -14,7 +14,11 @@ pub struct Context<'a> {
     pub can_speak: Option<&'a (dyn Fn(u64, u64) -> bool + Sync)>,
 }
 impl Context<'_> {
-    pub fn prepare(&self, voluntary: &(impl Fn(u64, u32) -> bool + Sync)) -> Vec<Encounter> {
+    pub fn prepare(
+        &self,
+        voluntary: &(impl Fn(u64, u32) -> bool + Sync),
+        acceptable: &(impl Fn(u64, u64) -> bool + Sync),
+    ) -> Vec<Encounter> {
         let Some(opinions) = self.opinions.filter(|o| {
             o.rules.affinity.is_some()
                 && !o.records.is_empty()
@@ -177,7 +181,7 @@ impl Context<'_> {
             .par_iter()
             .filter_map(|record| {
                 let own_score = score(record.observer, record.target, record.affinity);
-                if own_score <= 0 {
+                if own_score <= 0 || !acceptable(record.observer, record.target) {
                     return None;
                 }
                 let a = record.observer.min(record.target);
@@ -350,7 +354,7 @@ mod tests {
                         tick: 1,
                         can_speak: None,
                     }
-                    .prepare(&|_, _| true)
+                    .prepare(&|_, _| true, &|_, _| true)
                 })
         };
         let first = run(1, &social, &opinions, &contacts);
