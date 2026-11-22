@@ -130,3 +130,48 @@ fn creative_materials_are_atomic_and_reusable_instruments_stay_in_custody() {
     let state = host.snapshot();
     assert_eq!(state.purpose.unwrap().owner.people[2].deprivation, 10);
 }
+
+#[test]
+fn a_person_reuses_practice_across_activities_with_the_same_skill() {
+    use game_economy_player::interval::Player;
+
+    let run = |workers, quantum, chunks: &[u64]| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut host = scene(quantum);
+                assert!(Player::new(&mut host, 3).unwrap().start_pastime(2).unwrap());
+                assert_eq!(host.advance_continuous(600001, &[]).unwrap().failure, None);
+                assert!(Player::new(&mut host, 3).unwrap().start_pastime(1).unwrap());
+                for &chunk in chunks {
+                    assert_eq!(host.advance_continuous(chunk, &[]).unwrap().failure, None);
+                    host = CoreHost::resume(
+                        serde_json::from_slice(&serde_json::to_vec(&host.snapshot()).unwrap())
+                            .unwrap(),
+                    )
+                    .unwrap();
+                }
+                let mut player = Player::new(&mut host, 3).unwrap();
+                assert!(player.start_pastime(2).unwrap());
+                assert_eq!(player.advance(100000).unwrap().failure, None);
+                assert!(player.stop_pastime().unwrap());
+                let records = player.pastime_practice().unwrap();
+                assert_eq!(records.len(), 1);
+                assert_eq!(
+                    (
+                        records[0].skill.as_str(),
+                        records[0].completed,
+                        records[0].millis
+                    ),
+                    ("music", 2, 2400000)
+                );
+                records.to_vec()
+            })
+    };
+    assert_eq!(
+        run(1, 3700001, &[1800001]),
+        run(6, 541003, &[121, 540000, 1259880])
+    );
+}

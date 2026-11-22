@@ -62,6 +62,9 @@ fn command(host: &mut CoreHost, person: u64, words: &[&str]) -> Result<bool, Str
             for (id, name) in player.available_pastimes()? {
                 println!("activity={id} {name}");
             }
+            for record in player.pastime_practice()? {
+                println!("practiced_skill={} elapsed_millis={} completed={}", record.skill, record.millis, record.completed);
+            }
             println!(
                 "tick={} offset={} person={} region={:?} health={} hunger={}",
                 view.tick,

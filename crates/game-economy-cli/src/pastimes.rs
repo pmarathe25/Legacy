@@ -108,6 +108,7 @@ impl Config {
             activities,
             minds,
             active: Vec::new(),
+            training: Default::default(),
         })
     }
 }

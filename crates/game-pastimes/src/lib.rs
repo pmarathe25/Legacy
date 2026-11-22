@@ -1,8 +1,10 @@
 //! Personally chosen elapsed leisure and creative practice.
+mod training;
 use game_production_model::Amount;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
+pub use training::{Practice, Training};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -24,6 +26,9 @@ pub struct Interest {
     /// Signed change to desire during the activity's satisfaction window.
     #[serde(default)]
     pub recent_value: i64,
+    /// How a practiced hour in this skill changes their interest in this activity.
+    #[serde(default)]
+    pub practice_hour_value: i64,
     #[serde(default)]
     pub completions: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -75,6 +80,8 @@ pub struct Pastimes {
     pub minds: Vec<Mind>,
     #[serde(default)]
     pub active: Vec<Session>,
+    #[serde(default, skip_serializing_if = "Training::is_empty")]
+    pub training: Training,
 }
 
 impl Pastimes {
@@ -105,10 +112,11 @@ impl Pastimes {
                     .par_iter()
                     .all(|row| row.quantity > 0 && goods.contains(&row.good))
         };
-        if self
-            .activities
-            .par_windows(2)
-            .any(|pair| pair[0].id >= pair[1].id)
+        if !self.training.validate(people, &self.activities)
+            || self
+                .activities
+                .par_windows(2)
+                .any(|pair| pair[0].id >= pair[1].id)
             || self.activities.par_iter().any(|row| {
                 row.id == 0
                     || row.name.trim().is_empty()
@@ -172,7 +180,8 @@ impl Pastimes {
                 if self.session(mind.person).is_some() {
                     return None;
                 }
-                let (_, activity) = self.preferred(mind, now, |activity| usable(mind.person, activity))?;
+                let (_, activity) =
+                    self.preferred(mind, now, |activity| usable(mind.person, activity))?;
                 self.contemplate(mind.person, region, activity.id, now)
             })
             .collect()
@@ -184,14 +193,28 @@ impl Pastimes {
         now: u128,
         usable: impl Fn(&Activity) -> bool,
     ) -> Option<(i64, &Activity)> {
-        mind.interests.iter().filter_map(|interest| {
-            let activity = self.activity(interest.activity)?;
-            let recent = interest.last_completion.is_some_and(|at| {
-                now.saturating_sub(at) < u128::from(activity.satisfaction_millis)
-            });
-            let value = interest.value.saturating_add(if recent { interest.recent_value } else { 0 });
-            (value > mind.idle && usable(activity)).then_some((value, activity))
-        }).max_by_key(|(value, activity)| (*value, std::cmp::Reverse(activity.id)))
+        mind.interests
+            .iter()
+            .filter_map(|interest| {
+                let activity = self.activity(interest.activity)?;
+                let recent = interest.last_completion.is_some_and(|at| {
+                    now.saturating_sub(at) < u128::from(activity.satisfaction_millis)
+                });
+                let value =
+                    interest
+                        .value
+                        .saturating_add(if recent { interest.recent_value } else { 0 });
+                let value =
+                    if interest.practice_hour_value == 0 {
+                        value
+                    } else {
+                        value.saturating_add(interest.practice_hour_value.saturating_mul(
+                            self.training.practice_hours(mind.person, &activity.skill),
+                        ))
+                    };
+                (value > mind.idle && usable(activity)).then_some((value, activity))
+            })
+            .max_by_key(|(value, activity)| (*value, std::cmp::Reverse(activity.id)))
     }
 
     pub fn preferred_value(
@@ -200,8 +223,12 @@ impl Pastimes {
         now: u128,
         usable: impl Fn(&Activity) -> bool,
     ) -> Option<i64> {
-        let index = self.minds.binary_search_by_key(&person, |row| row.person).ok()?;
-        self.preferred(&self.minds[index], now, usable).map(|row| row.0)
+        let index = self
+            .minds
+            .binary_search_by_key(&person, |row| row.person)
+            .ok()?;
+        self.preferred(&self.minds[index], now, usable)
+            .map(|row| row.0)
     }
 
     pub fn contemplate(
@@ -287,6 +314,7 @@ impl Pastimes {
         if events.is_empty() {
             return events;
         }
+        self.training.credit(&events, &self.activities);
         self.active.retain(|row| {
             events
                 .binary_search_by_key(&row.person, |event| event.person)

@@ -9,6 +9,11 @@ pub(super) struct SettledPastimes {
 }
 
 impl CoreHost {
+    pub fn pastime_practice_controlled(&self, person: u64) -> Result<&[PastimePractice], String> {
+        self.controlled_person(person)?;
+        Ok(self.pastimes.as_ref().map_or(&[], |owner| owner.training.for_person(person)))
+    }
+
     pub(super) fn next_pastime_finish(&self) -> Option<u64> {
         self.pastimes
             .as_ref()?
