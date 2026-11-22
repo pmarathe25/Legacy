@@ -6,12 +6,71 @@ use game_pastimes::{Activity, Event, Outcome, Session};
 pub(super) struct SettledPastimes {
     pub activities: Vec<Event>,
     pub conclusions: Vec<MechanicalConclusion>,
+    pub hearings: Vec<HeardPerformance>,
 }
 
 impl CoreHost {
     pub fn pastime_practice_controlled(&self, person: u64) -> Result<&[PastimePractice], String> {
         self.controlled_person(person)?;
-        Ok(self.pastimes.as_ref().map_or(&[], |owner| owner.training.for_person(person)))
+        Ok(self
+            .pastimes
+            .as_ref()
+            .map_or(&[], |owner| owner.training.for_person(person)))
+    }
+
+    pub fn heard_performances_controlled(
+        &self,
+        person: u64,
+    ) -> Result<Vec<HeardPerformance>, String> {
+        self.controlled_person(person)?;
+        Ok(self
+            .pastimes
+            .as_ref()
+            .and_then(|owner| owner.culture.as_ref())
+            .map_or_else(Vec::new, |culture| culture.remembered(person).collect()))
+    }
+
+    pub fn listen_for_controlled(
+        &mut self,
+        person: u64,
+        activity: u32,
+        value: i64,
+    ) -> Result<(), String> {
+        self.controlled_person(person)?;
+        let owner = self
+            .pastimes
+            .as_mut()
+            .ok_or("no leisure activities are available")?;
+        owner.activity(activity).ok_or("unknown activity")?;
+        let culture = owner.culture.as_mut().ok_or("performances are disabled")?;
+        culture
+            .set_interest(person, activity, value)
+            .then_some(())
+            .ok_or_else(|| "this person already has sixteen listening interests".into())
+    }
+
+    pub fn present_performance_controlled(
+        &mut self,
+        person: u64,
+        activity: u32,
+        enabled: bool,
+    ) -> Result<(), String> {
+        self.controlled_person(person)?;
+        let owner = self
+            .pastimes
+            .as_mut()
+            .ok_or("no leisure activities are available")?;
+        owner.activity(activity).ok_or("unknown activity")?;
+        let culture = owner.culture.as_mut().ok_or("performances are disabled")?;
+        culture.set_presentation(game_pastimes::Presentation { person, activity }, enabled);
+        Ok(())
+    }
+
+    fn performance_venue(&self, person: u64) -> Option<game_pastimes::Venue> {
+        let actor = self.core.person(person)?;
+        let region = actor.region.filter(|_| actor.health > 0)?;
+        let endpoint = self.local_partition(person);
+        (!matches!(endpoint.0, 2 | 4)).then_some((region, endpoint))
     }
 
     pub(super) fn next_pastime_finish(&self) -> Option<u64> {
@@ -197,7 +256,7 @@ impl CoreHost {
             .start(accepted))
     }
 
-    pub(super) fn settle_pastimes(&mut self) -> SettledPastimes {
+    pub(super) fn settle_pastimes(&mut self, blocked: &[u64]) -> SettledPastimes {
         if self.pastime_people().next().is_none() {
             return SettledPastimes::default();
         }
@@ -211,6 +270,37 @@ impl CoreHost {
                     && self.pastime_ready(person.id, activity, false)
             })
         });
+        let hearings = owner
+            .culture
+            .as_ref()
+            .filter(|culture| !culture.presentations.is_empty() && !culture.listeners.is_empty())
+            .filter(|_| {
+                events
+                    .iter()
+                    .any(|event| event.outcome == Outcome::Completed)
+            })
+            .map_or_else(Vec::new, |culture| {
+                let busy = self.choice_busy(blocked);
+                let assisting = self.assisting_people();
+                let now = self.core.simulated_millis();
+                culture.hear(
+                    &events,
+                    |person| self.performance_venue(person),
+                    |person| {
+                        busy.binary_search(&person).is_err()
+                            && assisting.binary_search(&person).is_err()
+                            && owner.session(person).is_none()
+                    },
+                    |person| {
+                        owner.preferred_value(person, now, |activity| {
+                            self.pastime_ready(person, activity, true)
+                        })
+                    },
+                )
+            });
+        if let Some(culture) = &mut owner.culture {
+            culture.remember(&hearings);
+        }
         self.pastimes = Some(owner);
         self.remember_pastimes(&events);
         if let Some(purpose) = &mut self.purpose {
@@ -230,6 +320,10 @@ impl CoreHost {
             }
         }
         let conclusions = self.complete_mechanical_reflection(&events);
-        SettledPastimes { activities: events, conclusions }
+        SettledPastimes {
+            activities: events,
+            conclusions,
+            hearings,
+        }
     }
 }

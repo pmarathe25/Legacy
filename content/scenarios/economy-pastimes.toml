@@ -25,6 +25,7 @@ health = 100
 hunger = 0
 willing_to_work = false
 seek_meals = false
+goods = { "reed-pipe" = 1 }
 
 [[people]]
 id = 2
@@ -58,8 +59,15 @@ goods = { pigment = 1, bark = 1 }
 catalogs = ["pastimes/daily.toml", "pastimes/literature.toml"]
 activities = { "compose-song" = 1, "play-reed-pipe" = 2, paint = 3 }
 minds = [
-    { person = 1, interests = [{activity = 1, value = 4, recent_value = -6}] },
+    { person = 1, interests = [{activity = 1, value = 4, recent_value = -6}, {activity = 2, value = -1, heard_value = 6}] },
     { person = 2, interests = [{activity = 1, value = 2}] },
+]
+
+[pastimes.culture]
+presentations = [{ person = 3, activity = 2 }]
+listeners = [
+    { person = 1, interests = [{ activity = 2, value = 5 }] },
+    { person = 2, interests = [{ activity = 2, value = -5 }] },
 ]
 
 [purpose.rules]

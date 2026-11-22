@@ -1,5 +1,7 @@
 //! Personally chosen elapsed leisure and creative practice.
+mod culture;
 mod training;
+pub use culture::{Culture, Heard, Interest as ListeningInterest, Listener, Presentation, Venue};
 use game_production_model::Amount;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -29,6 +31,9 @@ pub struct Interest {
     /// How a practiced hour in this skill changes their interest in this activity.
     #[serde(default)]
     pub practice_hour_value: i64,
+    /// Signed response to remembering another person's performance.
+    #[serde(default)]
+    pub heard_value: i64,
     #[serde(default)]
     pub completions: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -82,6 +87,8 @@ pub struct Pastimes {
     pub active: Vec<Session>,
     #[serde(default, skip_serializing_if = "Training::is_empty")]
     pub training: Training,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub culture: Option<Box<Culture>>,
 }
 
 impl Pastimes {
@@ -113,6 +120,9 @@ impl Pastimes {
                     .all(|row| row.quantity > 0 && goods.contains(&row.good))
         };
         if !self.training.validate(people, &self.activities)
+            || self.culture.as_ref().is_some_and(|culture| {
+                !culture.valid(people, |id| self.activity(id).is_some(), now)
+            })
             || self
                 .activities
                 .par_windows(2)
@@ -212,6 +222,16 @@ impl Pastimes {
                             self.training.practice_hours(mind.person, &activity.skill),
                         ))
                     };
+                let value = if interest.heard_value != 0
+                    && self.culture.as_ref().is_some_and(|culture| {
+                        culture
+                            .remembered(mind.person)
+                            .any(|heard| heard.activity == activity.id)
+                    }) {
+                    value.saturating_add(interest.heard_value)
+                } else {
+                    value
+                };
                 (value > mind.idle && usable(activity)).then_some((value, activity))
             })
             .max_by_key(|(value, activity)| (*value, std::cmp::Reverse(activity.id)))
