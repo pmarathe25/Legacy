@@ -285,6 +285,12 @@ as intermediate work, comparing demolition and salvage with other personal
 opportunities, and recording construction and recovered material in narrative
 reports.
 
+Local searches for a personal crafting goal can use exact elapsed retry
+and expiry times. An expiry ends only the search and a walking leg still
+motivated by it. A standing visit preference can continue the same leg.
+The test compares different physical quanta, irregular advances, checkpoint
+reloads, and worker counts.
+
 ## Content extensibility
 
 | Area | Follow-up and acceptance example |

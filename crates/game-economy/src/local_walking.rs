@@ -36,6 +36,7 @@ pub struct GoalSearchContext<'a> {
     pub underage: &'a [u64],
     pub max_hunger: u32,
     pub tick: u64,
+    pub now: u128,
     pub honors_work_inclination: bool,
 }
 
@@ -54,12 +55,11 @@ pub fn goal_search(context: GoalSearchContext<'_>) -> Result<Vec<SearchProposal>
                 .ok()
                 .map(|index| context.needs[index].recipe);
             if search.active_recipe.is_some()
-                && (context.tick >= search.expires_at
+                && (search.expired(context.tick, context.now)
                     || (!context.honors_work_inclination && selected.is_none())
                     || selected.is_some_and(|recipe| Some(recipe) != search.active_recipe))
             {
-                search.active_recipe = None;
-                search.target = None;
+                search.stop();
                 return Some(Ok(SearchProposal {
                     person: preference.person,
                     request: None,
@@ -105,8 +105,7 @@ pub fn goal_search(context: GoalSearchContext<'_>) -> Result<Vec<SearchProposal>
                         .iter()
                         .any(|input| holder.quantity(input.good) > 0)
                 {
-                    search.active_recipe = None;
-                    search.target = None;
+                    search.stop();
                     return Some(Ok(SearchProposal {
                         person: person.id,
                         request: None,
@@ -115,8 +114,7 @@ pub fn goal_search(context: GoalSearchContext<'_>) -> Result<Vec<SearchProposal>
                 }
                 if matches!(location, Location::At { endpoint, .. } if endpoint == destination) {
                     if search.max_visits == 1 {
-                        search.active_recipe = None;
-                        search.target = None;
+                        search.stop();
                         return Some(Ok(SearchProposal {
                             person: person.id,
                             request: None,
@@ -171,8 +169,7 @@ pub fn goal_search(context: GoalSearchContext<'_>) -> Result<Vec<SearchProposal>
                             search,
                         }));
                     }
-                    search.active_recipe = None;
-                    search.target = None;
+                    search.stop();
                     return Some(Ok(SearchProposal {
                         person: person.id,
                         request: None,
@@ -211,7 +208,7 @@ pub fn goal_search(context: GoalSearchContext<'_>) -> Result<Vec<SearchProposal>
                     })
                 });
             }
-            if context.tick < search.next_review
+            if !search.can_start(context.tick, context.now)
                 || !matches!(
                     location,
                     Location::At {
@@ -244,17 +241,9 @@ pub fn goal_search(context: GoalSearchContext<'_>) -> Result<Vec<SearchProposal>
             if !shortage {
                 return None;
             }
-            let Some(next_review) = context.tick.checked_add(search.retry_ticks) else {
-                return Some(Err("local goal search retry overflow".into()));
-            };
-            let Some(expires_at) = context.tick.checked_add(search.max_ticks) else {
-                return Some(Err("local goal search expiry overflow".into()));
-            };
-            search.next_review = next_review;
-            search.expires_at = expires_at;
-            search.active_recipe = Some(recipe_id);
-            search.examined = 0;
-            search.target = Some(search.store);
+            if let Err(error) = search.begin(recipe_id, context.tick, context.now) {
+                return Some(Err(error.into()));
+            }
             Some(Ok(SearchProposal {
                 person: person.id,
                 request: Some(Request {

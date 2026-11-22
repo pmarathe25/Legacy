@@ -312,6 +312,7 @@ pub struct CoreHost {
     market: Option<game_market::Market>,
     writing: Option<crate::Writing>,
     local_transport: Option<game_economy_local_transport::LocalTransport>,
+    local_goal_search_expiries: std::collections::BTreeSet<(u128, u64)>,
     construction: Option<game_economy_building::Construction>,
     hauling: Option<crate::Hauling>,
     agreements: Option<game_agreements::Agreements>,
@@ -1632,6 +1633,8 @@ impl CoreHost {
         let skill_practice_recipes = skills
             .as_ref()
             .map_or_else(HashSet::new, CoreSkills::practice_recipes);
+        let local_goal_search_expiries =
+            goal_transport::search_expiries(local_transport.as_ref(), core.simulated_millis())?;
         Ok(Self {
             core,
             mechanics,
@@ -1689,6 +1692,7 @@ impl CoreHost {
             market,
             writing,
             local_transport,
+            local_goal_search_expiries,
             construction,
             hauling,
             agreement_deadlines: agreements
@@ -1823,7 +1827,15 @@ impl CoreHost {
         {
             self.sync_work_rates(&[])?;
         }
-        Ok(self.progress_with_activity(millis, &[], None, None, false)?.millis)
+        if self.next_local_goal_search_expiry() == Some(0) {
+            self.expire_local_goal_searches();
+        }
+        let millis = self.next_local_goal_search_expiry().map_or(millis, |after| millis.min(after));
+        let progress = self.progress_with_activity(millis, &[], None, None, false)?.millis;
+        if self.next_local_goal_search_expiry() == Some(0) {
+            self.expire_local_goal_searches();
+        }
+        Ok(progress)
     }
     pub fn next_deadline(&mut self, hunger: Option<u32>) -> Result<CoreDeadline, String> {
         if self
@@ -1853,6 +1865,7 @@ impl CoreHost {
         let dry_field = self.next_dry_field();
         let disease = self.next_disease_deadline();
         let local_arrival = self.next_local_arrival();
+        let local_goal_search_expiry = self.next_local_goal_search_expiry();
         let expedition = self.next_expedition_deadline();
         let tactical = self.next_tactical_deadline();
         let wounds = self.next_wound_deadline();
@@ -1875,6 +1888,7 @@ impl CoreHost {
             dry_field,
             disease,
             local_arrival,
+            local_goal_search_expiry,
             expedition,
             tactical,
             wounds,
@@ -1909,6 +1923,7 @@ impl CoreHost {
                     dry_field: dry_field == Some(after_millis),
                     disease: disease == Some(after_millis),
                     local_arrival: local_arrival == Some(after_millis),
+                    local_goal_search_expiry: local_goal_search_expiry == Some(after_millis),
                     expedition: expedition == Some(after_millis),
                     tactical: tactical == Some(after_millis),
                     wounds: wounds == Some(after_millis),
@@ -1934,6 +1949,7 @@ impl CoreHost {
                 deadline.dry_field = dry_field == Some(after_millis);
                 deadline.disease = disease == Some(after_millis);
                 deadline.local_arrival = local_arrival == Some(after_millis);
+                deadline.local_goal_search_expiry = local_goal_search_expiry == Some(after_millis);
                 deadline.expedition = expedition == Some(after_millis);
                 deadline.tactical = tactical == Some(after_millis);
                 deadline.wounds = wounds == Some(after_millis);

@@ -5,6 +5,7 @@ use game_lots::{ContainerView, Place, View};
 use game_production_model::Recipe;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
+use std::num::NonZeroU64;
 use std::sync::Arc;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -29,7 +30,9 @@ pub struct SearchPreference {
     pub max_visits: u32,
     #[serde(default)]
     pub willing: bool,
+    #[serde(default)]
     pub retry_ticks: u64,
+    #[serde(default)]
     pub max_ticks: u64,
     #[serde(default)]
     pub next_review: u64,
@@ -41,6 +44,82 @@ pub struct SearchPreference {
     pub examined: u32,
     #[serde(default)]
     pub target: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub elapsed: Option<ElapsedSearch>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ElapsedSearch {
+    pub retry_millis: NonZeroU64,
+    pub max_millis: NonZeroU64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_review: Option<u128>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expires_at: Option<u128>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub owns_walk: bool,
+}
+
+impl SearchPreference {
+    pub fn valid_clock(&self) -> bool {
+        self.elapsed
+            .map_or(self.retry_ticks > 0 && self.max_ticks > 0, |clock| {
+                self.retry_ticks == 0
+                    && self.max_ticks == 0
+                    && self.expires_at == 0
+                    && self.next_review == 0
+                    && clock.expires_at.is_some() == self.active_recipe.is_some()
+                    && (!clock.owns_walk || self.active_recipe.is_some())
+            })
+    }
+
+    pub fn can_start(&self, tick: u64, now: u128) -> bool {
+        self.elapsed.map_or(tick >= self.next_review, |clock| {
+            clock.next_review.is_none_or(|review| now >= review)
+        })
+    }
+
+    pub fn expired(&self, tick: u64, now: u128) -> bool {
+        self.elapsed.map_or(tick >= self.expires_at, |clock| {
+            clock.expires_at.is_some_and(|expiry| now >= expiry)
+        })
+    }
+
+    pub fn begin(&mut self, recipe: u32, tick: u64, now: u128) -> Result<(), &'static str> {
+        if let Some(clock) = &mut self.elapsed {
+            let next_review = now
+                .checked_add(u128::from(clock.retry_millis.get()))
+                .ok_or("local goal search retry overflow")?;
+            let expires_at = now
+                .checked_add(u128::from(clock.max_millis.get()))
+                .ok_or("local goal search expiry overflow")?;
+            clock.next_review = Some(next_review);
+            clock.expires_at = Some(expires_at);
+        } else {
+            let next_review = tick
+                .checked_add(self.retry_ticks)
+                .ok_or("local goal search retry overflow")?;
+            let expires_at = tick
+                .checked_add(self.max_ticks)
+                .ok_or("local goal search expiry overflow")?;
+            self.next_review = next_review;
+            self.expires_at = expires_at;
+        }
+        self.active_recipe = Some(recipe);
+        self.examined = 0;
+        self.target = Some(self.store);
+        Ok(())
+    }
+
+    pub fn stop(&mut self) {
+        self.active_recipe = None;
+        self.target = None;
+        if let Some(clock) = &mut self.elapsed {
+            clock.expires_at = None;
+            clock.owns_walk = false;
+        }
+    }
 }
 
 fn one_visit() -> u32 {
