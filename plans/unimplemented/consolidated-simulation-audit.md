@@ -26,8 +26,11 @@ to track rates, deadlines, and behavior under different advance sizes. The
 - Physical storage projects shelf life from the local ambient calendar or a
   holder's explicit temperature. Exact age survives movement and season
   changes. Preparations can mature in custody and stock can spoil before a
-  same-time use. Personal construction and selection of storage conditions
-  remain open.
+  same-time use. Carriers can weigh reachable temperatures and decide
+  whether to retain their goods. The composed scenario checks that people
+  can choose opposite temperatures, that competing deposits respect one
+  cellar's capacity, and that an accepted deposit changes actual shelf life.
+  Building protected storage remains a separate follow-up.
 - Mechanical designs use actual identified parts. Each character can rank
   alternative input components or a branched design. The mechanical owner
   computes force and travel in physical connection order and records which
