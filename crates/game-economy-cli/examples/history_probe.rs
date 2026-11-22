@@ -153,6 +153,13 @@ fn run_steps(
                     )?;
                     ("animal_feeding_events", events.len())
                 }
+                CoreRunEvent::ElapsedAnimalHandling { at_millis, events } => {
+                    write_line(&mut writer, &json!({
+                        "kind":"elapsed_animal_handling", "step":step,
+                        "at_millis":at_millis, "events":events
+                    }))?;
+                    ("animal_handling_events", events.len())
+                }
                 CoreRunEvent::ElapsedHunting { at_millis, events } => {
                     write_line(
                         &mut writer,

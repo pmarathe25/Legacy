@@ -2334,6 +2334,7 @@ willing = true
 health_at_most = 90
 
 [animal_handling]
+elapsed_actions = true
 inherit_births = true
 policies = [{ person = 13, animal = 2, willing = true }]
 

@@ -1,0 +1,87 @@
+# Two contacts, each with independent reactions from the person and animal.
+seed = 48
+tick_millis = 37
+decision_period_millis = 83
+stock_capacity = 30
+food_relief_divisor = 20
+
+[rules]
+hunger_rate = { units = 1, per_millis = 83 }
+meal_threshold = 20
+starvation_threshold = 50
+max_health = 100
+max_work_hunger = 30
+carrying_capacity = 20
+
+[[regions]]
+id = 1
+stock = { barley = 5 }
+
+[[people]]
+id = 1
+region = 1
+health = 100
+hunger = 0
+willing_to_work = false
+seek_meals = false
+
+[[people]]
+id = 2
+region = 1
+health = 100
+hunger = 0
+willing_to_work = false
+seek_meals = false
+
+[fauna]
+next_id = 2
+last_tick = 0
+lifecycle_period_millis = 1000
+
+[[fauna.species]]
+id = 1
+name = "Fixture grazer"
+food_good = "barley"
+intake = 1
+hunger_per_tick = 1
+relief_per_unit = 4
+starvation_threshold = 20
+starvation_damage = 1
+max_health = 100
+adult_age = 5
+fertile_until = 25
+lifespan = 50
+gestation = 4
+conception_one_in = 5
+breeding_max_hunger = 10
+newborn_health = 100
+mutation_per_million = 0
+mutation_step = 0
+hunting = { good = "raw-meat", quantity = 3, success_per_thousand = 1000 }
+
+[[fauna.animals]]
+id = 1
+species = 1
+region = 1
+age = 7
+health = 100
+hunger = 0
+genome = { sex = "Female", alleles = [[500, 500], [500, 500], [500, 500], [500, 500]] }
+social_response = { feed_affinity = 0, minimum = -10, maximum = 10, capacity = 4 }
+handling_response = { willing = false, affinity_at_most = 0, on_accept = 2, on_refuse = 1 }
+
+[animal_handling]
+elapsed_actions = true
+policies = [{ person = 1, animal = 1, willing = true }]
+
+[hunting]
+elapsed_actions = true
+policies = [{ person = 2, animal = 1, willing = true, hunger_at_least = 1 }]
+
+[[animal_feelings.minds]]
+person = 1
+minimum = -10
+maximum = 10
+capacity = 4
+on_handle_accepted = -2
+on_handle_refused = 3

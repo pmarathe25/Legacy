@@ -145,6 +145,12 @@ The selected encounter reserves the animal against another hunt or product
 collection in the same decision round. Scenarios with the older policy
 continue to handle feed offers at settlement.
 
+`animal_handling.elapsed_actions = true` schedules approaches on the
+person's decision clock. The animal can accept or refuse each approach
+based on its own preferences and memories. Both parties' interpretations
+apply immediately. A selected approach reserves the physical encounter
+against hunting or product collection in the same round.
+
 An optional `fauna.dispersal` defines directed wildlife corridors and policies
 by species. At each lifecycle event, a surviving animal can explore one
 corridor after grazing and reproduction. Its hunger, age, inherited drive,

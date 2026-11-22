@@ -10184,6 +10184,7 @@ fn handling_reserves_animal_and_actor_before_product_collection() {
             growth: 1,
         }];
     snapshot.animal_handling = Some(game_economy::AnimalHandling {
+        elapsed_actions: false,
         inherit_births: false,
         policies: vec![game_economy::AnimalHandlingPolicy {
             person: 2,

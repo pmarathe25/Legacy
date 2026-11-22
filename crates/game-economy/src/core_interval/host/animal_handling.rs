@@ -2,6 +2,53 @@
 use super::*;
 
 impl CoreHost {
+    pub(super) fn handle_animals_at_decision(
+        &mut self,
+        occupied: &[u64],
+        animals_fed: &[u64],
+    ) -> Result<crate::animal_handling::Plan, String> {
+        let Some(owner) = self
+            .animal_handling
+            .as_ref()
+            .filter(|owner| owner.elapsed_actions)
+        else {
+            return Ok(crate::animal_handling::Plan::default());
+        };
+        let busy = self.local_walk_exclusions(occupied);
+        let away = self.block_away_from_stock(&busy);
+        let busy = away.as_deref().unwrap_or(&busy);
+        let held = self.block_held(busy);
+        let busy = held.as_deref().unwrap_or(busy);
+        let plan = crate::animal_handling::Context {
+            owner: Some(owner),
+            fauna: self.fauna.as_ref(),
+            people: &self.core.people,
+            opinions: self.opinions.as_ref(),
+            feelings: self.animal_feelings.as_ref(),
+            busy,
+            blocked: animals_fed,
+            max_hunger: u32::MAX,
+            seed: self.core.seed,
+            draw_key: self.core.decision_time_key(),
+            tick: self.core.physical.tick(),
+            manual: None,
+        }
+        .prepare()?;
+        if !plan.events.is_empty() {
+            let feelings = self.stage_animal_feelings(None, &[], &[], Some(&plan), &[], None);
+            let fauna = self.fauna.as_mut().ok_or("missing wildlife for handling")?;
+            game_fauna::handling::apply(fauna, &plan.events);
+            self.animal_handling
+                .as_mut()
+                .expect("handling owner")
+                .events = plan.events.clone();
+            if let Some(feelings) = feelings {
+                self.animal_feelings = Some(feelings);
+            }
+        }
+        Ok(plan)
+    }
+
     pub(super) fn plan_animal_handling(
         &self,
         occupied: &[u64],
@@ -11,7 +58,11 @@ impl CoreHost {
         care: Option<&crate::animal_care::Plan>,
         restraints: Option<&game_animal_restraint::Plan>,
     ) -> Result<Option<crate::animal_handling::Plan>, String> {
-        let Some(owner) = &self.animal_handling else {
+        let Some(owner) = self
+            .animal_handling
+            .as_ref()
+            .filter(|owner| !owner.elapsed_actions)
+        else {
             return Ok(None);
         };
         let rest = self.blocked_with_rest(occupied);
@@ -68,6 +119,7 @@ impl CoreHost {
             blocked: &blocked,
             max_hunger: self.core.rules.max_work_hunger,
             seed: self.core.seed,
+            draw_key: tick,
             tick,
             manual: None,
         }

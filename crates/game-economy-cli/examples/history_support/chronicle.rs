@@ -694,6 +694,11 @@ fn classify(kind: &str, row: &Value) -> Option<Receipt> {
         },
         ("harvest_products", _) => "harvests with several physical products",
         ("elapsed_animal_feeding", _) => "animals given carried food",
+        ("elapsed_animal_handling", _) => match row["outcome"].as_str()? {
+            "accepted" => "animal handling attempts accepted",
+            "refused" => "animal handling attempts refused",
+            _ => return None,
+        },
         ("elapsed_hunting", _) => "successful hunts with physical yield",
         ("elapsed_animal_products", _) => match row["outcome"].as_str()? {
             "collected" => "renewable animal products collected",

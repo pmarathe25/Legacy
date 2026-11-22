@@ -31,6 +31,8 @@ pub struct Policy {
 #[serde(deny_unknown_fields)]
 pub struct Handling {
     #[serde(default)]
+    pub elapsed_actions: bool,
+    #[serde(default)]
     pub inherit_births: bool,
     #[serde(default)]
     pub policies: Vec<Policy>,
@@ -128,6 +130,7 @@ impl Handling {
     }
 }
 
+#[derive(Default)]
 pub struct Plan {
     pub actors: Vec<u64>,
     /// Sorted by animal; at most one event per animal.
@@ -145,6 +148,7 @@ pub struct Context<'a> {
     pub blocked: &'a [u64],
     pub max_hunger: u32,
     pub seed: u64,
+    pub draw_key: u64,
     pub tick: u64,
     pub manual: Option<(u64, u64)>,
 }
@@ -235,8 +239,9 @@ impl Context<'_> {
                     if start == end {
                         return None;
                     }
-                    let offset = (game_genetics::random(self.seed ^ region, person.id, self.tick)
-                        % (end - start) as u64) as usize;
+                    let offset =
+                        (game_genetics::random(self.seed ^ region, person.id, self.draw_key)
+                            % (end - start) as u64) as usize;
                     Some(visible[start + offset].1)
                 })?;
                 let animal = find_animal(animal_id)?;
@@ -268,7 +273,7 @@ impl Context<'_> {
                     .then_some((
                         animal_id,
                         true,
-                        game_genetics::random(self.seed ^ animal_id, person.id, self.tick),
+                        game_genetics::random(self.seed ^ animal_id, person.id, self.draw_key),
                         person.id,
                     ))
             })

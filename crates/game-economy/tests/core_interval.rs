@@ -8258,6 +8258,7 @@ fn gathering_depletes_resources_into_real_personal_custody() {
                     on_refuse: 3,
                 });
                 handling.animal_handling = Some(game_economy::AnimalHandling {
+                    elapsed_actions: false,
                     inherit_births: false,
                     events: vec![],
                     policies: vec![game_economy::AnimalHandlingPolicy {
@@ -8885,6 +8886,7 @@ fn core_host_cultivation_benchmark() {
             family
         }),
         animal_handling: handling.then(|| game_economy::AnimalHandling {
+            elapsed_actions: false,
             inherit_births: false, events: vec![], policies: (2..=count).map(|person| game_economy::AnimalHandlingPolicy {
                 person, animal: Some(if handling_contested { 1 } else { person }), willing: true,
                 affinity_at_least: None, affinity_at_most: None, pressured_by: None, pressure_threshold: None,

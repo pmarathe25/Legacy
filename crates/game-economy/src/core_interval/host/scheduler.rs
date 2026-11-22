@@ -800,6 +800,10 @@ pub enum CoreRunEvent {
         at_millis: u128,
         events: Vec<game_fauna::Feeding>,
     },
+    ElapsedAnimalHandling {
+        at_millis: u128,
+        events: Vec<game_fauna::handling::Event>,
+    },
     ElapsedHunting {
         at_millis: u128,
         events: Vec<crate::hunting::Receipt>,
@@ -3982,7 +3986,26 @@ impl CoreHost {
                                 events: feeding.receipts,
                             });
                         }
-                        let hunt = attempt!('run, self.hunt_at_decision(&busy, &feeding.targets));
+                        let mut claimed_animals = feeding.targets;
+                        let handling = attempt!(
+                            'run,
+                            self.handle_animals_at_decision(&busy, &claimed_animals)
+                        );
+                        if !handling.actors.is_empty() {
+                            busy.par_extend(handling.actors);
+                            busy.par_sort_unstable();
+                            busy.dedup();
+                        }
+                        if !handling.events.is_empty() {
+                            claimed_animals.par_extend(handling.events.par_iter().map(|event| event.animal));
+                            claimed_animals.par_sort_unstable();
+                            claimed_animals.dedup();
+                            run.events.push(CoreRunEvent::ElapsedAnimalHandling {
+                                at_millis: self.core.simulated_millis(),
+                                events: handling.events,
+                            });
+                        }
+                        let hunt = attempt!('run, self.hunt_at_decision(&busy, &claimed_animals));
                         if !hunt.actors.is_empty() {
                             busy.par_extend(hunt.actors);
                             busy.par_sort_unstable();
@@ -4003,7 +4026,7 @@ impl CoreHost {
                         }
                         let products = attempt!(
                             'run,
-                            self.collect_products_at_decision(&busy, &feeding.targets)
+                            self.collect_products_at_decision(&busy, &claimed_animals)
                         );
                         if !products.actors.is_empty() {
                             busy.par_extend(products.actors);

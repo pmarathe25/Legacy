@@ -70,6 +70,9 @@ to track rates, deadlines, and behavior under different advance sizes. The
   that round. A renewable yield can grow on the elapsed wildlife cycle
   and stay available after an animal refuses handling or the collector's
   cargo cannot accept it. The archive records accepted feed and collections.
+  Person and animal can interpret an approach differently. Elapsed contact
+  records both an acceptance and a subsequent refusal, with independent signed
+  feelings. A simultaneous hunt cannot claim the same encounter.
 - Wild stands support heritable plant strains, viable seed banks, finite
   adult capacity, and local habitat selection without human activity.
   Competing local variants and physical seed withdrawals are tested
