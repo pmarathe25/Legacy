@@ -130,7 +130,10 @@ mod local_walking;
 mod medical;
 mod mission_deliveries;
 mod route_sharing;
-pub use food_search::{FoodSearch, Preference as FoodSearchPreference};
+pub use food_search::{
+    DestinationValue as FoodDestinationValue, FoodSearch, Preference as FoodSearchPreference,
+    TravelChoice as FoodTravelChoice,
+};
 pub use giving::{
     Asking as FoodAsking, Giving, HelperAsking, Policy as GivingPolicy, Request as FoodRequest,
     Response as FoodResponse, SharingLearning,

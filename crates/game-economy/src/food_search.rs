@@ -1,4 +1,6 @@
 //! Hungry people travel using bounded personal reports, which may be stale.
+mod choice;
+pub use choice::{DestinationValue, TravelChoice};
 use game_economy_claims::Index as Claims;
 use game_economy_knowledge::Knowledge;
 use game_economy_person::{
@@ -10,6 +12,7 @@ use game_production_model::Good;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -40,6 +43,8 @@ pub struct FoodSearch {
     #[serde(default)]
     pub inherit_births: bool,
     pub people: Vec<Preference>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub travel_choices: Option<Arc<[TravelChoice]>>,
 }
 impl Clone for FoodSearch {
     fn clone(&self) -> Self {
@@ -52,6 +57,7 @@ impl Clone for FoodSearch {
             retry_millis: self.retry_millis,
             inherit_births: self.inherit_births,
             people: self.people.par_iter().cloned().collect(),
+            travel_choices: self.travel_choices.clone(),
         }
     }
 }
@@ -137,6 +143,20 @@ impl FoodSearch {
             })
         {
             return Err("invalid personal food search preference".into());
+        }
+        let mut choosing = HashSet::new();
+        if self
+            .travel_choices
+            .as_deref()
+            .unwrap_or_default()
+            .iter()
+            .any(|choice| {
+                ids.binary_search(&choice.person).is_err()
+                    || !choosing.insert(choice.person)
+                    || !choice.valid(&regions)
+            })
+        {
+            return Err("invalid personal food travel choice".into());
         }
         Ok(())
     }
@@ -230,6 +250,14 @@ pub struct Context<'a> {
 }
 impl Context<'_> {
     pub fn prepare(&self) -> Plan {
+        let choices: HashMap<_, _> = self
+            .owner
+            .travel_choices
+            .as_deref()
+            .unwrap_or_default()
+            .par_iter()
+            .map(|choice| (choice.person, choice))
+            .collect();
         let elapsed_delay = self.owner.retry_millis.or_else(|| {
             self.travel.travel_unit_millis.map(|unit| u128::from(unit) * u128::from(self.owner.retry_ticks))
         });
@@ -244,18 +272,21 @@ impl Context<'_> {
             .iter()
             .filter_map(|g| g.food.as_ref().map(|food| (g.id, food.portion)))
             .collect();
-        let mut local: Vec<_> = self
-            .view
-            .containers
-            .par_iter()
-            .filter_map(|c| {
-                let Place::Stock { region, good } = c.place else {
-                    return None;
-                };
-                let portion = *portions.get(&good)?;
-                (c.quantity(good) >= portion).then_some((region, good))
-            })
-            .collect();
+        let mut local: Vec<_> = if choices.len() == self.owner.people.len() {
+            Vec::new()
+        } else {
+            self.view
+                .containers
+                .par_iter()
+                .filter_map(|c| {
+                    let Place::Stock { region, good } = c.place else {
+                        return None;
+                    };
+                    let portion = *portions.get(&good)?;
+                    (c.quantity(good) >= portion).then_some((region, good))
+                })
+                .collect()
+        };
         if local.par_windows(2).any(|p| p[0] > p[1]) {
             local.par_sort_unstable();
         }
@@ -309,11 +340,15 @@ impl Context<'_> {
                     .ok()
                     .map(|i| &self.people[i])?;
                 let region = person.region?;
+                let choice = choices.get(&person.id).copied();
+                let minimum_hunger = choice
+                    .and_then(|row| row.min_hunger)
+                    .unwrap_or(self.owner.min_hunger);
                 if !preference.enabled
                     || person.controlled
                     || person.health == 0
                     || !person.seek_meals
-                    || person.hunger < self.owner.min_hunger
+                    || person.hunger < minimum_hunger
                 {
                     return preference.target.map(|_| (person.id, None));
                 }
@@ -325,13 +360,15 @@ impl Context<'_> {
                 }) {
                     return preference.target.map(|_| (person.id, None));
                 }
-                let start = local.partition_point(|row| row.0 < region);
-                let end = local.partition_point(|row| row.0 <= region);
-                if local[start..end].iter().any(|(_, good)| {
-                    self.claims
-                        .is_none_or(|claims| claims.allows(person.id, region, *good))
-                }) {
-                    return preference.target.map(|_| (person.id, None));
+                if choice.is_none() {
+                    let start = local.partition_point(|row| row.0 < region);
+                    let end = local.partition_point(|row| row.0 <= region);
+                    if local[start..end].iter().any(|(_, good)| {
+                        self.claims
+                            .is_none_or(|claims| claims.allows(person.id, region, *good))
+                    }) {
+                        return preference.target.map(|_| (person.id, None));
+                    }
                 }
                 if preference.target == Some(region) {
                     return Some((person.id, None));
@@ -376,6 +413,48 @@ impl Context<'_> {
                         .and_then(|paths| paths.get(&destination).copied()),
                     None => routes.get(&(region, destination)).copied(),
                 };
+                if let Some(choice) = choice {
+                    let unit = self
+                        .travel
+                        .travel_unit_millis
+                        .or_else(|| self.stock_time.tick_millis())
+                        .unwrap_or(1);
+                    let mut stay = i128::from(choice.stay_value);
+                    let mut best = None;
+                    for record in &mind.records {
+                        if !recall.remembers(person.id, record, self.stock_time)
+                            || record.food < self.owner.min_report_food
+                            || !self.owner.fresh(record, self.stock_time)
+                        {
+                            continue;
+                        }
+                        if record.region == region {
+                            stay = stay.max(choice.score(record, self.stock_time, 0, false));
+                        } else if let Some((ticks, next)) = path(record.region) {
+                            let duration = u128::from(ticks) * u128::from(unit);
+                            let score = choice.score(
+                                record,
+                                self.stock_time,
+                                duration,
+                                preference.target == Some(record.region),
+                            );
+                            let candidate = (
+                                score,
+                                (record.observed_at, record.observed_at_millis),
+                                std::cmp::Reverse(record.region),
+                                next,
+                            );
+                            best = Some(best.map_or(candidate, |previous| candidate.max(previous)));
+                        }
+                    }
+                    return match best {
+                        Some((score, _, destination, next)) if score > stay => {
+                            Some((person.id, Some((next, destination.0))))
+                        }
+                        _ => (preference.target.is_some() || self.travel.personal_routing)
+                            .then_some((person.id, None)),
+                    };
+                }
                 let destination = preference.target.or_else(|| {
                     mind.records
                         .iter()
@@ -428,14 +507,15 @@ impl Context<'_> {
                 .owner
                 .people
                 .par_iter()
-                .filter(|row| row.target.is_some())
-                .map(|row| row.person)
+                .filter_map(|row| row.target.map(|region| (row.person, region)))
                 .collect();
             continuing.par_sort_unstable();
             let mut uses: Vec<_> = targets
                 .par_iter()
                 .filter_map(|&(person, region)| {
-                    if !recall.tracks(person) || continuing.binary_search(&person).is_ok() {
+                    if !recall.tracks(person)
+                        || continuing.binary_search(&(person, region)).is_ok()
+                    {
                         return None;
                     }
                     let mind = minds
