@@ -60,7 +60,7 @@ fn command(host: &mut CoreHost, person: u64, words: &[&str]) -> Result<bool, Str
     match words {
         [] => {}
         ["help"] => println!(
-            "look | wait MILLISECONDS | move REGION | walk stock|store ID | stores | deposit STORE GOOD QUANTITY | take-from-store STORE GOOD QUANTITY | pause-walk | resume-walk | trip REGION VISIT_MILLISECONDS [food] | trip go|survey|back|cancel | trip leave-in MILLISECONDS | trip meet GROUP MINIMUM WAIT_MILLISECONDS | trip meet off | fight PERSON | join-fight BENEFICIARY OPPONENT | tactic wait|defend|retreat | tactic attack PERSON | tactic attack-site SITE | tactic move X Y | confine PERSON SITE | guard SITE | release PERSON | escape | build BLUEPRINT | demolish SITE | salvage SITE GOOD QUANTITY | gather NODE | cultivate FIELD [CARRIED_SEED_BATCH] | amend FIELD | water FIELD QUANTITY | pastime ACTIVITY | pastime stop | report-food on|off | misreport-food DELTA [PERSON] | survey-food exact|STEP [GOOD...] | food-reports | listen-for ACTIVITY VALUE | performances | memories [PERSON] | reflect-memory PERSON | reflect-memory activity ACTIVITY | findings | assemble APPARATUS PART... | mount APPARATUS STORE | unmount APPARATUS STORE | experiment APPARATUS OUTPUT FORCE DISTANCE LOAD | promise PERSON GOOD QUANTITY DUE_IN_MILLISECONDS | respond PROMISE accept|decline|withdraw | deliver PROMISE QUANTITY | eat GOOD | treat GOOD | wear GOOD | unwear | work RECIPE UNITS | stop JOB | stop-assist | rest on|off | word place|person|object ID SOUNDS | form SOUNDS MARKS | writing-surfaces | writing-surface GOOD|default | inscribe SOUNDS | compose SOUNDS SOUNDS ... | read-work PAGE | read PAGE | recall PAGE | save PATH | load PATH | catalog-additions CONTENT_ROOT | quit (SOUNDS and MARKS are comma-separated numbers)"
+            "look | wait MILLISECONDS | move REGION | walk stock|store ID | stores | deposit STORE GOOD QUANTITY | take-from-store STORE GOOD QUANTITY | pause-walk | resume-walk | trip REGION VISIT_MILLISECONDS [food] | trip go|survey|back|cancel | trip leave-in MILLISECONDS | trip meet GROUP MINIMUM WAIT_MILLISECONDS | trip meet off | fight PERSON | join-fight BENEFICIARY OPPONENT | tactic wait|defend|retreat | tactic attack PERSON | tactic attack-site SITE | tactic move X Y | confine PERSON SITE | guard SITE | release PERSON | escape | build BLUEPRINT | demolish SITE | salvage SITE GOOD QUANTITY | gather NODE | cultivate FIELD [CARRIED_SEED_BATCH] | amend FIELD | water FIELD QUANTITY | pastime ACTIVITY | pastime stop | report-food on|off | misreport-food DELTA [PERSON] | survey-food exact|STEP [GOOD...] | food-reports | listen-for ACTIVITY VALUE | present ACTIVITY on|off | performances | attend PERFORMER MINIMUM_MILLISECONDS | attend leave | memories [PERSON] | reflect-memory PERSON | reflect-memory activity ACTIVITY | findings | assemble APPARATUS PART... | mount APPARATUS STORE | unmount APPARATUS STORE | experiment APPARATUS OUTPUT FORCE DISTANCE LOAD | promise PERSON GOOD QUANTITY DUE_IN_MILLISECONDS | respond PROMISE accept|decline|withdraw | deliver PROMISE QUANTITY | eat GOOD | treat GOOD | wear GOOD | unwear | work RECIPE UNITS | stop JOB | stop-assist | rest on|off | word place|person|object ID SOUNDS | form SOUNDS MARKS | writing-surfaces | writing-surface GOOD|default | inscribe SOUNDS | compose SOUNDS SOUNDS ... | read-work PAGE | read PAGE | recall PAGE | save PATH | load PATH | catalog-additions CONTENT_ROOT | quit (SOUNDS and MARKS are comma-separated numbers)"
         ),
         ["quit"] | ["exit"] => return Ok(false),
         ["look"] => {
@@ -585,9 +585,45 @@ fn command(host: &mut CoreHost, person: u64, words: &[&str]) -> Result<bool, Str
             host.present_performance_controlled(person, number(activity)?, *choice == "on")?;
             println!("presentation preference updated");
         }
+        ["attend", "leave"] => {
+            println!(
+                "left_performance={}",
+                host.leave_performance_controlled(person)?
+            );
+        }
+        ["attend", performer, millis] => {
+            let minimum = std::num::NonZeroU64::new(number(millis)?)
+                .ok_or("the minimum listening time must be positive")?;
+            println!(
+                "attending={}",
+                host.join_performance_controlled(person, number(performer)?, minimum)?
+            );
+        }
         ["performances"] => {
+            if let Some(attendance) = host.current_performance_controlled(person)? {
+                println!(
+                    "attending performer={} activity={} joined_at_millis={}",
+                    attendance.performer, attendance.activity, attendance.joined_at
+                );
+            }
+            for performance in host.local_performances_controlled(person)? {
+                println!(
+                    "available performer={} activity={} ends_at_millis={}",
+                    performance.person, performance.activity, performance.ends_at
+                );
+            }
             for record in host.heard_performances_controlled(person)? {
-                println!("heard performer={} activity={} at_millis={}", record.performer, record.activity, record.at_millis);
+                if let Some(millis) = record.attended_millis {
+                    println!(
+                        "heard performer={} activity={} at_millis={} attended_millis={millis}",
+                        record.performer, record.activity, record.at_millis
+                    );
+                } else {
+                    println!(
+                        "heard performer={} activity={} at_millis={}",
+                        record.performer, record.activity, record.at_millis
+                    );
+                }
             }
         }
         ["memories", other @ ..] if other.len() <= 1 => {

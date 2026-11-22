@@ -1383,7 +1383,7 @@ impl CoreHost {
                     }
                     handled = true;
                 }
-                if deadline.pastime && run.record_pastimes(self.settle_pastimes(blocked)) {
+                if deadline.pastime && run.record_pastimes(self.settle_pastimes(external_blocked)) {
                     handled = true;
                     rest_dirty = true;
                 }
@@ -3957,7 +3957,7 @@ impl CoreHost {
                             busy.dedup();
                             run.events.push(CoreRunEvent::WrittenWorks(works));
                         }
-                        let pastimes = attempt!('run, self.start_pastimes(&busy));
+                        let pastimes = attempt!('run, self.start_pastimes(&busy, external_blocked));
                         if !pastimes.is_empty() {
                             run.events.push(CoreRunEvent::Pastimes(pastimes));
                             rest_dirty = true;
@@ -3991,6 +3991,7 @@ impl CoreHost {
                 run.failure = Some("core schedule made no progress".into());
                 break;
             }
+            self.enforce_audience_presence(external_blocked);
             let quiet_observation = defer_observations
                 && step < deadline.after_millis
                 && step < until_decision;

@@ -1,0 +1,104 @@
+# One performance, with individual decisions about staying.
+seed = 21
+tick_millis = 3600000
+decision_period_millis = 200000
+stock_capacity = 100
+food_relief_divisor = 20
+
+[rules]
+hunger_per_tick = 0
+meal_threshold = 5
+starvation_threshold = 50
+starvation_damage = 1
+max_health = 100
+carrying_capacity = 10
+max_work_hunger = 20
+
+[[regions]]
+id = 1
+stock = {}
+
+[[people]]
+id = 1
+region = 1
+health = 100
+hunger = 0
+willing_to_work = false
+seek_meals = false
+goods = { "reed-pipe" = 1 }
+
+[[people]]
+id = 2
+region = 1
+health = 100
+hunger = 0
+willing_to_work = false
+seek_meals = false
+
+[[people]]
+id = 3
+region = 1
+health = 100
+hunger = 0
+willing_to_work = false
+seek_meals = false
+
+[[people]]
+id = 4
+region = 1
+health = 100
+hunger = 0
+willing_to_work = false
+seek_meals = false
+controlled = true
+
+[[people]]
+id = 5
+region = 1
+health = 100
+hunger = 0
+willing_to_work = false
+seek_meals = false
+
+[[people]]
+id = 6
+region = 1
+health = 100
+hunger = 0
+willing_to_work = false
+seek_meals = false
+controlled = true
+
+[pastimes]
+catalogs = ["pastimes/daily.toml"]
+activities = { "play-reed-pipe" = 1 }
+minds = [{ person = 1, interests = [{ activity = 1, value = 9, recent_value = -20 }] }]
+
+[pastimes.culture]
+presentations = [{ person = 1, activity = 1 }]
+listeners = [
+    { person = 2, minimum_millis = 250000, interests = [{ activity = 1, value = 10 }] },
+    { person = 3, minimum_millis = 250000, interests = [{ activity = 1, value = -5 }] },
+    { person = 5, minimum_millis = 250000, stay_value = -20, interests = [{ activity = 1, value = 10 }] },
+]
+
+[[local_transport.stores]]
+id = 50
+region = 1
+name = "Shelf across the clearing"
+capacity = 12
+
+[local_transport.walking.elapsed]
+unit_millis = 1000
+
+[[local_transport.walking.routes]]
+region = 1
+from = { kind = "stock" }
+to = { kind = "store", id = 50 }
+duration_millis = 30000
+
+[[local_transport.walking.routes]]
+region = 1
+from = { kind = "store", id = 50 }
+to = { kind = "stock" }
+duration_millis = 30000

@@ -3,6 +3,7 @@ use super::{Event, Outcome};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
+use std::num::NonZeroU64;
 
 pub type Venue = (u64, (u64, u64));
 
@@ -20,6 +21,8 @@ pub struct Heard {
     pub performer: u64,
     pub activity: u32,
     pub at_millis: u128,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attended_millis: Option<u64>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -38,6 +41,35 @@ pub struct Listener {
     #[serde(default)]
     pub idle: i64,
     pub interests: Vec<Interest>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub minimum_millis: Option<NonZeroU64>,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub stay_value: i64,
+}
+
+fn is_zero(value: &i64) -> bool {
+    *value == 0
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Attendance {
+    pub listener: u64,
+    pub performer: u64,
+    pub activity: u32,
+    pub started_at: u128,
+    pub joined_at: u128,
+    pub venue: Venue,
+}
+
+impl Attendance {
+    pub(crate) fn follows(self, session: &super::Session) -> bool {
+        self.performer == session.person
+            && self.activity == session.activity
+            && self.started_at == session.started_at
+            && self.venue.0 == session.region
+            && self.joined_at < session.ends_at
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -45,12 +77,15 @@ pub struct Listener {
 pub struct Culture {
     pub presentations: Vec<Presentation>,
     pub listeners: Vec<Listener>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attendance: Vec<Attendance>,
 }
 
 impl Culture {
     pub fn sort(&mut self) {
         self.presentations.sort_unstable();
         self.listeners.sort_unstable_by_key(|row| row.person);
+        self.attendance.sort_unstable_by_key(|row| row.listener);
         for listener in &mut self.listeners {
             listener.interests.sort_unstable_by_key(|row| row.activity);
         }
@@ -71,6 +106,20 @@ impl Culture {
                 .listeners
                 .par_windows(2)
                 .all(|p| p[0].person < p[1].person)
+            && self
+                .attendance
+                .par_windows(2)
+                .all(|p| p[0].listener < p[1].listener)
+            && self.attendance.par_iter().all(|row| {
+                row.listener != row.performer
+                    && row.started_at <= row.joined_at
+                    && row.joined_at <= now
+                    && self.presents(row.performer, row.activity)
+                    && self.listener(row.listener).is_some_and(|listener| {
+                        listener.minimum_millis.is_some()
+                            && listener.interest(row.activity).is_some()
+                    })
+            })
             && self.listeners.par_iter().all(|row| {
                 people.contains(&row.person)
                     && row.interests.len() <= 16
@@ -86,9 +135,34 @@ impl Culture {
                                     && heard.performer != row.person
                                     && people.contains(&heard.performer)
                                     && heard.at_millis <= now
+                                    && heard.attended_millis.is_none_or(|millis| {
+                                        millis > 0 && u128::from(millis) <= heard.at_millis
+                                    })
                             })
                     })
             })
+    }
+
+    pub fn presents(&self, person: u64, activity: u32) -> bool {
+        self.presentations
+            .binary_search(&Presentation { person, activity })
+            .is_ok()
+    }
+
+    pub fn listener(&self, person: u64) -> Option<&Listener> {
+        let index = self
+            .listeners
+            .binary_search_by_key(&person, |row| row.person)
+            .ok()?;
+        Some(&self.listeners[index])
+    }
+
+    pub fn attending(&self, person: u64) -> Option<Attendance> {
+        let index = self
+            .attendance
+            .binary_search_by_key(&person, |row| row.listener)
+            .ok()?;
+        Some(self.attendance[index])
     }
 
     pub fn remembered(&self, person: u64) -> impl Iterator<Item = Heard> + '_ {
@@ -117,6 +191,8 @@ impl Culture {
                         person,
                         idle: 0,
                         interests: Vec::new(),
+                        minimum_millis: None,
+                        stay_value: 0,
                     },
                 );
                 &mut self.listeners[index]
@@ -144,6 +220,9 @@ impl Culture {
         match self.presentations.binary_search(&presentation) {
             Ok(index) if !enabled => {
                 self.presentations.remove(index);
+                self.attendance.retain(|row| {
+                    row.performer != presentation.person || row.activity != presentation.activity
+                });
             }
             Err(index) if enabled => self.presentations.insert(index, presentation),
             _ => (),
@@ -166,13 +245,7 @@ impl Culture {
             .par_iter()
             .filter_map(|event| {
                 (event.outcome == Outcome::Completed
-                    && self
-                        .presentations
-                        .binary_search(&Presentation {
-                            person: event.person,
-                            activity: event.activity,
-                        })
-                        .is_ok())
+                    && self.presents(event.person, event.activity))
                 .then_some(())?;
                 Some((
                     venue(event.person)?,
@@ -189,7 +262,7 @@ impl Culture {
         self.listeners
             .par_iter()
             .filter_map(|listener| {
-                if !available(listener.person) {
+                if listener.minimum_millis.is_some() || !available(listener.person) {
                     return None;
                 }
                 let venue = venue(listener.person)?;
@@ -224,6 +297,7 @@ impl Culture {
                     activity: listener.interests[index].activity,
                     performer,
                     at_millis,
+                    attended_millis: None,
                 })
             })
             .collect()
@@ -243,5 +317,15 @@ impl Culture {
                 listener.interests[interest].last_heard = Some(hearing);
             }
         });
+    }
+}
+
+impl Listener {
+    pub(crate) fn interest(&self, activity: u32) -> Option<&Interest> {
+        let index = self
+            .interests
+            .binary_search_by_key(&activity, |row| row.activity)
+            .ok()?;
+        Some(&self.interests[index])
     }
 }

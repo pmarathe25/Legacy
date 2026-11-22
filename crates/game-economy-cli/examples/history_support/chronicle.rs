@@ -545,7 +545,11 @@ fn classify(kind: &str, row: &Value) -> Option<Receipt> {
     }
     if kind == "heard_performances" {
         return Some(Receipt {
-            label: "performances heard at their conclusion",
+            label: if row["attended_millis"].as_u64().is_some() {
+                "performances heard with sustained attention"
+            } else {
+                "performances heard at their conclusion"
+            },
             actor: Some(row["listener"].as_u64()?),
             other: Some(row["performer"].as_u64()?),
         });

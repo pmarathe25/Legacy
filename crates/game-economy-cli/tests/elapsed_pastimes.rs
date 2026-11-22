@@ -1,14 +1,19 @@
 use game_economy::core_interval::{CoreHost, CoreRunEvent};
 use game_lots::Place;
 use game_pastimes::Outcome;
+use std::num::NonZeroU64;
 use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 static NEXT_FIXTURE: AtomicUsize = AtomicUsize::new(0);
 
 fn scene(quantum: u64) -> CoreHost {
+    load("economy-pastimes.toml", quantum)
+}
+
+fn load(scenario: &str, quantum: u64) -> CoreHost {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let text = std::fs::read_to_string(root.join("content/scenarios/economy-pastimes.toml"))
+    let text = std::fs::read_to_string(root.join("content/scenarios").join(scenario))
         .unwrap()
         .replace("tick_millis = 3600000", &format!("tick_millis = {quantum}"));
     let path = std::env::temp_dir().join(format!(
@@ -20,6 +25,104 @@ fn scene(quantum: u64) -> CoreHost {
     let loaded = game_economy_cli::core_scenario(&path, &root.join("content"));
     std::fs::remove_file(path).unwrap();
     loaded.unwrap()
+}
+
+#[test]
+fn listeners_choose_sustained_attention_and_an_interruption_breaks_it() {
+    use game_economy::LocalEndpoint;
+    use game_pastimes::Heard;
+
+    let run = |workers, quantum, chunks: &[u64], leaves| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut host = load("economy-pastime-audience.toml", quantum);
+                let mut receipts = Vec::new();
+                let advance = |host: &mut CoreHost, elapsed, receipts: &mut Vec<Heard>| {
+                    let run = host.advance_continuous(elapsed, &[]).unwrap();
+                    assert_eq!(run.failure, None);
+                    receipts.extend(run.events.into_iter().flat_map(|event| match event {
+                        CoreRunEvent::HeardPerformances(rows) => rows,
+                        _ => Vec::new(),
+                    }));
+                    *host = CoreHost::resume(
+                        serde_json::from_slice(&serde_json::to_vec(&host.snapshot()).unwrap())
+                            .unwrap(),
+                    )
+                    .unwrap();
+                };
+                let taking_part = |host: &CoreHost| {
+                    host.snapshot()
+                        .pastimes
+                        .unwrap()
+                        .culture
+                        .unwrap()
+                        .attendance
+                        .into_iter()
+                        .map(|row| row.listener)
+                        .collect::<Vec<_>>()
+                };
+                advance(&mut host, 100000, &mut receipts);
+                assert_eq!(taking_part(&host), [2, 5]);
+                assert_eq!(host.local_performances_controlled(4).unwrap()[0].person, 1);
+                let long = NonZeroU64::new(500001).unwrap();
+                let minimum = NonZeroU64::new(250000).unwrap();
+                assert!(!host.join_performance_controlled(4, 1, long).unwrap());
+                assert!(host.join_performance_controlled(4, 1, minimum).unwrap());
+                assert!(host.join_performance_controlled(6, 1, minimum).unwrap());
+                assert_eq!(taking_part(&host), [2, 4, 5, 6]);
+                advance(&mut host, 100000, &mut receipts);
+                assert_eq!(taking_part(&host), [2, 4, 6]);
+                if leaves {
+                    assert!(host.leave_performance_controlled(6).unwrap());
+                }
+                host.walk_controlled(4, LocalEndpoint::Store { id: 50 })
+                    .unwrap();
+                assert!(host.current_performance_controlled(4).unwrap().is_none());
+                advance(&mut host, 30000, &mut receipts);
+                assert!(host.local_performances_controlled(4).unwrap().is_empty());
+                host.walk_controlled(4, LocalEndpoint::Stock).unwrap();
+                advance(&mut host, 30000, &mut receipts);
+                assert_eq!(host.local_performances_controlled(4).unwrap().len(), 1);
+                assert!(host.current_performance_controlled(4).unwrap().is_none());
+                for &elapsed in chunks {
+                    advance(&mut host, elapsed, &mut receipts);
+                }
+                assert_eq!(host.core().simulated_millis(), 600000);
+                assert!(taking_part(&host).is_empty());
+                assert!(host.heard_performances_controlled(4).unwrap().is_empty());
+                assert_eq!(
+                    host.heard_performances_controlled(6).unwrap().len(),
+                    usize::from(!leaves)
+                );
+                receipts
+                    .into_iter()
+                    .map(|row| {
+                        (
+                            row.listener,
+                            row.performer,
+                            row.at_millis,
+                            row.attended_millis,
+                        )
+                    })
+                    .collect::<Vec<_>>()
+            })
+    };
+    let uninterrupted = run(1, 3600000, &[340000], false);
+    assert_eq!(
+        uninterrupted,
+        run(6, 197003, &[13017, 210011, 116972], false)
+    );
+    assert_eq!(
+        uninterrupted,
+        [(2, 1, 600000, Some(600000)), (6, 1, 600000, Some(500000))]
+    );
+    assert_eq!(
+        run(4, 260019, &[340000], true),
+        [(2, 1, 600000, Some(600000))]
+    );
 }
 
 fn carry(host: &CoreHost, person: u64, name: &str) -> u64 {

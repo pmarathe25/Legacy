@@ -66,13 +66,6 @@ impl CoreHost {
         Ok(())
     }
 
-    fn performance_venue(&self, person: u64) -> Option<game_pastimes::Venue> {
-        let actor = self.core.person(person)?;
-        let region = actor.region.filter(|_| actor.health > 0)?;
-        let endpoint = self.local_partition(person);
-        (!matches!(endpoint.0, 2 | 4)).then_some((region, endpoint))
-    }
-
     pub(super) fn next_pastime_finish(&self) -> Option<u64> {
         self.pastimes
             .as_ref()?
@@ -113,7 +106,12 @@ impl CoreHost {
             })
     }
 
-    pub(super) fn start_pastimes(&mut self, blocked: &[u64]) -> Result<Vec<Event>, String> {
+    pub(super) fn start_pastimes(
+        &mut self,
+        blocked: &[u64],
+        external: &[u64],
+    ) -> Result<Vec<Event>, String> {
+        self.choose_audience(blocked, external, false);
         let Some(owner) = &self.pastimes else {
             return Ok(Vec::new());
         };
@@ -126,13 +124,23 @@ impl CoreHost {
             now,
             |id| {
                 let person = self.core.person(id)?;
-                (person.health > 0 && !person.controlled && busy.binary_search(&id).is_err())
-                    .then_some(person.region)
-                    .flatten()
+                (person.health > 0
+                    && !person.controlled
+                    && busy.binary_search(&id).is_err()
+                    && owner
+                        .culture
+                        .as_ref()
+                        .is_none_or(|culture| culture.attending(id).is_none()))
+                .then_some(person.region)
+                .flatten()
             },
             |id, activity| self.pastime_ready(id, activity, true),
         );
-        self.publish_pastime_choices(selected)
+        let opened = self.publish_pastime_choices(selected)?;
+        if !opened.is_empty() {
+            self.choose_audience(blocked, external, true);
+        }
+        Ok(opened)
     }
 
     pub fn start_pastime_controlled(
@@ -161,10 +169,14 @@ impl CoreHost {
         else {
             return Ok(None);
         };
-        Ok(self
+        let opened = self
             .publish_pastime_choices(vec![selected])?
             .into_iter()
-            .next())
+            .next();
+        if opened.is_some() {
+            self.choose_audience(&[], &[], true);
+        }
+        Ok(opened)
     }
 
     pub fn stop_pastime_controlled(&mut self, person: u64) -> Result<Option<Event>, String> {
@@ -249,28 +261,37 @@ impl CoreHost {
                 .collect();
             self.core.physical.commit_interval_consumption(draft)?;
         }
-        Ok(self
-            .pastimes
-            .as_mut()
-            .expect("prepared pastime owner")
-            .start(accepted))
+        let owner = self.pastimes.as_mut().expect("prepared pastime owner");
+        if let Some(culture) = &mut owner.culture
+            && !culture.attendance.is_empty()
+        {
+            culture.retain_attendance(|row| {
+                accepted
+                    .binary_search_by_key(&row.listener, |session| session.person)
+                    .is_err()
+            });
+        }
+        Ok(owner.start(accepted))
     }
 
     pub(super) fn settle_pastimes(&mut self, blocked: &[u64]) -> SettledPastimes {
         if self.pastime_people().next().is_none() {
             return SettledPastimes::default();
         }
+        self.enforce_audience_presence(blocked);
         let Some(mut owner) = self.pastimes.take() else {
             return SettledPastimes::default();
         };
         let events = owner.settle(self.core.simulated_millis(), |session, activity| {
-            self.core.projected_person(session.person).is_some_and(|person| {
-                person.health > 0
-                    && person.region == Some(session.region)
-                    && self.pastime_ready(person.id, activity, false)
-            })
+            self.core
+                .projected_person(session.person)
+                .is_some_and(|person| {
+                    person.health > 0
+                        && person.region == Some(session.region)
+                        && self.pastime_ready(person.id, activity, false)
+                })
         });
-        let hearings = owner
+        let mut hearings = owner
             .culture
             .as_ref()
             .filter(|culture| !culture.presentations.is_empty() && !culture.listeners.is_empty())
@@ -299,6 +320,11 @@ impl CoreHost {
                 )
             });
         if let Some(culture) = &mut owner.culture {
+            let sustained = culture.finish_attendance(&events);
+            if !sustained.is_empty() {
+                hearings.extend(sustained);
+                hearings.par_sort_unstable_by_key(|row| row.listener);
+            }
             culture.remember(&hearings);
         }
         self.pastimes = Some(owner);

@@ -133,6 +133,12 @@ uses the carried materials when it starts, and leaves reusable instruments in
 custody. The [pastime scenario](../../content/scenarios/economy-pastimes.toml)
 includes song composition, instrument practice, and painting.
 
+Use `present ACTIVITY on|off` to share or withdraw a performance.
+`performances` lists audible sessions and the person's memories.
+`attend PERFORMER MINIMUM_MILLISECONDS` starts listening, and `attend leave`
+ends their attention. Crossing to another endpoint breaks continuous
+attendance, even if the person returns before the performance ends.
+
 `compose SOUNDS SOUNDS ...` writes an ordered sequence of personal forms on
 one carried object. Each form must have marks the character already chose.
 `writing-surfaces` lists the configured output good IDs and the current choice.

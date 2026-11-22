@@ -1,7 +1,10 @@
 //! Personally chosen elapsed leisure and creative practice.
+mod attendance;
 mod culture;
 mod training;
-pub use culture::{Culture, Heard, Interest as ListeningInterest, Listener, Presentation, Venue};
+pub use culture::{
+    Attendance, Culture, Heard, Interest as ListeningInterest, Listener, Presentation, Venue,
+};
 use game_production_model::Amount;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -122,6 +125,11 @@ impl Pastimes {
         if !self.training.validate(people, &self.activities)
             || self.culture.as_ref().is_some_and(|culture| {
                 !culture.valid(people, |id| self.activity(id).is_some(), now)
+                    || culture.attendance.par_iter().any(|row| {
+                        self.session(row.performer)
+                            .is_none_or(|session| !row.follows(session))
+                            || self.session(row.listener).is_some()
+                    })
             })
             || self
                 .activities
@@ -295,6 +303,11 @@ impl Pastimes {
             .binary_search_by_key(&person, |row| row.person)
             .ok()?;
         let row = self.active.remove(slot);
+        if let Some(culture) = &mut self.culture {
+            culture
+                .attendance
+                .retain(|attendance| attendance.performer != person);
+        }
         Some(Event {
             person,
             activity: row.activity,

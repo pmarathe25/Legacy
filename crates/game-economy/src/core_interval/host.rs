@@ -3,6 +3,7 @@ use super::*;
 use game_autowork::Autowork;
 use game_economy_work::tool_wear::ToolWear;
 mod agriculture;
+mod audience;
 mod watering;
 mod animal_care;
 mod animal_handling;
