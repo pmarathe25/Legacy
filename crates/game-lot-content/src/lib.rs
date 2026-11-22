@@ -385,6 +385,7 @@ impl Catalog {
         Ok(State {
             next_batch: None,
             expiry_millis: None,
+            footprints: Default::default(),
             storage_climate: None,
             tick,
             revision: 0,

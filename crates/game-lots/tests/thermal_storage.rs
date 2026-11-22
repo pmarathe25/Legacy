@@ -17,6 +17,7 @@ fn moving_part_of_a_batch_preserves_its_remaining_age_across_climates() {
                     revision: 0,
                     next_batch: None,
                     expiry_millis: Some(0),
+                    footprints: Default::default(),
                     storage_climate: Some(StorageClimate {
                         ambient_celsius: 20,
                         places: vec![
@@ -138,6 +139,7 @@ fn storage_changes_share_a_draft_with_custody_and_keep_remaining_age() {
                     revision: 0,
                     next_batch: None,
                     expiry_millis: Some(0),
+                    footprints: Default::default(),
                     storage_climate: Some(StorageClimate {
                         ambient_celsius: 20,
                         places: Vec::new(),

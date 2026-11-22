@@ -215,6 +215,7 @@ mod tests {
             bindings: vec![],
         };
         let view = View {
+            footprints: Default::default(),
             region_ids: None,
             boundary: 0,
             revision: 0,

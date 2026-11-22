@@ -184,7 +184,7 @@ impl Search<'_> {
                     .quantity(input.good)
                     .min(needed)
                     .min(self.max_quantity)
-                    .min(self.holder.capacity.saturating_sub(self.holder.used));
+                    .min(self.view.remaining_quantity(self.holder, input.good));
                 (quantity > 0).then_some(Choice {
                     person: self.person,
                     from: Place::Inventory(store),
@@ -201,7 +201,8 @@ impl Search<'_> {
             };
             let regional = self.view.container(destination)?;
             let amount = input.quantity.saturating_sub(regional.quantity(input.good));
-            (amount > 0 && regional.used < regional.capacity).then_some((destination, amount))
+            (amount > 0 && self.view.remaining_quantity(regional, input.good) > 0)
+                .then_some((destination, amount))
         };
         if let Some(choice) = recipe.inputs.iter().find_map(|input| {
             let (destination, amount) = missing(input)?;
@@ -211,7 +212,7 @@ impl Search<'_> {
                 .quantity(input.good)
                 .min(amount)
                 .min(self.max_quantity)
-                .min(regional.capacity.saturating_sub(regional.used));
+                .min(self.view.remaining_quantity(regional, input.good));
             (quantity > 0).then_some(Choice {
                 person: self.person,
                 from: Place::Person(self.person),
@@ -239,7 +240,7 @@ impl Search<'_> {
             let quantity = available
                 .min(amount)
                 .min(self.max_quantity)
-                .min(self.holder.capacity.saturating_sub(self.holder.used));
+                .min(self.view.remaining_quantity(self.holder, input.good));
             (quantity > 0).then_some(Choice {
                 person: self.person,
                 from: Place::Inventory(store),

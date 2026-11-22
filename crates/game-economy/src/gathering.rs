@@ -361,7 +361,9 @@ impl Context<'_> {
                 let capacity = self
                     .view
                     .container(Place::Person(person.id))
-                    .map_or(0, |holder| holder.capacity.saturating_sub(holder.used));
+                    .map_or(0, |holder| {
+                        self.view.remaining_quantity(holder, resource.good)
+                    });
                 let pressured = policy
                     .pressured_by
                     .zip(policy.pressure_threshold)

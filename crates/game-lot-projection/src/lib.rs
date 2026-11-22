@@ -17,7 +17,7 @@ pub fn inventories(view: &View) -> Vec<Inventory> {
                 Stock {
                     good,
                     quantity: container.quantity(good),
-                    capacity: container.capacity,
+                    capacity: view.footprints.fit(container.capacity, good),
                 },
             )),
             _ => None,

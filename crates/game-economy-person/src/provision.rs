@@ -84,13 +84,13 @@ fn stock_opportunities(
             .flatten();
             region.into_iter().flat_map(move |region| {
                 let holding = view.container(Place::Person(person.id));
-                let remaining =
-                    holding.map_or(0, |holding| holding.capacity.saturating_sub(holding.used));
                 let start = stock.partition_point(|row| row.0 < region);
                 let end = stock.partition_point(|row| row.0 <= region);
                 stock[start..end]
                     .iter()
                     .filter_map(move |&(_, good, quantity)| {
+                        let remaining =
+                            holding.map_or(0, |holder| view.remaining_quantity(holder, good));
                         let accessible = if eat_on_site {
                             quantity > remaining
                                 && holding.is_some_and(|holding| holding.quantity(good) < quantity)
@@ -201,7 +201,7 @@ pub fn prepare(
             let last = sources.partition_point(|row| row.region <= region);
             sources[first..last]
                 .iter()
-                .filter(|row| row.portion <= holding.capacity - holding.used)
+                .filter(|row| row.portion <= view.remaining_quantity(holding, row.good))
                 .filter_map(|row| {
                     let regional = row
                         .regional

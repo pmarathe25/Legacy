@@ -163,6 +163,7 @@ fn fixture(perishable: bool, output_quantity: u64) -> Runtime {
         custody: State {
             next_batch: None,
             expiry_millis: None,
+            footprints: Default::default(),
             storage_climate: None,
             tick: 0,
             revision: 0,

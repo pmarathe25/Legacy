@@ -13,6 +13,7 @@ combat_round_millis = 60000
 on_site_meals = true
 expedition_visit_unit_millis = 3600000
 stock_capacity = 100000
+good_footprints = { timber = 3, tool = 2 }
 food_relief_divisor = 1
 
 [storage_climate]

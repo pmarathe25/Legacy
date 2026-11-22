@@ -719,7 +719,7 @@ impl Context<'_> {
                             && requested(recipient.id, sender.id)))
                     && from.quantity(policy.good) >= policy.quantity
                     && to.quantity(policy.good) < policy.quantity
-                    && to.capacity.saturating_sub(to.used) >= policy.quantity)
+                    && self.view.remaining_quantity(to, policy.good) >= policy.quantity)
                     .then_some((sender.id, recipient.id, policy.good, policy.quantity))
             })
             .collect();
@@ -790,7 +790,7 @@ impl Context<'_> {
                             || affinity_motivated
                             || learners.binary_search(&sender.id).is_ok())
                             && policy.minimum_trust.is_none_or(|minimum| trust >= minimum)))
-                    && to.capacity.saturating_sub(to.used) >= policy.quantity)
+                    && self.view.remaining_quantity(to, policy.good) >= policy.quantity)
                     .then_some((
                         sender.id,
                         std::cmp::Reverse(
@@ -875,7 +875,7 @@ impl Context<'_> {
                                 .quantity
                                 .checked_add(proposal.reserve)
                                 .is_some_and(|needed| from.quantity(proposal.good) >= needed)
-                            && to.capacity.saturating_sub(to.used) >= proposal.quantity
+                            && self.view.remaining_quantity(to, proposal.good) >= proposal.quantity
                     })?;
                     Some((
                         sender.id,
@@ -949,7 +949,7 @@ impl Context<'_> {
                         && remaining
                             .checked_add(work.reserve)
                             .is_some_and(|needed| from.quantity(proposal.good) >= needed)
-                        && to.capacity.saturating_sub(to.used) >= remaining)
+                        && self.view.remaining_quantity(to, proposal.good) >= remaining)
                         .then_some((
                             sender.id,
                             recipient.id,
@@ -1009,7 +1009,7 @@ impl Context<'_> {
                     && policy.minimum_trust.is_none_or(|min| trust >= min)
                     && from.quantity(policy.good) >= policy.quantity
                     && to.quantity(policy.good) < policy.quantity
-                    && to.capacity.saturating_sub(to.used) >= policy.quantity)
+                    && self.view.remaining_quantity(to, policy.good) >= policy.quantity)
                     .then_some((sender.id, recipient.id, policy.good, policy.quantity))
             })
             .collect();
@@ -1037,7 +1037,7 @@ impl Context<'_> {
                             .is_some()
                         && self.locally_together(giver, recipient)
                         && from.quantity(offer.good) >= offer.quantity
-                        && to.capacity.saturating_sub(to.used) >= offer.quantity)
+                        && self.view.remaining_quantity(to, offer.good) >= offer.quantity)
                         .then_some((
                             giver.id,
                             std::cmp::Reverse(offer.value),

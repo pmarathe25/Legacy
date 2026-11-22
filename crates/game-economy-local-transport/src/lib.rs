@@ -363,7 +363,7 @@ impl Context<'_> {
                     p.quantity
                 })
                 .min(stock.quantity(p.good))
-                .min(holder.capacity.saturating_sub(holder.used)),
+                .min(self.view.remaining_quantity(holder, p.good)),
             )
         } else {
             let destination = p.destination.place(p.region, p.good, person.id);
@@ -373,7 +373,7 @@ impl Context<'_> {
                 destination,
                 p.quantity
                     .min(carrying)
-                    .min(store.capacity.saturating_sub(store.used)),
+                    .min(self.view.remaining_quantity(store, p.good)),
             )
         };
         (quantity > 0).then_some(Choice {

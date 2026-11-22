@@ -1,5 +1,5 @@
 //! Resolve one contested source feeding distinct destinations in parallel.
-use crate::independent_transfer::after;
+use crate::independent_transfer::after_with_footprints;
 use game_lot_model::{
     Container, Lot, Movement, OutcomeBatch, OutcomeChunk, Place, PlaceIndex, SimpleTransfer,
     Spoilage, State, Transaction, TransactionOutcome,
@@ -254,6 +254,8 @@ fn prepare_rows(
         state.tick
     };
     let instant = state.expiry_millis.unwrap_or(next);
+    let footprints = &state.footprints;
+    let unit_size = footprints.units(first.good);
     state
         .revision
         .checked_add(1)
@@ -352,10 +354,10 @@ fn prepare_rows(
                     .lots
                     .iter()
                     .filter(|lot| lot.expires_at.is_none_or(|at| at > instant))
-                    .map(|lot| lot.quantity)
+                    .map(|lot| footprints.admitted(lot.good, lot.quantity))
                     .sum()
             };
-            granted && row.movement.quantity <= destination.capacity - used
+            granted && row.movement.quantity <= (destination.capacity - used) / unit_size
         })
         .collect();
     let accepted_amounts: Vec<_> = rows
@@ -448,7 +450,14 @@ fn prepare_rows(
                 if accepted || destination.next_expiry.is_some_and(|at| at <= instant) {
                     changes.push((
                         row.destination,
-                        after(destination, instant, 0, 0, &arena[begin..]),
+                        after_with_footprints(
+                            destination,
+                            instant,
+                            0,
+                            0,
+                            &arena[begin..],
+                            footprints,
+                        ),
                     ));
                 }
             }
@@ -470,7 +479,7 @@ fn prepare_rows(
     if source_changed && source_first {
         changes.push((
             source_index,
-            after(source, instant, first.good, consumed, &[]),
+            after_with_footprints(source, instant, first.good, consumed, &[], footprints),
         ));
     }
     for (chunk, transactions, destinations) in parts {
@@ -481,7 +490,7 @@ fn prepare_rows(
     if source_changed && !source_first {
         changes.push((
             source_index,
-            after(source, instant, first.good, consumed, &[]),
+            after_with_footprints(source, instant, first.good, consumed, &[], footprints),
         ));
     }
     if !spoiled.is_empty() {
@@ -490,7 +499,12 @@ fn prepare_rows(
             (index != source_index
                 && destinations.binary_search(&index).is_err()
                 && container.next_expiry.is_some_and(|at| at <= instant))
-            .then(|| (index, after(container, instant, 0, 0, &[])))
+            .then(|| {
+                (
+                    index,
+                    after_with_footprints(container, instant, 0, 0, &[], footprints),
+                )
+            })
         }));
     }
     if changes.par_windows(2).any(|pair| pair[0].0 > pair[1].0) {

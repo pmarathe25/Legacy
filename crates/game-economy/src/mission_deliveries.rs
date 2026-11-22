@@ -88,7 +88,7 @@ pub(crate) fn choices(
             let amount = quantity
                 .saturating_sub(delivered)
                 .min(from.quantity(good).saturating_sub(preference.reserve))
-                .min(to.capacity.saturating_sub(to.used));
+                .min(context.view.remaining_quantity(to, good));
             (amount > 0).then_some((sender.id, target.id, good, amount))
         })
         .collect()

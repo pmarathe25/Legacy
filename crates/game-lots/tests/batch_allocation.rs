@@ -27,6 +27,7 @@ fn owner() -> Store {
         revision: 0,
         next_batch: None,
         expiry_millis: None,
+        footprints: Default::default(),
         storage_climate: None,
         containers: vec![
             Container::new(Place::Person(1), 10, vec![lot(Some(5))]).unwrap(),
@@ -185,6 +186,7 @@ fn independent_batch_creation_scaling() {
         revision: 0,
         next_batch: Some(1),
         expiry_millis: None,
+        footprints: Default::default(),
         storage_climate: None,
         containers: (1..=count)
             .map(|id| Container::new(Place::Person(id), 1, vec![]).unwrap())

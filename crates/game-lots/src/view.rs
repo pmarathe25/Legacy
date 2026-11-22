@@ -1,5 +1,5 @@
 //! Read-only physical quantities for compatibility with decision owners.
-use game_lot_model::{Container, Place, State};
+use game_lot_model::{Container, Footprints, Place, State};
 use rayon::prelude::*;
 use std::{borrow::Cow, sync::Arc};
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -27,8 +27,14 @@ pub struct View {
     pub revision: u64,
     pub containers: Vec<ContainerView>,
     pub region_ids: Option<Arc<[u64]>>,
+    pub footprints: Footprints,
 }
 impl View {
+    /// Quantity of this good that fits in the holder's remaining physical space.
+    pub fn remaining_quantity(&self, holder: &ContainerView, good: u32) -> u64 {
+        self.footprints.fit(holder.capacity - holder.used, good)
+    }
+
     pub fn regions(&self) -> Cow<'_, [u64]> {
         if let Some(regions) = &self.region_ids {
             return Cow::Borrowed(regions);
@@ -92,7 +98,10 @@ fn prepare_rows(
                         })
                     })
                     .collect();
-                let used = goods.iter().map(|row| row.quantity).sum();
+                let used = goods
+                    .iter()
+                    .map(|row| state.footprints.admitted(row.good, row.quantity))
+                    .sum();
                 return ContainerView {
                     place: container.place,
                     capacity: container.capacity,
@@ -109,7 +118,7 @@ fn prepare_rows(
                 if lot.expires_at.is_some_and(|at| at <= instant) {
                     continue;
                 }
-                used += lot.quantity;
+                used += state.footprints.admitted(lot.good, lot.quantity);
                 match goods.last_mut() {
                     Some(last) if last.good == lot.good => last.quantity += lot.quantity,
                     _ => goods.push(Balance {
@@ -128,6 +137,7 @@ fn prepare_rows(
         .collect();
     Ok(View {
         region_ids: None,
+        footprints: state.footprints.clone(),
         boundary,
         revision: state.revision,
         containers,

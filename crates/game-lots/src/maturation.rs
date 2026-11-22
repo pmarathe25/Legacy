@@ -38,6 +38,7 @@ pub(super) fn stage(
         })
         .collect::<Result<_, String>>()?;
     destinations.par_sort_unstable_by_key(|(index, id, _)| (*index, *id));
+    let footprints = &state.footprints;
     let changes = draft.changes.flat_mut();
     let patches: Vec<_> = destinations
         .par_chunk_by(|left, right| left.0 == right.0)
@@ -47,15 +48,16 @@ pub(super) fn stage(
                 .binary_search_by_key(&index, |row| row.0)
                 .map_or(&state.containers[index], |position| &changes[position].1);
             let room = u128::from(holder.capacity - holder.used);
-            let quantities: Vec<_> = destination
+            let sizes: Vec<_> = destination
                 .par_iter()
-                .map(|(_, _, lot)| lot.quantity)
+                .map(|(_, _, lot)| footprints.occupied(lot.good, lot.quantity))
                 .collect();
-            let prefixes = game_lot_allocation::prefixes(&quantities);
+            let prefixes = game_lot_allocation::capacity_prefixes(&sizes);
             let receipts: Vec<_> = destination
                 .par_iter()
+                .zip(sizes.par_iter())
                 .zip(prefixes.into_par_iter())
-                .map(|((_, id, lot), prefix)| (*id, prefix + u128::from(lot.quantity) <= room))
+                .map(|(((_, id, _), &units), prefix)| (*id, prefix + units <= room))
                 .collect();
             let mut lots: Vec<_> = destination
                 .par_iter()
@@ -64,7 +66,11 @@ pub(super) fn stage(
                 .map(|((_, _, lot), _)| lot.clone())
                 .collect();
             let replacement = (!lots.is_empty()).then(|| {
-                let used = holder.used + lots.par_iter().map(|lot| lot.quantity).sum::<u64>();
+                let used = holder.used
+                    + lots
+                        .par_iter()
+                        .map(|lot| footprints.admitted(lot.good, lot.quantity))
+                        .sum::<u64>();
                 lots.extend(holder.lots.iter().cloned());
                 lots.par_sort_unstable_by_key(key);
                 lots.dedup_by(|later, earlier| {

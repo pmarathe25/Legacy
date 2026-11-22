@@ -188,6 +188,7 @@ mod tests {
         let state = State {
             next_batch: None,
             expiry_millis: None,
+            footprints: Default::default(),
             storage_climate: None,
             tick: 0,
             revision: 0,

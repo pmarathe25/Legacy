@@ -310,7 +310,7 @@ impl CoreHost {
                         let Place::Stock { good, .. } = row.place else {
                             return None;
                         };
-                        edible.contains(&good).then_some(row.used)
+                        edible.contains(&good).then(|| row.quantity(good))
                     })
                     .reduce(|| 0, u64::saturating_add)
             })

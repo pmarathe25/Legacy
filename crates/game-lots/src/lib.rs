@@ -8,9 +8,9 @@ mod view;
 pub use batch_allocation::{BatchAllocation, BatchCount, BatchRange};
 pub use compose::{Composed, compose};
 pub use game_lot_model::{
-    Container, Creation, Lot, LotList, Movement, Outcome, OutcomeBatch, OutcomeHeader, OutcomeRef,
-    Place, PlaceIndex, SimpleTransfer, Spoilage, State, StorageClimate, StorageTemperature,
-    Transaction, TransactionOutcome, deadline,
+    Container, Creation, Footprint, Footprints, Lot, LotList, Movement, Outcome, OutcomeBatch,
+    OutcomeHeader, OutcomeRef, Place, PlaceIndex, SimpleTransfer, Spoilage, State, StorageClimate,
+    StorageTemperature, Transaction, TransactionOutcome, deadline,
 };
 use rayon::prelude::*;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -184,7 +184,7 @@ impl Store {
                 for lot in &mut lots {
                     state.date_lot(lot, None, holder.place, at)?;
                 }
-                Container::new(holder.place, holder.capacity, lots)
+                Container::with_footprints(holder.place, holder.capacity, lots, &state.footprints)
             })
             .collect::<Result<_, _>>()?;
         state.containers = containers;
@@ -193,13 +193,14 @@ impl Store {
     /// Validate a saved state once; subsequent mutations go through staged drafts.
     pub fn compile(mut state: State) -> Result<Self, String> {
         normalize_climate(&mut state)?;
+        state.footprints.validate()?;
         let now = state.expiry_millis.unwrap_or(state.tick);
         if state
             .containers
             .par_windows(2)
             .any(|pair| pair[0].place >= pair[1].place)
             || state.containers.par_iter().any(|container| {
-                container.validate().is_err()
+                container.validate_with(&state.footprints).is_err()
                     || container.next_expiry.is_some_and(|at| at <= now)
                     || container
                         .lots
@@ -575,6 +576,10 @@ impl Store {
             .ok()
             .map(|index| &self.state.containers[index])
     }
+    pub fn footprints(&self) -> &Footprints {
+        &self.state.footprints
+    }
+
     pub fn export(&self) -> State {
         self.state.clone()
     }

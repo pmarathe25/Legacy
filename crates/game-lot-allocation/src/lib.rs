@@ -1,7 +1,7 @@
 //! Parallel conservative prefixes for a single contested source or destination.
 pub mod additions;
 mod capacity;
-pub use capacity::{Destination, grant_destinations};
+pub use capacity::{Destination, capacity_prefixes, grant_destinations};
 use rayon::prelude::*;
 pub fn order_actions(actions: &mut [(u32, game_lot_model::Transaction)]) {
     if actions

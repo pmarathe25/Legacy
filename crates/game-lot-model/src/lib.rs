@@ -1,6 +1,8 @@
 //! Physical goods cohorts and stable custody identities.
 use serde::{Deserialize, Serialize};
+mod footprints;
 mod lot_list;
+pub use footprints::{Footprint, Footprints};
 mod outcome_batch;
 mod place_index;
 mod thermal;
@@ -87,17 +89,23 @@ pub struct Container {
     pub place: Place,
     pub capacity: u64,
     pub lots: Vec<Lot>,
-    /// Cached values are validated against lots when state is imported.
+    /// Occupied capacity units, validated against the lots when imported.
     pub used: u64,
     pub next_expiry: Option<u64>,
 }
 impl Container {
-    pub fn new(place: Place, capacity: u64, mut lots: Vec<Lot>) -> Result<Self, String> {
+    pub fn new(place: Place, capacity: u64, lots: Vec<Lot>) -> Result<Self, String> {
+        Self::with_footprints(place, capacity, lots, &Footprints::default())
+    }
+
+    pub fn with_footprints(
+        place: Place,
+        capacity: u64,
+        mut lots: Vec<Lot>,
+        footprints: &Footprints,
+    ) -> Result<Self, String> {
         lots.sort_unstable_by_key(key);
-        let used = lots
-            .iter()
-            .try_fold(0u64, |total, lot| total.checked_add(lot.quantity))
-            .ok_or("lot quantity overflow")?;
+        let used = Self::occupancy(&lots, footprints).ok_or("lot capacity units overflow")?;
         let next_expiry = lots.iter().filter_map(|lot| lot.expires_at).min();
         let result = Self {
             place,
@@ -106,10 +114,21 @@ impl Container {
             used,
             next_expiry,
         };
-        result.validate()?;
+        result.validate_with(footprints)?;
         Ok(result)
     }
+
+    fn occupancy(lots: &[Lot], footprints: &Footprints) -> Option<u64> {
+        lots.iter().try_fold(0u64, |total, lot| {
+            total.checked_add(u64::try_from(footprints.occupied(lot.good, lot.quantity)).ok()?)
+        })
+    }
+
     pub fn validate(&self) -> Result<(), String> {
+        self.validate_with(&Footprints::default())
+    }
+
+    pub fn validate_with(&self, footprints: &Footprints) -> Result<(), String> {
         if !self.place.valid()
             || self.capacity == 0
             || self.used > self.capacity
@@ -128,11 +147,7 @@ impl Container {
                 .lots
                 .windows(2)
                 .any(|pair| key(&pair[0]) >= key(&pair[1]))
-            || self
-                .lots
-                .iter()
-                .try_fold(0u64, |total, lot| total.checked_add(lot.quantity))
-                != Some(self.used)
+            || Self::occupancy(&self.lots, footprints) != Some(self.used)
             || self.lots.iter().filter_map(|lot| lot.expires_at).min() != self.next_expiry
         {
             return Err("invalid physical lot container".into());
@@ -222,6 +237,8 @@ pub struct State {
     pub expiry_millis: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub storage_climate: Option<StorageClimate>,
+    #[serde(default, skip_serializing_if = "Footprints::is_empty")]
+    pub footprints: Footprints,
     pub containers: Vec<Container>,
 }
 

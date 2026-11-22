@@ -92,7 +92,7 @@ impl Preference {
                 }
                 let to = Place::Inventory(id);
                 let holder = context.view.container(to)?;
-                let quantity = available.min(holder.capacity.saturating_sub(holder.used));
+                let quantity = available.min(context.view.remaining_quantity(holder, self.good));
                 let value = self.storage_value(
                     destination.value,
                     carried_celsius,
