@@ -213,6 +213,9 @@ fn command(host: &mut CoreHost, person: u64, words: &[&str]) -> Result<bool, Str
                 println!("fatigue={} resting={}", fatigue.fatigue, fatigue.resting);
             }
             if let Some(language) = view.language {
+                if let Some(marker) = language.role_marker {
+                    println!("role_marker_sound={} role={:?}", marker.sound, marker.role);
+                }
                 for word in language.words {
                     println!("word={:?} sounds={:?}", word.meaning, word.sounds);
                 }

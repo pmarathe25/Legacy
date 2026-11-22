@@ -99,3 +99,10 @@ may adopt a modified order. Someone without an explicit syntax profile can
 still learn according to their ordinary speech and adoption inclinations.
 Constructions and their observed examples are personal and survive save/load.
 `content/scenarios/economy-core-language-topics.toml` enables this path.
+
+An optional `syntax.role_marking` policy lets a speaker choose a sound from
+their own phonemes as a particle for the holder or the object. A listener with
+this policy can infer a mapping from two distinct demonstrations after hearing
+the phrase and recognizing its words. They can decline, reinterpret the sound
+as marking the opposite role, or revise an existing mapping. A listener who
+does learn the sound can use it independently of their own word order.

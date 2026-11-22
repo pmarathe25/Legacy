@@ -287,6 +287,7 @@ impl Chronicle {
                 | "work_requests"
                 | "maturation"
                 | "recipe_learning"
+                | "language_events"
                 | "written_explanations"
                 | "written_works"
                 | "farm_review"
@@ -466,6 +467,15 @@ impl Chronicle {
 }
 
 fn classify(kind: &str, row: &Value) -> Option<Receipt> {
+    if kind == "language_events" {
+        let marker = row.pointer("/clause/role_marker")?.as_object()?;
+        let adopted = marker.get("adopted").is_some_and(Value::is_object);
+        return Some(Receipt {
+            label: if adopted { "personal role particles adopted" } else { "role-marked phrases spoken" },
+            actor: row[if adopted { "listener" } else { "speaker" }].as_u64(),
+            other: row[if adopted { "speaker" } else { "listener" }].as_u64(),
+        });
+    }
     if kind == "mechanical_conclusions" {
         let evidence = &row["evidence"];
         let moved = evidence["largest_load_moved"].as_u64()?;
