@@ -12,6 +12,7 @@ use game_work_sites::{Facilities, Site};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
+use std::num::NonZeroU64;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -25,6 +26,16 @@ pub struct Blueprint {
     /// Amount of the kit retained as recoverable physical material.
     #[serde(default)]
     pub salvage: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub storage: Option<StorageDesign>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StorageDesign {
+    pub capacity: NonZeroU64,
+    pub celsius: i16,
+    pub walk_millis: NonZeroU64,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

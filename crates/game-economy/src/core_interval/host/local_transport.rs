@@ -7,6 +7,13 @@ pub struct CoreLocalTransportResults {
     pub events: Vec<game_economy_local_transport::Event>,
 }
 
+#[derive(Debug, PartialEq, Eq)]
+pub struct NearbyStore {
+    pub id: u64,
+    pub name: String,
+    pub reachable: bool,
+}
+
 impl CoreHost {
     /// Each person chooses a pickup or delivery based on their own policy and actual custody.
     pub fn carry_locally_autonomously(
@@ -71,9 +78,74 @@ impl CoreHost {
         } else {
             context.prepare_with_goals(1, &self.goal_carry_context(owner, &view, busy, &needs))?
         };
+        self.commit_local_carries(plan)
+    }
+
+    pub fn controlled_local_stores(&self, person: u64) -> Result<Vec<NearbyStore>, String> {
+        use game_economy_local_transport::Endpoint;
+        let person = self.controlled_person(person)?;
+        let Some(owner) = self.local_transport.as_ref() else {
+            return Ok(Vec::new());
+        };
+        Ok(owner.stores.par_iter().filter_map(|store| {
+            (person.region == Some(store.region)).then(|| NearbyStore {
+                id: store.id,
+                name: store.name.clone(),
+                reachable: owner.walking.as_ref().is_none_or(|walking| {
+                    walking.present(person.id, store.region, Endpoint::Store { id: store.id })
+                }),
+            })
+        }).collect())
+    }
+
+    pub fn carry_at_controlled_store(
+        &mut self,
+        person: u64,
+        store: u64,
+        good: u32,
+        quantity: u64,
+        deposit: bool,
+    ) -> Result<bool, String> {
+        self.controlled_person(person)?;
+        let offset = self.core.elapsed_millis().ok_or("no physical interval")?;
+        if offset >= self.core.physical.tick_millis()
+            || self.core.next_deadline(None)?.after_millis == 0
+            || self.blocked_with_rest(&[]).is_some_and(|rows| rows.binary_search(&person).is_ok())
+            || self.block_held(&[]).is_some_and(|rows| rows.binary_search(&person).is_ok())
+            || self.assisting_people().binary_search(&person).is_ok()
+            || self.core.physical.work().par_iter().any(|work| {
+                work.job.worker == person && work.phase == game_lot_runtime::Phase::Working
+            })
+        {
+            return Err("the controlled person is unavailable for carrying".into());
+        }
+        let owner = self.local_transport.as_ref().ok_or("local stores are unavailable")?;
+        let tick = self.core.physical.tick();
+        let view = self.core.physical.view(tick)?;
+        let plan = game_economy_local_transport::Context {
+            owner,
+            people: &self.core.people,
+            view: &view,
+            opinions: None,
+            claims: None,
+            busy: &[],
+            max_hunger: u32::MAX,
+            manual: Some(game_economy_local_transport::Manual { person, store, good, quantity, deposit }),
+            walking: owner.walking.as_ref(),
+            storage_celsius: &|place| self.core.physical.storage_celsius(place),
+        }.prepare(1)?;
+        Ok(self.commit_local_carries(plan)?.events.iter().any(|row| row.moved))
+    }
+
+    fn commit_local_carries(
+        &mut self,
+        plan: game_economy_local_transport::Plan,
+    ) -> Result<CoreLocalTransportResults, String> {
         if plan.actions.is_empty() {
             return Ok(CoreLocalTransportResults::default());
         }
+        let tick = self.core.physical.tick();
+        let owner = self.local_transport.as_ref().expect("staged local carrying owner");
         let physical = self
             .core
             .physical

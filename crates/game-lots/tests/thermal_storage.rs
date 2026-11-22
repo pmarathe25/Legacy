@@ -1,6 +1,7 @@
 use game_lot_model::{AgingRate, Freshness};
 use game_lots::{
     Container, Lot, Movement, Place, Spoilage, State, StorageClimate, StorageTemperature, Store,
+    Transaction,
 };
 
 #[test]
@@ -120,4 +121,136 @@ fn moving_part_of_a_batch_preserves_its_remaining_age_across_climates() {
             (Place::Person(2), 1, 24, Some(9)),
         ]
     );
+}
+
+#[test]
+fn storage_changes_share_a_draft_with_custody_and_keep_remaining_age() {
+    let run = |workers, round_trip| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let source = Place::Person(1);
+                let destination = Place::Inventory(3);
+                let opening = State {
+                    tick: 0,
+                    revision: 0,
+                    next_batch: None,
+                    expiry_millis: Some(0),
+                    storage_climate: Some(StorageClimate {
+                        ambient_celsius: 20,
+                        places: Vec::new(),
+                        aging_rates: vec![
+                            AgingRate {
+                                from_celsius: -20,
+                                per_thousand: 500,
+                            },
+                            AgingRate {
+                                from_celsius: 10,
+                                per_thousand: 1000,
+                            },
+                            AgingRate {
+                                from_celsius: 25,
+                                per_thousand: 2000,
+                            },
+                        ],
+                    }),
+                    containers: vec![
+                        Container::new(
+                            source,
+                            3,
+                            vec![Lot {
+                                good: 1,
+                                quantity: 2,
+                                batch: Some(9),
+                                item: None,
+                                expires_at: Some(20),
+                                freshness: Freshness::Standard,
+                            }],
+                        )
+                        .unwrap(),
+                    ],
+                };
+                let mut store = Store::compile(opening).unwrap();
+                let mut construction = store.prepare_transactions_now(1, &[]).unwrap();
+                store
+                    .add_empty_in(
+                        &mut construction,
+                        vec![Container::new(destination, 3, vec![]).unwrap()],
+                    )
+                    .unwrap();
+                store
+                    .set_holder_temperatures_in(&mut construction, &[(destination, Some(4))])
+                    .unwrap();
+                assert!(store.container(destination).is_none());
+                store.commit(construction).unwrap();
+                assert_eq!(store.storage_celsius(destination), 4);
+
+                let move_one = || Transaction {
+                    id: 1,
+                    movements: vec![Movement {
+                        id: 1,
+                        from: source,
+                        to: Some(destination),
+                        good: 1,
+                        quantity: 1,
+                        batch: Some(9),
+                        item: None,
+                    }],
+                    creations: Vec::new(),
+                };
+                let advance = |store: &mut Store, at| {
+                    let draft = store.prepare_expiry_at(at).unwrap();
+                    assert!(store.commit_expiry_at(draft).unwrap().is_empty());
+                };
+                advance(&mut store, 7);
+                let first_move = store.prepare_transactions_now(1, &[move_one()]).unwrap();
+                store.commit(first_move).unwrap();
+                assert_eq!(
+                    store.container(destination).unwrap().lots[0].expires_at,
+                    Some(33)
+                );
+                if round_trip {
+                    advance(&mut store, 11);
+                    let checkpoint = serde_json::to_vec(&store.export()).unwrap();
+                    store = Store::compile(serde_json::from_slice(&checkpoint).unwrap()).unwrap();
+                }
+                advance(&mut store, 17);
+                let before = store.revision();
+                let stale = store.prepare_transactions_now(1, &[]).unwrap();
+                let mut collapse = store.prepare_transactions_now(1, &[move_one()]).unwrap();
+                store
+                    .set_holder_temperatures_in(&mut collapse, &[(destination, None)])
+                    .unwrap();
+                store.commit(collapse).unwrap();
+                assert_eq!(store.revision(), before + 1);
+                assert!(store.commit(stale).is_err());
+                assert_eq!(store.storage_celsius(destination), 20);
+                let ages = |store: &Store| {
+                    store
+                        .container(destination)
+                        .unwrap()
+                        .lots
+                        .iter()
+                        .map(|lot| (lot.expires_at, lot.quantity, lot.batch))
+                        .collect::<Vec<_>>()
+                };
+                assert_eq!(
+                    ages(&store),
+                    [(Some(20), 1, Some(9)), (Some(25), 1, Some(9))]
+                );
+                store.change_ambient_temperature(28).unwrap();
+                assert_eq!(
+                    ages(&store),
+                    [(Some(19), 1, Some(9)), (Some(21), 1, Some(9))]
+                );
+                store.export()
+            })
+    };
+    let whole = run(1, false);
+    let split = run(6, true);
+    assert_eq!(whole.containers, split.containers);
+    assert_eq!(whole.storage_climate, split.storage_climate);
+    assert_eq!(whole.expiry_millis, split.expiry_millis);
 }

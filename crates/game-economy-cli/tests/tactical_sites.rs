@@ -47,7 +47,9 @@ fn tactical_damage_collapses_a_real_workshop_and_interrupts_its_work() {
         std::fs::read_to_string(root.join("content/scenarios/economy-combat-collapse.toml"))
             .unwrap();
     let source = template
-        .replace("tick_millis = 3600000", "tick_millis = 1000\ncombat_round_millis = 101")
+        .replace("tick_millis = 3600000", "tick_millis = 1000\ncombat_round_millis = 101\nelapsed_spoilage = true")
+        .replace("[rules]", "[storage_climate]\nambient_celsius = 20\naging_rates = [{ from_celsius = -50, per_thousand = 500 }, { from_celsius = 12, per_thousand = 1000 }]\nplaces = [{ place = { kind = \"inventory\", id = 1 }, celsius = 4 }]\n\n[rules]")
+        .replace("goods = { timber = 5 }", "goods = { timber = 5, bread = 2 }\nstructure = { site = 1, celsius = 4, intact = true }")
         .replace("reed-shelter-kit = 1, bread = 20", "reed-shelter-kit = 1, bread = 20, timber = 10")
         .replace("wear_limit = 1", "wear_limit = 2")
         .replace("position = { x = 0, y = 1 }", "position = { x = 5, y = 4 }")
@@ -63,6 +65,13 @@ fn tactical_damage_collapses_a_real_workshop_and_interrupts_its_work() {
     std::fs::remove_file(path).unwrap();
     let mut opening = loaded.unwrap().snapshot();
     opening.core.people[2].controlled = true;
+    let store = game_lots::Place::Inventory(1);
+    let chilled_bread = |world: &game_economy::core_interval::CoreHostSnapshot| {
+        world.core.physical.custody.containers.iter()
+            .find(|holder| holder.place == store).unwrap().lots.iter()
+            .find(|lot| lot.expires_at.is_some()).unwrap().clone()
+    };
+    let cold_expiry = chilled_bread(&opening).expires_at.unwrap();
     let recipe = opening
         .core
         .physical
@@ -108,6 +117,8 @@ fn tactical_damage_collapses_a_real_workshop_and_interrupts_its_work() {
                         let sites = saved.sites.as_ref().unwrap();
                         assert_eq!(sites.maintenance.as_ref().unwrap().conditions[0].wear, 1);
                         assert_eq!(sites.facilities.bindings[0].job, job);
+                        assert_eq!(chilled_bread(&saved).expires_at, Some(cold_expiry));
+                        assert!(saved.local_transport.as_ref().unwrap().stores[0].structure.unwrap().intact);
                     }
                     host = CoreHost::resume(
                         serde_json::from_str(&serde_json::to_string(&saved).unwrap()).unwrap(),
@@ -116,6 +127,9 @@ fn tactical_damage_collapses_a_real_workshop_and_interrupts_its_work() {
                 }
                 assert_eq!(strikes, [(101, 1, 1, false), (202, 1, 1, true)]);
                 let end = host.snapshot();
+                assert_eq!(chilled_bread(&end).quantity, 2);
+                assert_eq!(chilled_bread(&end).expires_at, Some(202 + (cold_expiry - 202).div_ceil(2)));
+                assert!(!end.local_transport.as_ref().unwrap().stores[0].structure.unwrap().intact);
                 assert!(end.sites.as_ref().unwrap().facilities.sites.is_empty());
                 assert!(
                     end.sites

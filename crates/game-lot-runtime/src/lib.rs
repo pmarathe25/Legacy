@@ -6,7 +6,7 @@ mod interval_settlement;
 mod maturation;
 mod receipts;
 pub use advance::{Adoption, AdvanceDraft, Events, Suspension, WorkTransitions};
-pub use early_work::{EarlyWorkDraft, EarlyWorkEvents, IntervalConsumptionDraft};
+pub use early_work::{EarlyWorkDraft, EarlyWorkEvents, IntervalConsumptionDraft, StorageExposureDraft};
 use game_lot_content::Catalog;
 pub use game_lot_content::{Gathered, Growth, WritingPage};
 pub use game_lot_work::{Phase, Snapshot, Work, WorkInterval};
@@ -158,6 +158,10 @@ impl Runtime {
 
     pub fn storage_celsius(&self, place: Place) -> i16 {
         self.store.storage_celsius(place)
+    }
+
+    pub fn storage_override_celsius(&self, place: Place) -> Option<i16> {
+        self.store.storage_override_celsius(place)
     }
 
     /// Reproject exposed lots from their exact age at the committed custody instant.

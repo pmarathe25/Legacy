@@ -56,7 +56,7 @@ pub use host::{
     CoreSites, CoreSkillCredit, CoreSkills, CoreSocial, CoreSocialResults, CoreStepper,
     CoreToolRepairResults, CoreTreatmentResults, CoreWorkIntent, CoreWritingPracticeResults,
     CoreWritingResults, CoreWorkEdition, CoreWorkInscription, CoreWorkObservation, DecisionPhase,
-    Incapacitation, IncapacityCause, MechanicalCapability,
+    Incapacitation, IncapacityCause, MechanicalCapability, NearbyStore,
     MechanicalCommunication, MechanicalDesignInput, MechanicalDesignPreferences,
     MechanicalExploration, MechanicalLoadMaterial, MechanicalLoadOutcome, MechanicalLoadPolicy,
     MechanicalLoadRequest, MechanicalLoadResult, MechanicalMaterial, MechanicalMemory,
@@ -840,6 +840,16 @@ impl CoreInterval {
         offset_millis: u64,
         requests: &[(u64, u64)],
     ) -> Result<(), String> {
+        self.abandon_work_with_exposure(tick, offset_millis, requests, None)
+    }
+
+    fn abandon_work_with_exposure(
+        &mut self,
+        tick: u64,
+        offset_millis: u64,
+        requests: &[(u64, u64)],
+        exposure: Option<game_lot_runtime::StorageExposureDraft>,
+    ) -> Result<(), String> {
         if self.physical.tick() != tick
             || self.elapsed_millis() != Some(offset_millis)
             || offset_millis >= self.physical.tick_millis()
@@ -849,7 +859,7 @@ impl CoreInterval {
         if self.next_deadline(None)?.after_millis == 0 {
             return Err("publish pending interval events before abandoning work".into());
         }
-        self.physical.abandon_interval_work(requests)
+        self.physical.abandon_interval_work_with_exposure(requests, exposure)
     }
     /// Transfer goods between local people or between a person and local stock.
     /// The host decides who acts and whether their social choices permit it.

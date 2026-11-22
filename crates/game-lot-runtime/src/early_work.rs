@@ -68,6 +68,9 @@ pub struct IntervalConsumptionDraft {
     offset_millis: u64,
     custody: game_lots::Draft,
 }
+pub struct StorageExposureDraft {
+    custody: game_lots::Draft,
+}
 impl IntervalConsumptionDraft {
     pub fn transactions(&self) -> &[game_lots::TransactionOutcome] {
         self.custody.transactions()
@@ -227,6 +230,24 @@ impl Runtime {
             .ok_or("physical work revision overflow")?;
         self.store.validate_commit(&draft.custody)?;
         Ok(())
+    }
+
+    /// Add local storage and its climate as part of an already staged physical action.
+    pub fn configure_interval_storage(
+        &self,
+        mut draft: IntervalConsumptionDraft,
+        holders: Vec<game_lots::Container>,
+        temperatures: &[(Place, Option<i16>)],
+    ) -> Result<IntervalConsumptionDraft, String> {
+        self.validate_interval_consumption(&draft)?;
+        if holders.par_iter().any(|row| !matches!(row.place, Place::Inventory(_)))
+            || temperatures.par_iter().any(|(place, _)| !matches!(place, Place::Inventory(_)))
+        {
+            return Err("local storage requires inventory custody".into());
+        }
+        self.store.add_empty_in(&mut draft.custody, holders)?;
+        self.store.set_holder_temperatures_in(&mut draft.custody, temperatures)?;
+        Ok(draft)
     }
 
     /// Retire emptied site custody in the same commit as the material transfer.
@@ -654,6 +675,26 @@ impl Runtime {
     /// Stop chosen jobs at this offset. Their surviving inputs remain in job
     /// custody until the normal boundary return, even if that return is blocked.
     pub fn abandon_interval_work(&mut self, requests: &[(u64, u64)]) -> Result<(), String> {
+        self.abandon_interval_work_with_exposure(requests, None)
+    }
+
+    pub fn prepare_storage_exposure(
+        &self,
+        holders: &[(Place, Option<i16>)],
+    ) -> Result<Option<StorageExposureDraft>, String> {
+        if holders.is_empty() {
+            return Ok(None);
+        }
+        let custody = self.store.prepare_holder_temperatures(holders)?;
+        Ok(Some(StorageExposureDraft { custody }))
+    }
+
+    /// Stop work and change the storage affected by the same physical event.
+    pub fn abandon_interval_work_with_exposure(
+        &mut self,
+        requests: &[(u64, u64)],
+        exposure: Option<StorageExposureDraft>,
+    ) -> Result<(), String> {
         let interval = self
             .work_interval
             .as_ref()
@@ -681,30 +722,31 @@ impl Runtime {
         {
             return Err("invalid interval work abandonment".into());
         }
-        if ordered.is_empty() {
+        if ordered.is_empty() && exposure.is_none() {
             return Ok(());
         }
         let epoch = self
             .epoch
             .checked_add(1)
             .ok_or("physical work revision overflow")?;
-        let rates: Vec<_> = interval
-            .rates
-            .par_iter()
-            .copied()
-            .filter(|(job, _)| ordered.binary_search_by_key(job, |row| row.0).is_err())
-            .collect();
-        // Parallel filtering preserves the sorted source order.
-        debug_assert!(rates.windows(2).all(|rows| rows[0].0 < rows[1].0));
-        self.work.par_iter_mut().for_each(|row| {
-            if ordered
-                .binary_search_by_key(&row.job.id, |request| request.0)
-                .is_ok()
-            {
-                row.phase = Phase::Returning;
-            }
+        let rates = (!ordered.is_empty()).then(|| {
+            interval.rates.par_iter().copied()
+                .filter(|(job, _)| ordered.binary_search_by_key(job, |row| row.0).is_err())
+                .collect()
         });
-        self.work_interval.as_mut().expect("checked interval").rates = rates;
+        if let Some(exposure) = exposure {
+            self.store.commit(exposure.custody)?;
+        }
+        let interval = self.work_interval.as_mut().expect("checked interval");
+        if let Some(rates) = rates {
+            self.work.par_iter_mut().for_each(|row| {
+                if ordered.binary_search_by_key(&row.job.id, |request| request.0).is_ok() {
+                    row.phase = Phase::Returning;
+                }
+            });
+            interval.rates = rates;
+        }
+        interval.custody_revision = self.store.revision();
         self.epoch = epoch;
         Ok(())
     }

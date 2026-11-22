@@ -461,6 +461,7 @@ struct LocalStoreConfig {
     region: u64,
     name: String,
     capacity: u64,
+    structure: Option<game_economy::StoreStructure>,
     #[serde(default)]
     goods: BTreeMap<String, u64>,
     #[serde(default)]
@@ -526,6 +527,7 @@ struct BuildingBlueprintConfig {
     quantity: u64,
     #[serde(default)]
     salvage: u64,
+    storage: Option<game_economy::StorageDesign>,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -2359,6 +2361,7 @@ fn build_scenario(
                             .ok_or_else(|| format!("unknown construction kit {}", b.kit))?,
                         quantity: b.quantity,
                         salvage: b.salvage,
+                        storage: b.storage,
                     })
                 })
                 .collect::<Result<Vec<_>, String>>()?;
@@ -2895,6 +2898,7 @@ fn build_scenario(
                         id: store.id,
                         region: store.region,
                         name: store.name,
+                        structure: store.structure,
                     })
                 })
                 .collect::<Result<Vec<_>, String>>()?;

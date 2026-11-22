@@ -78,7 +78,7 @@ impl CoreHost {
         let demolished = plan.publish(tick, &sites.facilities, None, &mut facilities);
         actors.par_extend(demolished.par_iter().map(|row| row.person));
         actors.par_sort_unstable();
-        let released = self.publish_site_demolition(facilities, &demolished);
+        let released = self.publish_site_demolition(facilities, &demolished)?;
         Ok((
             actors,
             CoreSiteChanges {
@@ -148,17 +148,20 @@ impl CoreHost {
         &mut self,
         facilities: crate::WorkSites,
         events: &[demolition::Event],
-    ) -> Vec<game_economy_confinement::Event> {
+    ) -> Result<Vec<game_economy_confinement::Event>, String> {
         if events.is_empty() {
-            return Vec::new();
+            return Ok(Vec::new());
         }
-        let owner = self.construction.as_mut().expect("construction checked");
-        owner.demolition_events = events.to_vec();
         let destroyed: HashSet<_> = events
             .par_iter()
             .filter_map(|event| event.destroyed.then_some(event.site))
             .collect();
-        self.publish_destroyed_sites(facilities, &destroyed)
+        if let Some(exposure) = self.stage_storage_exposure(&destroyed)? {
+            self.abandon_work_with_exposure(&[], Some(exposure))?;
+        }
+        let owner = self.construction.as_mut().expect("construction checked");
+        owner.demolition_events = events.to_vec();
+        Ok(self.publish_destroyed_sites(facilities, &destroyed))
     }
 
     pub(super) fn publish_destroyed_sites(
@@ -172,6 +175,15 @@ impl CoreHost {
         if let Some(owner) = &mut self.construction {
             owner.materials.par_iter_mut().for_each(|row| {
                 row.debris |= destroyed.contains(&row.site);
+            });
+        }
+        if let Some(transport) = &mut self.local_transport {
+            transport.stores.par_iter_mut().for_each(|store| {
+                if let Some(structure) = &mut store.structure
+                    && destroyed.contains(&structure.site)
+                {
+                    structure.intact = false;
+                }
             });
         }
         let sites = self.sites.as_mut().expect("sites checked");
@@ -218,7 +230,7 @@ impl CoreHost {
                 site,
                 destroyed,
             }],
-        );
+        )?;
         Ok(destroyed)
     }
 

@@ -14,6 +14,10 @@ of a controlled character in an authored scenario. Pass a scenario path to
 choose a different world and provide `--seed N` or
 `--population PATH` to apply either override at creation.
 
+`stores` lists nearby store identities. After reaching one, use
+`deposit STORE GOOD QUANTITY` or `take-from-store STORE GOOD QUANTITY`
+to move goods by their catalog IDs.
+
 Use `help` for available actions and `look` for the character's view.
 `wait MILLISECONDS` advances time. `work`, `eat`, `rest`, `walk`,
 and `move` are choices checked against actual supplies and reach. A traveler

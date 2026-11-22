@@ -12,6 +12,7 @@ pub use game_economy_building::{
     Blueprint as BuildingBlueprint, Construction, Event as ConstructionEvent, GoalBuilder,
     Policy as ConstructionPolicy,
 };
+pub use game_economy_building::StorageDesign;
 pub use game_economy_campaign::{Campaign, ReleaseDecision};
 pub use game_economy_combat::Combat;
 pub use game_economy_confinement::{
@@ -45,7 +46,7 @@ pub use game_economy_local_transport::walking::{
 };
 pub use game_economy_local_transport::{
     Endpoint as LocalEndpoint, Event as LocalTransportEvent, LocalTransport,
-    Policy as LocalTransportPolicy, Store as LocalStore,
+    Policy as LocalTransportPolicy, Store as LocalStore, StoreStructure,
 };
 pub use game_economy_person::travel::{
     Closure as RouteClosure, Colocation, Departure, Journey, Route, RouteObservation, RouteSharing,

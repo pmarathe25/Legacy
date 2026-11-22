@@ -96,6 +96,7 @@ pub struct Draft {
     retire: Vec<Place>,
     item_updates: Vec<(u64, Option<Place>)>,
     batch_next: Option<u64>,
+    temperatures: Option<Vec<StorageTemperature>>,
 }
 impl Draft {
     /// Staged item custody updates; `None` means the item was consumed.
@@ -756,6 +757,7 @@ impl Store {
             retire: Vec::new(),
             item_updates,
             batch_next: None,
+            temperatures: None,
         })
     }
     fn validate_batch_creations(
@@ -1137,6 +1139,7 @@ impl Store {
             retire: Vec::new(),
             item_updates: Vec::new(),
             batch_next: None,
+            temperatures: None,
         }))
     }
     /// Attempt a flat batch with exclusive and contested transfer partitions.
@@ -1173,6 +1176,7 @@ impl Store {
             retire: Vec::new(),
             item_updates: Vec::new(),
             batch_next: None,
+            temperatures: None,
         }))
     }
     /// Attempt a shared-source batch into newly staged empty custody.
@@ -1210,6 +1214,7 @@ impl Store {
             retire: Vec::new(),
             item_updates: Vec::new(),
             batch_next: None,
+            temperatures: None,
         }))
     }
     /// Check this owner before publishing any part of a composed generation.
@@ -1289,6 +1294,7 @@ impl Store {
             retire,
             item_updates,
             batch_next,
+            temperatures,
         } = draft;
         let revision = self
             .state
@@ -1326,6 +1332,9 @@ impl Store {
         self.state.revision = revision;
         if let Some(next) = batch_next {
             self.state.next_batch = Some(next);
+        }
+        if let Some(places) = temperatures {
+            self.state.storage_climate.as_mut().expect("staged storage climate").places = places;
         }
         if !item_updates.is_empty() {
             self.items = merge_item_updates(&self.items, &item_updates);
