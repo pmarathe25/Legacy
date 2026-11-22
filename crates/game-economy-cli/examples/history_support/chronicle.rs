@@ -257,6 +257,37 @@ impl Chronicle {
             );
             return;
         }
+        if kind == "incapacitations" {
+            for row in event["people"].as_array().into_iter().flatten() {
+                let Some(died) = row["died"].as_bool() else {
+                    continue;
+                };
+                let label = if died {
+                    match row["cause"].as_str() {
+                        Some("starvation") => "deaths from starvation",
+                        Some("exhaustion") => "deaths from exhaustion",
+                        Some("nutrient_deficiency") => "deaths from nutrient deficiency",
+                        Some("food_reaction") => "deaths from food reactions",
+                        Some("exposure") => "deaths from exposure",
+                        Some("illness") => "deaths from illness",
+                        Some("deprivation") => "deaths from deprivation of purpose",
+                        Some("natural_mortality") => "natural deaths",
+                        _ if row["natural_mortality"].as_bool() == Some(true) => "natural deaths",
+                        _ => "deaths with unspecified cause",
+                    }
+                } else {
+                    "incapacitations survived"
+                };
+                self.record(
+                    event,
+                    row,
+                    year,
+                    focus,
+                    Receipt { label, actor: row["person"].as_u64(), other: None },
+                );
+            }
+            return;
+        }
         if kind == "tactical" {
             for row in event["sites"].as_array().into_iter().flatten() {
                 let label = if row["collapsed"].as_bool() == Some(true) {
@@ -1024,6 +1055,28 @@ mod tests {
         assert_eq!(summary["counts"]["prepared batches matured"], 1);
         assert_eq!(summary["people"].as_array().unwrap().len(), 1);
         assert_eq!(history.selected().last().unwrap()["at_millis"], 500);
+    }
+
+    #[test]
+    fn preserves_known_and_unknown_causes_in_personal_history() {
+        let mut history = Chronicle::default();
+        history.observe(
+            &json!({"kind":"incapacitations","at_millis":75,"people":[
+                {"person":3,"died":true,"cause":"illness"},
+                {"person":4,"died":true,"natural_mortality":false},
+                {"person":5,"died":false,"cause":"exhaustion"}
+            ]}),
+            1,
+            Some(3),
+        );
+        let counts = &history.summary()["counts"];
+        assert_eq!(counts["deaths from illness"], 1);
+        assert_eq!(counts["deaths with unspecified cause"], 1);
+        assert_eq!(counts["incapacitations survived"], 1);
+        let selected = history.selected();
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0]["at_millis"], 75);
+        assert_eq!(selected[0]["receipt"]["cause"], "illness");
     }
 
     #[test]

@@ -55,7 +55,8 @@ pub use host::{
     CoreRun, CoreRunEvent, CoreSchedule, CoreSeenPerson, CoreSharedApparatus, CoreSharedWork, CoreSiteChanges,
     CoreSites, CoreSkillCredit, CoreSkills, CoreSocial, CoreSocialResults, CoreStepper,
     CoreToolRepairResults, CoreTreatmentResults, CoreWorkIntent, CoreWritingPracticeResults,
-    CoreWritingResults, CoreWorkEdition, CoreWorkInscription, CoreWorkObservation, DecisionPhase, Incapacitation, MechanicalCapability,
+    CoreWritingResults, CoreWorkEdition, CoreWorkInscription, CoreWorkObservation, DecisionPhase,
+    Incapacitation, IncapacityCause, MechanicalCapability,
     MechanicalCommunication, MechanicalDesignInput, MechanicalDesignPreferences,
     MechanicalExploration, MechanicalLoadMaterial, MechanicalLoadOutcome, MechanicalLoadPolicy,
     MechanicalLoadRequest, MechanicalLoadResult, MechanicalMaterial, MechanicalMemory,
@@ -122,6 +123,7 @@ struct VitalsProgress {
     people: Vec<Person>,
     nutrition: Option<Nutrition>,
     pending_food: Option<Vec<FoodEffect>>,
+    casualties: Vec<(u64, IncapacityCause)>,
 }
 
 struct ElapsedBirths<'a> {
@@ -1297,12 +1299,22 @@ impl CoreInterval {
         }
         debug_assert!(self.deferred_vitals.is_none());
         let mut people = self.stage_vital_rows(consumed)?;
+        let mut casualties: Vec<_> = self
+            .people
+            .par_iter()
+            .zip(&people)
+            .filter_map(|(before, after)| {
+                (before.health > 0 && after.health == 0)
+                    .then_some((after.id, IncapacityCause::Starvation))
+            })
+            .collect();
         if !injuries.is_empty() {
-            people.par_iter_mut().for_each(|person| {
-                if let Ok(index) = injuries.binary_search_by_key(&person.id, |injury| injury.id) {
-                    person.health = person.health.saturating_sub(injuries[index].damage);
-                }
-            });
+            casualties.par_extend(people.par_iter_mut().filter_map(|person| {
+                let index = injuries.binary_search_by_key(&person.id, |injury| injury.id).ok()?;
+                let before = person.health;
+                person.health = before.saturating_sub(injuries[index].damage);
+                (before > 0 && person.health == 0).then_some((person.id, IncapacityCause::Exhaustion))
+            }));
         }
         let nutrition = self.nutrition.as_ref().and_then(|nutrition| {
             (self.next_metabolism() == Some(consumed)).then(|| {
@@ -1313,13 +1325,15 @@ impl CoreInterval {
                     .collect();
                 let (state, deficient) = nutrition.metabolize(&eligible);
                 if !deficient.is_empty() {
-                    people.par_iter_mut().for_each(|person| {
-                        if deficient.binary_search(&person.id).is_ok() {
-                            person.health = person
-                                .health
-                                .saturating_sub(nutrition.rules.deficiency_damage);
+                    casualties.par_extend(people.par_iter_mut().filter_map(|person| {
+                        if deficient.binary_search(&person.id).is_err() {
+                            return None;
                         }
-                    });
+                        let before = person.health;
+                        person.health = before.saturating_sub(nutrition.rules.deficiency_damage);
+                        (before > 0 && person.health == 0)
+                            .then_some((person.id, IncapacityCause::NutrientDeficiency))
+                    }));
                 }
                 state
             })
@@ -1332,7 +1346,8 @@ impl CoreInterval {
                 .copied()
                 .partition(|row| row.at_millis == Some(now));
             due.par_sort_unstable_by_key(|row| (row.person, row.health));
-            people.par_iter_mut().for_each(|person| {
+            casualties.par_extend(people.par_iter_mut().filter_map(|person| {
+                let before = person.health;
                 let start = due.partition_point(|effect| effect.person < person.id);
                 let end = due.partition_point(|effect| effect.person <= person.id);
                 for effect in &due[start..end] {
@@ -1342,7 +1357,9 @@ impl CoreInterval {
                         self.rules.max_health,
                     );
                 }
-            });
+                (before > 0 && person.health == 0)
+                    .then_some((person.id, IncapacityCause::FoodReaction))
+            }));
             Some(pending)
         } else {
             None
@@ -1351,6 +1368,7 @@ impl CoreInterval {
             people,
             nutrition,
             pending_food,
+            casualties,
         })
     }
     /// Stage the full quantum without publishing physical or personal changes.

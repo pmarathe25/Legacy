@@ -13,8 +13,7 @@ pub fn validate(
     let Some(environment) = environment else {
         return Ok(());
     };
-    let regions: HashSet<_> = view
-        .regions().iter().copied().collect();
+    let regions: HashSet<_> = view.regions().iter().copied().collect();
     environment.validate(&regions)?;
     if environment.regions.iter().any(|h| {
         h.shelter_good.is_some_and(|good| {
@@ -39,9 +38,9 @@ pub fn apply(
     people: &mut [Person],
     tick: u64,
     elapsed: Option<u128>,
-) {
+) -> Vec<u64> {
     let Some(environment) = environment else {
-        return;
+        return Vec::new();
     };
     let journeys: HashMap<_, _> = travel
         .map_or(&[][..], |t| t.journeys.as_slice())
@@ -86,37 +85,39 @@ pub fn apply(
         .map_or(u128::from(tick.saturating_sub(1)), |(millis, period)| {
             millis / u128::from(period)
         });
-    people.par_iter_mut().for_each(|person| {
-        if person.health == 0 {
-            return;
-        }
-        let region = person.region.or_else(|| journeys.get(&person.id).copied());
-        let Some((hazard, first, last, capacity)) = region.and_then(|r| hazards.get(&r)).copied()
-        else {
-            return;
-        };
-        let count = last - first;
-        let sheltered = person.region.is_some()
-            && count > 0
-            && residents
-                .binary_search(&(hazard.region, person.id))
-                .ok()
-                .is_some_and(|index| {
-                    let offset = (exposure_index % count as u128) as usize;
-                    (index - first + count - offset) % count < capacity
+    people
+        .par_iter_mut()
+        .filter_map(|person| {
+            if person.health == 0 {
+                return None;
+            }
+            let region = person.region.or_else(|| journeys.get(&person.id).copied());
+            let (hazard, first, last, capacity) = region.and_then(|r| hazards.get(&r)).copied()?;
+            let count = last - first;
+            let sheltered = person.region.is_some()
+                && count > 0
+                && residents
+                    .binary_search(&(hazard.region, person.id))
+                    .ok()
+                    .is_some_and(|index| {
+                        let offset = (exposure_index % count as u128) as usize;
+                        (index - first + count - offset) % count < capacity
+                    });
+            let damage = hazard.damage.saturating_sub(if sheltered {
+                hazard.shelter_reduction
+            } else {
+                0
+            });
+            let damage = season.map_or(damage, |s| s.exposure(damage));
+            let insulation =
+                environment.choose_clothing(person.id, person.hunger, damage, |good| {
+                    view.container(Place::Person(person.id))
+                        .is_some_and(|holder| holder.quantity(good) > 0)
                 });
-        let damage = hazard.damage.saturating_sub(if sheltered {
-            hazard.shelter_reduction
-        } else {
-            0
-        });
-        let damage = season.map_or(damage, |s| s.exposure(damage));
-        let insulation = environment.choose_clothing(person.id, person.hunger, damage, |good| {
-            view.container(Place::Person(person.id))
-                .is_some_and(|holder| holder.quantity(good) > 0)
-        });
-        person.health = person
-            .health
-            .saturating_sub(damage.saturating_sub(insulation));
-    });
+            person.health = person
+                .health
+                .saturating_sub(damage.saturating_sub(insulation));
+            (person.health == 0).then_some(person.id)
+        })
+        .collect()
 }

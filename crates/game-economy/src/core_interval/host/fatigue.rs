@@ -440,25 +440,33 @@ impl CoreHost {
             let tick = self.core.physical.tick();
             let view = self.core.physical.view(tick)?;
             let sample = self.core.simulated_millis() + u128::from(consumed) - 1;
-            crate::environment::apply(
+            let vitals = vitals.as_mut().expect("staged exposure");
+            let casualties = crate::environment::apply(
                 self.environment.as_ref(),
                 &view,
                 self.core.travel.as_ref(),
-                &mut vitals.as_mut().expect("staged exposure").people,
+                &mut vitals.people,
                 tick,
                 Some(sample),
+            );
+            vitals.casualties.par_extend(
+                casualties.into_par_iter().map(|id| (id, IncapacityCause::Exposure)),
             );
         }
         let event_time = self.core.simulated_millis() + u128::from(consumed);
         let staged_health = if disease_due {
-            self.stage_elapsed_disease(
-                &mut vitals.as_mut().expect("disease vitals").people,
-                event_time,
-            )
+            let vitals = vitals.as_mut().expect("disease vitals");
+            self.stage_elapsed_disease(&mut vitals.people, event_time)
+                .map(|(health, casualties)| {
+                    vitals.casualties.par_extend(
+                        casualties.into_par_iter().map(|id| (id, IncapacityCause::Illness)),
+                    );
+                    health
+                })
         } else {
             None
         };
-        let natural_deaths: Vec<_> = if natural_death_due {
+        if natural_death_due {
             let now = self.core.simulated_millis() + u128::from(consumed);
             let due = self
                 .family
@@ -468,23 +476,20 @@ impl CoreHost {
                 .as_ref()
                 .unwrap()
                 .deaths_at(now);
-            let people = &mut vitals.as_mut().expect("staged natural mortality").people;
-            people
-                .par_iter_mut()
-                .filter_map(|person| {
+            let vitals = vitals.as_mut().expect("staged natural mortality");
+            vitals.casualties.par_extend(
+                vitals.people.par_iter_mut().filter_map(|person| {
                     if person.health > 0
                         && due.binary_search_by_key(&person.id, |row| row.1).is_ok()
                     {
                         person.health = 0;
-                        Some(person.id)
+                        Some((person.id, IncapacityCause::NaturalMortality))
                     } else {
                         None
                     }
-                })
-                .collect()
-        } else {
-            Vec::new()
-        };
+                }),
+            );
+        }
         let purpose = if purpose_due {
             let elapsed = self.core.elapsed_millis().expect("active interval");
             let tick = self
@@ -493,10 +498,12 @@ impl CoreHost {
                 .tick()
                 .checked_add(u64::from(elapsed + consumed == quantum))
                 .ok_or("purpose eligibility tick overflow")?;
-            Some(self.stage_elapsed_purpose(
-                &mut vitals.as_mut().expect("staged elapsed purpose").people,
-                tick,
-            ))
+            let vitals = vitals.as_mut().expect("staged elapsed purpose");
+            let (purpose, casualties) = self.stage_elapsed_purpose(&mut vitals.people, tick);
+            vitals.casualties.par_extend(
+                casualties.into_par_iter().map(|id| (id, IncapacityCause::Deprivation)),
+            );
+            Some(purpose)
         } else {
             None
         };
@@ -518,15 +525,8 @@ impl CoreHost {
         if let Some(delivery) = &delivery {
             disease_events.par_extend(delivery.birth_disease_events(event_time));
         }
-        let deaths = if let Some(vitals) = &vitals {
-            self.core
-                .people
-                .par_iter()
-                .zip(vitals.people.par_iter())
-                .filter_map(|(before, after)| {
-                    (before.health > 0 && after.health == 0).then_some(before.id)
-                })
-                .collect()
+        let mut casualties = if let Some(vitals) = &mut vitals {
+            std::mem::take(&mut vitals.casualties)
         } else if !scheduled || limits.starvation == Some(consumed) {
             game_economy_person::starvation_deaths_within(
                 &self.core.people,
@@ -535,12 +535,17 @@ impl CoreHost {
                 consumed,
             )
             .map_err(str::to_owned)?
+            .into_par_iter()
+            .map(|id| (id, IncapacityCause::Starvation))
+            .collect()
         } else {
             Vec::new()
         };
-        let incapacitations = deaths
+        casualties.par_sort_unstable_by_key(|row| row.0);
+        let deaths: Vec<_> = casualties.par_iter().map(|row| row.0).collect();
+        let incapacitations = casualties
             .par_iter()
-            .map(|&person| {
+            .map(|&(person, cause)| {
                 let index = self
                     .core
                     .people
@@ -549,7 +554,8 @@ impl CoreHost {
                 scheduler::Incapacitation {
                     person,
                     died: self.core.people[index].immortal.is_none(),
-                    natural_mortality: natural_deaths.binary_search(&person).is_ok(),
+                    natural_mortality: cause == IncapacityCause::NaturalMortality,
+                    cause,
                 }
             })
             .collect();

@@ -45,7 +45,7 @@ fn travel_deadline_uses_explicit_elapsed_duration() {
 
 #[test]
 fn elapsed_illness_stops_work_at_the_fatal_deadline_and_records_recovery() {
-    use game_economy::core_interval::CoreRunEvent;
+    use game_economy::core_interval::{CoreRunEvent, IncapacityCause};
 
     let run = |quantum, workers| {
         rayon::ThreadPoolBuilder::new().num_threads(workers).build().unwrap().install(|| {
@@ -86,7 +86,8 @@ fn elapsed_illness_stops_work_at_the_fatal_deadline_and_records_recovery() {
             let fatal = host.advance_continuous(100, &[]).unwrap();
             assert_eq!(fatal.failure, None);
             assert!(fatal.events.iter().any(|event| matches!(event,
-                CoreRunEvent::Incapacitations {at_millis:300, people} if people[0].person == 1 && people[0].died)));
+                CoreRunEvent::Incapacitations {at_millis:300, people} if people[0].person == 1
+                    && people[0].died && people[0].cause == IncapacityCause::Illness)));
             let stopped = host.snapshot();
             assert_eq!(stopped.core.people[0].health, 0);
             assert_eq!(stopped.core.physical.work[0].progress_remainder, 300);
@@ -109,6 +110,8 @@ fn elapsed_illness_stops_work_at_the_fatal_deadline_and_records_recovery() {
 
 #[test]
 fn fatal_starvation_stops_work_at_its_elapsed_deadline_and_resumes() {
+    use game_economy::core_interval::{CoreRunEvent, IncapacityCause};
+
     let mut state = fixture();
     state.nutrition = None;
     state.pending_food.clear();
@@ -122,6 +125,15 @@ fn fatal_starvation_stops_work_at_its_elapsed_deadline_and_resumes() {
     });
     state.people[0].health = 2;
     state.people[0].hunger = state.rules.starvation_threshold;
+    let opening: CoreHostSnapshot =
+        serde_json::from_value(serde_json::json!({"core": state.clone()})).unwrap();
+    let mut host = CoreHost::begin(opening, &[(1, 1)]).unwrap();
+    host.enable_schedule(1000, 1).unwrap();
+    let fatal = host.advance_continuous(500, &[]).unwrap();
+    assert_eq!(fatal.failure, None);
+    assert!(fatal.events.iter().any(|event| matches!(event,
+        CoreRunEvent::Incapacitations {at_millis:500, people} if people[0].person == 1
+            && people[0].died && people[0].cause == IncapacityCause::Starvation)));
     let mut core = CoreInterval::begin(state, &[(1, 1)]).unwrap();
     let deadline = core.next_deadline(None).unwrap();
     assert_eq!(deadline.after_millis, 500);
@@ -321,7 +333,7 @@ fn fatal_starvation_survives_resume_with_family_and_no_conflict_owner() {
 
 #[test]
 fn elapsed_mortality_and_purpose_damage_interrupt_work_across_quanta() {
-    use game_economy::core_interval::{CoreRunEvent, Incapacitation};
+    use game_economy::core_interval::{CoreRunEvent, Incapacitation, IncapacityCause};
 
     fn run(
         quantum: u64,
@@ -421,6 +433,11 @@ fn elapsed_mortality_and_purpose_damage_interrupt_work_across_quanta() {
                 person: 1,
                 died: true,
                 natural_mortality: natural,
+                cause: if natural {
+                    IncapacityCause::NaturalMortality
+                } else {
+                    IncapacityCause::Deprivation
+                },
             }],
         )];
         assert_eq!(run(1000, 1000, 1, natural), expected);

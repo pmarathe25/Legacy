@@ -16,7 +16,7 @@ impl CoreHost {
         &self,
         people: &mut [game_economy_person::Person],
         now: u128,
-    ) -> Option<CoreHealth> {
+    ) -> Option<(CoreHealth, Vec<u64>)> {
         let health = self.health.as_ref()?;
         let draft = health.owner.stage_elapsed(
             |person| {
@@ -28,19 +28,21 @@ impl CoreHost {
             now,
             self.core.physical.tick(),
         )?;
-        people.par_iter_mut().for_each(|person| {
-            if let Ok(index) = draft
+        let casualties = people.par_iter_mut().filter_map(|person| {
+            let index = draft
                 .damage
                 .binary_search_by_key(&person.id, |row| row.person)
-            {
-                person.health = person.health.saturating_sub(draft.damage[index].amount);
-            }
-        });
-        Some(CoreHealth {
+                .ok()?;
+            let before = person.health;
+            person.health = before.saturating_sub(draft.damage[index].amount);
+            (before > 0 && person.health == 0).then_some(person.id)
+        }).collect();
+        let health = CoreHealth {
             owner: draft.state,
             treatment: health.treatment.clone(),
             last_tick: health.last_tick,
-        })
+        };
+        Some((health, casualties))
     }
 
     pub(super) fn plan_medical(

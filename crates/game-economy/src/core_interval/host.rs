@@ -100,7 +100,7 @@ pub use player::{
 pub use purpose::CorePurpose;
 pub use requests::{CoreDeliveryResults, CorePromiseTransfer, CoreRequestResults};
 pub use scheduler::{
-    CoreRun, CoreRunEvent, CoreSchedule, CoreStepper, DecisionPhase, Incapacitation,
+    CoreRun, CoreRunEvent, CoreSchedule, CoreStepper, DecisionPhase, Incapacitation, IncapacityCause,
 };
 pub use shared_work::{CoreAssistRecord, CoreAssistSession, CoreCrewStart, CoreSharedWork};
 pub use site_lifecycle::CoreSiteChanges;

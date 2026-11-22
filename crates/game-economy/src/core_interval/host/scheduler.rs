@@ -839,6 +839,20 @@ pub struct Incapacitation {
     pub person: u64,
     pub died: bool,
     pub natural_mortality: bool,
+    pub cause: IncapacityCause,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum IncapacityCause {
+    Starvation,
+    Exhaustion,
+    NutrientDeficiency,
+    FoodReaction,
+    Exposure,
+    Illness,
+    NaturalMortality,
+    Deprivation,
 }
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct CoreRun {

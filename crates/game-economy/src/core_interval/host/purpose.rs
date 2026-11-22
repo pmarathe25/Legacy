@@ -32,17 +32,22 @@ impl CoreHost {
         Some(period - offset)
     }
 
-    pub(super) fn stage_elapsed_purpose(&self, people: &mut [Person], tick: u64) -> CorePurpose {
+    pub(super) fn stage_elapsed_purpose(
+        &self,
+        people: &mut [Person],
+        tick: u64,
+    ) -> (CorePurpose, Vec<u64>) {
         let previous = self
             .purpose
             .as_ref()
             .expect("purpose deadline has an owner");
         let owner = previous.owner.prepare(&[], tick, |id| alive(people, id));
-        harm(&owner, people, tick);
-        CorePurpose {
+        let casualties = harm(&owner, people, tick);
+        let purpose = CorePurpose {
             owner,
             progress: previous.progress.clone(),
-        }
+        };
+        (purpose, casualties)
     }
 
     pub(super) fn record_personal_choices(
@@ -149,9 +154,9 @@ fn alive(people: &[Person], id: u64) -> bool {
         .is_some_and(|index| people[index].health > 0)
 }
 
-fn harm(owner: &game_purpose::Purpose, people: &mut [Person], tick: u64) {
+fn harm(owner: &game_purpose::Purpose, people: &mut [Person], tick: u64) -> Vec<u64> {
     if owner.rules.damage == 0 {
-        return;
+        return Vec::new();
     }
     let harmed: Vec<_> = owner
         .people
@@ -161,9 +166,11 @@ fn harm(owner: &game_purpose::Purpose, people: &mut [Person], tick: u64) {
         })
         .map(|person| person.person)
         .collect();
-    people.par_iter_mut().for_each(|person| {
-        if person.health > 0 && harmed.binary_search(&person.id).is_ok() {
-            person.health = person.health.saturating_sub(owner.rules.damage);
+    people.par_iter_mut().filter_map(|person| {
+        if person.health == 0 || harmed.binary_search(&person.id).is_err() {
+            return None;
         }
-    });
+        person.health = person.health.saturating_sub(owner.rules.damage);
+        (person.health == 0).then_some(person.id)
+    }).collect()
 }
