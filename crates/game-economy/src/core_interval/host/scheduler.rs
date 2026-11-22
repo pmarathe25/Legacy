@@ -792,6 +792,10 @@ pub enum CoreRunEvent {
     Campaign(Vec<game_economy_campaign::elapsed::Event>),
     Care(CoreCareVisit),
     Fauna(CoreFaunaTransitions),
+    ElapsedHunting {
+        at_millis: u128,
+        events: Vec<crate::hunting::Receipt>,
+    },
     WildPlants(game_economy_agriculture::wild_plants::Cycle),
     InvocationWarning {
         at_millis: u128,
@@ -3942,6 +3946,25 @@ impl CoreHost {
                             run.events.push(CoreRunEvent::Tactical(CoreTacticalResult {
                                 events: arrivals,
                                 ..Default::default()
+                            }));
+                        }
+                        let hunt = attempt!('run, self.hunt_at_decision(&busy));
+                        if !hunt.actors.is_empty() {
+                            busy.par_extend(hunt.actors);
+                            busy.par_sort_unstable();
+                            busy.dedup();
+                        }
+                        if !hunt.yields.is_empty() {
+                            let at_millis = self.core.simulated_millis();
+                            run.events.push(CoreRunEvent::ElapsedHunting {
+                                at_millis,
+                                events: hunt.yields,
+                            });
+                            run.events.push(CoreRunEvent::Fauna(CoreFaunaTransitions {
+                                at_millis,
+                                births: Vec::new(),
+                                deaths: hunt.deaths,
+                                migrations: Vec::new(),
                             }));
                         }
                         let walking = attempt!('run, self.walk_autonomously(&busy));

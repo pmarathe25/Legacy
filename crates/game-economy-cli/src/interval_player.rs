@@ -60,7 +60,7 @@ fn command(host: &mut CoreHost, person: u64, words: &[&str]) -> Result<bool, Str
     match words {
         [] => {}
         ["help"] => println!(
-            "look | wait MILLISECONDS | move REGION | walk stock|store ID | stores | deposit STORE GOOD QUANTITY | take-from-store STORE GOOD QUANTITY | pause-walk | resume-walk | trip REGION VISIT_MILLISECONDS [food] | trip go|survey|back|cancel | trip leave-in MILLISECONDS | trip meet GROUP MINIMUM WAIT_MILLISECONDS | trip meet off | fight PERSON | join-fight BENEFICIARY OPPONENT | tactic wait|defend|retreat | tactic attack PERSON | tactic attack-site SITE | tactic move X Y | confine PERSON SITE | guard SITE | release PERSON | escape | build BLUEPRINT | demolish SITE | salvage SITE GOOD QUANTITY | gather NODE | cultivate FIELD [CARRIED_SEED_BATCH] | amend FIELD | water FIELD QUANTITY | pastime ACTIVITY | pastime stop | report-food on|off | misreport-food DELTA [PERSON] | survey-food exact|STEP [GOOD...] | food-reports | listen-for ACTIVITY VALUE | present ACTIVITY on|off | performances | attend PERFORMER MINIMUM_MILLISECONDS | attend leave | repertoire | memories [PERSON] | reflect-memory PERSON | reflect-memory activity ACTIVITY | findings | assemble APPARATUS PART... | mount APPARATUS STORE | unmount APPARATUS STORE | experiment APPARATUS OUTPUT FORCE DISTANCE LOAD | promise PERSON GOOD QUANTITY DUE_IN_MILLISECONDS | respond PROMISE accept|decline|withdraw | deliver PROMISE QUANTITY | eat GOOD | treat GOOD | wear GOOD | unwear | work RECIPE UNITS | stop JOB | stop-assist | rest on|off | word place|person|object ID SOUNDS | form SOUNDS MARKS | writing-surfaces | writing-surface GOOD|default | inscribe SOUNDS | compose SOUNDS SOUNDS ... | read-work PAGE | read PAGE | recall PAGE | save PATH | load PATH | catalog-additions CONTENT_ROOT | quit (SOUNDS and MARKS are comma-separated numbers)"
+            "look | wait MILLISECONDS | move REGION | walk stock|store ID | stores | deposit STORE GOOD QUANTITY | take-from-store STORE GOOD QUANTITY | pause-walk | resume-walk | trip REGION VISIT_MILLISECONDS [food] | trip go|survey|back|cancel | trip leave-in MILLISECONDS | trip meet GROUP MINIMUM WAIT_MILLISECONDS | trip meet off | fight PERSON | join-fight BENEFICIARY OPPONENT | tactic wait|defend|retreat | tactic attack PERSON | tactic attack-site SITE | tactic move X Y | confine PERSON SITE | guard SITE | release PERSON | escape | build BLUEPRINT | demolish SITE | salvage SITE GOOD QUANTITY | hunt ANIMAL | gather NODE | cultivate FIELD [CARRIED_SEED_BATCH] | amend FIELD | water FIELD QUANTITY | pastime ACTIVITY | pastime stop | report-food on|off | misreport-food DELTA [PERSON] | survey-food exact|STEP [GOOD...] | food-reports | listen-for ACTIVITY VALUE | present ACTIVITY on|off | performances | attend PERFORMER MINIMUM_MILLISECONDS | attend leave | repertoire | memories [PERSON] | reflect-memory PERSON | reflect-memory activity ACTIVITY | findings | assemble APPARATUS PART... | mount APPARATUS STORE | unmount APPARATUS STORE | experiment APPARATUS OUTPUT FORCE DISTANCE LOAD | promise PERSON GOOD QUANTITY DUE_IN_MILLISECONDS | respond PROMISE accept|decline|withdraw | deliver PROMISE QUANTITY | eat GOOD | treat GOOD | wear GOOD | unwear | work RECIPE UNITS | stop JOB | stop-assist | rest on|off | word place|person|object ID SOUNDS | form SOUNDS MARKS | writing-surfaces | writing-surface GOOD|default | inscribe SOUNDS | compose SOUNDS SOUNDS ... | read-work PAGE | read PAGE | recall PAGE | save PATH | load PATH | catalog-additions CONTENT_ROOT | quit (SOUNDS and MARKS are comma-separated numbers)"
         ),
         ["quit"] | ["exit"] => return Ok(false),
         ["look"] => {
@@ -512,6 +512,14 @@ fn command(host: &mut CoreHost, person: u64, words: &[&str]) -> Result<bool, Str
             let accepted =
                 Player::new(host, person)?.deliver_promise(number(pledge)?, number(quantity)?)?;
             println!("delivered={accepted}");
+        }
+        ["hunt", animal] => {
+            let animal = number(animal)?;
+            if let Some(receipt) = Player::new(host, person)?.hunt(animal)? {
+                println!("hunted={} good={} quantity={}", receipt.animal, receipt.good, receipt.quantity);
+            } else {
+                println!("nothing hunted");
+            }
         }
         ["gather", node] => {
             let node = node.parse::<u64>().map_err(|_| "invalid resource node")?;

@@ -2,7 +2,7 @@
 use game_economy_person::Person;
 use game_fauna::Fauna;
 use game_lot_content::AnimalYield;
-use game_lot_runtime::Events;
+use game_lots::TransactionOutcome;
 use game_lots::{Place, View};
 use game_opinions::Opinions;
 use rayon::prelude::*;
@@ -53,6 +53,8 @@ pub struct RequestResponse {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Hunting {
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub elapsed_actions: bool,
     #[serde(default)]
     pub inherit_births: bool,
     pub policies: Vec<Policy>,
@@ -61,6 +63,8 @@ pub struct Hunting {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
+    #[serde(default)]
+    pub elapsed_actions: bool,
     #[serde(default)]
     pub inherit_births: bool,
     pub policies: Vec<PolicyConfig>,
@@ -118,6 +122,7 @@ impl Config {
             })
             .collect::<Result<Vec<_>, String>>()?;
         Ok(Hunting {
+            elapsed_actions: self.elapsed_actions,
             inherit_births: self.inherit_births,
             policies,
         })
@@ -224,6 +229,15 @@ impl Hunting {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Receipt {
+    pub person: u64,
+    pub animal: u64,
+    pub good: u32,
+    pub quantity: u64,
+}
+
 pub struct Plan {
     pub actors: Vec<u64>,
     pub yields: Vec<AnimalYield>,
@@ -241,6 +255,7 @@ pub struct Context<'a> {
     pub feed_targets: &'a [u64],
     pub max_hunger: u32,
     pub seed: u64,
+    pub draw_key: u64,
     pub tick: u64,
     pub manual: Option<(u64, u64)>,
 }
@@ -324,7 +339,7 @@ impl Context<'_> {
                         return None;
                     }
                     let offset =
-                        (game_genetics::random(self.seed ^ 0x70726579, actor.id, self.tick)
+                        (game_genetics::random(self.seed ^ 0x70726579, actor.id, self.draw_key)
                             % (end - start) as u64) as usize;
                     Some(visible[start + offset].1)
                 })?;
@@ -401,7 +416,7 @@ impl Context<'_> {
                     && motivated)
                     .then_some((
                         target.id,
-                        game_genetics::random(self.seed ^ target.id, actor.id, self.tick),
+                        game_genetics::random(self.seed ^ target.id, actor.id, self.draw_key),
                         actor.id,
                         yield_,
                     ))
@@ -422,7 +437,7 @@ impl Context<'_> {
             if self.feed_targets.binary_search(&animal_id).is_err() {
                 candidates.push((
                     target.id,
-                    game_genetics::random(self.seed ^ target.id, actor.id, self.tick),
+                    game_genetics::random(self.seed ^ target.id, actor.id, self.draw_key),
                     actor.id,
                     species(target.species).and_then(|s| s.hunting.as_ref()),
                 ));
@@ -444,7 +459,7 @@ impl Context<'_> {
                     .expect("nonempty target group");
                 let yield_ = row.3?;
                 let roll =
-                    game_genetics::random(self.seed ^ 0x68756e74 ^ row.0, row.2, self.tick) % 1000;
+                    game_genetics::random(self.seed ^ 0x68756e74 ^ row.0, row.2, self.draw_key) % 1000;
                 (roll < u64::from(yield_.success_per_thousand))
                     .then_some((row.0, row.1, row.2, yield_))
             })
@@ -467,12 +482,11 @@ impl Context<'_> {
 }
 
 impl Plan {
-    pub fn accepted(&self, events: &Events) -> Vec<u64> {
+    pub fn accepted(&self, transactions: &[TransactionOutcome]) -> Vec<u64> {
         if self.yields.is_empty() {
             return Vec::new();
         }
-        let mut accepted: Vec<_> = events
-            .physical_actions
+        let mut accepted: Vec<_> = transactions
             .par_iter()
             .filter(|event| event.accepted)
             .map(|event| event.id)

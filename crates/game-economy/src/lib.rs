@@ -149,7 +149,7 @@ pub use hauling::{
 };
 pub use hunting::{
     Config as HuntingConfig, Hunting, Policy as HuntingPolicy,
-    RequestResponse as HuntingRequestResponse,
+    Receipt as HuntReceipt, RequestResponse as HuntingRequestResponse,
 };
 pub use medical::{
     AcquaintancePolicy as MedicalAcquaintancePolicy, Medical, Policy as MedicalPolicy,

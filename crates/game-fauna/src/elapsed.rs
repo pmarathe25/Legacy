@@ -137,11 +137,16 @@ impl Fauna {
 
     /// Publish against the same owner from which these changes were staged.
     pub fn publish_encounters(&mut self, draft: Encounters) {
+        self.recent_deaths = self.publish_encounter_receipts(draft);
+    }
+
+    /// Publish encounters already reported with their own elapsed timestamp.
+    pub fn publish_encounter_receipts(&mut self, draft: Encounters) -> Vec<AnimalDeath> {
         for (index, animal) in draft.changes {
             self.animals[index] = animal;
         }
-        self.recent_deaths = draft.deaths;
-        self.recent_deaths
-            .par_sort_unstable_by_key(|row| row.animal);
+        let mut deaths = draft.deaths;
+        deaths.par_sort_unstable_by_key(|row| row.animal);
+        deaths
     }
 }

@@ -8030,6 +8030,7 @@ fn gathering_depletes_resources_into_real_personal_custody() {
                     pressure_threshold: None,
                 };
                 hunting.hunting = Some(game_economy::Hunting {
+                    elapsed_actions: false,
                     inherit_births: false,
                     policies: vec![policy(2), policy(3)],
                 });
@@ -8890,6 +8891,7 @@ fn core_host_cultivation_benchmark() {
             }
         }),
         hunting: hunting.then(|| game_economy::Hunting {
+            elapsed_actions: false,
             inherit_births: false,
             policies: (2..=count)
                 .map(|person| game_economy::HuntingPolicy {

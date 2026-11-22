@@ -137,6 +137,7 @@ fn observation(event: &CoreRunEvent, current_tick: &mut u64) -> Option<Value> {
         CoreRunEvent::ElapsedWatering { at_millis, events } => Some(json!({"kind":"elapsed_watering","at_millis":at_millis,"events":events})),
         CoreRunEvent::ElapsedCultivation { at_millis, fields } => Some(json!({"kind":"elapsed_cultivation","at_millis":at_millis,"events":fields})),
         CoreRunEvent::HarvestProducts { at_millis, events } => Some(json!({"kind":"harvest_products","at_millis":at_millis,"events":events})),
+        CoreRunEvent::ElapsedHunting { at_millis, events } => Some(json!({"kind":"elapsed_hunting","at_millis":at_millis,"events":events})),
         CoreRunEvent::SoilAmendment { at_millis, events } => Some(json!({"kind":"soil_amendments","at_millis":at_millis,"events":events})),
         CoreRunEvent::FarmReview { at_millis, review } => Some(json!({"kind":"farm_review","at_millis":at_millis,"events":review.work,"requests":review.requests})),
         CoreRunEvent::ElapsedGathering { at_millis, events } => Some(json!({"kind":"gathered_resources","at_millis":at_millis,"events":events})),

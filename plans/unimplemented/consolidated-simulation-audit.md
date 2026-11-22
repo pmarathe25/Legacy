@@ -62,6 +62,9 @@ to track rates, deadlines, and behavior under different advance sizes. The
   its grazer population after hunting removed six founders. The last two
   mutually compatible pairs found in the annual checkpoints shared one male.
   The remaining animals died without enough offspring to replace them.
+  With elapsed hunting, each person's attempts follow their decision clock.
+  A successful kill requires room for the actual yield, and the archive
+  records the hunter and the elapsed time.
 - Wild stands support heritable plant strains, viable seed banks, finite
   adult capacity, and local habitat selection without human activity.
   Competing local variants and physical seed withdrawals are tested

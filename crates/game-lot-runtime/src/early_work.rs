@@ -516,6 +516,26 @@ impl Runtime {
         outputs: &[crate::Gathered],
         seed: u64,
     ) -> Result<IntervalConsumptionDraft, String> {
+        self.prepare_interval_output(seed, |catalog, now| {
+            game_lot_content::prepare_gathered(catalog, outputs, now)
+        })
+    }
+
+    pub fn prepare_interval_hunts(
+        &self,
+        outputs: &[game_lot_content::AnimalYield],
+        seed: u64,
+    ) -> Result<IntervalConsumptionDraft, String> {
+        self.prepare_interval_output(seed, |catalog, now| {
+            game_lot_content::prepare_animal_yield(catalog, outputs, now)
+        })
+    }
+
+    fn prepare_interval_output(
+        &self,
+        seed: u64,
+        output: impl FnOnce(&game_lot_content::Catalog, u64) -> Result<Vec<Transaction>, String>,
+    ) -> Result<IntervalConsumptionDraft, String> {
         let interval = self
             .work_interval
             .as_ref()
@@ -524,19 +544,15 @@ impl Runtime {
             || interval.custody_revision != self.store.revision()
             || interval.elapsed_millis >= self.tick_millis
         {
-            return Err("invalid interval for gathering".into());
+            return Err("invalid interval for physical output".into());
         }
         self.epoch
             .checked_add(1)
             .ok_or("physical work revision overflow")?;
-        let actions = game_lot_content::prepare_gathered(
-            &self.catalog,
-            outputs,
-            self.lot_instant(interval.tick),
-        )?;
+        let actions = output(&self.catalog, self.lot_instant(interval.tick))?;
         let custody = self.store.prepare_transactions_now(seed, &actions)?;
         if !custody.spoiled().is_empty() {
-            return Err("interval gathering cannot publish pending spoilage".into());
+            return Err("interval output cannot publish pending spoilage".into());
         }
         Ok(IntervalConsumptionDraft {
             epoch: self.epoch,

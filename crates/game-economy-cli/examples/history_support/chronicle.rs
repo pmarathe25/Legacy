@@ -320,6 +320,7 @@ impl Chronicle {
                 | "mechanical_conclusions"
                 | "mechanical_assemblies"
                 | "harvest_products"
+                | "elapsed_hunting"
                 | "soil_amendments"
                 | "pastimes"
                 | "heard_performances"
@@ -690,6 +691,7 @@ fn classify(kind: &str, row: &Value) -> Option<Receipt> {
             _ => return None,
         },
         ("harvest_products", _) => "harvests with several physical products",
+        ("elapsed_hunting", _) => "successful hunts with physical yield",
         ("soil_amendments", _) if row["accepted"].as_bool() == Some(true) => {
             "soil amendments completed"
         }

@@ -2274,6 +2274,7 @@ choices = [
 ]
 
 [hunting]
+elapsed_actions = true
 inherit_births = true
 [[hunting.policies]]
 person = 8

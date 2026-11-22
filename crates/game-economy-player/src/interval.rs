@@ -63,6 +63,10 @@ impl<'a> Player<'a> {
             .move_controlled_apparatus(self.person, apparatus, store, put_down)
     }
 
+    pub fn hunt(&mut self, animal: u64) -> Result<Option<game_economy::HuntReceipt>, String> {
+        self.host.hunt_controlled(self.person, animal)
+    }
+
     pub fn gather(&mut self, node: u64) -> Result<Option<game_economy::GatheredResource>, String> {
         self.host.gather_controlled(self.person, node)
     }

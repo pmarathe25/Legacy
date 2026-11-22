@@ -1,7 +1,137 @@
 //! Personal hunting choices and physical yield reservations.
 use super::*;
 
+#[derive(Default)]
+pub(super) struct HuntRound {
+    pub actors: Vec<u64>,
+    pub yields: Vec<crate::hunting::Receipt>,
+    pub deaths: Vec<game_fauna::AnimalDeath>,
+}
+
 impl CoreHost {
+    pub(super) fn hunt_at_decision(&mut self, occupied: &[u64]) -> Result<HuntRound, String> {
+        if self
+            .hunting
+            .as_ref()
+            .is_none_or(|owner| !owner.elapsed_actions)
+        {
+            return Ok(HuntRound::default());
+        }
+        self.hunt_now(occupied, None)
+    }
+
+    /// Pursue one reachable animal chosen by the controlled actor.
+    pub fn hunt_controlled(
+        &mut self,
+        person: u64,
+        animal: u64,
+    ) -> Result<Option<crate::hunting::Receipt>, String> {
+        let actor = self.controlled_person(person)?;
+        let region = actor.region.ok_or("the controlled hunter is in transit")?;
+        if actor.health == 0
+            || !self.regional_stock_reachable(person, region)
+            || self
+                .local_walk_exclusions(&[])
+                .binary_search(&person)
+                .is_ok()
+            || self.held_at(person).is_some()
+        {
+            return Err("the controlled hunter is unavailable".into());
+        }
+        if self.core.next_deadline(None)?.after_millis == 0 {
+            return Err("settle the current event before hunting".into());
+        }
+        Ok(self
+            .hunt_now(&[], Some((person, animal)))?
+            .yields
+            .into_iter()
+            .next())
+    }
+
+    fn hunt_now(
+        &mut self,
+        occupied: &[u64],
+        manual: Option<(u64, u64)>,
+    ) -> Result<HuntRound, String> {
+        let tick = self.core.physical.tick();
+        let view = self.core.physical.view(tick)?;
+        let busy = self.local_walk_exclusions(occupied);
+        let away = self.block_away_from_stock(&busy);
+        let busy = away.as_deref().unwrap_or(&busy);
+        let held = self.block_held(busy);
+        let busy = held.as_deref().unwrap_or(busy);
+        let excluded: Vec<_> =
+            self.animal_restraints
+                .as_ref()
+                .map_or_else(Vec::new, |restraints| {
+                    restraints
+                        .holds
+                        .par_iter()
+                        .map(|hold| hold.animal)
+                        .collect()
+                });
+        let key = self.core.decision_time_key();
+        let plan = crate::hunting::Context {
+            owner: manual.is_none().then_some(self.hunting.as_ref()).flatten(),
+            fauna: self.fauna.as_ref(),
+            people: &self.core.people,
+            opinions: self.opinions.as_ref(),
+            animal_feelings: self.animal_feelings.as_ref(),
+            view: &view,
+            requests: &[],
+            busy,
+            feed_targets: &excluded,
+            max_hunger: u32::MAX,
+            seed: self.core.seed,
+            draw_key: key,
+            tick,
+            manual,
+        }
+        .prepare(1)?;
+        let mut result = HuntRound::default();
+        if plan.yields.is_empty() {
+            result.actors = plan.actors;
+            return Ok(result);
+        }
+        let custody = self
+            .core
+            .physical
+            .prepare_interval_hunts(&plan.yields, self.core.seed ^ key)?;
+        let hunted = plan.accepted(custody.transactions());
+        if !hunted.is_empty() {
+            let fauna = self
+                .fauna
+                .as_ref()
+                .ok_or("missing wildlife owner")?
+                .prepare_encounters(&hunted, &[])
+                .map_err(str::to_owned)?;
+            let feelings = self.stage_animal_feelings(Some(&plan), &hunted, &[], None, &[], None);
+            result.yields =
+                plan.yields
+                    .par_iter()
+                    .filter_map(|row| {
+                        hunted.binary_search(&row.animal).is_ok().then_some(
+                            crate::hunting::Receipt {
+                                person: row.hunter,
+                                animal: row.animal,
+                                good: row.good,
+                                quantity: row.quantity,
+                            },
+                        )
+                    })
+                    .collect();
+            self.core.physical.validate_interval_consumption(&custody)?;
+            self.core.physical.commit_interval_consumption(custody)?;
+            let live = self.fauna.as_mut().expect("prepared wildlife");
+            result.deaths = live.publish_encounter_receipts(fauna);
+            if let Some(feelings) = feelings {
+                self.animal_feelings = Some(feelings);
+            }
+        }
+        result.actors = plan.actors;
+        Ok(result)
+    }
+
     pub(super) fn plan_hunting(
         &self,
         occupied: &[u64],
@@ -15,7 +145,7 @@ impl CoreHost {
         ),
         base: u64,
     ) -> Result<Option<crate::hunting::Plan>, String> {
-        let Some(owner) = &self.hunting else {
+        let Some(owner) = self.hunting.as_ref().filter(|owner| !owner.elapsed_actions) else {
             return Ok(None);
         };
         let rest = self.blocked_with_rest(occupied);
@@ -79,6 +209,7 @@ impl CoreHost {
             feed_targets: &feed_targets,
             max_hunger: self.core.rules.max_work_hunger,
             seed: self.core.seed,
+            draw_key: tick,
             tick,
             manual: None,
         }

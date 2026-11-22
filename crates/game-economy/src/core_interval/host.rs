@@ -3396,7 +3396,7 @@ impl CoreHost {
             .transpose()?;
         let hunted = hunting
             .as_ref()
-            .map_or_else(Vec::new, |plan| plan.accepted(draft.events()));
+            .map_or_else(Vec::new, |plan| plan.accepted(&draft.events().physical_actions));
         let feeding = care
             .as_ref()
             .map_or_else(Vec::new, |plan| plan.accepted(draft.events()));

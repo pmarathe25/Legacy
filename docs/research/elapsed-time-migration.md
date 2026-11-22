@@ -123,6 +123,13 @@ When using a seasonal calendar with a wildlife clock, configure
 The integrated history scenario defines both clocks. The report retains exact
 birth and death times from the wildlife owner.
 
+Set `hunting.elapsed_actions = true` to let hunters reconsider on their
+ordinary personal decision clock. Selection and outcome draws use the
+elapsed decision instant. A successful hunt changes the animal and puts
+the yield into actual personal custody at that same instant. A full bag
+leaves the animal alive. History retains that physical cause and the
+hunter's identity, and the player can attempt `hunt ANIMAL` directly.
+
 An optional `fauna.dispersal` defines directed wildlife corridors and policies
 by species. At each lifecycle event, a surviving animal can explore one
 corridor after grazing and reproduction. Its hunger, age, inherited drive,
