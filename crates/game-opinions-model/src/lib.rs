@@ -89,6 +89,9 @@ pub struct Sensitivity {
     /// Signed personal interpretations of giving or receiving a lesson.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub teaching_reaction: Option<Arc<TeachingReaction>>,
+    /// How this person interprets a care visit during development.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub care_reaction: Option<CareReaction>,
     /// Optional interpretations of experiences with particular people.
     #[serde(default)]
     pub relationship_cases: Vec<RelationshipCase>,
@@ -117,6 +120,14 @@ pub struct ObligationDevelopment {
     pub cared_promise_change: Option<i64>,
     #[serde(default)]
     pub unattended_promise_change: Option<i64>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CareReaction {
+    /// Age at which this developmental reaction stops applying.
+    pub until_age: u64,
+    pub visit: SubjectiveReaction,
 }
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -174,6 +185,9 @@ pub struct RelationshipCase {
     /// Per-person lesson interpretations override the general disposition.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub teaching_reaction: Option<Arc<TeachingReaction>>,
+    /// Overrides this observer's care reaction for an individual caregiver.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub care_reaction: Option<CareReaction>,
     #[serde(default)]
     pub obligation_gain: Option<u64>,
     #[serde(default)]

@@ -154,7 +154,12 @@ impl CoreHost {
         else {
             return;
         };
-        if care.events.is_empty() || !opinions.tracks_obligation_development() {
+        if care.events.is_empty() {
+            return;
+        }
+        let develop_obligation = opinions.tracks_obligation_development();
+        let learn_relationships = opinions.tracks_care_reactions();
+        if !develop_obligation && !learn_relationships {
             return;
         }
         let now = self.core.simulated_millis();
@@ -167,10 +172,21 @@ impl CoreHost {
                     .binary_search_by_key(&event.child, |row| row.id)
                     .ok()?;
                 let age = family.age_at(&family.members[index], now);
-                Some((event.child, age, event.caregiver.is_some()))
+                Some((event.child, age, event.caregiver))
             })
             .collect();
-        opinions.develop_obligation(&experiences);
+        if develop_obligation {
+            let childhood: Vec<_> = experiences.par_iter()
+                .map(|&(child, age, caregiver)| (child, age, caregiver.is_some()))
+                .collect();
+            opinions.develop_obligation(&childhood);
+        }
+        if learn_relationships {
+            let visits: Vec<_> = experiences.par_iter().filter_map(|&(child, age, caregiver)| {
+                Some(game_opinions::CareExperience { child, age, caregiver: caregiver? })
+            }).collect();
+            opinions.learn_care(&visits, self.core.physical.tick());
+        }
     }
 
     pub(super) fn stage_care_health(

@@ -1,6 +1,72 @@
 use game_economy::core_interval::{CoreHost, CoreRunEvent};
 
 #[test]
+fn children_interpret_attributed_care_differently_without_assigning_unobserved_blame() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let opening = game_economy_cli::core_scenario(
+        &root.join("content/scenarios/economy-care-relationships.toml"),
+        &root.join("content"),
+    )
+    .unwrap()
+    .snapshot();
+    let simulate = |workers, durations: &[u64], available| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut initial = opening.clone();
+                for policy in &mut initial.dependent_care.as_mut().unwrap().policies {
+                    policy.willing = available;
+                }
+                let mut host = CoreHost::resume(initial).unwrap();
+                let mut visits = Vec::new();
+                for &duration in durations {
+                    let advanced = host.advance_continuous(duration, &[]).unwrap();
+                    assert_eq!(advanced.failure, None);
+                    visits.extend(advanced.events.into_iter().filter_map(|event| {
+                        if let CoreRunEvent::Care(visit) = event {
+                            Some(visit)
+                        } else {
+                            None
+                        }
+                    }));
+                    let save = serde_json::to_vec(&host.snapshot()).unwrap();
+                    host = CoreHost::resume(serde_json::from_slice(&save).unwrap()).unwrap();
+                }
+                assert_eq!(visits.len(), 1);
+                let visit = &visits[0];
+                assert_eq!(visit.at_millis, 100);
+                assert_eq!(visit.events.len(), 2);
+                let opinions = host.snapshot().opinions.unwrap();
+                for event in &visit.events {
+                    if available {
+                        let caregiver = event.caregiver.unwrap();
+                        let (trust, affinity, fear, obligation) =
+                            opinions.index().subjective(event.child, caregiver);
+                        assert_eq!(
+                            (trust, affinity, fear, obligation),
+                            if event.child == 3 {
+                                (1, 3, 0, 0)
+                            } else {
+                                (-2, -4, 2, 0)
+                            }
+                        );
+                    } else {
+                        assert!(event.caregiver.is_none());
+                    }
+                }
+                if !available {
+                    assert!(opinions.records.is_empty());
+                }
+                (visits, opinions.records)
+            })
+    };
+    assert_eq!(simulate(1, &[100], true), simulate(6, &[59, 21, 20], true));
+    simulate(1, &[100], false);
+}
+
+#[test]
 fn care_visits_use_elapsed_deadlines_and_real_local_food() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
