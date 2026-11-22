@@ -44,6 +44,7 @@ fn reachable_workers_rank_later_requests_and_feel_the_same_hunger_differently() 
                 work.pending = [(1, 1, 3), (2, 2, 3), (3, 2, 4)]
                     .into_iter()
                     .map(|(id, requester, worker)| Request {
+                        elapsed: None,
                         id,
                         requester,
                         worker,

@@ -731,6 +731,7 @@ fn classify(kind: &str, row: &Value) -> Option<Receipt> {
         ("work_requests", _) if row["outcome"]["kind"] == "started" => {
             "work starts following requests"
         }
+        ("work_request_expiry", _) => "work requests that expired",
         _ => return None,
     };
     let primary = row["actor"]

@@ -11,6 +11,7 @@ pub(super) struct ElapsedProgress {
     pub fauna: Option<CoreFaunaTransitions>,
     pub wild_plants: Option<game_economy_agriculture::wild_plants::Cycle>,
     pub agreement_expiries: Vec<game_agreements::Event>,
+    pub work_request_expiries: Vec<game_autowork::requests::Event>,
     pub pastimes: super::pastimes::SettledPastimes,
     pub disease_events: Vec<game_disease::Event>,
     pub local_arrivals: Vec<game_economy_local_transport::walking::Event>,
@@ -39,6 +40,7 @@ struct ElapsedLimits {
     wild_plants: Option<u64>,
     fear_relaxation: Option<u64>,
     agreement_expiry: Option<u64>,
+    work_request_expiry: Option<u64>,
 }
 
 impl From<PreparedDeadline> for ElapsedLimits {
@@ -62,6 +64,7 @@ impl From<PreparedDeadline> for ElapsedLimits {
             wild_plants: at(deadline.wild_plants),
             fear_relaxation: at(deadline.fear_relaxation),
             agreement_expiry: at(deadline.agreement_expiry),
+            work_request_expiry: at(deadline.work_request_expiry),
         }
     }
 }
@@ -87,6 +90,7 @@ impl ElapsedLimits {
         let wild_plants = host.next_wild_plant_cycle();
         let fear_relaxation = host.next_fear_relaxation();
         let agreement_expiry = host.next_agreement_expiry();
+        let work_request_expiry = host.next_work_request_expiry();
         let mut limit = host.core.progress_limit(requested)?;
         limit = [
             recovery,
@@ -104,6 +108,7 @@ impl ElapsedLimits {
             wild_plants,
             fear_relaxation,
             agreement_expiry,
+            work_request_expiry,
             host.next_pastime_finish(),
         ]
         .into_iter()
@@ -126,6 +131,7 @@ impl ElapsedLimits {
             wild_plants,
             fear_relaxation,
             agreement_expiry,
+            work_request_expiry,
         })
     }
 }
@@ -595,7 +601,8 @@ impl CoreHost {
             || has_injuries
             || recovery_due
             || batches.is_some()
-            || limits.agreement_expiry == Some(consumed);
+            || limits.agreement_expiry == Some(consumed)
+            || limits.work_request_expiry == Some(consumed);
         let moisture = self
             .irrigation
             .as_ref()
@@ -669,10 +676,16 @@ impl CoreHost {
             } else {
                 Vec::new()
             };
+            let work_request_expiries = if limits.work_request_expiry == Some(advanced) {
+                self.expire_due_work_requests()
+            } else {
+                Vec::new()
+            };
             return Ok(ElapsedProgress {
                 millis: advanced,
                 pastimes: self.settle_pastimes(externally_busy),
                 agreement_expiries,
+                work_request_expiries,
                 interrupted_preparation,
                 activity,
                 incapacitations,
@@ -882,10 +895,16 @@ impl CoreHost {
         } else {
             Vec::new()
         };
+        let work_request_expiries = if limits.work_request_expiry == Some(advanced) {
+            self.expire_due_work_requests()
+        } else {
+            Vec::new()
+        };
         Ok(ElapsedProgress {
             millis: advanced,
             pastimes: self.settle_pastimes(externally_busy),
             agreement_expiries,
+            work_request_expiries,
             interrupted_preparation,
             activity,
             incapacitations,

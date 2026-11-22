@@ -794,10 +794,7 @@ impl Plan {
         });
         owner.observe_refusals(&events, &witnessed, physical.tick);
         let ids: Vec<_> = events.par_iter().map(|row| row.request).collect();
-        owner.pending = std::mem::take(&mut owner.pending)
-            .into_par_iter()
-            .filter(|row| ids.binary_search(&row.id).is_err())
-            .collect();
+        owner.end_requests(&ids);
         owner.events = events;
         if let Some(asks) = self.asks {
             asking::publish(owner, asks);

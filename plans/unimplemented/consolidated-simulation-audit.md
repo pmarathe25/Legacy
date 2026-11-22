@@ -86,6 +86,8 @@ to track rates, deadlines, and behavior under different advance sizes. The
   Hunger can increase or decrease the appeal of work for different people.
   The same physical capability requirements apply to requested and
   self-directed work. An unfulfilled offer can still motivate a worker.
+  Ordinary work requests can expire at an elapsed deadline even if the
+  recipient is away or chooses to ignore them. The archive retains expiry.
 - Voluntary gathering can publish at the personal decision instant. The
   gathered yield enters physical custody before later decisions. The node
   owner arbitrates competing requests and charges only accepted transfers.

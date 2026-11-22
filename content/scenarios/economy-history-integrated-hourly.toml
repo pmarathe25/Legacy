@@ -1883,6 +1883,29 @@ recipe = "fixture-tool"
 priority = 1
 target = 1
 
+[work_requests]
+next_id = 1
+elapsed = { unit_millis = 3600000 }
+memory_limit = 4
+
+[[work_requests.askers]]
+person = 1
+interval = 720
+lifetime = 24
+
+[[work_requests.preferences]]
+person = 2
+effort = 4
+help_value = 5
+affinity_weight = 1
+hunger_weight = -1
+
+[[work_requests.preferences]]
+person = 3
+effort = 4
+help_value = 1
+affinity_weight = 1
+
 [skills]
 rules = []
 [skills.recipe_knowledge]

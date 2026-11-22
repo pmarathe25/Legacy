@@ -2,6 +2,7 @@ use game_work_requests::{Request, Requests, SuccessReceipt, WorkLink};
 
 fn state(limit: usize) -> Requests {
     Requests {
+        elapsed: None,
         inherit_births: false,
         next_id: 100_002,
         memory_limit: limit,
@@ -134,6 +135,7 @@ fn a_witness_distinguishes_refusal_from_a_failed_job() {
     requests.resolve(&[(1, false)], 1, |_| true);
     assert_eq!(requests.memories[0].last_refusal_at, None);
     let request = Request {
+        elapsed: None,
         id: 2,
         requester: 1,
         worker: 2,

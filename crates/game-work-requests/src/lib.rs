@@ -9,11 +9,14 @@ use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::cmp::Reverse;
 use std::collections::HashSet;
+use std::num::NonZeroU64;
 
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Requests {
     pub next_id: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub elapsed: Option<RequestClock>,
     /// Enroll newborns with general preferences, never another person's experiences.
     #[serde(default)]
     pub inherit_births: bool,
@@ -37,6 +40,7 @@ impl Clone for Requests {
     fn clone(&self) -> Self {
         Self {
             next_id: self.next_id,
+            elapsed: self.elapsed,
             inherit_births: self.inherit_births,
             memory_limit: self.memory_limit,
             work_links: self.work_links.par_iter().cloned().collect(),
@@ -47,6 +51,21 @@ impl Clone for Requests {
             events: self.events.par_iter().cloned().collect(),
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RequestClock {
+    pub unit_millis: NonZeroU64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_expiry_millis: Option<u128>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ElapsedLifetime {
+    pub posted_at: u128,
+    pub ends_at: u128,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -203,6 +222,17 @@ pub struct Request {
     pub recipe: u32,
     pub created_at: u64,
     pub expires: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub elapsed: Option<ElapsedLifetime>,
+}
+impl Request {
+    pub fn live_at(&self, tick: u64, now: Option<u128>) -> bool {
+        match (self.elapsed, now) {
+            (Some(lifetime), Some(now)) => lifetime.posted_at <= now && now < lifetime.ends_at,
+            (Some(_), None) => false,
+            (None, _) => self.expires >= tick,
+        }
+    }
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -241,6 +271,59 @@ pub struct Draft {
 }
 
 impl Requests {
+    pub fn register_elapsed_requests(&mut self, rows: &[Request]) {
+        if let Some(clock) = &mut self.elapsed {
+            clock.next_expiry_millis = clock
+                .next_expiry_millis
+                .into_iter()
+                .chain(
+                    rows.par_iter()
+                        .filter_map(|row| row.elapsed.map(|time| time.ends_at))
+                        .min(),
+                )
+                .min();
+        }
+    }
+
+    pub fn end_requests(&mut self, ended: &[u64]) {
+        if ended.is_empty() {
+            return;
+        }
+        self.pending = std::mem::take(&mut self.pending)
+            .into_par_iter()
+            .filter(|row| ended.binary_search(&row.id).is_err())
+            .collect();
+        if let Some(clock) = &mut self.elapsed {
+            clock.next_expiry_millis = self
+                .pending
+                .par_iter()
+                .filter_map(|row| row.elapsed.map(|time| time.ends_at))
+                .min();
+        }
+    }
+
+    pub fn expire_elapsed(&mut self, tick: u64, now: u128) -> Vec<Event> {
+        let Some(clock) = self.elapsed else {
+            return Vec::new();
+        };
+        if clock.next_expiry_millis.is_none_or(|next| next > now) {
+            return Vec::new();
+        }
+        let mut events: Vec<_> = self
+            .pending
+            .par_iter()
+            .filter(|row| row.elapsed.is_some_and(|time| time.ends_at <= now))
+            .map(|row| Event {
+                tick,
+                request: row.id,
+                worker: row.worker,
+                outcome: Outcome::Expired,
+            })
+            .collect();
+        events.par_sort_unstable_by_key(|event| event.request);
+        self.end_requests(&events.iter().map(|row| row.request).collect::<Vec<_>>());
+        events
+    }
     /// Only addressed, still-pending promises can inform a recipient's own choice.
     pub fn offer_index(&self, agreements: Option<&Agreements>, tick: u64) -> Option<OfferIndex> {
         let agreements = agreements.filter(|owner| !owner.contracts.is_empty())?;
@@ -395,6 +478,9 @@ impl Requests {
                     || !recipes.contains(&row.recipe)
                     || !regions.contains(&row.region)
                     || row.expires < row.created_at
+                    || row.elapsed.is_some_and(|time| {
+                        self.elapsed.is_none() || time.ends_at <= time.posted_at
+                    })
             })
             || self.events.par_iter().any(|row| {
                 row.request == 0
@@ -403,6 +489,16 @@ impl Requests {
             })
         {
             return Err("invalid work requests".into());
+        }
+        if self.elapsed.is_some_and(|clock| {
+            clock.next_expiry_millis
+                != self
+                    .pending
+                    .par_iter()
+                    .filter_map(|row| row.elapsed.map(|time| time.ends_at))
+                    .min()
+        }) {
+            return Err("invalid elapsed work request deadline".into());
         }
         Ok(())
     }
@@ -477,6 +573,7 @@ impl Requests {
                 recipe: proposal.recipe,
                 created_at: now,
                 expires: proposal.expires,
+                elapsed: None,
             })
             .collect();
         self.pending.par_extend(rows);
@@ -510,6 +607,28 @@ impl Requests {
         busy: &[u64],
         offers: Option<&OfferIndex>,
         tick: u64,
+        eligible_contact: F,
+    ) -> Draft
+    where
+        F: Fn(&Request) -> bool + Sync,
+    {
+        self.prepare_filtered_at(
+            people,
+            opinions,
+            busy,
+            offers,
+            (tick, None),
+            eligible_contact,
+        )
+    }
+
+    pub fn prepare_filtered_at<F>(
+        &self,
+        people: &[PersonSnapshot],
+        opinions: Option<&Opinions>,
+        busy: &[u64],
+        offers: Option<&OfferIndex>,
+        (tick, now): (u64, Option<u128>),
         eligible_contact: F,
     ) -> Draft
     where
@@ -558,7 +677,7 @@ impl Requests {
             .pending
             .par_iter()
             .filter(|row| {
-                row.expires >= tick
+                row.live_at(tick, now)
                     && eligible_contact(row)
                     && busy.binary_search(&row.worker).is_err()
                     && person_index(people, row.worker)
@@ -634,7 +753,7 @@ impl Requests {
         let expired = self
             .pending
             .par_iter()
-            .filter(|row| row.expires < tick)
+            .filter(|row| row.elapsed.is_none() && row.expires < tick)
             .map(|row| Event {
                 tick,
                 request: row.id,
@@ -691,6 +810,7 @@ mod preference_tests {
             disregard_claims: false,
         };
         let requests = Requests {
+            elapsed: None,
             next_id: 1,
             inherit_births: false,
             memory_limit: 0,

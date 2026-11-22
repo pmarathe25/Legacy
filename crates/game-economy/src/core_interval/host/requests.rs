@@ -39,6 +39,19 @@ fn together(people: &[Person], requester: u64, worker: u64, region: u64) -> bool
 }
 
 impl CoreHost {
+    pub(super) fn next_work_request_expiry(&self) -> Option<u64> {
+        let clock = self.autowork.as_ref()?.requests.as_ref()?.elapsed?;
+        let when = clock.next_expiry_millis?;
+        u64::try_from(when.saturating_sub(self.core.simulated_millis())).ok()
+    }
+
+    pub(super) fn expire_due_work_requests(&mut self) -> Vec<Event> {
+        self.autowork.as_mut().and_then(|owner| owner.requests.as_mut())
+            .map_or_else(Vec::new, |requests| {
+                requests.expire_elapsed(self.core.physical.tick(), self.core.simulated_millis())
+            })
+    }
+
     /// A controlled person can describe a future transfer without reserving goods.
     pub fn promise_controlled(
         &mut self,
@@ -508,14 +521,19 @@ impl CoreHost {
             (1, store) => Some(Some(store)),
             _ => None,
         };
-        let Some(draft) = game_work_asking::prepare_for_goal_clock(
+        let timing = game_work_asking::Timing {
+            tick,
+            now: Some(self.core.simulated_millis()),
+            decision_period_millis: self.schedule.as_ref().map_or(1, |row| row.period_millis),
+        };
+        let Some(draft) = game_work_asking::prepare_at(
             owner,
             self.goals.as_ref(),
             &people,
             &busy,
             offers.as_ref(),
             &practices,
-            (tick, Some(self.core.simulated_millis()), Some(&endpoint)),
+            (timing, Some(&endpoint)),
         )
         .map_err(str::to_owned)?
         else {
@@ -677,12 +695,12 @@ impl CoreHost {
             agreements.instant(self.core.simulated_millis(), tick).map(|at| at.now)
         }).map_err(str::to_owned)?;
         let offers = requests.offer_index(self.agreements.as_ref(), offer_time);
-        let draft = requests.prepare_filtered(
+        let draft = requests.prepare_filtered_at(
             &people,
             self.opinions.as_ref(),
             &busy,
             offers.as_ref(),
-            tick,
+            (tick, Some(self.core.simulated_millis())),
             |request| {
                 request.created_at <= tick
                     && together(
@@ -863,10 +881,7 @@ impl CoreHost {
         requests.record_starts(&events);
         requests.observe_refusals(&events, &visible, tick);
         let ended: Vec<_> = events.iter().map(|event| event.request).collect();
-        requests.pending = std::mem::take(&mut requests.pending)
-            .into_par_iter()
-            .filter(|request| ended.binary_search(&request.id).is_err())
-            .collect();
+        requests.end_requests(&ended);
         requests.events = events.clone();
         let base = (self.practice_work_evidence.starts.len()
             + self.practice_work_evidence.gifts.len()) as u64;

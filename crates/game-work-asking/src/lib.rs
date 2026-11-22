@@ -1,12 +1,19 @@
 //! Bounded personal requests derived from existing goals and local visibility.
 use game_goals::Goals;
 use game_production_model::{PersonSnapshot, person_index};
-use game_work_requests::{OfferIndex, Request, Requests};
+use game_work_requests::{ElapsedLifetime, OfferIndex, Request, Requests};
 use rayon::prelude::*;
 use std::cmp::Reverse;
 
 /// Returns the local store, regional stock, or no location while in transit.
 pub type EndpointLookup<'a> = dyn Fn(u64, u64) -> Option<Option<u64>> + Sync + 'a;
+
+#[derive(Clone, Copy)]
+pub struct Timing {
+    pub tick: u64,
+    pub now: Option<u128>,
+    pub decision_period_millis: u64,
+}
 
 pub struct Draft {
     pub requests: Vec<Request>,
@@ -28,6 +35,7 @@ struct Candidate {
     region: u64,
     recipe: u32,
     expires: u64,
+    elapsed: Option<ElapsedLifetime>,
 }
 
 pub fn prepare(
@@ -64,49 +72,71 @@ pub fn prepare_at_endpoints(
     timing_and_endpoint: (u64, Option<&EndpointLookup<'_>>),
 ) -> Result<Option<Draft>, &'static str> {
     let (tick, endpoint) = timing_and_endpoint;
-    prepare_for_goal_clock(
+    prepare_at(
         owner,
         goals,
         people,
         busy,
         offers,
         practices,
-        (tick, None, endpoint),
+        (
+            Timing {
+                tick,
+                now: None,
+                decision_period_millis: 1,
+            },
+            endpoint,
+        ),
     )
 }
 
-pub fn prepare_for_goal_clock(
+pub fn prepare_at(
     owner: &Requests,
     goals: Option<&Goals>,
     people: &[PersonSnapshot],
     busy: &[u64],
     offers: Option<&OfferIndex>,
     practices: &[PracticeRequest],
-    timing_and_endpoint: (u64, Option<u128>, Option<&EndpointLookup<'_>>),
+    (timing, endpoint): (Timing, Option<&EndpointLookup<'_>>),
 ) -> Result<Option<Draft>, &'static str> {
-    let (tick, now, endpoint) = timing_and_endpoint;
+    let Timing {
+        tick,
+        now,
+        decision_period_millis,
+    } = timing;
+    let elapsed = owner.elapsed.zip(now);
+    let due = |asker: &game_work_requests::Asker| match elapsed {
+        Some((clock, now)) => {
+            let unit = u128::from(clock.unit_millis.get());
+            let phase = u128::from(asker.person % asker.interval) * unit;
+            let period = u128::from(asker.interval) * unit;
+            now.checked_sub(phase)
+                .is_some_and(|age| age % period < u128::from(decision_period_millis))
+        }
+        None => owner.elapsed.is_none() && tick % asker.interval == asker.person % asker.interval,
+    };
     let Some(goals) = goals.filter(|_| !owner.askers.is_empty() || !practices.is_empty()) else {
         return Ok(None);
     };
     let mut busy = busy.to_vec();
     busy.par_sort_unstable();
     if practices.is_empty()
-        && !owner.askers.par_iter().any(|asker| {
-            tick % asker.interval == asker.person % asker.interval
-                && busy.binary_search(&asker.person).is_err()
-        })
+        && !owner
+            .askers
+            .par_iter()
+            .any(|asker| due(asker) && busy.binary_search(&asker.person).is_err())
     {
         return Ok(None);
     }
-    let clock = goals;
-    let mut goals: Vec<_> = goals
+    let goals_owner = goals;
+    let mut goals: Vec<_> = goals_owner
         .people
         .par_iter()
         .filter(|row| {
             row.enabled
                 && row.progress < row.target
-                && if clock.review_clock.is_some() {
-                    clock.ready_at(row, tick, now)
+                && if goals_owner.review_clock.is_some() || elapsed.is_some() {
+                    goals_owner.ready_at(row, tick, now)
                 } else {
                     row.next_review < tick
                 }
@@ -151,7 +181,7 @@ pub fn prepare_for_goal_clock(
     let mut old: Vec<_> = owner
         .pending
         .par_iter()
-        .filter(|row| row.expires >= tick)
+        .filter(|row| row.live_at(tick, now))
         .map(|row| (row.worker, row.requester, row.recipe))
         .collect();
     if old.par_windows(2).any(|pair| pair[0] > pair[1]) {
@@ -195,6 +225,7 @@ pub fn prepare_for_goal_clock(
                     region,
                     recipe: practice.recipe,
                     expires: practice.expires,
+                    elapsed: None,
                 })
         })
         .collect();
@@ -221,7 +252,7 @@ pub fn prepare_for_goal_clock(
         .par_iter()
         .map(|asker| -> Result<Option<Candidate>, &'static str> {
             if preferred_people.contains(&asker.person)
-                || tick % asker.interval != asker.person % asker.interval
+                || !due(asker)
                 || busy.binary_search(&asker.person).is_ok()
             {
                 return Ok(None);
@@ -316,14 +347,32 @@ pub fn prepare_for_goal_clock(
             let Some(worker) = worker else {
                 return Ok(None);
             };
+            let (expires, lifetime) = if let Some((clock, now)) = elapsed {
+                let duration = u128::from(asker.lifetime) * u128::from(clock.unit_millis.get());
+                let ends_at = now
+                    .checked_add(duration)
+                    .ok_or("elapsed work request expiry overflow")?;
+                (
+                    tick,
+                    Some(ElapsedLifetime {
+                        posted_at: now,
+                        ends_at,
+                    }),
+                )
+            } else {
+                (
+                    tick.checked_add(asker.lifetime)
+                        .ok_or("work request expiry overflow")?,
+                    None,
+                )
+            };
             Ok(Some(Candidate {
                 requester: asker.person,
                 worker,
                 region,
                 recipe: goal.recipe,
-                expires: tick
-                    .checked_add(asker.lifetime)
-                    .ok_or("work request expiry overflow")?,
+                expires,
+                elapsed: lifetime,
             }))
         })
         .collect::<Result<Vec<_>, _>>()?
@@ -370,6 +419,7 @@ pub fn prepare_for_goal_clock(
             recipe: row.recipe,
             created_at: tick,
             expires: row.expires,
+            elapsed: row.elapsed,
         })
         .collect();
     if requests.is_empty() {
@@ -383,6 +433,7 @@ pub fn prepare_for_goal_clock(
     }))
 }
 pub fn publish(owner: &mut Requests, draft: Draft) {
+    owner.register_elapsed_requests(&draft.requests);
     owner.pending.extend(draft.requests);
     owner.next_id = draft.next_id;
 }
@@ -396,6 +447,7 @@ mod tests {
     #[test]
     fn personal_terms_create_only_one_local_request_for_an_active_goal() {
         let mut owner = Requests {
+            elapsed: None,
             next_id: 1,
             inherit_births: false,
             memory_limit: 0,

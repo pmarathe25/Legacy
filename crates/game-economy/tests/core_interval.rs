@@ -4351,6 +4351,7 @@ fn core_host_work_requests_benchmark() {
     .unwrap();
     let requests = Requests {
         next_id: count,
+        elapsed: None,
         inherit_births: false,
         memory_limit: 0,
         work_links: vec![],
@@ -4374,6 +4375,7 @@ fn core_host_work_requests_benchmark() {
         askers: vec![],
         pending: (2..=count)
             .map(|worker| Request {
+                elapsed: None,
                 id: worker - 1,
                 requester: 1,
                 worker,
@@ -5965,6 +5967,7 @@ fn scheduled_requests_use_directed_fear_and_obligation_without_binding_work() {
                     })
                     .collect();
                 let request = |id, requester, worker| Request {
+                    elapsed: None,
                     id,
                     requester,
                     worker,
@@ -5974,6 +5977,7 @@ fn scheduled_requests_use_directed_fear_and_obligation_without_binding_work() {
                     expires: 5,
                 };
                 let requests = Requests {
+                    elapsed: None,
                     next_id: 5,
                     inherit_births: false,
                     memory_limit: 4,
@@ -6142,6 +6146,7 @@ fn willing_request_response_with_missing_stock_remains_pending() {
     initial.nutrition = None;
     initial.pending_food.clear();
     let requests = Requests {
+        elapsed: None,
         next_id: 2,
         inherit_births: false,
         memory_limit: 4,
@@ -6159,6 +6164,7 @@ fn willing_request_response_with_missing_stock_remains_pending() {
         }],
         askers: vec![],
         pending: vec![Request {
+            elapsed: None,
             id: 1,
             requester: 1,
             worker: 2,
@@ -6284,6 +6290,7 @@ fn contested_request_reservations_do_not_turn_shortage_into_refusal() {
                 )
                 .unwrap();
                 let requests = Requests {
+                    elapsed: None,
                     next_id: 3,
                     inherit_births: false,
                     memory_limit: 4,
@@ -6304,6 +6311,7 @@ fn contested_request_reservations_do_not_turn_shortage_into_refusal() {
                     askers: vec![],
                     pending: (2..=3)
                         .map(|worker| Request {
+                            elapsed: None,
                             id: worker - 1,
                             requester: 1,
                             worker,
@@ -6424,6 +6432,7 @@ fn future_request_does_not_hide_an_existing_local_request() {
     )
     .unwrap();
     let request = |id, created_at| Request {
+        elapsed: None,
         id,
         requester: 1,
         worker: 2,
@@ -6433,6 +6442,7 @@ fn future_request_does_not_hide_an_existing_local_request() {
         expires: 5,
     };
     let requests = Requests {
+        elapsed: None,
         next_id: 3,
         inherit_births: false,
         memory_limit: 0,
@@ -6563,6 +6573,7 @@ fn requested_work_follows_the_workers_own_claim_preference() {
                 )
                 .unwrap();
                 let requests = Requests {
+                    elapsed: None,
                     next_id: 2,
                     inherit_births: false,
                     memory_limit: 4,
@@ -6580,6 +6591,7 @@ fn requested_work_follows_the_workers_own_claim_preference() {
                     }],
                     askers: vec![],
                     pending: vec![Request {
+                        elapsed: None,
                         id: 1,
                         requester: 1,
                         worker: 2,
@@ -8745,7 +8757,7 @@ fn core_host_cultivation_benchmark() {
         core: initial,
         autowork: work_gifts.then(|| game_autowork::Autowork {
             next_id: 2, policies: vec![], requests: Some(game_autowork::requests::Requests {
-                next_id: count + 1, inherit_births: false, memory_limit: 1, work_links: vec![],
+                next_id: count + 1, elapsed: None, inherit_births: false, memory_limit: 1, work_links: vec![],
                 memories: (2..=count / 2).map(|person| game_autowork::requests::Memory {
                     observer: person, worker: person + count / 2, recipe: 1, successes: 1, failures: 0, last_tick: 0,
                     last_success_at: Some(0), last_success: Some(game_autowork::requests::SuccessReceipt { request: person, job: person }), last_refusal_at: None,
@@ -9957,6 +9969,7 @@ fn core_host_clears_old_request_events_at_the_boundary() {
     initial.nutrition = None;
     initial.pending_food.clear();
     let requests = Requests {
+        elapsed: None,
         next_id: 2,
         inherit_births: false,
         memory_limit: 4,
@@ -9974,6 +9987,7 @@ fn core_host_clears_old_request_events_at_the_boundary() {
         }],
         askers: vec![],
         pending: vec![Request {
+            elapsed: None,
             id: 1,
             requester: 1,
             worker: 2,
@@ -10086,6 +10100,7 @@ fn scheduled_personal_goals_create_requests_and_count_only_witnessed_help() {
             let stock = initial.physical.custody.containers.iter_mut().find(|row| row.place == Place::Stock { region: 1, good: 1 }).unwrap();
             *stock = Container::new(stock.place, 10, vec![Lot { batch: None, item: None, good: 1, quantity: 2, freshness: Default::default(), expires_at: None }]).unwrap();
             let requests = Requests {
+                elapsed: None,
                 next_id: 1, inherit_births: false, memory_limit: 4,
                 work_links: vec![], memories: vec![],
                 preferences: vec![Preference { person: 1, effort: 0, help_value: 1, affinity_weight: 0, trust_weight: 0, hunger_weight: 0, offer_value: None, disregard_claims: false }],
@@ -10136,6 +10151,7 @@ fn work_practice_asks_then_freely_gives_for_witnessed_work() {
             ]);
             initial.physical.custody.containers.sort_unstable_by_key(|row| row.place);
             let requests = Requests {
+                elapsed: None,
                 next_id: 1, inherit_births: false, memory_limit: 4,
                 work_links: vec![], memories: vec![],
                 preferences: vec![Preference { person: 1, effort: 0, help_value: 1, affinity_weight: 0, trust_weight: 0, hunger_weight: 0, offer_value: None, disregard_claims: false }],
@@ -10197,6 +10213,7 @@ fn worker_subjectively_reacts_to_received_or_missing_work_gift() {
             ]);
             initial.physical.custody.containers.sort_unstable_by_key(|row| row.place);
             let requests = Requests {
+                elapsed: None,
                 next_id: 1, inherit_births: false, memory_limit: 4,
                 work_links: vec![], memories: vec![],
                 preferences: vec![Preference { person: 1, effort: 0, help_value: 1, affinity_weight: 0, trust_weight: 0, hunger_weight: 0, offer_value: None, disregard_claims: false }],
@@ -10267,6 +10284,7 @@ fn same_interval_delivery_respects_its_order_relative_to_work_start() {
             ]);
             initial.physical.custody.containers.sort_unstable_by_key(|row| row.place);
             let requests = Requests {
+                elapsed: None,
                 next_id: 1, inherit_births: false, memory_limit: 4,
                 work_links: vec![], memories: vec![],
                 preferences: vec![Preference { person: 1, effort: 0, help_value: 1, affinity_weight: 0, trust_weight: 0, hunger_weight: 0, offer_value: None, disregard_claims: false }],
@@ -10347,6 +10365,7 @@ fn worker_can_dislike_a_gift_and_enjoy_not_receiving_it() {
             ]);
             initial.physical.custody.containers.sort_unstable_by_key(|row| row.place);
             let requests = Requests {
+                elapsed: None,
                 next_id: 1, inherit_births: false, memory_limit: 4,
                 work_links: vec![], memories: vec![],
                 preferences: vec![Preference { person: 1, effort: 0, help_value: 1, affinity_weight: 0, trust_weight: 0, hunger_weight: 0, offer_value: None, disregard_claims: false }],
@@ -10418,6 +10437,7 @@ fn abandoned_requested_work_does_not_create_a_completed_expectation() {
             ]);
             initial.physical.custody.containers.sort_unstable_by_key(|row| row.place);
             let requests = Requests {
+                elapsed: None,
                 next_id: 1, inherit_births: false, memory_limit: 4,
                 work_links: vec![], memories: vec![],
                 preferences: vec![Preference { person: 1, effort: 0, help_value: 1, affinity_weight: 0, trust_weight: 0, hunger_weight: 0, offer_value: None, disregard_claims: false }],
@@ -10481,6 +10501,7 @@ fn work_expectation_observes_only_accepted_early_deliveries() {
             ]);
             initial.physical.custody.containers.sort_unstable_by_key(|row| row.place);
             let requests = Requests {
+                elapsed: None,
                 next_id: 1, inherit_births: false, memory_limit: 4,
                 work_links: vec![], memories: vec![],
                 preferences: vec![Preference { person: 1, effort: 0, help_value: 1, affinity_weight: 0, trust_weight: 0, hunger_weight: 0, offer_value: None, disregard_claims: false }],
@@ -10564,6 +10585,7 @@ fn work_expectation_survives_early_completion_and_save() {
             ]);
             initial.physical.custody.containers.sort_unstable_by_key(|row| row.place);
             let requests = Requests {
+                elapsed: None,
                 next_id: 1, inherit_births: false, memory_limit: 4,
                 work_links: vec![], memories: vec![],
                 preferences: vec![Preference { person: 1, effort: 0, help_value: 1, affinity_weight: 0, trust_weight: 0, hunger_weight: 0, offer_value: None, disregard_claims: false }],
@@ -10688,6 +10710,7 @@ fn core_host_goal_asking_benchmark() {
         game_economy::Giving { practices: Some(game_practices::Practices { minds }), policies: vec![].into(), inherit_births: false, responses: vec![].into(), learning: vec![], asking: vec![], requests: vec![], acquaintance_asking: vec![] }
     });
     let requests = Requests {
+        elapsed: None,
         next_id: 1,
         inherit_births: false,
         memory_limit: 0,
@@ -10926,6 +10949,7 @@ fn an_unfunded_offer_can_motivate_work_without_forcing_delivery() {
     )
     .unwrap();
     let requests = Requests {
+        elapsed: None,
         next_id: 2,
         inherit_births: false,
         memory_limit: 4,
@@ -10947,6 +10971,7 @@ fn an_unfunded_offer_can_motivate_work_without_forcing_delivery() {
         }],
         askers: vec![],
         pending: vec![Request {
+            elapsed: None,
             id: 1,
             requester: 1,
             worker: 2,
@@ -11533,9 +11558,10 @@ fn completed_work_wears_a_site_and_real_repairs_reopen_it() {
                     events: vec![],
                 };
                 let requests = game_autowork::requests::Requests {
+                    elapsed: None,
                     next_id: 2, inherit_births: false, memory_limit: 2, work_links: vec![], memories: vec![],
                     preferences: vec![game_autowork::requests::Preference { person: 2, effort: 0, help_value: 1, affinity_weight: 0, trust_weight: 0, hunger_weight: 0, offer_value: None, disregard_claims: false }], askers: vec![],
-                    pending: vec![game_autowork::requests::Request { id: 1, requester: 1, worker: 2, region: 1, recipe: 1, created_at: 0, expires: 5 }], events: vec![],
+                    pending: vec![game_autowork::requests::Request { elapsed: None, id: 1, requester: 1, worker: 2, region: 1, recipe: 1, created_at: 0, expires: 5 }], events: vec![],
                 };
                 let snapshot = CoreHostSnapshot { pastimes: None, work_capabilities: None, personal_conflict: None, expeditions: None, campaign: None, mechanics: None,
                     core: initial,

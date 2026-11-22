@@ -701,6 +701,10 @@ pub enum CoreRunEvent {
         at_millis: u128,
         events: Vec<game_agreements::Event>,
     },
+    WorkRequestExpiry {
+        at_millis: u128,
+        events: Vec<game_autowork::requests::Event>,
+    },
     Arrivals(CoreArrivals),
     Deferred(Vec<u64>),
     Work(game_lot_runtime::EarlyWorkEvents),
@@ -1411,6 +1415,16 @@ impl CoreHost {
                     let events = self.expire_due_agreements();
                     if !events.is_empty() {
                         run.events.push(CoreRunEvent::AgreementExpiry {
+                            at_millis: self.core.simulated_millis(),
+                            events,
+                        });
+                    }
+                    handled = true;
+                }
+                if deadline.work_request_expiry {
+                    let events = self.expire_due_work_requests();
+                    if !events.is_empty() {
+                        run.events.push(CoreRunEvent::WorkRequestExpiry {
                             at_millis: self.core.simulated_millis(),
                             events,
                         });
@@ -4155,6 +4169,12 @@ impl CoreHost {
                 run.events.push(CoreRunEvent::AgreementExpiry {
                     at_millis: self.core.simulated_millis(),
                     events: elapsed.agreement_expiries,
+                });
+            }
+            if !elapsed.work_request_expiries.is_empty() {
+                run.events.push(CoreRunEvent::WorkRequestExpiry {
+                    at_millis: self.core.simulated_millis(),
+                    events: elapsed.work_request_expiries,
                 });
             }
             if run.record_pastimes(elapsed.pastimes) {

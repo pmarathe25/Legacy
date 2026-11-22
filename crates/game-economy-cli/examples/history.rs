@@ -134,6 +134,7 @@ fn observation(event: &CoreRunEvent, current_tick: &mut u64) -> Option<Value> {
         CoreRunEvent::CrewStarts { at_millis, crew } => Some(json!({"kind":"crew_starts","at_millis":at_millis,"events":crew})),
         CoreRunEvent::PromiseTransfers { at_millis, transfers } => Some(json!({"kind":"promise_transfers","at_millis":at_millis,"events":transfers})),
         CoreRunEvent::AgreementExpiry { at_millis, events } => Some(json!({"kind":"agreement_expiry","at_millis":at_millis,"events":events})),
+        CoreRunEvent::WorkRequestExpiry { at_millis, events } => Some(json!({"kind":"work_request_expiry","at_millis":at_millis,"events":events})),
         CoreRunEvent::ElapsedWatering { at_millis, events } => Some(json!({"kind":"elapsed_watering","at_millis":at_millis,"events":events})),
         CoreRunEvent::ElapsedCultivation { at_millis, fields } => Some(json!({"kind":"elapsed_cultivation","at_millis":at_millis,"events":fields})),
         CoreRunEvent::HarvestProducts { at_millis, events } => Some(json!({"kind":"harvest_products","at_millis":at_millis,"events":events})),

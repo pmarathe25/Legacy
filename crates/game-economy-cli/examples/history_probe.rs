@@ -168,6 +168,13 @@ fn run_steps(
                     ("animal_product_events", events.len())
                 }
                 CoreRunEvent::Work(row) => ("work_finished", row.finished.len()),
+                CoreRunEvent::WorkRequestExpiry { at_millis, events } => {
+                    write_line(&mut writer, &json!({
+                        "kind":"work_request_expiry", "step":step,
+                        "at_millis":at_millis, "events":events
+                    }))?;
+                    ("work_request_expiry", events.len())
+                }
                 CoreRunEvent::Meetings(rows) => ("meetings", rows.len()),
                 CoreRunEvent::ElapsedEncounters {
                     meetings,

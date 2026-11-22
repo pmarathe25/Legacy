@@ -225,6 +225,13 @@ choice. Another attempt depends on the character's next decision.
 Supply planning and work requests use the same goal readiness.
 Scenarios without this clock keep the older settlement-based review dates.
 
+`work_requests.elapsed.unit_millis` gives ordinary discretionary requests
+an elapsed review and lifetime. Each asker's `interval` sets how often a
+scheduled personal round can consider making a request. The `lifetime`
+starts when the request is posted and expiry has its own elapsed deadline,
+even without further contact. A person can choose to respond during that
+window. Personalized work practice terms still have their older clock.
+
 An elapsed environment can set `exposure_period_millis` to schedule personal
 hazard damage and shelter rotation at fixed simulated times. The host uses
 the season just before each exposure event and applies it before new choices
