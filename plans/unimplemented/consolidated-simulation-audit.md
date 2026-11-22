@@ -122,6 +122,14 @@ to track rates, deadlines, and behavior under different advance sizes. The
   A debtor can condition delivery on their own hunger. Personal fear or
   obligation may still motivate them. History dates accepted transfers and
   identifies the actual participants, goods, and quantity.
+- The archive can identify when at least two of the same helpers joined a
+  different lead most often in consecutive years. It uses accepted crew
+  starts and excludes people whose most frequent lead was tied.
+- Stock observations carry their elapsed dates. Hearing a report and using
+  it for a chosen action can refresh memory without changing the original
+  evidence date. Authored retention, search retry, and acceptable report age
+  can be measured in milliseconds. A focused test checks expiration after
+  an actual meeting across different physical intervals and save/reload.
 - On the elapsed family clock either participant can seek a mating
   encounter. The other participant evaluates it independently, and a
   separately chosen partnership can form or end at its review instant.
@@ -242,7 +250,7 @@ reports.
 | Family and learned inclinations | Either participant can initiate a subjective mating opportunity using inherited desire. Each person weighs their own feelings and circumstances. A match can occur outside a partnership. Legacy automatic pairing still uses pedigree exclusions. Model how characters learn about their family and form preferences around that knowledge. Review the single reciprocal partner field and the feature policies copied from a parent, retaining genetic dispositions while allowing experience and upbringing to change behavior. |
 | Dependent care | Directed personal preferences let parents and non-parents choose care based on affinity, fear, felt obligation, and hunger. Visits, food transfers, and neglect can run on independent elapsed deadlines. Each child can develop a different disposition to feeling obligated from the care they experience. Add discovery of other local children through experience and put visits in the same evaluation as other opportunities. |
 | Trade and agreements | Recipients rank physically feasible offers using their own values and social incentives before arbitration. Personal incentives can assign signed weights to affinity, fear, trust, and obligation. Expand bounded known counterparties and decisions based on perceived feasibility. Refusal and withdrawal are available. An actor can claim to have goods or make a promise without verified custody. Actual settlement requires the goods and respects capacity and conservation. |
-| Observation and testimony | A remembered food observation can remain private. A person can choose to share it or respond to their own pressure threshold. They may deliberately misstate a quantity for an individual listener. The receiver can apply their own trust policy. Records preserve the witness and immediate speaker. Extend observation to partial access and estimates, and move remaining food report retention to elapsed time. |
+| Observation and testimony | A remembered food observation can remain private. A person can choose to share it or respond to their own pressure threshold. They may deliberately misstate a quantity for an individual listener. The receiver can apply their own trust policy. Records preserve the witness, observation time, and immediate speaker. Extend observation to partial access and estimates. |
 | Meals, search, and travel | The personal choice round ranks individual foods. Optional on-site meals let people choose locally accessible stock portions that their cargo cannot fit. Legacy meal selection takes the first qualifying food. Food search favors reported quantity before distance, may use exact local stock to abandon a search, and can use the authored map directly. Ordinary legs then progress without a travel reconsideration option. Extend personal destination, exposure, and information preferences. Reconsider at real decision points, including between legs. Keep physical progress, route closures, and observation of failures. |
 | Purpose | Signed appraisals can interpret completed work and the outcomes of individual choice domains. Deprivation and its physical effects support an elapsed clock. Expand receipt coverage to care, discoveries, and social activities as those move into personal evaluation. Add appraisal development through experience. |
 | Animals | Keep individual handling, affinity, restraint, and escape responses. Animal mate selection uses inherited desire, individual preferences, and circumstances. Age, hunger, grazing, and births can follow a separate elapsed ecological cadence. Model physical separation within regions. Preserve ecological pressure, conception, and inheritance. |
