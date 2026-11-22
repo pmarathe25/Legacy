@@ -21,6 +21,7 @@ impl CoreHost {
     pub(super) fn collect_products_at_decision(
         &mut self,
         occupied: &[u64],
+        animals_fed: &[u64],
     ) -> Result<ProductRound, String> {
         let Some(owner) = self
             .animal_products
@@ -43,7 +44,7 @@ impl CoreHost {
             opinions: self.opinions.as_ref(),
             holds: self.animal_restraints.as_ref(),
             busy,
-            blocked: &[],
+            blocked: animals_fed,
             max_hunger: u32::MAX,
             manual: None,
             seed: self.core.seed,

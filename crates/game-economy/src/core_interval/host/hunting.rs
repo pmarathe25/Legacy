@@ -9,7 +9,7 @@ pub(super) struct HuntRound {
 }
 
 impl CoreHost {
-    pub(super) fn hunt_at_decision(&mut self, occupied: &[u64]) -> Result<HuntRound, String> {
+    pub(super) fn hunt_at_decision(&mut self, occupied: &[u64], fed_animals: &[u64]) -> Result<HuntRound, String> {
         if self
             .hunting
             .as_ref()
@@ -17,7 +17,7 @@ impl CoreHost {
         {
             return Ok(HuntRound::default());
         }
-        self.hunt_now(occupied, None)
+        self.hunt_now(occupied, fed_animals, None)
     }
 
     /// Pursue one reachable animal chosen by the controlled actor.
@@ -42,7 +42,7 @@ impl CoreHost {
             return Err("settle the current event before hunting".into());
         }
         Ok(self
-            .hunt_now(&[], Some((person, animal)))?
+            .hunt_now(&[], &[], Some((person, animal)))?
             .yields
             .into_iter()
             .next())
@@ -51,6 +51,7 @@ impl CoreHost {
     fn hunt_now(
         &mut self,
         occupied: &[u64],
+        fed_animals: &[u64],
         manual: Option<(u64, u64)>,
     ) -> Result<HuntRound, String> {
         let tick = self.core.physical.tick();
@@ -60,7 +61,7 @@ impl CoreHost {
         let busy = away.as_deref().unwrap_or(&busy);
         let held = self.block_held(busy);
         let busy = held.as_deref().unwrap_or(busy);
-        let excluded: Vec<_> =
+        let mut excluded: Vec<_> =
             self.animal_restraints
                 .as_ref()
                 .map_or_else(Vec::new, |restraints| {
@@ -70,6 +71,11 @@ impl CoreHost {
                         .map(|hold| hold.animal)
                         .collect()
                 });
+        if !fed_animals.is_empty() {
+            excluded.par_extend(fed_animals.par_iter().copied());
+            excluded.par_sort_unstable();
+            excluded.dedup();
+        }
         let key = self.core.decision_time_key();
         let plan = crate::hunting::Context {
             owner: manual.is_none().then_some(self.hunting.as_ref()).flatten(),

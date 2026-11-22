@@ -8141,6 +8141,7 @@ fn gathering_depletes_resources_into_real_personal_custody() {
                 )
                 .unwrap();
                 caring.animal_care = Some(game_economy::AnimalCare {
+                    elapsed_actions: false,
                     inherit_births: false,
                     policies: vec![game_economy::AnimalCarePolicy {
                         person: 4,
@@ -8869,7 +8870,7 @@ fn core_host_cultivation_benchmark() {
                 affinity_at_least: None, affinity_at_most: None, pressured_by: None, pressure_threshold: None,
             }).collect(),
         }),
-        animal_care: care.then(|| game_economy::AnimalCare { inherit_births: false,
+        animal_care: care.then(|| game_economy::AnimalCare { elapsed_actions: false, inherit_births: false,
             policies: (2..=count).map(|person| game_economy::AnimalCarePolicy {
                 person, animal: Some(if care_contested { 1 } else { person }), good: 2, quantity: 1, willing: true, health_at_most: 10,
                 affinity_at_least: None, affinity_at_most: None, pressured_by: None, pressure_threshold: None,

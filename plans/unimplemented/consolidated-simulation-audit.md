@@ -65,6 +65,11 @@ to track rates, deadlines, and behavior under different advance sizes. The
   With elapsed hunting, each person's attempts follow their decision clock.
   A successful kill requires room for the actual yield, and the archive
   records the hunter and the elapsed time.
+- Feed offers use the person's decision time and actual carried stock.
+  A competing hunt cannot also claim an animal selected for feeding in
+  that round. A renewable yield can grow on the elapsed wildlife cycle
+  and stay available after an animal refuses handling or the collector's
+  cargo cannot accept it. The archive records accepted feed and collections.
 - Wild stands support heritable plant strains, viable seed banks, finite
   adult capacity, and local habitat selection without human activity.
   Competing local variants and physical seed withdrawals are tested

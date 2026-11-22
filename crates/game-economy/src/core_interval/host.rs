@@ -3399,7 +3399,7 @@ impl CoreHost {
             .map_or_else(Vec::new, |plan| plan.accepted(&draft.events().physical_actions));
         let feeding = care
             .as_ref()
-            .map_or_else(Vec::new, |plan| plan.accepted(draft.events()));
+            .map_or_else(Vec::new, |plan| plan.accepted(&draft.events().physical_actions));
         let (products, product_handling) = products.map_or((None, Vec::new()), |plan| {
             let (events, handling) = plan.publish(draft.events());
             let owner = self.animal_products.as_ref().expect("product owner");

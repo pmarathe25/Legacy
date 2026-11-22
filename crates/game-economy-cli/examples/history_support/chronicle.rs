@@ -320,6 +320,7 @@ impl Chronicle {
                 | "mechanical_conclusions"
                 | "mechanical_assemblies"
                 | "harvest_products"
+                | "elapsed_animal_feeding"
                 | "elapsed_hunting"
                 | "elapsed_animal_products"
                 | "soil_amendments"
@@ -692,6 +693,7 @@ fn classify(kind: &str, row: &Value) -> Option<Receipt> {
             _ => return None,
         },
         ("harvest_products", _) => "harvests with several physical products",
+        ("elapsed_animal_feeding", _) => "animals given carried food",
         ("elapsed_hunting", _) => "successful hunts with physical yield",
         ("elapsed_animal_products", _) => match row["outcome"].as_str()? {
             "collected" => "renewable animal products collected",

@@ -138,6 +138,13 @@ decision clock. A refusal or insufficient cargo space keeps the product
 available for another attempt. Only a transfer into actual custody resets
 the growth.
 
+With `animal_care.elapsed_actions = true`, a person can choose to offer
+carried feed on their own decision clock. An accepted physical consumption
+debits the food and updates the animal's condition at the same instant.
+The selected encounter reserves the animal against another hunt or product
+collection in the same decision round. Scenarios with the older policy
+continue to handle feed offers at settlement.
+
 An optional `fauna.dispersal` defines directed wildlife corridors and policies
 by species. At each lifecycle event, a surviving animal can explore one
 corridor after grazing and reproduction. Its hunger, age, inherited drive,

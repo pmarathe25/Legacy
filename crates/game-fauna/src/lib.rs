@@ -185,7 +185,8 @@ pub struct Patch {
 }
 
 /// Food already consumed in an accepted physical transaction.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Feeding {
     pub animal: u64,
     pub person: Option<u64>,

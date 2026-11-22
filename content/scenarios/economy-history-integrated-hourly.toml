@@ -2299,6 +2299,7 @@ animal = 1
 willing = true
 
 [animal_care]
+elapsed_actions = true
 inherit_births = true
 [[animal_care.policies]]
 person = 12

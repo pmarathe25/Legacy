@@ -792,6 +792,10 @@ pub enum CoreRunEvent {
     Campaign(Vec<game_economy_campaign::elapsed::Event>),
     Care(CoreCareVisit),
     Fauna(CoreFaunaTransitions),
+    ElapsedAnimalFeeding {
+        at_millis: u128,
+        events: Vec<game_fauna::Feeding>,
+    },
     ElapsedHunting {
         at_millis: u128,
         events: Vec<crate::hunting::Receipt>,
@@ -3952,7 +3956,19 @@ impl CoreHost {
                                 ..Default::default()
                             }));
                         }
-                        let hunt = attempt!('run, self.hunt_at_decision(&busy));
+                        let feeding = attempt!('run, self.feed_at_decision(&busy));
+                        if !feeding.actors.is_empty() {
+                            busy.par_extend(feeding.actors);
+                            busy.par_sort_unstable();
+                            busy.dedup();
+                        }
+                        if !feeding.receipts.is_empty() {
+                            run.events.push(CoreRunEvent::ElapsedAnimalFeeding {
+                                at_millis: self.core.simulated_millis(),
+                                events: feeding.receipts,
+                            });
+                        }
+                        let hunt = attempt!('run, self.hunt_at_decision(&busy, &feeding.targets));
                         if !hunt.actors.is_empty() {
                             busy.par_extend(hunt.actors);
                             busy.par_sort_unstable();
@@ -3971,7 +3987,10 @@ impl CoreHost {
                                 migrations: Vec::new(),
                             }));
                         }
-                        let products = attempt!('run, self.collect_products_at_decision(&busy));
+                        let products = attempt!(
+                            'run,
+                            self.collect_products_at_decision(&busy, &feeding.targets)
+                        );
                         if !products.actors.is_empty() {
                             busy.par_extend(products.actors);
                             busy.par_sort_unstable();

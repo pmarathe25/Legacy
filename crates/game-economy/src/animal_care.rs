@@ -1,7 +1,7 @@
 //! Personal preferences for offering carried goods to locally observed animals.
 use game_economy_person::Person;
 use game_fauna::{Fauna, Feeding};
-use game_lot_runtime::Events;
+use game_lots::TransactionOutcome;
 use game_lots::{Movement, Place, Transaction, View};
 use game_opinions::Opinions;
 use rayon::prelude::*;
@@ -31,6 +31,8 @@ pub struct Policy {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AnimalCare {
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub elapsed_actions: bool,
     #[serde(default)]
     pub inherit_births: bool,
     pub policies: Vec<Policy>,
@@ -39,6 +41,8 @@ pub struct AnimalCare {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
+    #[serde(default)]
+    elapsed_actions: bool,
     #[serde(default)]
     pub inherit_births: bool,
     pub policies: Vec<PolicyConfig>,
@@ -86,6 +90,7 @@ impl Config {
             })
             .collect::<Result<Vec<_>, String>>()?;
         Ok(AnimalCare {
+            elapsed_actions: self.elapsed_actions,
             inherit_births: self.inherit_births,
             policies,
         })
@@ -199,7 +204,7 @@ pub struct Context<'a> {
     pub blocked_animals: &'a [u64],
     pub max_hunger: u32,
     pub seed: u64,
-    pub tick: u64,
+    pub draw_key: u64,
 }
 
 impl Context<'_> {
@@ -249,7 +254,7 @@ impl Context<'_> {
                         return None;
                     }
                     let offset =
-                        (game_genetics::random(self.seed ^ 0x63617265, actor.id, self.tick)
+                        (game_genetics::random(self.seed ^ 0x63617265, actor.id, self.draw_key)
                             % (end - start) as u64) as usize;
                     Some(visible[start + offset].1)
                 })?;
@@ -346,14 +351,13 @@ impl Plan {
         targets.dedup();
         targets
     }
-    pub fn accepted(&self, events: &Events) -> Vec<Feeding> {
+    pub fn accepted(&self, receipts: &[TransactionOutcome]) -> Vec<Feeding> {
         #[cfg(feature = "profile")]
         let _profile = game_diagnostics::span("economy.animal_care.receipts");
         if self.records.is_empty() {
             return Vec::new();
         }
-        let mut accepted: Vec<_> = events
-            .physical_actions
+        let mut accepted: Vec<_> = receipts
             .par_iter()
             .filter(|e| e.accepted)
             .map(|e| e.id)
