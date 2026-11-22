@@ -457,6 +457,7 @@ struct StoragePreferenceConfig {
     #[serde(default)]
     destinations: Vec<game_economy::StorageDestination>,
     own_cellar: Option<game_economy::OwnCellarPreference>,
+    visits: Option<game_economy::StorageVisitPreference>,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -2944,6 +2945,10 @@ fn build_scenario(
                             keep_value: row.keep_value,
                             destinations: row.destinations,
                             own_cellar: row.own_cellar,
+                            visits: row.visits.map(|mut preferences| {
+                                preferences.observed = None;
+                                preferences
+                            }),
                         })
                     })
                     .collect::<Result<Vec<_>, String>>()?,

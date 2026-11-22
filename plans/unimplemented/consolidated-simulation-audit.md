@@ -38,8 +38,11 @@ to track rates, deadlines, and behavior under different advance sizes. The
   A builder can remember the design of their own cellar, weigh the cooling
   against the elapsed walk, and reconsider whether to deposit after arrival.
   Different preferences led two builders to choose differently. The builder
-  who reached a demolished cellar instead kept their food. Discovering
-  another person's store through visits or reports remains open.
+  who reached a demolished cellar instead kept their food. A visitor can
+  ignore local storage conditions or remember the observed temperature for
+  a personal duration. The observation can inform a later choice to return.
+  The deposit still depends on physical conditions at arrival. Sharing store
+  reports remains open.
 - Mechanical designs use actual identified parts. Each character can rank
   alternative input components or a branched design. The mechanical owner
   computes force and travel in physical connection order and records which

@@ -146,14 +146,16 @@ impl CoreHost {
         let Some(progress) = progress else {
             return Vec::new();
         };
-        let walking = self
-            .local_transport
-            .as_mut()
-            .and_then(|owner| owner.walking.as_mut())
-            .expect("walking owner");
+        let owner = self.local_transport.as_mut().expect("walking owner");
+        let walking = owner.walking.as_mut().expect("walking owner");
         walking.positions = progress.positions;
         if !progress.arrivals.is_empty() {
             walking.events = progress.arrivals.par_iter().cloned().collect();
+            owner.remember_visited_stores(
+                &progress.arrivals,
+                self.core.simulated_millis(),
+                |place| self.core.physical.storage_celsius(place),
+            );
             self.work_checked_revision = None;
         }
         progress.arrivals
@@ -212,6 +214,7 @@ impl CoreHost {
         );
         if !owner.preservation.is_empty() {
             let context = game_economy_local_transport::Context {
+                now: self.core.simulated_millis(),
                 owner,
                 people: &self.core.people,
                 view: &view,

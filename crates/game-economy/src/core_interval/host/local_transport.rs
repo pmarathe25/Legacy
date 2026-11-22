@@ -61,6 +61,7 @@ impl CoreHost {
         let view = self.core.physical.view(tick)?;
         let claims_index = self.claims.as_ref().map(game_economy_claims::Claims::index);
         let context = game_economy_local_transport::Context {
+            now: self.core.simulated_millis(),
             owner,
             people: &self.core.people,
             view: &view,
@@ -123,6 +124,7 @@ impl CoreHost {
         let tick = self.core.physical.tick();
         let view = self.core.physical.view(tick)?;
         let plan = game_economy_local_transport::Context {
+            now: self.core.simulated_millis(),
             owner,
             people: &self.core.people,
             view: &view,

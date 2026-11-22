@@ -1451,7 +1451,7 @@ impl CoreHost {
             let people: HashSet<_> = core.people.par_iter().map(|p| p.id).collect();
             let goods: HashSet<_> = core.physical.goods().par_iter().map(|g| g.id).collect();
             let view = core.physical.view(core.physical.tick())?;
-            owner.validate(&people, &goods, &view, core.physical.tick())?;
+            owner.validate(&people, &goods, &view, core.physical.tick(), core.simulated_millis())?;
             if let Some(walking) = &owner.walking {
                 if walking.elapsed.is_none() {
                     return Err("local walking requires an elapsed walking unit".into());

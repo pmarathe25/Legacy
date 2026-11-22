@@ -2060,6 +2060,16 @@ good = "timber"
 quantity = 5
 willing = true
 
+[[local_transport.preservation]]
+person = 5
+region = 1
+good = "bread"
+quantity = 2
+cooling_value_per_degree = 1
+keep_value = 7
+own_cellar = { walking_cost_per_hour = 4 }
+visits = { attention = 5, max_age_millis = 604800000, walking_cost_per_hour = 4 }
+
 [writing]
 paper = "paper"
 ink = "ink"
