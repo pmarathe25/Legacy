@@ -2,8 +2,9 @@
 
 Loads authored object and workshop definitions into the numeric production
 catalog. Existing template identities are preserved and new numeric IDs are
-assigned in key order for unqualified definitions. Inventory stocks are
-physical and start empty.
+assigned in key order for unqualified definitions. New stock endpoints use
+the configured capacity. Existing endpoints keep their authored quantities
+and capacities when a recipe requires or produces a larger batch.
 
 A workshop recipe specifies one or more named `inputs` and either an
 `outputs` table of named goods and quantities or the single-output fields
