@@ -70,7 +70,7 @@ impl CoreHost {
                 let design = definition.storage?;
                 let site =
                     &sites.sites[sites.sites.binary_search_by_key(&id, |row| row.id).ok()?];
-                Some((site, definition.name.as_str(), design))
+                Some((site, definition.name.as_str(), design, event.person))
             })
             .collect();
         if constructed.is_empty() {
@@ -85,7 +85,7 @@ impl CoreHost {
         let stores: Vec<_> = constructed
             .par_iter()
             .enumerate()
-            .map(|(index, (site, name, design))| {
+            .map(|(index, (site, name, design, builder))| {
                 let id = previous + index as u64 + 1;
                 Store {
                     id,
@@ -95,6 +95,7 @@ impl CoreHost {
                         site: site.id,
                         celsius: design.celsius,
                         intact: true,
+                        builder: Some(*builder),
                     }),
                 }
             })
@@ -102,7 +103,7 @@ impl CoreHost {
         let holders = stores
             .par_iter()
             .zip(&constructed)
-            .map(|(store, (_, _, design))| {
+            .map(|(store, (_, _, design, _))| {
                 Container::new(
                     Place::Inventory(store.id),
                     design.capacity.get(),
@@ -113,7 +114,7 @@ impl CoreHost {
         let temperatures: Vec<_> = stores
             .par_iter()
             .zip(&constructed)
-            .map(|(store, (_, _, design))| (Place::Inventory(store.id), Some(design.celsius)))
+            .map(|(store, (_, _, design, _))| (Place::Inventory(store.id), Some(design.celsius)))
             .collect();
         let physical =
             self.core
@@ -122,7 +123,7 @@ impl CoreHost {
         if let Some(walking) = &mut transport.walking {
             let routes = std::sync::Arc::make_mut(&mut walking.routes);
             routes.par_extend(stores.par_iter().zip(&constructed).flat_map_iter(
-                |(store, (_, _, design))| {
+                |(store, (_, _, design, _))| {
                     let local = Endpoint::Store { id: store.id };
                     [(Endpoint::Stock, local), (local, Endpoint::Stock)].map(|(from, to)| Route {
                         region: store.region,
@@ -135,6 +136,7 @@ impl CoreHost {
             ));
             routes.par_sort_unstable_by_key(|r| (r.region, r.from, r.to));
         }
+        transport.remember_built_cellars(&stores);
         transport.stores.extend(stores);
         Ok((physical, Some(transport)))
     }

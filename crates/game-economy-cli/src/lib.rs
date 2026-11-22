@@ -452,7 +452,9 @@ struct StoragePreferenceConfig {
     cooling_value_per_degree: i32,
     #[serde(default)]
     keep_value: i32,
+    #[serde(default)]
     destinations: Vec<game_economy::StorageDestination>,
+    own_cellar: Option<game_economy::OwnCellarPreference>,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -2939,6 +2941,7 @@ fn build_scenario(
                             cooling_value_per_degree: row.cooling_value_per_degree,
                             keep_value: row.keep_value,
                             destinations: row.destinations,
+                            own_cellar: row.own_cellar,
                         })
                     })
                     .collect::<Result<Vec<_>, String>>()?,
