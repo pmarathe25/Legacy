@@ -57,6 +57,9 @@ pub struct Sensitivity {
     /// How this person weights directed affinity when seeking social meetings.
     #[serde(default)]
     pub social_affinity_weight: Option<i32>,
+    /// Minimum weighted affinity for choosing an ordinary meeting.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub social_affinity_floor: Option<i64>,
     /// Personal interpretation of another person's witnessed use of claimed regional stock.
     #[serde(default)]
     pub affinity_stock_use: Option<i32>,
@@ -156,6 +159,9 @@ pub struct RelationshipCase {
     /// Relationship-specific weight when considering this person for a meeting.
     #[serde(default)]
     pub social_affinity_weight: Option<i32>,
+    /// Override the person's minimum value for choosing to meet this partner.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub social_affinity_floor: Option<i64>,
     /// Override the observer's general reaction to this person's stock use.
     #[serde(default)]
     pub stock_use: Option<i32>,

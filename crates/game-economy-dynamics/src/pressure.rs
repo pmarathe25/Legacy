@@ -64,6 +64,17 @@ pub fn prepare(
             .as_ref()
             .is_none_or(|index| index.social(id, isolation, seed, tick))
     };
+    let partner_preferences = opinions.and_then(Opinions::meeting_filter);
+    let accepts = |person, partner| partner_preferences.as_ref().is_none_or(|view| view.accepts(person, partner));
+    let acceptable = |a, b| accepts(a, b) && accepts(b, a);
+    let filter_meetings = |selection: &mut game_social::Selection| {
+        if partner_preferences.is_some() {
+            selection.events = std::mem::take(&mut selection.events)
+                .into_par_iter()
+                .filter(|event| acceptable(event.a, event.b))
+                .collect();
+        }
+    };
     #[cfg(feature = "profile")]
     {
         drop(stage);
@@ -115,8 +126,9 @@ pub fn prepare(
                     .ok()
                     .map(|i| policies[i])?;
                 if !policy.responds(opinion.fear, opinion.obligation)
-                    || willing(target) != Some(false)
+                    || willing(target).map(|willing| willing && accepts(target, requester)) != Some(false)
                     || willing(requester) != Some(true)
+                    || !accepts(requester, target)
                 {
                     return None;
                 }
@@ -164,7 +176,11 @@ pub fn prepare(
                 }
             })
             .collect();
-        pressured
+        if partner_preferences.is_some() {
+            resolve_pressure_conflicts(pressured, seed, tick)
+        } else {
+            pressured
+        }
     } else {
         Vec::new()
     };
@@ -189,7 +205,7 @@ pub fn prepare(
         tick,
         can_speak,
     }
-    .prepare(&voluntary);
+    .prepare(&voluntary, &acceptable);
     pressured.par_extend(friends);
     #[cfg(feature = "profile")]
     {
@@ -209,7 +225,7 @@ pub fn prepare(
             location,
         }
         .prepare(&voluntary);
-        pressured.par_extend(conversations);
+        pressured.par_extend(conversations.into_par_iter().filter(|event| acceptable(event.a, event.b)));
     }
     #[cfg(feature = "profile")]
     {
@@ -217,7 +233,13 @@ pub fn prepare(
         stage = game_diagnostics::span("dynamics.select.general");
     }
     if pressured.is_empty() {
-        let selection = social.select_validated(contacts, seed, tick, voluntary)?;
+        let mut selection = social.select_validated(contacts, seed, tick, voluntary)?;
+        let original_count = selection.events.len();
+        filter_meetings(&mut selection);
+        if selection.events.len() != original_count {
+            selection.needs = social.needs.as_ref()
+                .map(|needs| needs.advance(&social.participants, contacts, &selection.events));
+        }
         #[cfg(feature = "profile")]
         drop(stage);
         #[cfg(feature = "profile")]
@@ -236,6 +258,7 @@ pub fn prepare(
         })
         .collect();
     let mut selection = social.select_validated(&available, seed, tick, voluntary)?;
+    filter_meetings(&mut selection);
     selection.events.append(&mut pressured);
     selection.events.par_sort_unstable_by_key(|e| (e.a, e.b));
     selection.needs = social
@@ -249,4 +272,41 @@ pub fn prepare(
     #[cfg(feature = "profile")]
     let _history_phase = game_diagnostics::span("dynamics.meetings.history");
     social.prepare_selection_validated(selection, tick)
+}
+
+/// Directed refusals can put the same actor in both proposal roles.
+fn resolve_pressure_conflicts(candidates: Vec<Encounter>, seed: u64, tick: u64) -> Vec<Encounter> {
+    let mut choices: Vec<_> = candidates
+        .par_iter()
+        .enumerate()
+        .flat_map_iter(|(index, event)| {
+            let priority = game_genetics::random(seed ^ event.a, event.b, tick);
+            [(event.a, priority, index), (event.b, priority, index)]
+        })
+        .collect();
+    choices.par_sort_unstable();
+    let winners: Vec<_> = choices
+        .par_chunk_by(|a, b| a.0 == b.0)
+        .map(|rows| (rows[0].0, rows[0].2))
+        .collect();
+    let selected = |person, index| winners
+        .binary_search_by_key(&person, |row| row.0)
+        .is_ok_and(|at| winners[at].1 == index);
+    candidates.into_par_iter().enumerate().filter_map(|(index, row)| {
+        (selected(row.a, index) && selected(row.b, index)).then_some(row)
+    }).collect()
+}
+
+#[cfg(test)]
+#[test]
+fn a_person_can_take_only_one_part_when_pressured_in_both_roles() {
+    let candidate = |a, b| Encounter {
+        tick: 1, region: 1, a, b, pressured: Some(b), also_pressured: None,
+    };
+    for workers in [1, 6] {
+        rayon::ThreadPoolBuilder::new().num_threads(workers).build().unwrap().install(|| {
+            let admitted = resolve_pressure_conflicts(vec![candidate(1, 2), candidate(2, 3)], 7, 1);
+            assert_eq!(admitted.len(), 1);
+        });
+    }
 }
