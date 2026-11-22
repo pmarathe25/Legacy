@@ -319,6 +319,7 @@ impl Chronicle {
                 | "mechanical_experiments"
                 | "mechanical_conclusions"
                 | "mechanical_assemblies"
+                | "harvest_products"
                 | "soil_amendments"
                 | "pastimes"
                 | "heard_performances"
@@ -946,6 +947,23 @@ pub(super) fn write_person(text: &mut String, rows: &Value, time_name: fn(u64) -
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn harvest_bundles_retain_the_person_field_and_goods_in_history() {
+        let mut history = Chronicle::default();
+        history.observe(&json!({
+            "kind": "harvest_products",
+            "at_millis": 131,
+            "events": [{"person": 2, "field": 7, "products": [{"good": 1, "quantity": 9},
+                {"good": 2, "quantity": 3}]}]
+        }), 1, Some(2));
+        let summary = history.summary();
+        assert_eq!(summary["counts"]["harvests with several physical products"], 1);
+        let selected = history.selected();
+        assert_eq!(selected[0]["actor"], 2);
+        assert_eq!(selected[0]["receipt"]["field"], 7);
+        assert_eq!(selected[0]["receipt"]["products"][1]["quantity"], 3);
+    }
 
     #[test]
     fn written_history_distinguishes_adoption_adaptation_and_hearing() {
