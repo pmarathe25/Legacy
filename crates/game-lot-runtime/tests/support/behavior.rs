@@ -2346,10 +2346,8 @@ fn identified_job_outputs_avoid_simultaneous_written_item_and_respect_stale_draf
     let page = WritingPage {
         action: 1,
         writer: 1,
-        paper: 3,
-        paper_quantity: 1,
-        ink: 5,
-        ink_quantity: 1,
+        blank: (3, 1),
+        pigment: Some((5, 1)),
         page: 4,
         item: 100,
     };

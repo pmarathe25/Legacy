@@ -23,6 +23,10 @@ pub struct Writing {
     pub paper_quantity: u64,
     pub ink_quantity: u64,
     pub next_item: u64,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub surfaces: Arc<Vec<Surface>>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub surface_choices: Arc<Vec<SurfaceChoice>>,
     #[serde(default)]
     pub literacy: Arc<Vec<Literacy>>,
     #[serde(default)]
@@ -47,6 +51,23 @@ pub struct Writing {
     pub text_retention: Arc<Vec<crate::TextRetention>>,
     #[serde(default)]
     pub text_memories: Arc<Vec<crate::TextMemory>>,
+}
+
+/// One physical way to turn a carried blank into an identified written object.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Surface {
+    pub blank: (u32, u64),
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pigment: Option<(u32, u64)>,
+    pub page: u32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SurfaceChoice {
+    pub person: u64,
+    pub page: u32,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -148,6 +169,9 @@ pub struct Literacy {
 pub struct Page {
     pub item: u64,
     pub author: u64,
+    /// The output good identifies the material. An absent value is the original surface.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub surface: Option<u32>,
     pub script: u32,
     pub written_at: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -172,6 +196,40 @@ pub struct Work {
 pub const MAX_WORK_FORMS: usize = 16;
 
 impl Writing {
+    pub(super) fn surface_for(&self, person: u64) -> Surface {
+        self.surface_choices
+            .binary_search_by_key(&person, |choice| choice.person)
+            .ok()
+            .and_then(|index| self.surface(self.surface_choices[index].page))
+            .unwrap_or(Surface {
+                blank: (self.paper, self.paper_quantity),
+                pigment: Some((self.ink, self.ink_quantity)),
+                page: self.page,
+            })
+    }
+
+    fn surface(&self, page: u32) -> Option<Surface> {
+        self.surfaces
+            .binary_search_by_key(&page, |surface| surface.page)
+            .ok()
+            .map(|index| self.surfaces[index])
+    }
+
+    pub(super) fn choose_surface(&mut self, person: u64, page: Option<u32>) -> Result<(), String> {
+        let page = page.filter(|&page| page != self.page);
+        if page.is_some_and(|page| self.surface(page).is_none()) {
+            return Err("unknown writing surface".into());
+        }
+        let choices = Arc::make_mut(&mut self.surface_choices);
+        match (choices.binary_search_by_key(&person, |choice| choice.person), page) {
+            (Ok(index), Some(page)) => choices[index].page = page,
+            (Ok(index), None) => { choices.remove(index); }
+            (Err(index), Some(page)) => choices.insert(index, SurfaceChoice { person, page }),
+            (Err(_), None) => {}
+        }
+        Ok(())
+    }
+
     pub fn normalize_and_validate(
         &mut self,
         people: &HashSet<u64>,
@@ -185,6 +243,8 @@ impl Writing {
         Arc::make_mut(&mut self.authors).par_sort_unstable_by_key(|row| row.person);
         Arc::make_mut(&mut self.study).par_sort_unstable_by_key(|row| (row.person, row.script));
         Arc::make_mut(&mut self.practice).par_sort_unstable_by_key(|row| row.person);
+        Arc::make_mut(&mut self.surfaces).par_sort_unstable_by_key(|surface| surface.page);
+        Arc::make_mut(&mut self.surface_choices).par_sort_unstable_by_key(|row| row.person);
         Arc::make_mut(&mut self.text_templates).par_sort_unstable_by_key(|row| row.id);
         Arc::make_mut(&mut self.text_authors).par_sort_unstable_by_key(|row| row.person);
         Arc::make_mut(&mut self.compositions).par_sort_unstable_by_key(|row| row.person);
@@ -201,6 +261,34 @@ impl Writing {
             || self.paper_quantity == 0
             || self.ink_quantity == 0
             || self.next_item == 0
+            || self.surfaces.windows(2).any(|pair| pair[0].page == pair[1].page)
+            || self.surfaces.iter().any(|surface| {
+                let (blank, quantity) = surface.blank;
+                surface.page == self.page
+                    || surface.page == self.paper
+                    || surface.page == self.ink
+                    || !physical.goods.iter().any(|good| {
+                        good.id == surface.page
+                            && good.maturation.is_none()
+                            && good.food.as_ref().is_none_or(|food| food.shelf_days.is_none())
+                    })
+                    || blank == self.page
+                    || self.surface(blank).is_some()
+                    || !goods.contains(&blank)
+                    || quantity == 0
+                    || surface.pigment.is_some_and(|(good, quantity)| {
+                        good == blank
+                            || good == self.page
+                            || self.surface(good).is_some()
+                            || !goods.contains(&good)
+                            || quantity == 0
+                    })
+            })
+            || self.surface_choices.par_windows(2).any(|pair| pair[0].person == pair[1].person)
+            || self.surface_choices.par_iter().any(|choice| {
+                !people.contains(&choice.person)
+                    || (choice.page != self.page && self.surface(choice.page).is_none())
+            })
             || self
                 .literacy
                 .par_windows(2)
@@ -250,6 +338,7 @@ impl Writing {
                 row.item == 0
                     || row.item >= self.next_item
                     || !people.contains(&row.author)
+                    || row.surface.is_some_and(|page| self.surface(page).is_none())
                     || (row.script == 0) != (row.marks.is_some() || row.work.is_some())
                     || row.written_at > tick
                     || usize::from(row.claim.is_some())
@@ -350,7 +439,7 @@ impl Writing {
             .collect();
         physical_pages.par_sort_unstable_by_key(|row| row.0);
         if physical_pages.par_iter().any(|&(id, good)| {
-            good == self.page
+            (good == self.page || self.surface(good).is_some())
                 && (id >= self.next_item
                     || self
                         .pages
@@ -360,7 +449,7 @@ impl Writing {
             physical_pages
                 .binary_search_by_key(&page.item, |row| row.0)
                 .ok()
-                .is_none_or(|i| physical_pages[i].1 != self.page)
+                .is_none_or(|i| physical_pages[i].1 != page.surface.unwrap_or(self.page))
         }) {
             return Err("written pages do not match physical custody".into());
         }

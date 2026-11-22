@@ -76,7 +76,7 @@ hunger = 0
 willing_to_work = false
 seek_meals = false
 controlled = true
-goods = { paper = 1, ink = 1 }
+goods = { paper = 1, ink = 1, clay = 1, bark = 1 }
 
 [[people]]
 id = 2
@@ -86,6 +86,7 @@ hunger = 0
 willing_to_work = false
 seek_meals = false
 controlled = true
+goods = { charcoal = 1 }
 
 [[people]]
 id = 3
@@ -94,7 +95,7 @@ health = 100
 hunger = 0
 willing_to_work = false
 seek_meals = false
-goods = { paper = 1, ink = 1 }
+goods = { paper = 1, ink = 1, clay = 1 }
 
 [[people]]
 id = 4
@@ -122,6 +123,11 @@ page = "written-page"
 paper_quantity = 1
 ink_quantity = 1
 next_item = 1
+surfaces = [
+    { blank = { good = "clay", quantity = 1 }, page = "inscribed-clay-tablet" },
+    { blank = { good = "bark", quantity = 1 }, pigment = { good = "charcoal", quantity = 1 }, page = "marked-bark-sheet" },
+]
+surface_choices = [{ person = 3, page = "inscribed-clay-tablet" }]
 compositions = [
     { person = 3, topics = [{kind = "place", id = 1}, {kind = "person", id = 2}], value = 8 },
     { person = 4, words = [[1, 2], [0, 1]], value = 4 },

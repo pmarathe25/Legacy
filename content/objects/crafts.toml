@@ -192,3 +192,15 @@ id = 216
 name = "Written page"
 mass = 1
 tags = ["crafted", "writing"]
+
+[data.objects.inscribed-clay-tablet]
+id = 9501
+name = "Inscribed clay tablet"
+mass = 3
+tags = ["crafted", "writing", "clay"]
+
+[data.objects.marked-bark-sheet]
+id = 9502
+name = "Marked bark sheet"
+mass = 1
+tags = ["crafted", "writing", "bark"]

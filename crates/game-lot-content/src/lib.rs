@@ -71,10 +71,8 @@ pub fn prepare_gathered(
 pub struct WritingPage {
     pub action: u64,
     pub writer: u64,
-    pub paper: u32,
-    pub paper_quantity: u64,
-    pub ink: u32,
-    pub ink_quantity: u64,
+    pub blank: (u32, u64),
+    pub pigment: Option<(u32, u64)>,
     pub page: u32,
     pub item: u64,
 }
@@ -90,13 +88,12 @@ pub fn prepare_writing(
             if p.action == 0
                 || p.writer == 0
                 || p.item == 0
-                || p.paper == p.ink
-                || p.paper == p.page
-                || p.ink == p.page
-                || p.paper_quantity == 0
-                || p.ink_quantity == 0
-                || !catalog.contains(p.paper)
-                || !catalog.contains(p.ink)
+                || p.blank.0 == p.page
+                || p.blank.1 == 0
+                || !catalog.contains(p.blank.0)
+                || p.pigment.is_some_and(|(good, quantity)| {
+                    good == p.blank.0 || good == p.page || quantity == 0 || !catalog.contains(good)
+                })
             {
                 return Err("invalid writing action".into());
             }
@@ -108,26 +105,19 @@ pub fn prepare_writing(
             let place = Place::Person(p.writer);
             Ok(Transaction {
                 id: p.action,
-                movements: vec![
-                    game_lot_model::Movement {
+                movements: std::iter::once(p.blank)
+                    .chain(p.pigment)
+                    .enumerate()
+                    .map(|(index, (good, quantity))| game_lot_model::Movement {
                         batch: None,
-                        id: 1,
+                        id: index as u64 + 1,
                         from: place,
                         to: None,
-                        good: p.paper,
-                        quantity: p.paper_quantity,
+                        good,
+                        quantity,
                         item: None,
-                    },
-                    game_lot_model::Movement {
-                        batch: None,
-                        id: 2,
-                        from: place,
-                        to: None,
-                        good: p.ink,
-                        quantity: p.ink_quantity,
-                        item: None,
-                    },
-                ],
+                    })
+                    .collect(),
                 creations: vec![Creation {
                     id: 3,
                     to: place,

@@ -53,7 +53,7 @@ fn command(host: &mut CoreHost, person: u64, words: &[&str]) -> Result<bool, Str
     match words {
         [] => {}
         ["help"] => println!(
-            "look | wait MILLISECONDS | move REGION | walk stock|store ID | pause-walk | resume-walk | trip REGION VISIT_MILLISECONDS [food] | trip go|survey|back|cancel | trip leave-in MILLISECONDS | trip meet GROUP MINIMUM WAIT_MILLISECONDS | trip meet off | fight PERSON | join-fight BENEFICIARY OPPONENT | tactic wait|defend|retreat | tactic attack PERSON | tactic attack-site SITE | tactic move X Y | confine PERSON SITE | guard SITE | release PERSON | escape | build BLUEPRINT | demolish SITE | salvage SITE GOOD QUANTITY | gather NODE | cultivate FIELD [CARRIED_SEED_BATCH] | amend FIELD | water FIELD QUANTITY | pastime ACTIVITY | pastime stop | listen-for ACTIVITY VALUE | performances | memories [PERSON] | reflect-memory PERSON | reflect-memory activity ACTIVITY | findings | assemble APPARATUS PART... | mount APPARATUS STORE | unmount APPARATUS STORE | experiment APPARATUS OUTPUT FORCE DISTANCE LOAD | promise PERSON GOOD QUANTITY DUE_IN_MILLISECONDS | respond PROMISE accept|decline|withdraw | deliver PROMISE QUANTITY | eat GOOD | treat GOOD | wear GOOD | unwear | work RECIPE UNITS | stop JOB | stop-assist | rest on|off | word place|person|object ID SOUNDS | form SOUNDS MARKS | inscribe SOUNDS | compose SOUNDS SOUNDS ... | read-work PAGE | read PAGE | recall PAGE | save PATH | load PATH | quit (SOUNDS and MARKS are comma-separated numbers)"
+            "look | wait MILLISECONDS | move REGION | walk stock|store ID | pause-walk | resume-walk | trip REGION VISIT_MILLISECONDS [food] | trip go|survey|back|cancel | trip leave-in MILLISECONDS | trip meet GROUP MINIMUM WAIT_MILLISECONDS | trip meet off | fight PERSON | join-fight BENEFICIARY OPPONENT | tactic wait|defend|retreat | tactic attack PERSON | tactic attack-site SITE | tactic move X Y | confine PERSON SITE | guard SITE | release PERSON | escape | build BLUEPRINT | demolish SITE | salvage SITE GOOD QUANTITY | gather NODE | cultivate FIELD [CARRIED_SEED_BATCH] | amend FIELD | water FIELD QUANTITY | pastime ACTIVITY | pastime stop | listen-for ACTIVITY VALUE | performances | memories [PERSON] | reflect-memory PERSON | reflect-memory activity ACTIVITY | findings | assemble APPARATUS PART... | mount APPARATUS STORE | unmount APPARATUS STORE | experiment APPARATUS OUTPUT FORCE DISTANCE LOAD | promise PERSON GOOD QUANTITY DUE_IN_MILLISECONDS | respond PROMISE accept|decline|withdraw | deliver PROMISE QUANTITY | eat GOOD | treat GOOD | wear GOOD | unwear | work RECIPE UNITS | stop JOB | stop-assist | rest on|off | word place|person|object ID SOUNDS | form SOUNDS MARKS | writing-surfaces | writing-surface GOOD|default | inscribe SOUNDS | compose SOUNDS SOUNDS ... | read-work PAGE | read PAGE | recall PAGE | save PATH | load PATH | quit (SOUNDS and MARKS are comma-separated numbers)"
         ),
         ["quit"] | ["exit"] => return Ok(false),
         ["look"] => {
@@ -643,6 +643,14 @@ fn command(host: &mut CoreHost, person: u64, words: &[&str]) -> Result<bool, Str
             Player::new(host, person)?.choose_word(meaning, numbers(sounds)?)?;
             println!("word chosen");
         }
+        ["writing-surfaces"] => {
+            let (selected, surfaces) = Player::new(host, person)?.writing_surfaces()?;
+            println!("writing_surface={selected} surfaces={surfaces:?}");
+        }
+        ["writing-surface", surface] => {
+            let surface = (*surface != "default").then(|| number(surface)).transpose()?;
+            Player::new(host, person)?.choose_writing_surface(surface)?;
+        }
         ["inscribe", sounds] => {
             if let Some(item) = Player::new(host, person)?.inscribe(numbers(sounds)?)? {
                 println!("inscribed_page={item}");
@@ -660,6 +668,9 @@ fn command(host: &mut CoreHost, person: u64, words: &[&str]) -> Result<bool, Str
         }
         ["read-work", item] => {
             let work = Player::new(host, person)?.observe_written_work(number(item)?)?;
+            if let Some(surface) = work.surface {
+                println!("written_surface={surface}");
+            }
             for (index, form) in work.forms.iter().enumerate() {
                 println!("form={} marks={:?} meanings={:?}", index + 1, form.marks, form.meanings);
             }
