@@ -1,0 +1,148 @@
+# Four people begin with the same two food reports and choose different journeys.
+seed = 67
+tick_millis = 1000
+decision_period_millis = 10
+travel_unit_millis = 20
+stock_capacity = 100
+food_relief_divisor = 20
+
+[rules]
+hunger_rate = { units = 0, per_millis = 60000 }
+meal_threshold = 99
+starvation_threshold = 200
+max_health = 100
+carrying_capacity = 20
+max_work_hunger = 40
+
+[[regions]]
+id = 1
+storage = {}
+[[regions]]
+id = 2
+storage = { bread = 20 }
+stock = { bread = 16 }
+[[regions]]
+id = 3
+storage = { bread = 40 }
+stock = { bread = 30 }
+[[regions]]
+id = 4
+storage = { bread = 20 }
+stock = { bread = 18 }
+
+[[routes]]
+source = 1
+destination = 2
+ticks = 1
+[[routes]]
+source = 1
+destination = 4
+ticks = 1
+[[routes]]
+source = 4
+destination = 3
+ticks = 1
+
+[[people]]
+id = 1
+region = 1
+health = 100
+hunger = 0
+seek_meals = false
+willing_to_work = false
+controlled = true
+
+[[people]]
+id = 2
+region = 1
+health = 100
+hunger = 10
+seek_meals = true
+willing_to_work = false
+[[people]]
+id = 3
+region = 1
+health = 100
+hunger = 10
+seek_meals = true
+willing_to_work = false
+[[people]]
+id = 4
+region = 1
+health = 100
+hunger = 10
+seek_meals = true
+willing_to_work = false
+[[people]]
+id = 5
+region = 1
+health = 100
+hunger = 10
+seek_meals = true
+willing_to_work = false
+
+[knowledge]
+max_records = 4
+
+[[knowledge.minds]]
+person = 2
+records = [
+    { region = 2, food = 16, observed_at = 0, witness = 1, learned_from = 1 },
+    { region = 3, food = 30, observed_at = 0, witness = 1, learned_from = 1 },
+]
+[[knowledge.minds]]
+person = 3
+records = [
+    { region = 2, food = 16, observed_at = 0, witness = 1, learned_from = 1 },
+    { region = 3, food = 30, observed_at = 0, witness = 1, learned_from = 1 },
+]
+[[knowledge.minds]]
+person = 4
+records = [
+    { region = 2, food = 16, observed_at = 0, witness = 1, learned_from = 1 },
+    { region = 3, food = 30, observed_at = 0, witness = 1, learned_from = 1 },
+]
+[[knowledge.minds]]
+person = 5
+records = [
+    { region = 2, food = 16, observed_at = 0, witness = 1, learned_from = 1 },
+    { region = 3, food = 30, observed_at = 0, witness = 1, learned_from = 1 },
+]
+
+[food_search]
+min_hunger = 5
+min_report_food = 1
+max_report_age_millis = 5000
+retry_millis = 10
+people = [
+    { person = 2, enabled = true },
+    { person = 3, enabled = true },
+    { person = 4, enabled = true },
+    { person = 5, enabled = true },
+]
+
+[[food_search.travel_choices]]
+person = 2
+time_unit_millis = 20
+food_weight = 1
+duration_cost = 0
+
+[[food_search.travel_choices]]
+person = 3
+time_unit_millis = 20
+food_weight = 1
+duration_cost = 15
+
+[[food_search.travel_choices]]
+person = 4
+time_unit_millis = 20
+food_weight = 1
+duration_cost = 0
+stay_value = 40
+
+[[food_search.travel_choices]]
+person = 5
+time_unit_millis = 20
+food_weight = 1
+duration_cost = 4
+destinations = [{ region = 4, value = 12 }]

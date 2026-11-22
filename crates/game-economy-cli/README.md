@@ -58,6 +58,16 @@ page. A person can read a text they actually hold and understand. An
 `auto_read` literacy setting provides a standing inclination for people
 without that personal choice domain.
 
+### Choosing where to look for food
+
+`[[food_search.travel_choices]]` lets each listed person weigh remembered
+food, expected travel time, the age and source of the report, and their own
+preference for a destination. `time_unit_millis` sets the unit for the
+duration and age weights. A journey must score above `stay_value` and any
+local evidence the traveler remembers. At a waypoint they can continue,
+redirect, or stay, with `continuation_value` expressing their attachment to
+the existing plan. See `economy-personal-food-travel.toml`.
+
 ## Record a history
 
 Histories record authored aid and work proposals, individual responses, and

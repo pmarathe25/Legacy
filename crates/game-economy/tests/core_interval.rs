@@ -2981,6 +2981,7 @@ fn core_host_departure_benchmark() {
                 max_report_age: 20,
                 retry_ticks: 3,
                 inherit_births: false,
+                travel_choices: None,
                 people: (2..=count)
                     .map(|person| game_economy::FoodSearchPreference {
                         person,
@@ -3456,7 +3457,7 @@ fn food_search_follows_personal_report_even_when_it_is_stale() {
         };
         let search = game_economy::FoodSearch {
             min_hunger: 5, min_report_food: 1, max_report_age_millis: None, retry_millis: None, max_report_age: 20, retry_ticks: 3,
-            inherit_births: false, people: vec![game_economy::FoodSearchPreference {
+            inherit_births: false, travel_choices: None, people: vec![game_economy::FoodSearchPreference {
                 person: 2, enabled: true, next_review: 0, next_review_millis: None, target: None,
             }],
         };
@@ -3522,7 +3523,7 @@ fn personal_food_acquisition_contends_for_real_stock_then_eats() {
             core: initial, autowork: None, tool_wear: None, tool_requirements: vec![], paused_work_rates: vec![], pending_vital_deaths: vec![],
             fatigue: None, activity: vec![], giving: None, practice_work_asks: vec![], practice_work_evidence: Default::default(), skills: None, taking: None, medical: None, goal_setbacks: vec![], purpose: None, animal_restraints: None, animal_products: None, recovery: None, fauna: None, hunting: None, animal_feelings: None, animal_care: None, animal_handling: None, family: None, dependent_care: None, gathering: None, environment: None, irrigation: None, agriculture: None, health: None, knowledge: None, social: None, personality: None, claims: None, food_search: Some(game_economy::core_interval::CoreFoodSearch {
                 claims: None,
-                search: game_economy::FoodSearch {min_hunger: 5, min_report_food: 1, max_report_age_millis: None, retry_millis: None, max_report_age: 10, retry_ticks: 1, inherit_births: false, people: vec![]},
+                search: game_economy::FoodSearch {min_hunger: 5, min_report_food: 1, max_report_age_millis: None, retry_millis: None, max_report_age: 10, retry_ticks: 1, inherit_births: false, people: vec![], travel_choices: None},
                 knowledge: Some(game_economy_knowledge::Knowledge { episodes: None, max_records: 1, minds: vec![], retention: vec![]}),
             }), opinions: None, goals: None, dreams: None, shared_work: None, market: None, writing: None, local_transport: None, construction: None, hauling: None, agreements: None, sites: None, schedule: None,
         };
@@ -15833,6 +15834,7 @@ fn family_birth_custody_and_worker_death_commit_atomically() {
                     max_report_age_millis: None,
                     retry_millis: None,
                     max_report_age: 20, retry_ticks: 3, inherit_births: true,
+                    travel_choices: None,
                     people: vec![game_economy::FoodSearchPreference { person: 2, enabled: true,
                         next_review: 0, next_review_millis: None, target: Some(2) }] }, knowledge: None, claims: None,
             });
