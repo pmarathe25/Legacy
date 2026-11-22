@@ -13,7 +13,7 @@ fn mind(person: u64, records: Vec<Record>) -> Mind {
             willing: true,
             pressure_threshold: None,
         }),
-        misreport: None,
+        stock_survey: None, misreport: None,
         records,
     }
 }
@@ -21,6 +21,7 @@ fn record() -> Record {
     Record {
         region: 2,
         food: 17,
+        survey: None,
         observed_at_millis: None,
         observed_at: 0,
         witness: 1,
@@ -32,6 +33,7 @@ fn observations() -> Vec<Observation> {
         .map(|person| Observation {
             person,
             health: 100,
+            survey: None,
             local: Some((1, 3)),
         })
         .collect()
@@ -320,11 +322,13 @@ fn sparse_person_ids_reinforce_independent_encounters() {
         Observation {
             person: 3,
             health: 100,
+            survey: None,
             local: Some((1, 3)),
         },
         Observation {
             person: 1,
             health: 100,
+            survey: None,
             local: Some((1, 3)),
         },
     ];
@@ -498,6 +502,7 @@ fn personal_memory_retention_benchmark() {
         .map(|person| Observation {
             person,
             health: 100,
+            survey: None,
             local: Some((1, 3)),
         })
         .collect();
@@ -572,6 +577,7 @@ fn personal_memory_retelling_benchmark() {
         .map(|person| Observation {
             person,
             health: 100,
+            survey: None,
             local: Some((1, 3)),
         })
         .collect();

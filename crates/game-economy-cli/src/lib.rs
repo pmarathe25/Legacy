@@ -178,6 +178,8 @@ struct Scenario {
     #[serde(default)]
     knowledge: Option<game_economy::Knowledge>,
     #[serde(default)]
+    stock_surveys: Vec<StockSurveyConfig>,
+    #[serde(default)]
     writing: Option<WritingConfig>,
     #[serde(default)]
     combat: Option<game_economy_combat::Config>,
@@ -415,6 +417,15 @@ struct WritingSurfaceConfig {
 struct WritingSurfaceChoiceConfig {
     person: u64,
     page: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StockSurveyConfig {
+    person: u64,
+    #[serde(default)]
+    goods: Vec<String>,
+    count_step: std::num::NonZeroU32,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -2030,6 +2041,24 @@ fn build_scenario(
         .iter()
         .map(|good| (good.name.as_str(), good.id))
         .collect();
+    if !scenario.stock_surveys.is_empty() {
+        let knowledge = scenario.knowledge.as_mut().ok_or("stock surveys require personal knowledge")?;
+        for choice in scenario.stock_surveys {
+            let mind = knowledge.minds.iter_mut().find(|mind| mind.person == choice.person)
+                .ok_or("stock survey person has no personal knowledge")?;
+            if mind.stock_survey.is_some() {
+                return Err(format!("duplicate stock survey for person {}", choice.person));
+            }
+            let mut visible = choice.goods.iter().map(|name| {
+                goods.get(name.as_str()).copied().ok_or_else(|| format!("unknown survey good {name}"))
+            }).collect::<Result<Vec<_>, _>>()?;
+            visible.sort_unstable();
+            mind.stock_survey = Some(std::sync::Arc::new(game_economy::StockSurvey {
+                goods: visible,
+                count_step: choice.count_step,
+            }));
+        }
+    }
     let writing = scenario
         .writing
         .map(|config| {

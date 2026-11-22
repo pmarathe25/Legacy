@@ -19,6 +19,14 @@ reinforce recall while leaving the evidence date intact. A passive view leaves
 recall unchanged. Legacy `ticks` and evidence with boundary dates can still
 be loaded.
 
+A scenario can give a person a `[[stock_surveys]]` entry with
+`goods = ["bread"]` and `count_step = 4` to count one accessible kind in
+groups of four. An empty list includes all
+edible kinds at the local stock endpoint. The record keeps the chosen kinds
+and counting precision when shared, along with the original date and
+immediate speaker. Comparing amounts from different scopes does not produce
+a report discrepancy.
+
 The ignored `personal_memory_retention_benchmark` measures knowledge preparation for `LEGACY_PEOPLE` people; `personal_memory_retelling_benchmark` includes independent encounters and repeated reports. `LEGACY_RETENTION_STRIDE` selects how sparsely personal retention is configured (1 means everyone, 100 means one in a hundred), and `LEGACY_WORKERS` selects concurrency. For retelling, `LEGACY_ENCOUNTER_STRIDE` controls the fraction of pairs that meet. These benchmarks exclude the rest of the economy boundary.
 
 When a person directly observes a region and the amount differs from a report they remember, they can interpret that experience with a signed `affinity_report_discrepancy` in their own opinion sensitivity. A `report_discrepancy` in a target-specific relationship case overrides it. The change is applied once, toward the immediate speaker, and defaults to zero. A difference is not evidence of a lie: stock may have changed since an honest or mistaken report.

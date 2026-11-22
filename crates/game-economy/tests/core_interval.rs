@@ -3001,10 +3001,11 @@ fn core_host_departure_benchmark() {
                         people_reporting: None,
                         people_reports: vec![],
                         reporting: None,
-                        misreport: None,
+                        stock_survey: None, misreport: None,
                         records: vec![game_economy_knowledge::Record {
                             region: 2,
                             food: 10,
+                            survey: None,
                             observed_at_millis: None,
                             observed_at: 0,
                             witness: 1,
@@ -3447,8 +3448,8 @@ fn food_search_follows_personal_report_even_when_it_is_stale() {
             episodes: None,
             max_records: 4, retention: vec![], minds: vec![game_economy_knowledge::Mind {
                 person: 2, remember_people: false, people_seen: vec![], people_reporting: None,
-                people_reports: vec![], reporting: None, misreport: None,
-                records: vec![game_economy_knowledge::Record {region: 2, food: 10, observed_at_millis: None, observed_at: 0, witness: 1, learned_from: Some(1)}],
+                people_reports: vec![], reporting: None, stock_survey: None, misreport: None,
+                records: vec![game_economy_knowledge::Record {region: 2, food: 10, survey: None, observed_at_millis: None, observed_at: 0, witness: 1, learned_from: Some(1)}],
             }],
         };
         let search = game_economy::FoodSearch {
@@ -6680,12 +6681,12 @@ fn pressured_meeting_can_share_a_false_personal_report_once_per_tick() {
             game_economy_knowledge::Mind {
                 person: 2, remember_people: false, people_seen: vec![], people_reporting: None, people_reports: vec![],
                 reporting: Some(game_economy_knowledge::Reporting {willing: false, pressure_threshold: Some(1)}),
-                misreport: Some(game_economy_knowledge::Misreport {target: Some(3), food_delta: 5}),
-                records: vec![game_economy_knowledge::Record {region: 2, food: 10, observed_at_millis: None, observed_at: 0, witness: 2, learned_from: None}],
+                stock_survey: None, misreport: Some(game_economy_knowledge::Misreport {target: Some(3), food_delta: 5}),
+                records: vec![game_economy_knowledge::Record {region: 2, food: 10, survey: None, observed_at_millis: None, observed_at: 0, witness: 2, learned_from: None}],
             },
             game_economy_knowledge::Mind {
                 person: 3, remember_people: false, people_seen: vec![], people_reporting: None, people_reports: vec![],
-                reporting: None, misreport: None, records: vec![],
+                reporting: None, stock_survey: None, misreport: None, records: vec![],
             },
         ];
         let rules = serde_json::from_value(serde_json::json!({"minimum":-10,"maximum":10,"initial":0,"fulfilled_gain":1,"default_loss":1})).unwrap();
@@ -6750,12 +6751,12 @@ fn pressured_meeting_can_share_false_taking_testimony_once() {
             game_economy_knowledge::Mind {
                 person: 2, remember_people: false, people_seen: vec![], people_reporting: None, people_reports: vec![],
                 reporting: Some(game_economy_knowledge::Reporting {willing: false, pressure_threshold: Some(1)}),
-                misreport: Some(game_economy_knowledge::Misreport {target: Some(3), food_delta: 5}),
-                records: vec![game_economy_knowledge::Record {region: 2, food: 10, observed_at_millis: None, observed_at: 0, witness: 2, learned_from: None}],
+                stock_survey: None, misreport: Some(game_economy_knowledge::Misreport {target: Some(3), food_delta: 5}),
+                records: vec![game_economy_knowledge::Record {region: 2, food: 10, survey: None, observed_at_millis: None, observed_at: 0, witness: 2, learned_from: None}],
             },
             game_economy_knowledge::Mind {
                 person: 3, remember_people: false, people_seen: vec![], people_reporting: None, people_reports: vec![],
-                reporting: None, misreport: None, records: vec![],
+                reporting: None, stock_survey: None, misreport: None, records: vec![],
             },
         ];
         let rules = serde_json::from_value(serde_json::json!({"minimum":-10,"maximum":10,"initial":0,"fulfilled_gain":1,"default_loss":1,"affinity":{"limit":10}})).unwrap();
@@ -6829,12 +6830,12 @@ fn personal_inquiry_requires_later_meetings_and_subjective_assessment() {
             game_economy_knowledge::Mind {
                 person: 2, remember_people: false, people_seen: vec![], people_reporting: None, people_reports: vec![],
                 reporting: Some(game_economy_knowledge::Reporting {willing: false, pressure_threshold: Some(1)}),
-                misreport: Some(game_economy_knowledge::Misreport {target: Some(3), food_delta: 5}),
-                records: vec![game_economy_knowledge::Record {region: 2, food: 10, observed_at_millis: None, observed_at: 0, witness: 2, learned_from: None}],
+                stock_survey: None, misreport: Some(game_economy_knowledge::Misreport {target: Some(3), food_delta: 5}),
+                records: vec![game_economy_knowledge::Record {region: 2, food: 10, survey: None, observed_at_millis: None, observed_at: 0, witness: 2, learned_from: None}],
             },
             game_economy_knowledge::Mind {
                 person: 3, remember_people: false, people_seen: vec![], people_reporting: None, people_reports: vec![],
-                reporting: None, misreport: None, records: vec![],
+                reporting: None, stock_survey: None, misreport: None, records: vec![],
             },
         ];
         let rules = serde_json::from_value(serde_json::json!({"minimum":-10,"maximum":10,"initial":0,"fulfilled_gain":1,"default_loss":1,"affinity":{"limit":10}})).unwrap();
@@ -6912,12 +6913,12 @@ fn personal_inquiry_can_be_declined() {
             game_economy_knowledge::Mind {
                 person: 2, remember_people: false, people_seen: vec![], people_reporting: None, people_reports: vec![],
                 reporting: Some(game_economy_knowledge::Reporting {willing: false, pressure_threshold: Some(1)}),
-                misreport: Some(game_economy_knowledge::Misreport {target: Some(3), food_delta: 5}),
-                records: vec![game_economy_knowledge::Record {region: 2, food: 10, observed_at_millis: None, observed_at: 0, witness: 2, learned_from: None}],
+                stock_survey: None, misreport: Some(game_economy_knowledge::Misreport {target: Some(3), food_delta: 5}),
+                records: vec![game_economy_knowledge::Record {region: 2, food: 10, survey: None, observed_at_millis: None, observed_at: 0, witness: 2, learned_from: None}],
             },
             game_economy_knowledge::Mind {
                 person: 3, remember_people: false, people_seen: vec![], people_reporting: None, people_reports: vec![],
-                reporting: None, misreport: None, records: vec![],
+                reporting: None, stock_survey: None, misreport: None, records: vec![],
             },
         ];
         let rules = serde_json::from_value(serde_json::json!({"minimum":-10,"maximum":10,"initial":0,"fulfilled_gain":1,"default_loss":1,"affinity":{"limit":10}})).unwrap();
@@ -6982,12 +6983,12 @@ fn personal_inquiry_expires_without_a_later_decision() {
             game_economy_knowledge::Mind {
                 person: 2, remember_people: false, people_seen: vec![], people_reporting: None, people_reports: vec![],
                 reporting: Some(game_economy_knowledge::Reporting {willing: false, pressure_threshold: Some(1)}),
-                misreport: Some(game_economy_knowledge::Misreport {target: Some(3), food_delta: 5}),
-                records: vec![game_economy_knowledge::Record {region: 2, food: 10, observed_at_millis: None, observed_at: 0, witness: 2, learned_from: None}],
+                stock_survey: None, misreport: Some(game_economy_knowledge::Misreport {target: Some(3), food_delta: 5}),
+                records: vec![game_economy_knowledge::Record {region: 2, food: 10, survey: None, observed_at_millis: None, observed_at: 0, witness: 2, learned_from: None}],
             },
             game_economy_knowledge::Mind {
                 person: 3, remember_people: false, people_seen: vec![], people_reporting: None, people_reports: vec![],
-                reporting: None, misreport: None, records: vec![],
+                reporting: None, stock_survey: None, misreport: None, records: vec![],
             },
         ];
         let rules = serde_json::from_value(serde_json::json!({"minimum":-10,"maximum":10,"initial":0,"fulfilled_gain":1,"default_loss":1,"affinity":{"limit":10}})).unwrap();
@@ -9549,10 +9550,11 @@ fn core_host_social_benchmark() {
                     willing: true,
                     pressure_threshold: None,
                 }),
-                misreport: None,
+                stock_survey: None, misreport: None,
                 records: vec![game_economy_knowledge::Record {
                     region: 2,
                     food: 10,
+                    survey: None,
                     observed_at_millis: None,
                     observed_at: 0,
                     witness: person,
@@ -15815,8 +15817,9 @@ fn family_birth_custody_and_worker_death_commit_atomically() {
                 episodes: None,
                 max_records: 4, retention: vec![], minds: vec![game_economy_knowledge::Mind {
                     person: 2, remember_people: false, people_seen: vec![], people_reporting: None,
-                    people_reports: vec![], reporting: None, misreport: None,
+                    people_reports: vec![], reporting: None, stock_survey: None, misreport: None,
                     records: vec![game_economy_knowledge::Record { region: 2, food: 10,
+                        survey: None,
                         observed_at_millis: None,
                         observed_at: 0, witness: 1, learned_from: Some(1) }],
                 }],

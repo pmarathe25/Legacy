@@ -30,7 +30,7 @@ pub use game_economy_family::Families;
 pub use game_economy_fatigue::Fatigue;
 pub use game_economy_goals::{Dream, Dreams, Goal, Goals, Learning};
 pub use game_economy_knowledge::{
-    Knowledge, Misreport, PersonReport, RecallTrace, Reporting, Retention, SeenPerson,
+    Knowledge, Misreport, PersonReport, RecallTrace, Reporting, Retention, SeenPerson, StockSurvey,
 };
 pub use game_economy_local_transport::goal::{
     Preference as GoalFetchPreference, SearchPreference as GoalSearchPreference,

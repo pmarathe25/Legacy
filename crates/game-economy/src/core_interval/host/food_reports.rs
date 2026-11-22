@@ -1,6 +1,7 @@
 //! Player choices about sharing and retaining personal food reports.
 use super::*;
-use game_economy_knowledge::{Mind, Misreport, Record, Reporting, StockTime};
+use game_economy_knowledge::{Mind, Misreport, Record, Reporting, StockSurvey, StockTime};
+use std::sync::Arc;
 
 impl CoreHost {
     pub(super) fn stock_time(&self) -> StockTime {
@@ -36,6 +37,22 @@ impl CoreHost {
             willing,
             pressure_threshold: None,
         });
+        Ok(())
+    }
+
+    pub fn set_food_survey_controlled(
+        &mut self,
+        person: u64,
+        survey: Option<StockSurvey>,
+    ) -> Result<(), String> {
+        if survey.as_ref().is_some_and(|survey| {
+            !survey.valid() || survey.goods.iter().any(|&id| {
+                !self.core.physical.goods().iter().any(|good| good.id == id && good.food.is_some())
+            })
+        }) {
+            return Err("invalid or inedible survey goods".into());
+        }
+        self.food_mind_controlled(person)?.stock_survey = survey.map(Arc::new);
         Ok(())
     }
 

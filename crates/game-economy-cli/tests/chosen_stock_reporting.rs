@@ -128,3 +128,52 @@ fn hearing_refreshes_memory_at_the_encounter_instead_of_at_a_custody_boundary() 
     };
     assert_eq!(run(1, 1000, 0), run(6, 17, 19));
 }
+
+#[test]
+fn the_same_stock_can_yield_different_personal_counts_and_reported_evidence() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let scene = root.join("content/scenarios/economy-chosen-stock-reporting.toml");
+    let run = |workers, chunks: &[u64], sampled: bool| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut host = game_economy_cli::core_scenario(&scene, &root.join("content")).unwrap();
+                if !sampled {
+                    host.set_food_survey_controlled(1, None).unwrap();
+                }
+                host.set_food_reporting_controlled(1, true).unwrap();
+                host.detach_player_control().unwrap();
+                for &elapsed in chunks {
+                    assert_eq!(host.advance_continuous(elapsed, &[]).unwrap().failure, None);
+                }
+                let mut state = host.snapshot();
+                let bread = state.core.physical.goods.iter().find(|good| good.name == "bread").unwrap().id;
+                let knowledge = state.knowledge.as_ref().unwrap();
+                let first = knowledge.minds[0].records.iter().find(|row| row.region == 1).unwrap();
+                let exact = knowledge.minds[1].records.iter().find(|row| row.region == 1).unwrap();
+                assert_eq!((exact.food, exact.survey.as_ref()), (13, None));
+                assert_eq!(first.food, if sampled { 8 } else { 13 });
+                assert_eq!(
+                    first.survey.as_ref().map(|survey| (survey.goods.as_slice(), survey.count_step.get())),
+                    sampled.then_some((&[bread][..], 4)),
+                );
+                assert_eq!(first.observed_at_millis, Some(41));
+                let firsthand = first.clone();
+                let person = state.core.people.iter_mut().find(|person| person.id == 1).unwrap();
+                person.region = Some(2);
+                let save = serde_json::to_vec(&state).unwrap();
+                let mut host = CoreHost::resume(serde_json::from_slice(&save).unwrap()).unwrap();
+                assert_eq!(host.advance_continuous(41, &[]).unwrap().failure, None);
+                let updated = host.snapshot().knowledge.unwrap();
+                let heard = updated.minds[2].records.iter().find(|row| row.region == 1).unwrap();
+                assert_eq!(heard.learned_from, Some(1));
+                assert_eq!((&heard.survey, heard.food, heard.observed_at_millis, heard.witness),
+                    (&firsthand.survey, firsthand.food, firsthand.observed_at_millis, firsthand.witness));
+                heard.clone()
+            })
+    };
+    assert_eq!(run(1, &[41], true), run(6, &[11, 30], true));
+    run(6, &[41], false);
+}

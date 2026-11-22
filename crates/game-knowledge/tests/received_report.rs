@@ -4,6 +4,7 @@ fn record(region: u64, observed_at: u64) -> Record {
     Record {
         region,
         food: 10,
+        survey: None,
         observed_at_millis: None,
         observed_at,
         witness: 1,
@@ -24,7 +25,7 @@ fn received_reports_respect_recency_capacity_and_local_memory() {
             people_reporting: None,
             people_reports: vec![],
             reporting: None,
-            misreport: None,
+            stock_survey: None, misreport: None,
             records: vec![record(1, 1), record(2, 5)],
         }],
     };
@@ -46,7 +47,7 @@ fn batched_reports_are_independent_and_reject_duplicate_recipients_atomically() 
         people_reporting: None,
         people_reports: vec![],
         reporting: None,
-        misreport: None,
+        stock_survey: None, misreport: None,
         records: vec![],
     };
     let initial = Knowledge {

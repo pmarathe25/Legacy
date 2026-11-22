@@ -21,12 +21,14 @@ pub fn prepare(
             region.people.par_iter().map(|p| Observation {
                 person: p.id,
                 health: p.health,
+                survey: None,
                 local: Some((region.id, region.food)),
             })
         })
         .chain(travelers.par_iter().map(|t| Observation {
             person: t.person.id,
             health: t.person.health,
+            survey: None,
             local: None,
         }))
         .collect();
@@ -74,6 +76,7 @@ pub fn prepare_indexed(
                     person,
                     health,
                     local,
+                    survey: None,
                 })
             },
         )
