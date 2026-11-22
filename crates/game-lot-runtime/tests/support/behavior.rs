@@ -55,6 +55,7 @@ fn runtime() -> Runtime {
         work_rate_period_millis: None,
         work: vec![],
         region_ids: None,
+        catalog_manifest: None,
         work_interval: None,
     })
     .unwrap()
@@ -2114,6 +2115,7 @@ fn authored_recipe_produces_real_dated_food_and_it_expires_after_transport_and_r
         work_rate_period_millis: None,
         work: vec![],
         region_ids: None,
+        catalog_manifest: None,
         work_interval: None,
     })
     .unwrap();

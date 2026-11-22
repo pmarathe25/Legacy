@@ -47,6 +47,7 @@ fn runtime(expiry: u64) -> Runtime {
         work_rate_period_millis: None,
         work: vec![],
         region_ids: None,
+        catalog_manifest: None,
         work_interval: None,
     })
     .unwrap()
@@ -238,6 +239,7 @@ fn many_dated_meals_produce_the_same_personal_effects_on_one_and_four_workers() 
         work_rate_period_millis: None,
         work: vec![],
         region_ids: None,
+        catalog_manifest: None,
         work_interval: None,
     };
     let meals: Vec<_> = (1..=count)

@@ -1,7 +1,9 @@
 //! Load new economic scenarios from authored content and retain lot ages in saves.
+mod catalog_refresh;
 mod population;
 mod pastimes;
 mod seed_batches;
+pub use catalog_refresh::extend_catalog;
 use game_autowork::{Autowork, Policy};
 use game_economy::{
     Agreements, Agriculture, CropPhase, DependentCare, Dream, Dreams, Families, FarmPolicy, Field,
@@ -1983,14 +1985,13 @@ fn build_scenario(
         jobs: vec![],
         events: vec![],
     };
-    game_content_import::augment(
+    let catalog_manifest = game_content_import::augment_catalog(
         &mut production,
         &content.join("objects"),
         &content.join("workshop"),
         scenario
             .work_rate_period_millis
             .unwrap_or(scenario.tick_millis),
-        scenario.stock_capacity,
         scenario.food_relief_divisor,
     )?;
     let mut skills: Option<game_economy::Skills> = scenario
@@ -3090,6 +3091,7 @@ fn build_scenario(
         seed: scenario.seed,
         physical: Snapshot {
             region_ids: Some(scenario.regions.iter().map(|region| region.id).collect()),
+            catalog_manifest: Some(std::sync::Arc::new(catalog_manifest)),
             custody,
             goods: production.goods,
             recipes: production.recipes,

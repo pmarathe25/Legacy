@@ -30,6 +30,13 @@ pub(super) fn load(path: &[&str]) -> Result<CoreHost, String> {
     CoreHost::resume(snapshot)
 }
 
+pub(super) fn extend(host: &mut CoreHost, path: &[&str]) -> Result<(), String> {
+    let path = path.join(" ");
+    *host = game_economy_cli::extend_catalog(host, Path::new(path.trim_matches('"')))?;
+    println!("catalog updated");
+    Ok(())
+}
+
 fn number<T: std::str::FromStr>(value: &str) -> Result<T, String> {
     value.parse().map_err(|_| format!("invalid number {value}"))
 }
@@ -53,7 +60,7 @@ fn command(host: &mut CoreHost, person: u64, words: &[&str]) -> Result<bool, Str
     match words {
         [] => {}
         ["help"] => println!(
-            "look | wait MILLISECONDS | move REGION | walk stock|store ID | pause-walk | resume-walk | trip REGION VISIT_MILLISECONDS [food] | trip go|survey|back|cancel | trip leave-in MILLISECONDS | trip meet GROUP MINIMUM WAIT_MILLISECONDS | trip meet off | fight PERSON | join-fight BENEFICIARY OPPONENT | tactic wait|defend|retreat | tactic attack PERSON | tactic attack-site SITE | tactic move X Y | confine PERSON SITE | guard SITE | release PERSON | escape | build BLUEPRINT | demolish SITE | salvage SITE GOOD QUANTITY | gather NODE | cultivate FIELD [CARRIED_SEED_BATCH] | amend FIELD | water FIELD QUANTITY | pastime ACTIVITY | pastime stop | report-food on|off | misreport-food DELTA [PERSON] | survey-food exact|STEP [GOOD...] | food-reports | listen-for ACTIVITY VALUE | performances | memories [PERSON] | reflect-memory PERSON | reflect-memory activity ACTIVITY | findings | assemble APPARATUS PART... | mount APPARATUS STORE | unmount APPARATUS STORE | experiment APPARATUS OUTPUT FORCE DISTANCE LOAD | promise PERSON GOOD QUANTITY DUE_IN_MILLISECONDS | respond PROMISE accept|decline|withdraw | deliver PROMISE QUANTITY | eat GOOD | treat GOOD | wear GOOD | unwear | work RECIPE UNITS | stop JOB | stop-assist | rest on|off | word place|person|object ID SOUNDS | form SOUNDS MARKS | writing-surfaces | writing-surface GOOD|default | inscribe SOUNDS | compose SOUNDS SOUNDS ... | read-work PAGE | read PAGE | recall PAGE | save PATH | load PATH | quit (SOUNDS and MARKS are comma-separated numbers)"
+            "look | wait MILLISECONDS | move REGION | walk stock|store ID | pause-walk | resume-walk | trip REGION VISIT_MILLISECONDS [food] | trip go|survey|back|cancel | trip leave-in MILLISECONDS | trip meet GROUP MINIMUM WAIT_MILLISECONDS | trip meet off | fight PERSON | join-fight BENEFICIARY OPPONENT | tactic wait|defend|retreat | tactic attack PERSON | tactic attack-site SITE | tactic move X Y | confine PERSON SITE | guard SITE | release PERSON | escape | build BLUEPRINT | demolish SITE | salvage SITE GOOD QUANTITY | gather NODE | cultivate FIELD [CARRIED_SEED_BATCH] | amend FIELD | water FIELD QUANTITY | pastime ACTIVITY | pastime stop | report-food on|off | misreport-food DELTA [PERSON] | survey-food exact|STEP [GOOD...] | food-reports | listen-for ACTIVITY VALUE | performances | memories [PERSON] | reflect-memory PERSON | reflect-memory activity ACTIVITY | findings | assemble APPARATUS PART... | mount APPARATUS STORE | unmount APPARATUS STORE | experiment APPARATUS OUTPUT FORCE DISTANCE LOAD | promise PERSON GOOD QUANTITY DUE_IN_MILLISECONDS | respond PROMISE accept|decline|withdraw | deliver PROMISE QUANTITY | eat GOOD | treat GOOD | wear GOOD | unwear | work RECIPE UNITS | stop JOB | stop-assist | rest on|off | word place|person|object ID SOUNDS | form SOUNDS MARKS | writing-surfaces | writing-surface GOOD|default | inscribe SOUNDS | compose SOUNDS SOUNDS ... | read-work PAGE | read PAGE | recall PAGE | save PATH | load PATH | catalog-additions CONTENT_ROOT | quit (SOUNDS and MARKS are comma-separated numbers)"
         ),
         ["quit"] | ["exit"] => return Ok(false),
         ["look"] => {
@@ -725,6 +732,7 @@ fn command(host: &mut CoreHost, person: u64, words: &[&str]) -> Result<bool, Str
             host.controlled_person(person)?;
             save(host, path)?;
         }
+        ["catalog-additions", path @ ..] if !path.is_empty() => extend(host, path)?,
         ["load", path @ ..] if !path.is_empty() => {
             let loaded = load(path)?;
             loaded.controlled_person(person)?;
@@ -805,6 +813,7 @@ fn campaign_command(host: &mut CoreHost, words: &[&str]) -> Result<bool, String>
             );
         }
         ["save", path @ ..] if !path.is_empty() => save(host, path)?,
+        ["catalog-additions", path @ ..] if !path.is_empty() => extend(host, path)?,
         ["load", path @ ..] if !path.is_empty() => {
             let loaded = load(path)?;
             loaded.campaign_view().ok_or("save has no campaign")?;
@@ -813,7 +822,7 @@ fn campaign_command(host: &mut CoreHost, words: &[&str]) -> Result<bool, String>
         }
         ["help"] => {
             println!(
-                "campaign | invoke PAST_LIVES | recall-life LIFE | dismiss | accept-cost REVISION | release-mentor GUARDIAN"
+                "campaign | invoke PAST_LIVES | recall-life LIFE | dismiss | accept-cost REVISION | release-mentor GUARDIAN | catalog-additions CONTENT_ROOT"
             );
             if let Some(person) = view.controlled {
                 return command(host, person, words);

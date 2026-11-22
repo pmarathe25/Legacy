@@ -3,6 +3,7 @@ use game_production::{
     Amount, FoodProfile, Good, MaturationProfile, NUTRIENT_NAMES, Production, Recipe,
     RecipeCategory, Stock,
 };
+use game_production::catalog::CatalogManifest;
 use std::collections::{BTreeMap, HashSet};
 use std::path::Path;
 use toml::Value;
@@ -71,10 +72,46 @@ pub fn augment(
     capacity: u64,
     food_relief_divisor: u32,
 ) -> Result<(), String> {
-    if work_unit_millis == 0 || capacity == 0 || food_relief_divisor == 0 {
+    if capacity == 0 {
+        return Err("invalid stock capacity".into());
+    }
+    augment_catalog(
+        production,
+        objects,
+        recipes,
+        work_unit_millis,
+        food_relief_divisor,
+    )?;
+    for inventory in &mut production.inventories {
+        let mut existing: HashSet<_> = inventory.stocks.iter().map(|stock| stock.good).collect();
+        for good in &production.goods {
+            if existing.insert(good.id) {
+                inventory.stocks.push(Stock {
+                    good: good.id,
+                    quantity: 0,
+                    capacity,
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
+pub fn augment_catalog(
+    production: &mut Production,
+    objects: &Path,
+    recipes: &Path,
+    work_unit_millis: u64,
+    food_relief_divisor: u32,
+) -> Result<CatalogManifest, String> {
+    if work_unit_millis == 0 || food_relief_divisor == 0 {
         return Err("invalid catalog conversion rules".into());
     }
-    let (objects, recipes) = packs::load(objects, recipes)?;
+    let packs::Catalog {
+        objects,
+        recipes,
+        packs,
+    } = packs::load(objects, recipes)?;
     let mut next = production.clone();
     let mut ids = BTreeMap::new();
     let mut maturing = Vec::new();
@@ -250,24 +287,19 @@ pub fn augment(
             outputs,
         });
     }
-    for inventory in &mut next.inventories {
-        let mut existing: HashSet<_> = inventory.stocks.iter().map(|stock| stock.good).collect();
-        for good in &next.goods {
-            if existing.insert(good.id) {
-                inventory.stocks.push(Stock {
-                    good: good.id,
-                    quantity: 0,
-                    capacity,
-                });
-            }
-        }
-    }
     next.goods.sort_unstable_by_key(|row| row.id);
     next.recipes.sort_unstable_by_key(|row| row.id);
     next.recipe_categories
         .sort_unstable_by_key(|row| row.recipe);
+    let manifest = CatalogManifest {
+        work_unit_millis,
+        food_relief_divisor,
+        packs,
+        recipe_categories: next.recipe_categories.clone(),
+    };
+    manifest.validate()?;
     *production = next;
-    Ok(())
+    Ok(manifest)
 }
 
 fn recipe_outputs(

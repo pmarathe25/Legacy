@@ -205,6 +205,7 @@ fn fixture(perishable: bool, output_quantity: u64) -> Runtime {
         work_rate_period_millis: None,
         work: vec![],
         region_ids: None,
+        catalog_manifest: None,
         work_interval: None,
     })
     .unwrap();

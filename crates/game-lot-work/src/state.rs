@@ -107,6 +107,9 @@ pub struct Snapshot {
     /// Geographical regions exist independently of their stock endpoints.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub region_ids: Option<Arc<[u64]>>,
+    /// Present when the catalog was compiled from authored content packs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub catalog_manifest: Option<Arc<game_production_model::catalog::CatalogManifest>>,
     pub goods: Vec<Good>,
     pub recipes: Vec<Recipe>,
     pub tick_millis: u64,

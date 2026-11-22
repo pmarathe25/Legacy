@@ -7,6 +7,7 @@ const FORMAT_VERSION: i64 = 1;
 
 struct Pack {
     id: String,
+    version: u32,
     namespace: Option<String>,
     dependencies: Vec<String>,
     rows: BTreeMap<String, Value>,
@@ -101,16 +102,20 @@ fn parse(source: &str, kind: &str) -> Result<Pack, String> {
         .collect();
     Ok(Pack {
         id: id.to_owned(),
+        version: version as u32,
         namespace,
         dependencies,
         rows,
     })
 }
 
-pub(crate) fn load(
-    objects: &Path,
-    recipes: &Path,
-) -> Result<(Vec<Definition>, Vec<Definition>), String> {
+pub(crate) struct Catalog {
+    pub(crate) objects: Vec<Definition>,
+    pub(crate) recipes: Vec<Definition>,
+    pub(crate) packs: Vec<game_production::catalog::Pack>,
+}
+
+pub(crate) fn load(objects: &Path, recipes: &Path) -> Result<Catalog, String> {
     let objects = read(objects, "objects")?;
     let recipes = read(recipes, "recipes")?;
     let packs: Vec<_> = objects.iter().chain(&recipes).collect();
@@ -156,7 +161,21 @@ pub(crate) fn load(
     if loaded != packs.len() {
         return Err("cyclic content pack dependencies".into());
     }
-    Ok((collect(objects, "objects")?, collect(recipes, "recipes")?))
+    let mut manifest: Vec<_> = packs
+        .iter()
+        .map(|pack| game_production::catalog::Pack {
+            id: pack.id.clone(),
+            version: pack.version,
+            namespace: pack.namespace.clone(),
+            requires: pack.dependencies.clone(),
+        })
+        .collect();
+    manifest.sort_unstable_by(|a, b| a.id.cmp(&b.id));
+    Ok(Catalog {
+        objects: collect(objects, "objects")?,
+        recipes: collect(recipes, "recipes")?,
+        packs: manifest,
+    })
 }
 
 fn collect(packs: Vec<Pack>, kind: &str) -> Result<Vec<Definition>, String> {
