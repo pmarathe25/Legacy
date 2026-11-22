@@ -26,6 +26,9 @@ pub struct MatePreference {
     pub trust_weight: i32,
     pub fear_weight: i32,
     pub obligation_weight: i32,
+    /// Personal response to a known caregiver from childhood.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub childhood_weight: i32,
     /// Personal response to a stable, directed attraction toward this person.
     pub attraction_weight: i32,
     /// Individual attraction adjustments for the candidate's modeled sex.
@@ -38,6 +41,9 @@ pub struct MatePreference {
     /// Minimum acceptable subjective evaluation of a prospective mate.
     pub minimum: i32,
 }
+fn is_zero(value: &i32) -> bool {
+    *value == 0
+}
 impl Default for MatePreference {
     fn default() -> Self {
         Self {
@@ -47,6 +53,7 @@ impl Default for MatePreference {
             trust_weight: 0,
             fear_weight: 0,
             obligation_weight: 0,
+            childhood_weight: 0,
             attraction_weight: 100,
             female_attraction: 0,
             male_attraction: 0,
@@ -111,6 +118,7 @@ pub struct MateFeelings {
     pub trust: i32,
     pub fear: u64,
     pub obligation: u64,
+    pub caregiver_known: bool,
 }
 
 /// Committed or staged physical reads keyed by stable identity.

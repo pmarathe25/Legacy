@@ -5,6 +5,7 @@ use super::*;
 pub struct CoreCareVisit {
     pub at_millis: u128,
     pub events: Vec<game_economy_work::care::Event>,
+    pub recognized: Vec<game_economy_family::familiarity::Recognition>,
     pub transfers: Vec<game_lots::TransactionOutcome>,
     pub incapacitated: Vec<u64>,
 }
@@ -137,30 +138,33 @@ impl CoreHost {
             .as_mut()
             .expect("checked elapsed clock")
             .last_millis = Some(at);
-        self.develop_after_care();
+        let recognized = self.develop_after_care();
         self.work_checked_revision = None;
         Ok(CoreCareVisit {
             at_millis: at,
             events,
+            recognized,
             transfers,
             incapacitated,
         })
     }
 
     /// Each child interprets an actual visit or an unattended care period at their current age.
-    pub(super) fn develop_after_care(&mut self) {
-        let (Some(care), Some(family), Some(opinions)) =
-            (&self.dependent_care, &self.family, &mut self.opinions)
+    pub(super) fn develop_after_care(&mut self) -> Vec<game_economy_family::familiarity::Recognition> {
+        let (Some(care), Some(family)) =
+            (&self.dependent_care, &mut self.family)
         else {
-            return;
+            return Vec::new();
         };
         if care.events.is_empty() {
-            return;
+            return Vec::new();
         }
-        let develop_obligation = opinions.tracks_obligation_development();
-        let learn_relationships = opinions.tracks_care_reactions();
-        if !develop_obligation && !learn_relationships {
-            return;
+        let develop_obligation = self.opinions.as_ref()
+            .is_some_and(game_opinions::Opinions::tracks_obligation_development);
+        let learn_relationships = self.opinions.as_ref()
+            .is_some_and(game_opinions::Opinions::tracks_care_reactions);
+        if family.familiarity.is_none() && !develop_obligation && !learn_relationships {
+            return Vec::new();
         }
         let now = self.core.simulated_millis();
         let experiences: Vec<_> = care
@@ -175,6 +179,20 @@ impl CoreHost {
                 Some((event.child, age, event.caregiver))
             })
             .collect();
+        let recognized = if let Some(familiarity) = &mut family.familiarity {
+            let visits: Vec<_> = experiences.par_iter()
+                .filter_map(|&(child, age, caregiver)| Some(game_economy_family::familiarity::Experience {
+                    child, age, caregiver: caregiver?,
+                })).collect();
+            if visits.is_empty() {
+                Vec::new()
+            } else {
+                std::sync::Arc::make_mut(familiarity).observe_care(&visits, now)
+            }
+        } else {
+            Vec::new()
+        };
+        let Some(opinions) = self.opinions.as_mut() else { return recognized };
         if develop_obligation {
             let childhood: Vec<_> = experiences.par_iter()
                 .map(|&(child, age, caregiver)| (child, age, caregiver.is_some()))
@@ -187,6 +205,7 @@ impl CoreHost {
             }).collect();
             opinions.learn_care(&visits, self.core.physical.tick());
         }
+        recognized
     }
 
     pub(super) fn stage_care_health(

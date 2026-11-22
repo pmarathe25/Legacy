@@ -37,6 +37,7 @@ impl PhysicalView for PressureView {
                 trust: 20,
                 fear: 20,
                 obligation: 20,
+                caregiver_known: false,
             }
         } else {
             MateFeelings {
@@ -74,6 +75,7 @@ fn pref() -> MatePreference {
         trust_weight: 0,
         fear_weight: 0,
         obligation_weight: 0,
+        childhood_weight: 0,
         attraction_weight: 0,
         female_attraction: 0,
         male_attraction: 0,
@@ -107,6 +109,7 @@ fn member(id: u64, sex: Sex, partner: Option<u64>) -> Member {
 fn family() -> Families {
     Families {
         traits: None,
+        familiarity: None,
         rules: FamilyRules {
             adult_age: 16,
             min_work_age: 0,
@@ -519,6 +522,7 @@ fn concentrated_mate_choice_benchmark() {
                 trust_weight: 0,
                 fear_weight: 0,
                 obligation_weight: 0,
+                childhood_weight: 0,
                 attraction_weight: 0,
                 female_attraction: 0,
                 male_attraction: 0,
@@ -590,6 +594,7 @@ fn concentrated_mate_choice_with_opinions_benchmark() {
                 affinity,
                 fear,
                 obligation,
+                caregiver_known: false,
             }
         }
     }
@@ -604,6 +609,7 @@ fn concentrated_mate_choice_with_opinions_benchmark() {
                 trust_weight: 1,
                 fear_weight: 1,
                 obligation_weight: 1,
+                childhood_weight: 0,
                 attraction_weight: 100,
                 female_attraction: 0,
                 male_attraction: 0,

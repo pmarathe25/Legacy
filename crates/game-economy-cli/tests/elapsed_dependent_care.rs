@@ -1,6 +1,97 @@
 use game_economy::core_interval::{CoreHost, CoreRunEvent};
 
 #[test]
+fn a_child_can_learn_familiarity_with_an_unrelated_caregiver() {
+    let content = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content");
+    let scenario = content.join("scenarios/economy-care-familiarity.toml");
+    let opening = game_economy_cli::core_scenario(&scenario, &content)
+        .unwrap()
+        .snapshot();
+    let simulate = |workers, durations: &[u64], visits: bool, weight| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut initial = opening.clone();
+                initial.family.as_mut().unwrap().members[3]
+                    .mate_preference
+                    .as_mut()
+                    .unwrap()
+                    .childhood_weight = weight;
+                if !visits {
+                    initial.dependent_care.as_mut().unwrap().preferences[0].value = 0;
+                }
+                let mut host = CoreHost::resume(initial).unwrap();
+                let mut recognized = Vec::new();
+                for &duration in durations {
+                    let advanced = host.advance_continuous(duration, &[]).unwrap();
+                    assert_eq!(advanced.failure, None);
+                    recognized.extend(
+                        advanced
+                            .events
+                            .into_iter()
+                            .filter_map(|event| match event {
+                                CoreRunEvent::Care(visit) => Some(visit.recognized),
+                                _ => None,
+                            })
+                            .flatten(),
+                    );
+                    let save = serde_json::to_vec(&host.snapshot()).unwrap();
+                    host = CoreHost::resume(serde_json::from_slice(&save).unwrap()).unwrap();
+                }
+                let state = host.snapshot();
+                assert_eq!(host.core().simulated_millis(), 1100);
+                let family = state.family.as_ref().unwrap();
+                let familiarity = family.familiarity.as_ref().unwrap();
+                assert_eq!(familiarity.recognizes(4, 3), visits);
+                assert!(!familiarity.recognizes(3, 4));
+                assert!(!familiarity.recognizes(4, 1));
+                assert!(!familiarity.recognizes(4, 2));
+                assert_eq!(
+                    family.members[3].partner,
+                    (!visits || weight >= 0).then_some(3)
+                );
+                if visits {
+                    assert_eq!(recognized.len(), 1);
+                    let recognition = recognized[0];
+                    assert_eq!(
+                        (
+                            recognition.child,
+                            recognition.caregiver,
+                            recognition.at_millis
+                        ),
+                        (4, 3, 200)
+                    );
+                    let mut forged = state.clone();
+                    std::sync::Arc::make_mut(
+                        forged
+                            .family
+                            .as_mut()
+                            .unwrap()
+                            .familiarity
+                            .as_mut()
+                            .unwrap(),
+                    )
+                    .learners[0]
+                        .contacts[0]
+                        .recognized_at = Some(1101);
+                    assert!(CoreHost::resume(forged).is_err());
+                } else {
+                    assert!(recognized.is_empty());
+                }
+                (state, recognized)
+            })
+    };
+    assert_eq!(
+        simulate(1, &[1100], true, -10),
+        simulate(6, &[137, 63, 399, 501], true, -10)
+    );
+    simulate(4, &[1100], false, -10);
+    simulate(4, &[1100], true, 10);
+}
+
+#[test]
 fn children_interpret_attributed_care_differently_without_assigning_unobserved_blame() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let opening = game_economy_cli::core_scenario(

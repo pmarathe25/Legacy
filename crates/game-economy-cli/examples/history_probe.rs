@@ -160,6 +160,14 @@ fn run_steps(
                     )?;
                     ("local_walking", events.len())
                 }
+                CoreRunEvent::Care(visit) if !visit.recognized.is_empty() => {
+                    let events = &visit.recognized;
+                    write_line(
+                        &mut writer,
+                        &json!({"kind":"care_recognitions","step":step,"at_millis":visit.at_millis,"events":events}),
+                    )?;
+                    ("care_recognitions", events.len())
+                }
                 CoreRunEvent::Confinement { at_millis, events } => {
                     write_line(
                         &mut writer,

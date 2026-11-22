@@ -99,7 +99,7 @@ impl CoreHost {
         let current = self.family.as_ref().expect("family deadline has an owner");
         let tick = self.core.physical.tick();
         let mut conception = if conception_due {
-            let feelings = mate_feelings(self.opinions.as_ref());
+            let feelings = mate_feelings(self.opinions.as_ref(), current.familiarity.as_deref());
             game_economy_family::choose_conceptions_elapsed(
                 current,
                 people,
@@ -373,6 +373,7 @@ impl CoreHost {
             self.opinions
                 .as_ref()
                 .filter(|_| owner.rules.subjective_mating),
+            owner.familiarity.as_deref(),
         );
         let (personal_meals, personal_work) = self.birth_preferences(owner);
         let next = game_economy_family::advance_with_clock(
@@ -506,12 +507,13 @@ impl CoreHost {
     }
 }
 
-fn mate_feelings(
-    opinions: Option<&game_opinions::Opinions>,
-) -> impl Fn(u64, u64) -> game_economy_family::MateFeelings + Sync + '_ {
+fn mate_feelings<'a>(
+    opinions: Option<&'a game_opinions::Opinions>,
+    familiarity: Option<&'a game_economy_family::familiarity::Familiarity>,
+) -> impl Fn(u64, u64) -> game_economy_family::MateFeelings + Sync + 'a {
     let opinions = opinions.map(game_opinions::Opinions::index);
     move |observer, target| {
-        opinions
+        let mut feelings = opinions
             .as_ref()
             .map_or_else(game_economy_family::MateFeelings::default, |index| {
                 let (trust, affinity, fear, obligation) = index.subjective(observer, target);
@@ -520,7 +522,10 @@ fn mate_feelings(
                     affinity,
                     fear,
                     obligation,
+                    caregiver_known: false,
                 }
-            })
+            });
+        feelings.caregiver_known = familiarity.is_some_and(|records| records.recognizes(observer, target));
+        feelings
     }
 }

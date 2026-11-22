@@ -64,17 +64,18 @@ fn mate_score(
         Sex::Female => pref.female_attraction,
         Sex::Male => pref.male_attraction,
     };
+    let childhood = if feelings.caregiver_known { i64::from(pref.childhood_weight) } else { 0 };
     if pref.trust_weight == 0 && pref.fear_weight == 0 && pref.obligation_weight == 0 {
         return i64::from(pref.affinity_weight) * i64::from(feelings.affinity)
             + i64::from(pref.attraction_weight) * attraction / 1000
-            + i64::from(sex_attraction);
+            + i64::from(sex_attraction) + childhood;
     }
     let score = i128::from(pref.affinity_weight) * i128::from(feelings.affinity)
         + i128::from(pref.trust_weight) * i128::from(feelings.trust)
         + i128::from(pref.fear_weight) * i128::from(feelings.fear)
         + i128::from(pref.obligation_weight) * i128::from(feelings.obligation)
         + i128::from(pref.attraction_weight) * i128::from(attraction) / 1000
-        + i128::from(sex_attraction);
+        + i128::from(sex_attraction) + i128::from(childhood);
     score.clamp(i128::from(i64::MIN), i128::from(i64::MAX)) as i64
 }
 fn mutual_mate_score(
@@ -230,6 +231,7 @@ impl Families {
         Self {
             rules: self.rules.clone(),
             traits: self.traits.clone(),
+            familiarity: self.familiarity.clone(),
             members: self.members.par_iter().cloned().collect(),
             next_id: self.next_id,
             last_tick: self.last_tick,
@@ -787,6 +789,7 @@ impl Families {
             families: Families {
                 rules: rules.clone(),
                 traits: self.traits.clone(),
+                familiarity: self.familiarity.clone(),
                 members,
                 next_id,
                 last_tick: tick,

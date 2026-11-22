@@ -312,6 +312,7 @@ impl Chronicle {
             kind,
             "campaign"
                 | "care"
+                | "care_recognitions"
                 | "expeditions"
                 | "tactical"
                 | "confinement"
@@ -548,6 +549,13 @@ fn classify(kind: &str, row: &Value) -> Option<Receipt> {
             label: "performances heard at their conclusion",
             actor: Some(row["listener"].as_u64()?),
             other: Some(row["performer"].as_u64()?),
+        });
+    }
+    if kind == "care_recognitions" {
+        return Some(Receipt {
+            label: "caregivers recognized from childhood experience",
+            actor: Some(row["child"].as_u64()?),
+            other: Some(row["caregiver"].as_u64()?),
         });
     }
     if kind == "care" {
