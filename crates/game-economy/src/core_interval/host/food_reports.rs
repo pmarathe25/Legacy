@@ -1,8 +1,16 @@
 //! Player choices about sharing and retaining personal food reports.
 use super::*;
-use game_economy_knowledge::{Mind, Misreport, Record, Reporting};
+use game_economy_knowledge::{Mind, Misreport, Record, Reporting, StockTime};
 
 impl CoreHost {
+    pub(super) fn stock_time(&self) -> StockTime {
+        StockTime::elapsed(
+            self.core.physical.tick(),
+            self.core.simulated_millis(),
+            self.core.physical.tick_millis(),
+        )
+    }
+
     fn food_mind_controlled(&mut self, person: u64) -> Result<&mut Mind, String> {
         self.controlled_person(person)?;
         self.knowledge
@@ -15,7 +23,7 @@ impl CoreHost {
         self.controlled_person(person)?;
         self.knowledge
             .as_ref()
-            .and_then(|owner| owner.recall_at(person, self.core.physical.tick()))
+            .and_then(|owner| owner.recall_at_time(person, self.stock_time()))
             .ok_or_else(|| "this person has no food memory".into())
     }
 

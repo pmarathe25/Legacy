@@ -2374,8 +2374,8 @@ on_feed = 1
 inherit_births = true
 min_hunger = 10
 min_report_food = 1
-max_report_age = 8760
-retry_ticks = 24
+max_report_age_millis = 31536000000
+retry_millis = 86400000
 people = [{ person = 18, enabled = true }]
 
 [[aspirations]]

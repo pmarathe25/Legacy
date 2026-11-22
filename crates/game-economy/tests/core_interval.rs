@@ -2974,6 +2974,8 @@ fn core_host_departure_benchmark() {
             search: game_economy::FoodSearch {
                 min_hunger: 5,
                 min_report_food: 1,
+                max_report_age_millis: None,
+                retry_millis: None,
                 max_report_age: 20,
                 retry_ticks: 3,
                 inherit_births: false,
@@ -3003,6 +3005,7 @@ fn core_host_departure_benchmark() {
                         records: vec![game_economy_knowledge::Record {
                             region: 2,
                             food: 10,
+                            observed_at_millis: None,
                             observed_at: 0,
                             witness: 1,
                             learned_from: Some(1),
@@ -3438,11 +3441,11 @@ fn food_search_follows_personal_report_even_when_it_is_stale() {
             max_records: 4, retention: vec![], minds: vec![game_economy_knowledge::Mind {
                 person: 2, remember_people: false, people_seen: vec![], people_reporting: None,
                 people_reports: vec![], reporting: None, misreport: None,
-                records: vec![game_economy_knowledge::Record {region: 2, food: 10, observed_at: 0, witness: 1, learned_from: Some(1)}],
+                records: vec![game_economy_knowledge::Record {region: 2, food: 10, observed_at_millis: None, observed_at: 0, witness: 1, learned_from: Some(1)}],
             }],
         };
         let search = game_economy::FoodSearch {
-            min_hunger: 5, min_report_food: 1, max_report_age: 20, retry_ticks: 3,
+            min_hunger: 5, min_report_food: 1, max_report_age_millis: None, retry_millis: None, max_report_age: 20, retry_ticks: 3,
             inherit_births: false, people: vec![game_economy::FoodSearchPreference {
                 person: 2, enabled: true, next_review: 0, next_review_millis: None, target: None,
             }],
@@ -3509,7 +3512,7 @@ fn personal_food_acquisition_contends_for_real_stock_then_eats() {
             core: initial, autowork: None, tool_wear: None, tool_requirements: vec![], paused_work_rates: vec![], pending_vital_deaths: vec![],
             fatigue: None, activity: vec![], giving: None, practice_work_asks: vec![], practice_work_evidence: Default::default(), skills: None, taking: None, medical: None, goal_setbacks: vec![], purpose: None, animal_restraints: None, animal_products: None, recovery: None, fauna: None, hunting: None, animal_feelings: None, animal_care: None, animal_handling: None, family: None, dependent_care: None, gathering: None, environment: None, irrigation: None, agriculture: None, health: None, knowledge: None, social: None, personality: None, claims: None, food_search: Some(game_economy::core_interval::CoreFoodSearch {
                 claims: None,
-                search: game_economy::FoodSearch {min_hunger: 5, min_report_food: 1, max_report_age: 10, retry_ticks: 1, inherit_births: false, people: vec![]},
+                search: game_economy::FoodSearch {min_hunger: 5, min_report_food: 1, max_report_age_millis: None, retry_millis: None, max_report_age: 10, retry_ticks: 1, inherit_births: false, people: vec![]},
                 knowledge: Some(game_economy_knowledge::Knowledge { episodes: None, max_records: 1, minds: vec![], retention: vec![]}),
             }), opinions: None, goals: None, dreams: None, shared_work: None, market: None, writing: None, local_transport: None, construction: None, hauling: None, agreements: None, sites: None, schedule: None,
         };
@@ -6671,7 +6674,7 @@ fn pressured_meeting_can_share_a_false_personal_report_once_per_tick() {
                 person: 2, remember_people: false, people_seen: vec![], people_reporting: None, people_reports: vec![],
                 reporting: Some(game_economy_knowledge::Reporting {willing: false, pressure_threshold: Some(1)}),
                 misreport: Some(game_economy_knowledge::Misreport {target: Some(3), food_delta: 5}),
-                records: vec![game_economy_knowledge::Record {region: 2, food: 10, observed_at: 0, witness: 2, learned_from: None}],
+                records: vec![game_economy_knowledge::Record {region: 2, food: 10, observed_at_millis: None, observed_at: 0, witness: 2, learned_from: None}],
             },
             game_economy_knowledge::Mind {
                 person: 3, remember_people: false, people_seen: vec![], people_reporting: None, people_reports: vec![],
@@ -6741,7 +6744,7 @@ fn pressured_meeting_can_share_false_taking_testimony_once() {
                 person: 2, remember_people: false, people_seen: vec![], people_reporting: None, people_reports: vec![],
                 reporting: Some(game_economy_knowledge::Reporting {willing: false, pressure_threshold: Some(1)}),
                 misreport: Some(game_economy_knowledge::Misreport {target: Some(3), food_delta: 5}),
-                records: vec![game_economy_knowledge::Record {region: 2, food: 10, observed_at: 0, witness: 2, learned_from: None}],
+                records: vec![game_economy_knowledge::Record {region: 2, food: 10, observed_at_millis: None, observed_at: 0, witness: 2, learned_from: None}],
             },
             game_economy_knowledge::Mind {
                 person: 3, remember_people: false, people_seen: vec![], people_reporting: None, people_reports: vec![],
@@ -6820,7 +6823,7 @@ fn personal_inquiry_requires_later_meetings_and_subjective_assessment() {
                 person: 2, remember_people: false, people_seen: vec![], people_reporting: None, people_reports: vec![],
                 reporting: Some(game_economy_knowledge::Reporting {willing: false, pressure_threshold: Some(1)}),
                 misreport: Some(game_economy_knowledge::Misreport {target: Some(3), food_delta: 5}),
-                records: vec![game_economy_knowledge::Record {region: 2, food: 10, observed_at: 0, witness: 2, learned_from: None}],
+                records: vec![game_economy_knowledge::Record {region: 2, food: 10, observed_at_millis: None, observed_at: 0, witness: 2, learned_from: None}],
             },
             game_economy_knowledge::Mind {
                 person: 3, remember_people: false, people_seen: vec![], people_reporting: None, people_reports: vec![],
@@ -6903,7 +6906,7 @@ fn personal_inquiry_can_be_declined() {
                 person: 2, remember_people: false, people_seen: vec![], people_reporting: None, people_reports: vec![],
                 reporting: Some(game_economy_knowledge::Reporting {willing: false, pressure_threshold: Some(1)}),
                 misreport: Some(game_economy_knowledge::Misreport {target: Some(3), food_delta: 5}),
-                records: vec![game_economy_knowledge::Record {region: 2, food: 10, observed_at: 0, witness: 2, learned_from: None}],
+                records: vec![game_economy_knowledge::Record {region: 2, food: 10, observed_at_millis: None, observed_at: 0, witness: 2, learned_from: None}],
             },
             game_economy_knowledge::Mind {
                 person: 3, remember_people: false, people_seen: vec![], people_reporting: None, people_reports: vec![],
@@ -6973,7 +6976,7 @@ fn personal_inquiry_expires_without_a_later_decision() {
                 person: 2, remember_people: false, people_seen: vec![], people_reporting: None, people_reports: vec![],
                 reporting: Some(game_economy_knowledge::Reporting {willing: false, pressure_threshold: Some(1)}),
                 misreport: Some(game_economy_knowledge::Misreport {target: Some(3), food_delta: 5}),
-                records: vec![game_economy_knowledge::Record {region: 2, food: 10, observed_at: 0, witness: 2, learned_from: None}],
+                records: vec![game_economy_knowledge::Record {region: 2, food: 10, observed_at_millis: None, observed_at: 0, witness: 2, learned_from: None}],
             },
             game_economy_knowledge::Mind {
                 person: 3, remember_people: false, people_seen: vec![], people_reporting: None, people_reports: vec![],
@@ -9543,6 +9546,7 @@ fn core_host_social_benchmark() {
                 records: vec![game_economy_knowledge::Record {
                     region: 2,
                     food: 10,
+                    observed_at_millis: None,
                     observed_at: 0,
                     witness: person,
                     learned_from: None,
@@ -15806,11 +15810,14 @@ fn family_birth_custody_and_worker_death_commit_atomically() {
                     person: 2, remember_people: false, people_seen: vec![], people_reporting: None,
                     people_reports: vec![], reporting: None, misreport: None,
                     records: vec![game_economy_knowledge::Record { region: 2, food: 10,
+                        observed_at_millis: None,
                         observed_at: 0, witness: 1, learned_from: Some(1) }],
                 }],
             });
             inherited.food_search = Some(game_economy::core_interval::CoreFoodSearch {
                 search: game_economy::FoodSearch { min_hunger: 5, min_report_food: 1,
+                    max_report_age_millis: None,
+                    retry_millis: None,
                     max_report_age: 20, retry_ticks: 3, inherit_births: true,
                     people: vec![game_economy::FoodSearchPreference { person: 2, enabled: true,
                         next_review: 0, next_review_millis: None, target: Some(2) }] }, knowledge: None, claims: None,

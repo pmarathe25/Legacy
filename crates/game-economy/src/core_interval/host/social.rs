@@ -739,7 +739,7 @@ impl CoreHost {
                 next.social.as_ref(),
                 self.opinions.as_ref(),
                 game_economy_knowledge::ObservationAccess {
-                    now: tick,
+                    now: self.stock_time(),
                     not_at_stock: self
                         .block_away_from_stock(&busy)
                         .as_deref()

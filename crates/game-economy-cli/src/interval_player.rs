@@ -545,8 +545,8 @@ fn command(host: &mut CoreHost, person: u64, words: &[&str]) -> Result<bool, Str
             }
             for row in records {
                 println!(
-                    "region={} food={} observed_tick={} witness={} learned_from={:?}",
-                    row.region, row.food, row.observed_at, row.witness, row.learned_from,
+                    "region={} food={} observed_tick={} observed_millis={:?} witness={} learned_from={:?}",
+                    row.region, row.food, row.observed_at, row.observed_at_millis, row.witness, row.learned_from,
                 );
             }
         }

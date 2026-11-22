@@ -218,7 +218,7 @@ impl CoreHost {
             None,
             None,
             game_economy_knowledge::ObservationAccess {
-                now: tick,
+                now: self.stock_time(),
                 not_at_stock: &busy,
             },
         )?
@@ -238,8 +238,7 @@ impl CoreHost {
             view: &view,
             claims: claims.as_ref(),
             busy: &busy,
-            now: tick,
-            now_millis: Some(self.core.simulated_millis()),
+            stock_time: self.stock_time(),
         }
         .prepare();
         plan.departures.par_sort_unstable_by_key(|row| row.person);
@@ -250,6 +249,7 @@ impl CoreHost {
             tick,
             travel
                 .travel_unit_millis
+                .or_else(|| next_owner.search.retry_millis.map(|_| self.core.physical.tick_millis()))
                 .map(|unit| (self.core.simulated_millis(), unit)),
             travel.personal_routing,
         )?;
@@ -283,7 +283,7 @@ impl CoreHost {
                 .filter(|row| departed.binary_search(&row.0).is_ok())
                 .collect();
             knowledge
-                .reinforce_uses(&uses, tick)
+                .reinforce_uses_at(&uses, self.stock_time())
                 .map_err(str::to_owned)?;
         }
         self.food_search = Some(next_owner);

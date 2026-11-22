@@ -34,9 +34,12 @@ progress, so travel and arrival deadlines no longer have to use the physical
 quantum. A route closure can specify `unit_millis` to measure its start and
 end from the simulation epoch. Departures, food searches, and hauling then
 check whether it is open at the actual time of the attempt. Route observations
-retain the time of the attempt through reporting and save/reload. When travel
-has an explicit unit, `food_search.retry_ticks` counts those units, and
-elapsed food search reviews and closed-route rechecks use the actual time.
+retain the time of the attempt through reporting and save/reload.
+`food_search.retry_millis` sets the elapsed delay before reconsideration,
+and `food_search.max_report_age_millis` limits the age of evidence the
+search will use. `knowledge.retention.duration_millis` measures how long a
+person can recall a report since hearing, reading, observing, or using it.
+Evidence age still measures from the actual observation.
 Legacy route reports and older saved review dates retain their original
 boundary-based interpretation until replaced. The interval player view shows
 the controlled person's remembered route reports and their dates.

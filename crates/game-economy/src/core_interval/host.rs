@@ -819,7 +819,10 @@ impl CoreHost {
         if let Some(owner) = &knowledge {
             let people: HashSet<_> = core.people.par_iter().map(|person| person.id).collect();
             let view = core.physical.view(core.physical.tick())?;
-            game_economy_knowledge::validate(Some(owner), &people, &view, core.physical.tick())?;
+            let now = game_economy_knowledge::StockTime::elapsed(
+                core.physical.tick(), core.simulated_millis(), core.physical.tick_millis(),
+            );
+            game_economy_knowledge::validate(Some(owner), &people, &view, now)?;
             if let Some(memory) = &owner.episodes {
                 memory.validate_at(core.simulated_millis())?;
             }

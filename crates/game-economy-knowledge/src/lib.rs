@@ -4,6 +4,7 @@ use game_families::Families;
 use game_knowledge::Observation;
 pub use game_knowledge::{
     Knowledge, Mind, Misreport, PersonReport, RecallTrace, Record, Reporting, Retention, SeenPerson,
+    StockTime,
 };
 pub use game_knowledge::episodes;
 use game_lots::{Place, View};
@@ -26,11 +27,11 @@ pub fn validate(
     owner: Option<&Knowledge>,
     people: &HashSet<u64>,
     view: &View,
-    tick: u64,
+    now: StockTime,
 ) -> Result<(), String> {
     if let Some(owner) = owner {
         owner
-            .validate(people, &regions(view), tick)
+            .validate_at(people, &regions(view), now)
             .map_err(str::to_owned)?;
     }
     Ok(())
@@ -38,11 +39,11 @@ pub fn validate(
 #[macro_export]
 macro_rules! validate_world {
     ($state:expr, $ids:expr, $view:expr, $physical:expr) => {
-        $crate::validate($state.knowledge.as_ref(), &$ids, &$view, $physical.tick())?
+        $crate::validate($state.knowledge.as_ref(), &$ids, &$view, $physical.tick().into())?
     };
 }
 pub struct ObservationAccess<'a> {
-    pub now: u64,
+    pub now: StockTime,
     pub not_at_stock: &'a [u64],
 }
 
@@ -121,7 +122,7 @@ pub fn advance(
         .flatten();
     let events = social.map_or(&[][..], |s| s.events.as_slice());
     owner
-        .prepare_validated_with_pressure(
+        .prepare_at(
             &observations,
             &regions(view),
             events,
@@ -206,7 +207,7 @@ pub fn discrepancies(
                 std::borrow::Cow::Owned(
                     old.records
                         .iter()
-                        .filter(|record| recall.remembers(old.person, record, now))
+                        .filter(|record| recall.remembers(old.person, record, now.into()))
                         .cloned()
                         .collect::<Vec<_>>(),
                 )
@@ -235,7 +236,7 @@ macro_rules! prepare_world {
                 $dynamics.as_ref().and_then(|d| d.social.as_ref()),
                 $world.opinions.as_ref(),
                 $crate::ObservationAccess {
-                    now: $world.tick(),
+                    now: $world.tick().into(),
                     not_at_stock: &$not_at_stock,
                 },
             )?
