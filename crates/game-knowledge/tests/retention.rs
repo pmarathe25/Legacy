@@ -1,4 +1,4 @@
-use game_knowledge::{Knowledge, Mind, Observation, RecallTrace, Record, Retention};
+use game_knowledge::{Knowledge, Mind, Observation, RecallTrace, Record, Reporting, Retention};
 use game_social::Encounter;
 use std::collections::HashSet;
 
@@ -9,7 +9,10 @@ fn mind(person: u64, records: Vec<Record>) -> Mind {
         people_seen: vec![],
         people_reporting: None,
         people_reports: vec![],
-        reporting: None,
+        reporting: Some(Reporting {
+            willing: true,
+            pressure_threshold: None,
+        }),
         misreport: None,
         records,
     }

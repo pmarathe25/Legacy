@@ -979,7 +979,7 @@ impl Knowledge {
                 };
                 if let Some(partner) = partner
                     && let Some(j) = mind_index(partner)
-                    && minds[j].reporting.is_none_or(|choice| {
+                    && minds[j].reporting.is_some_and(|choice| {
                         choice.willing
                             || choice.pressure_threshold.is_some_and(|threshold| {
                                 pressure(partner, mind.person) >= threshold
