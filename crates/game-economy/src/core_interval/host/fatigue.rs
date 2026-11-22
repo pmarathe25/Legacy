@@ -659,7 +659,7 @@ impl CoreHost {
             };
             return Ok(ElapsedProgress {
                 millis: advanced,
-                pastimes: self.settle_pastimes(),
+                pastimes: self.settle_pastimes(externally_busy),
                 agreement_expiries,
                 interrupted_preparation,
                 activity,
@@ -871,7 +871,7 @@ impl CoreHost {
         };
         Ok(ElapsedProgress {
             millis: advanced,
-            pastimes: self.settle_pastimes(),
+            pastimes: self.settle_pastimes(externally_busy),
             agreement_expiries,
             interrupted_preparation,
             activity,

@@ -2,6 +2,9 @@ use game_economy::core_interval::{CoreHost, CoreRunEvent};
 use game_lots::Place;
 use game_pastimes::Outcome;
 use std::path::Path;
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+static NEXT_FIXTURE: AtomicUsize = AtomicUsize::new(0);
 
 fn scene(quantum: u64) -> CoreHost {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
@@ -9,8 +12,9 @@ fn scene(quantum: u64) -> CoreHost {
         .unwrap()
         .replace("tick_millis = 3600000", &format!("tick_millis = {quantum}"));
     let path = std::env::temp_dir().join(format!(
-        "legacy-pastimes-{}-{quantum}.toml",
-        std::process::id()
+        "legacy-pastimes-{}-{}-{quantum}.toml",
+        std::process::id(),
+        NEXT_FIXTURE.fetch_add(1, Ordering::Relaxed)
     ));
     std::fs::write(&path, text).unwrap();
     let loaded = game_economy_cli::core_scenario(&path, &root.join("content"));
@@ -173,5 +177,77 @@ fn a_person_reuses_practice_across_activities_with_the_same_skill() {
     assert_eq!(
         run(1, 3700001, &[1800001]),
         run(6, 541003, &[121, 540000, 1259880])
+    );
+}
+
+#[test]
+fn hearing_a_local_performance_is_independent_and_can_change_future_practice() {
+    let simulate = |workers, quantum, chunks: &[u64], present| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut host = scene(quantum);
+                assert_eq!(
+                    host.advance_continuous(1_800_001, &[]).unwrap().failure,
+                    None
+                );
+                host.listen_for_controlled(4, 2, 20).unwrap();
+                host.present_performance_controlled(3, 2, present).unwrap();
+                host.start_pastime_controlled(3, 2).unwrap().unwrap();
+                let mut heard = Vec::new();
+                for &elapsed in chunks {
+                    let run = host.advance_continuous(elapsed, &[]).unwrap();
+                    assert_eq!(run.failure, None);
+                    heard.extend(
+                        run.events
+                            .into_iter()
+                            .filter_map(|event| {
+                                if let CoreRunEvent::HeardPerformances(receipts) = event {
+                                    Some(receipts)
+                                } else {
+                                    None
+                                }
+                            })
+                            .flatten(),
+                    );
+                    let save = serde_json::to_vec(&host.snapshot()).unwrap();
+                    host = CoreHost::resume(serde_json::from_slice(&save).unwrap()).unwrap();
+                }
+                assert_eq!(
+                    host.heard_performances_controlled(4).unwrap(),
+                    heard
+                        .iter()
+                        .filter(|row| row.listener == 4)
+                        .copied()
+                        .collect::<Vec<_>>()
+                );
+                let until_choice = 3_600_000 - host.core().simulated_millis() as u64;
+                let result = host.advance_continuous(until_choice, &[]).unwrap();
+                assert_eq!(result.failure, None);
+                let took_up_music = result.events.iter().any(|event| {
+                    matches!(
+                        event, CoreRunEvent::Pastimes(rows) if rows.iter().any(|row|
+                        row.person == 1 && row.activity == 2 && row.outcome == Outcome::Started)
+                    )
+                });
+                (heard, took_up_music)
+            })
+    };
+    let presented = simulate(1, 3_600_000, &[600_000], true);
+    assert_eq!(presented, simulate(6, 733_333, &[12, 599_987, 1], true));
+    assert_eq!(
+        presented
+            .0
+            .iter()
+            .map(|row| (row.listener, row.performer, row.activity, row.at_millis))
+            .collect::<Vec<_>>(),
+        [(1, 3, 2, 2_400_001), (4, 3, 2, 2_400_001)]
+    );
+    assert!(presented.1);
+    assert_eq!(
+        simulate(1, 3_600_000, &[600_000], false),
+        (Vec::new(), false)
     );
 }

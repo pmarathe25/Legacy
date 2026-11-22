@@ -30,6 +30,7 @@ fn independent_leisure_checks_one_local_choice_per_person_across_worker_counts()
                                     value: 2,
                                     recent_value: -2,
                                     practice_hour_value: 0,
+                                    heard_value: 0,
                                     completions: 0,
                                     last_completion: None,
                                 }],
@@ -37,6 +38,7 @@ fn independent_leisure_checks_one_local_choice_per_person_across_worker_counts()
                             .collect(),
                         active: Vec::new(),
                         training: Default::default(),
+                        culture: None,
                     };
                     let inspected = AtomicUsize::new(0);
                     let starts = owner.choose(

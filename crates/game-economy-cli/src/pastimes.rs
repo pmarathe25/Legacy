@@ -1,5 +1,5 @@
 //! Resolve chosen creative activities from the authored pastime catalogs.
-use game_pastimes::{Activity, Mind, Pastimes};
+use game_pastimes::{Activity, Culture, Mind, Pastimes};
 use game_production::{Amount, Good};
 use serde::Deserialize;
 use std::collections::{BTreeMap, HashMap};
@@ -12,6 +12,8 @@ pub(crate) struct Config {
     pub activities: BTreeMap<String, u32>,
     #[serde(default)]
     pub minds: Vec<Mind>,
+    #[serde(default)]
+    pub culture: Option<Culture>,
 }
 
 #[derive(Deserialize)]
@@ -104,11 +106,16 @@ impl Config {
         for mind in &mut minds {
             mind.interests.sort_unstable_by_key(|row| row.activity);
         }
+        let mut culture = self.culture.map(Box::new);
+        if let Some(rows) = &mut culture {
+            rows.sort();
+        }
         Ok(Pastimes {
             activities,
             minds,
             active: Vec::new(),
             training: Default::default(),
+            culture,
         })
     }
 }

@@ -84,6 +84,14 @@ minds = [
     { person = 35, interests = [{ activity = 3, value = 5, recent_value = -6 }] },
 ]
 
+[pastimes.culture]
+presentations = [{ person = 34, activity = 2 }]
+listeners = [
+    { person = 33, interests = [{ activity = 2, value = 3 }] },
+    { person = 36, interests = [{ activity = 2, value = 7 }] },
+    { person = 37, interests = [{ activity = 2, value = -4 }] },
+]
+
 [rules]
 hunger_rate = { units = 1, per_millis = 3600000 }
 meal_threshold = 48

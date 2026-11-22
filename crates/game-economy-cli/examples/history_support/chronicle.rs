@@ -283,6 +283,7 @@ impl Chronicle {
                 | "mechanical_assemblies"
                 | "soil_amendments"
                 | "pastimes"
+                | "heard_performances"
                 | "work_requests"
                 | "maturation"
                 | "recipe_learning"
@@ -477,6 +478,13 @@ fn classify(kind: &str, row: &Value) -> Option<Receipt> {
     }
     if kind == "written_works" {
         return Some(Receipt { label: "written works composed", actor: Some(row["person"].as_u64()?), other: None });
+    }
+    if kind == "heard_performances" {
+        return Some(Receipt {
+            label: "performances heard at their conclusion",
+            actor: Some(row["listener"].as_u64()?),
+            other: Some(row["performer"].as_u64()?),
+        });
     }
     if kind == "care" {
         let child = row["child"].as_u64()?;

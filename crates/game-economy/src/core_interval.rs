@@ -4,6 +4,7 @@
 //! Its caller supplies already admitted work rates. Nonperishable work can be
 //! published early, as can completed travel; periodic effects settle at the boundary.
 pub use game_economy_person::{HungerRate, RecoveryRate, StarvationRate};
+pub use game_pastimes::Heard as HeardPerformance;
 use game_economy_person::{
     Person, Rules,
     travel::{self, Travel},

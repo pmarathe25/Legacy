@@ -694,6 +694,7 @@ impl CoreSchedule {
 #[derive(Debug, PartialEq, Eq)]
 pub enum CoreRunEvent {
     Pastimes(Vec<game_pastimes::Event>),
+    HeardPerformances(Vec<HeardPerformance>),
     WrittenWorks(Vec<CoreWorkEdition>),
     AgreementExpiry {
         at_millis: u128,
@@ -850,6 +851,9 @@ impl CoreRun {
         }
         if !settled.conclusions.is_empty() {
             self.events.push(CoreRunEvent::MechanicalConclusions(settled.conclusions));
+        }
+        if !settled.hearings.is_empty() {
+            self.events.push(CoreRunEvent::HeardPerformances(settled.hearings));
         }
         activities_ended
     }
@@ -1304,7 +1308,7 @@ impl CoreHost {
                     }
                     handled = true;
                 }
-                if deadline.pastime && run.record_pastimes(self.settle_pastimes()) {
+                if deadline.pastime && run.record_pastimes(self.settle_pastimes(blocked)) {
                     handled = true;
                     rest_dirty = true;
                 }
