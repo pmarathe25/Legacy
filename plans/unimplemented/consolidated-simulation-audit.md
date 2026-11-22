@@ -69,6 +69,12 @@ to track rates, deadlines, and behavior under different advance sizes. The
   stock containers. A stockless region still supports travel and local
   observations. A missing input holder rejects only the affected start.
   Finished output remains in job custody when its destination is absent.
+- A save remembers the source pack identities, versions, dependencies, and
+  conversion settings for its object and recipe catalogs. Additional packs
+  can be loaded through the command line after resuming a save. The update
+  checks existing compiled definitions before publishing, preserves live
+  work and custody, and creates no stock endpoints. A test crafts an
+  actual newly loaded item and checks rejection of changed old definitions.
 - People with a cultivation choice profile can plant or harvest on their
   decision clock when the crop owner uses elapsed growth. Shared-field
   competition, actual seed-batch withdrawal, offspring custody, and the
@@ -255,7 +261,7 @@ reports.
 
 | Area | Follow-up and acceptance example |
 | --- | --- |
-| Content identity and compatibility | Namespaced objects and recipes accept stable runtime IDs. The loader validates pack versions and dependencies and rejects duplicate identities. Persist a catalog manifest with versioned saves and define how a resumed world accepts compatible catalog additions. |
+| Content identity and compatibility | Namespaced objects and recipes accept stable runtime IDs. The loader validates pack versions and dependencies and rejects duplicate identities. Saves with manifests accept compatible object and recipe additions. Additional content owners still need compatible overlay rules. |
 | Import and storage | The [catalog importer](../../crates/game-content-import/src/lib.rs) preserves authored capacities independently of recipe size. Explicit regional storage stays sparse as catalog goods are added. Older regions without explicit storage still use the scenario capacity for each good. Migrate more representative worlds and exercise additional transfer and production paths with sparse storage. |
 | Quantities and lot identity | Represent the physical capacity being consumed, such as volume, mass, or slots, where counting unlike raw quantities gives wrong results. Keep stable batch provenance and expiry for goods that also need individual identity. The [current lot model](../../crates/game-lot-model/src/lib.rs) rejects both combinations for identified items. Cover perishability, splitting, merges, transfer, rollback, and conservation. |
 | Production, knowledge, and work | Workshop recipes support several outputs or byproducts. Multiple recipes per character, specific recipe teaching, and practice across creative activities have interval slices. Extend choice and practice across work, and keep exact recipe knowledge distinct from skill and personal preferences. |
