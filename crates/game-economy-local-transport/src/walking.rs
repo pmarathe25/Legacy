@@ -714,6 +714,7 @@ mod tests {
                         id: 7,
                         region: 1,
                         name: "store".into(),
+                        structure: None,
                     }];
                     restored
                         .validate(&people, &stores, &HashSet::from([1]), 2)
