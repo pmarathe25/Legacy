@@ -4,6 +4,7 @@ use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::sync::Arc;
+mod care;
 mod confinement;
 mod encounter_trust;
 mod harm;
@@ -18,6 +19,7 @@ pub use confinement::{
 pub use opposed_action::{Experience as OpposedActionExperience, Outcome as OpposedActionOutcome};
 pub use personal_change::PersonalChange;
 pub use teaching::{Experience as TeachingExperience, Role as TeachingRole};
+pub use care::Experience as CareExperience;
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Opinions {
@@ -40,7 +42,7 @@ impl Clone for Opinions {
     }
 }
 pub use game_opinions_model::{
-    AffinityRules, ConfinementReaction, Confrontation, Event, FearDecay, MeetingTrust,
+    AffinityRules, CareReaction, ConfinementReaction, Confrontation, Event, FearDecay, MeetingTrust,
     ObligationDevelopment, Opinion, OpposedActionReaction, RelationshipCase, ReportReception,
     Rules, Sensitivity, SubjectiveReaction, TeachingReaction,
 };
@@ -131,6 +133,15 @@ impl Index<'_> {
     }
 }
 impl Opinions {
+    pub fn tracks_care_reactions(&self) -> bool {
+        self.sensitivities.par_iter().any(care::has_reaction)
+    }
+
+    /// Interpret actual care from the receiver's personal point of view.
+    pub fn learn_care(&mut self, experiences: &[CareExperience], tick: u64) {
+        care::apply(self, experiences, tick);
+    }
+
     pub fn tracks_social_affinity_weights(&self) -> bool {
         self.sensitivities.par_iter().any(|row| {
             row.social_affinity_weight.is_some()
@@ -436,6 +447,7 @@ impl Opinions {
                 affinity_work_failure: None,
                 opposed_action_reaction: None,
                 teaching_reaction: None,
+                care_reaction: None,
                 confinement_reaction: None,
                 relationship_cases: vec![],
                 obligation_development: Some(rule.clone()),

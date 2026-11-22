@@ -598,6 +598,8 @@ struct Sensitivity {
     affinity_work_failure: Option<i32>,
     opposed_action_reaction: Option<std::sync::Arc<game_opinions::OpposedActionReaction>>,
     teaching_reaction: Option<std::sync::Arc<game_opinions::TeachingReaction>>,
+    #[serde(default)]
+    care_reaction: Option<game_opinions::CareReaction>,
     obligation_development: Option<game_opinions::ObligationDevelopment>,
 }
 pub fn sensitivities(profiles: &[Profile]) -> Vec<game_opinions::Sensitivity> {
@@ -637,6 +639,7 @@ pub fn sensitivities(profiles: &[Profile]) -> Vec<game_opinions::Sensitivity> {
                     affinity_work_failure: rule.affinity_work_failure,
                     opposed_action_reaction: rule.opposed_action_reaction.clone(),
                     teaching_reaction: rule.teaching_reaction.clone(),
+                    care_reaction: rule.care_reaction,
                     confinement_reaction: None,
                     relationship_cases: Vec::new(),
                     obligation_development: rule.obligation_development.clone(),
