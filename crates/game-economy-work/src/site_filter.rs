@@ -215,6 +215,7 @@ mod tests {
             bindings: vec![],
         };
         let view = View {
+            region_ids: None,
             boundary: 0,
             revision: 0,
             containers: vec![ContainerView {

@@ -1,6 +1,7 @@
 //! Read-only physical quantities for compatibility with decision owners.
 use game_lot_model::{Container, Place, State};
 use rayon::prelude::*;
+use std::{borrow::Cow, sync::Arc};
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Balance {
     pub good: u32,
@@ -25,8 +26,24 @@ pub struct View {
     pub boundary: u64,
     pub revision: u64,
     pub containers: Vec<ContainerView>,
+    pub region_ids: Option<Arc<[u64]>>,
 }
 impl View {
+    pub fn regions(&self) -> Cow<'_, [u64]> {
+        if let Some(regions) = &self.region_ids {
+            return Cow::Borrowed(regions);
+        }
+        let mut regions = Vec::new();
+        for row in &self.containers {
+            if let Place::Stock { region, .. } = row.place
+                && regions.last() != Some(&region)
+            {
+                regions.push(region);
+            }
+        }
+        Cow::Owned(regions)
+    }
+
     pub fn container(&self, place: Place) -> Option<&ContainerView> {
         self.containers
             .binary_search_by_key(&place, |row| row.place)
@@ -110,6 +127,7 @@ fn prepare_rows(
         })
         .collect();
     Ok(View {
+        region_ids: None,
         boundary,
         revision: state.revision,
         containers,

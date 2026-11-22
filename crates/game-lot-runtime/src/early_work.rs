@@ -850,12 +850,19 @@ impl Runtime {
             .ok_or("physical work revision overflow")?;
         let starts: Vec<_> = requests.par_iter().map(|(start, _)| *start).collect();
         game_lot_work::validate_starts(&self.work, &starts)?;
+        let admitted = self.starts_with_storage(&starts);
+        let physical_starts = admitted.as_deref().unwrap_or(&starts);
+        if physical_starts.is_empty() {
+            let mut results = Vec::new();
+            Self::include_unavailable_starts(&mut results, &starts);
+            return Ok(results);
+        }
         #[cfg(feature = "profile")]
         {
             drop(phase);
             phase = game_diagnostics::span("physical.interval_start.plan");
         }
-        let flat = game_lot_work::start_flat(&starts, &self.recipes)?;
+        let flat = game_lot_work::start_flat(physical_starts, &self.recipes)?;
         #[cfg(feature = "profile")]
         {
             drop(phase);
@@ -871,7 +878,7 @@ impl Runtime {
         let (jobs, mut custody) = if let Some(fast) = fast {
             fast
         } else {
-            let plan = game_lot_work::start(&starts, &self.recipes)?;
+            let plan = game_lot_work::start(physical_starts, &self.recipes)?;
             let custody =
                 self.store
                     .prepare_with_empty(seed, &plan.transactions, plan.containers, false)?;
@@ -881,11 +888,14 @@ impl Runtime {
         if !spoiled.is_empty() {
             return Err("interval work cannot publish pending spoilage".into());
         }
-        let results: Vec<_> = custody
+        let mut results: Vec<_> = custody
             .transactions()
             .iter()
             .map(|row| (row.id, row.accepted))
             .collect();
+        if admitted.is_some() {
+            Self::include_unavailable_starts(&mut results, &starts);
+        }
         if results.iter().all(|row| !row.1) {
             return Ok(results);
         }

@@ -303,13 +303,7 @@ fn clone_state(state: &Combat) -> Combat {
 }
 
 fn regions(view: &View) -> HashSet<u64> {
-    view.containers
-        .par_iter()
-        .filter_map(|c| match c.place {
-            Place::Stock { region, .. } => Some(region),
-            _ => None,
-        })
-        .collect()
+    view.regions().iter().copied().collect()
 }
 impl Runtime {
     pub fn compile(

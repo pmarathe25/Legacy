@@ -74,6 +74,7 @@ fn personal_work_decisions_use_expiry_aware_projection_and_physical_admission() 
         tick_millis: 86_400_000,
         work_rate_period_millis: None,
         work: vec![],
+        region_ids: None,
         work_interval: None,
     })
     .unwrap();
@@ -175,6 +176,7 @@ fn fear_can_motivate_cooperation_but_only_actual_transfer_resolves_the_offer() {
         tick_millis: 86_400_000,
         work_rate_period_millis: None,
         work: vec![],
+        region_ids: None,
         work_interval: None,
     };
     let mut runtime = Runtime::compile(snapshot.clone()).unwrap();
@@ -336,6 +338,7 @@ fn promises_do_not_compel_delivery_but_fear_can_change_a_personal_choice() {
         tick_millis: 86_400_000,
         work_rate_period_millis: None,
         work: vec![],
+        region_ids: None,
         work_interval: None,
     };
     let mut runtime = Runtime::compile(snapshot.clone()).unwrap();
@@ -497,6 +500,7 @@ fn many_individual_promises_can_deliver_to_one_busy_recipient() {
         tick_millis: 86_400_000,
         work_rate_period_millis: None,
         work: vec![],
+        region_ids: None,
         work_interval: None,
     };
     let agreements = Agreements {
@@ -624,6 +628,7 @@ fn concentrated_promise_delivery_benchmark() {
         tick_millis: 86_400_000,
         work_rate_period_millis: None,
         work: vec![],
+        region_ids: None,
         work_interval: None,
     };
     let agreements = Agreements {

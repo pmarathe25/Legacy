@@ -105,6 +105,7 @@ fn runtime(capacity: u64, stock: u64) -> Runtime {
         tick_millis: 1000,
         work_rate_period_millis: None,
         work: vec![],
+        region_ids: None,
         work_interval: None,
     })
     .unwrap()

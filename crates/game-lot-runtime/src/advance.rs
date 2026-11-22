@@ -602,6 +602,8 @@ impl Runtime {
         let combined = game_lot_content::combine_growth(external, growth.harvest, &animal_yield);
         let external = combined.as_deref().unwrap_or(external);
         game_lot_work::validate_starts(&self.work, starts)?;
+        let admitted = self.starts_with_storage(starts);
+        let starts = admitted.as_deref().unwrap_or(starts);
         let start_plan = game_lot_work::start(starts, &self.recipes)?;
         let mut rates = rates.to_vec();
         rates.par_sort_unstable_by_key(|row| row.0);
@@ -759,13 +761,22 @@ impl Runtime {
             .filter(|row| row.phase == Phase::Returning)
             .map(|row| (&row.job, work_custody(Place::JobInput(row.job.id))))
             .collect();
-        let returned = game_lot_work::cancel(&returning, lot_instant)?;
+        let mut returned = game_lot_work::cancel(&returning, lot_instant)?;
         let waiting: Vec<_> = next
             .par_iter()
             .filter(|row| row.phase == Phase::Waiting)
             .map(|row| (&row.job, work_custody(Place::JobOutput(row.job.id))))
             .collect();
-        let delivered = game_lot_work::deliver(&waiting, lot_instant)?;
+        let mut delivered = game_lot_work::deliver(&waiting, lot_instant)?;
+        if !self.complete_stock {
+            let has_destinations = |row: &game_lots::Transaction| {
+                row.movements.iter().all(|movement| {
+                    movement.to.is_some_and(|place| self.store.container(place).is_some())
+                })
+            };
+            returned.returns.retain(has_destinations);
+            delivered.returns.retain(has_destinations);
+        }
         #[cfg(feature = "profile")]
         {
             drop(profile_phase);

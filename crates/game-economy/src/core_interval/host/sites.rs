@@ -32,13 +32,7 @@ impl CoreSites {
         let people: HashSet<_> = core.people.par_iter().map(|person| person.id).collect();
         let view = core.physical.view(core.physical.tick())?;
         let regions: HashSet<_> = view
-            .containers
-            .par_iter()
-            .filter_map(|row| match row.place {
-                game_lots::Place::Stock { region, .. } => Some(region),
-                _ => None,
-            })
-            .collect();
+            .regions().iter().copied().collect();
         self.facilities
             .validate(core.physical.work(), &recipes, &regions)?;
         if self.maintenance.as_ref().is_some_and(|owner| {

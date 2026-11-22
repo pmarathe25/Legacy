@@ -15,13 +15,7 @@ use rayon::prelude::*;
 use std::collections::{HashMap, HashSet};
 
 fn regions(view: &View) -> HashSet<u64> {
-    view.containers
-        .par_iter()
-        .filter_map(|c| match c.place {
-            Place::Stock { region, .. } => Some(region),
-            _ => None,
-        })
-        .collect()
+    view.regions().iter().copied().collect()
 }
 pub fn validate(
     owner: Option<&Knowledge>,
@@ -74,6 +68,7 @@ pub fn advance(
         .filter(|g| g.food.is_some())
         .map(|g| g.id)
         .collect();
+    let known_regions = regions(view);
     let stocks: Vec<_> = view
         .containers
         .par_iter()
@@ -110,25 +105,30 @@ pub fn advance(
                 .region
                 .filter(|_| access.not_at_stock.binary_search(&p.id).is_err())
                 .map(|region| {
-                    food.binary_search_by_key(&region, |r| r.0)
-                        .ok()
-                        .map(|i| {
-                            let (_, total, group) = food[i];
-                            let amount = survey.map_or(total, |survey| {
-                                let amount = if survey.goods.is_empty() {
-                                    total
-                                } else {
-                                    survey.goods.iter().filter_map(|good| {
-                                        let index = group.binary_search_by_key(good, |row| row.1).ok()?;
-                                        Some(u128::from(group[index].2))
-                                    }).sum()
-                                };
-                                let step = u128::from(survey.count_step.get());
-                                amount / step * step
-                            });
-                            (region, amount.min(u128::from(u32::MAX)) as u32)
-                        })
-                        .ok_or("unknown observation region")
+                    if !known_regions.contains(&region) {
+                        return Err("unknown observation region");
+                    }
+                    let Ok(index) = food.binary_search_by_key(&region, |row| row.0) else {
+                        return Ok((region, 0));
+                    };
+                    let (_, total, group) = food[index];
+                    let amount = survey.map_or(total, |survey| {
+                        let amount = if survey.goods.is_empty() {
+                            total
+                        } else {
+                            survey
+                                .goods
+                                .iter()
+                                .filter_map(|good| {
+                                    let at = group.binary_search_by_key(good, |row| row.1).ok()?;
+                                    Some(u128::from(group[at].2))
+                                })
+                                .sum()
+                        };
+                        let step = u128::from(survey.count_step.get());
+                        amount / step * step
+                    });
+                    Ok((region, amount.min(u128::from(u32::MAX)) as u32))
                 })
                 .transpose()?;
             Ok(Observation {
@@ -157,7 +157,7 @@ pub fn advance(
     owner
         .prepare_at(
             &observations,
-            &regions(view),
+            &known_regions,
             events,
             access.now,
             |receiver, sender| {

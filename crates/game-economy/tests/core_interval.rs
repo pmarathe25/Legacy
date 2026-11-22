@@ -949,6 +949,7 @@ fn fixture() -> CoreSnapshot {
         tick_millis: 1000,
         work_rate_period_millis: None,
         work: vec![],
+        region_ids: None,
         work_interval: None,
     })
     .unwrap();

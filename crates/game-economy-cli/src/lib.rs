@@ -1025,6 +1025,8 @@ struct Region {
     id: u64,
     #[serde(default)]
     stock: BTreeMap<String, u64>,
+    /// Explicit capacities enable a sparse regional inventory, including no storage.
+    storage: Option<BTreeMap<String, u64>>,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -1977,14 +1979,7 @@ fn build_scenario(
         goods: vec![],
         recipes: vec![],
         recipe_categories: vec![],
-        inventories: scenario
-            .regions
-            .iter()
-            .map(|r| Inventory {
-                region: r.id,
-                stocks: vec![],
-            })
-            .collect(),
+        inventories: Vec::new(),
         jobs: vec![],
         events: vec![],
     };
@@ -2452,19 +2447,33 @@ fn build_scenario(
         owner.work_offering.extend(offering);
     }
     let dynamics = game_economy_dynamics::configure_remedies!(scenario, goods);
-    for (inventory, region) in production.inventories.iter_mut().zip(&scenario.regions) {
-        for (name, quantity) in &region.stock {
-            let good = *goods
-                .get(name.as_str())
-                .ok_or_else(|| format!("unknown good {name}"))?;
-            let stock = inventory
-                .stocks
-                .iter_mut()
-                .find(|row| row.good == good)
-                .ok_or("missing stock")?;
-            stock.quantity = *quantity;
+    production.inventories = scenario.regions.iter().map(|region| {
+        let resolve = |name: &str| goods.get(name).copied()
+            .ok_or_else(|| format!("unknown stock good {name}"));
+        let mut stocks: BTreeMap<_, _> = if let Some(storage) = &region.storage {
+            storage.iter().map(|(name, &capacity)| {
+                let good = resolve(name)?;
+                if capacity == 0 {
+                    return Err(format!("region {} storage capacity for {name} must be positive", region.id));
+                }
+                Ok((good, game_production::Stock { good, quantity: 0, capacity }))
+            }).collect::<Result<_, String>>()?
+        } else {
+            goods.values().map(|&good| (good, game_production::Stock {
+                good, quantity: 0, capacity: scenario.stock_capacity
+            })).collect()
+        };
+        for (name, &quantity) in &region.stock {
+            let good = resolve(name)?;
+            let stock = stocks.get_mut(&good)
+                .ok_or_else(|| format!("region {} has no storage for {name}", region.id))?;
+            if quantity > stock.capacity {
+                return Err(format!("region {} holds more {name} than its capacity", region.id));
+            }
+            stock.quantity = quantity;
         }
-    }
+        Ok(Inventory { region: region.id, stocks: stocks.into_values().collect() })
+    }).collect::<Result<_, String>>()?;
     let catalog = if scenario.elapsed_spoilage {
         Catalog::from_elapsed_millis(&production.goods)?
     } else {
@@ -3080,6 +3089,7 @@ fn build_scenario(
     Ok(State {
         seed: scenario.seed,
         physical: Snapshot {
+            region_ids: Some(scenario.regions.iter().map(|region| region.id).collect()),
             custody,
             goods: production.goods,
             recipes: production.recipes,

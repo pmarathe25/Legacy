@@ -7,7 +7,7 @@ pub use game_guardians::{Guardian, Guardians, ReleaseDecision};
 pub use game_lineage::{
     Invocation, InvocationRules, InvocationWarning, InvocationWarningKind, Life, Lineage,
 };
-use game_lots::{Place, View};
+use game_lots::View;
 use game_transport::Route;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -128,17 +128,7 @@ pub fn validate(
         guardians.validate(people, campaign.lineage.current)?;
     }
     if let Some(guardians) = &campaign.guardians {
-        let mut regions: Vec<_> = view
-            .containers
-            .par_iter()
-            .filter_map(|c| match c.place {
-                Place::Stock { region, .. } => Some(region),
-                _ => None,
-            })
-            .collect();
-        regions.par_sort_unstable();
-        regions.dedup();
-        guardians.validate(&regions, &routes(travel)?)?;
+        guardians.validate(&view.regions(), &routes(travel)?)?;
     }
     Ok(())
 }

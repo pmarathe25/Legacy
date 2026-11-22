@@ -14,13 +14,7 @@ pub fn validate(
         return Ok(());
     };
     let regions: HashSet<_> = view
-        .containers
-        .par_iter()
-        .filter_map(|row| match row.place {
-            Place::Stock { region, .. } => Some(region),
-            _ => None,
-        })
-        .collect();
+        .regions().iter().copied().collect();
     environment.validate(&regions)?;
     if environment.regions.iter().any(|h| {
         h.shelter_good.is_some_and(|good| {

@@ -342,13 +342,7 @@ impl CoreInterval {
             )?;
         } else {
             let regions: HashSet<_> = view
-                .containers
-                .par_iter()
-                .filter_map(|container| match container.place {
-                    game_lots::Place::Stock { region, .. } => Some(region),
-                    _ => None,
-                })
-                .collect();
+                .regions().iter().copied().collect();
             if people
                 .par_iter()
                 .any(|p| p.region.is_none_or(|region| !regions.contains(&region)))
