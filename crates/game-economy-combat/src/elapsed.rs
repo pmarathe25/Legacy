@@ -718,6 +718,7 @@ fn prepare_one(
                 Choice::Retreat
             } else {
                 match preference.response {
+                    Response::Wait => Choice::Wait,
                     Response::Fight => opponent.map_or(row.choice, |other| Choice::Attack {
                         target: other.person,
                         pursue: preference.pursue,

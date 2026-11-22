@@ -37,6 +37,7 @@ pub enum Order {
     AttackSite {
         site: u64,
     },
+    Wait,
     Defend,
     Retreat,
 }
@@ -486,7 +487,7 @@ pub fn finish(conflict: &mut Conflict, alive: impl Fn(u64) -> bool + Sync) {
                     if target_fighter.is_none_or(|fighter| {
                         matches!(fighter.order, Order::Retreat) || !alive(target)
                     }) {
-                        survivor.order = Order::Defend;
+                        survivor.order = Order::Wait;
                     }
                 }
                 survivor

@@ -23,9 +23,19 @@ use std::collections::HashSet;
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Response {
+    Wait,
     Defend,
     Fight,
     Retreat,
+}
+
+fn opening_order(response: Option<&Response>, opponent: u64, immobilized: bool) -> Order {
+    match response {
+        Some(Response::Defend) => Order::Defend,
+        Some(Response::Fight) => Order::Attack { target: opponent },
+        Some(Response::Retreat) if !immobilized => Order::Retreat,
+        _ => Order::Wait,
+    }
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -722,19 +732,14 @@ impl Runtime {
             .state
             .reactions
             .iter()
-            .find(|r| r.person == target)
-            .map_or(&Response::Defend, |r| &r.response);
+            .find(|r| r.person == target && !victim.controlled)
+            .map(|r| &r.response);
         let immobilized = self
             .state
             .injuries
             .as_ref()
             .is_some_and(|injuries| injuries.immobilized(target));
-        let target_order = match response {
-            Response::Defend => Order::Defend,
-            Response::Fight => Order::Attack { target: actor },
-            Response::Retreat if immobilized => Order::Defend,
-            Response::Retreat => Order::Retreat,
-        };
+        let target_order = opening_order(response, actor, immobilized);
         let mut state = self.state.clone();
         let id = state.conflict.next_id;
         let snapshots: Vec<_> = people
