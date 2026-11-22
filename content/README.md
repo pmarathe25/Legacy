@@ -16,4 +16,11 @@ initial quantity must fit its declared storage. A region with
 work remains in job custody. Older region tables without a `storage` entry
 use the scenario's `stock_capacity` for catalog goods.
 
+`cultivation.seed_genetics.pollen_corridors` can link cultivated regions.
+List corridors in destination and source order, using `source`,
+`destination`, and `strength` from 1 to 1000. A linked donor contributes
+pollen from its ripe fields of the same crop. Local pollen has weight 1000
+per seed unit. The [pollen corridor scenario](scenarios/economy-pollen-corridor.toml)
+uses a one-way link between two regions.
+
 Other content directories are retained as source material for future features; their presence does not mean the current engine loads or implements them.
