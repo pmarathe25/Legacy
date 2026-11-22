@@ -483,6 +483,7 @@ fn namesake_choice_uses_the_speakers_subjective_affinity_and_confusion() {
         act_on_tie: false,
         novel_value: Some(5),
         confusion_weight: 10,
+        near_confusion_weight: 0,
         namesakes: vec![Namesake {
             person: 3,
             value: 0,
@@ -538,7 +539,7 @@ fn namesake_choice_uses_the_speakers_subjective_affinity_and_confusion() {
     policy.confusion_weight = -200;
     assert_eq!(
         refuses
-            .prepare_grounded_with_affinity(&[meeting], 7, 1, &|_, _| -100)
+            .prepare_grounded_with_affinity(std::slice::from_ref(&meeting), 7, 1, &|_, _| -100)
             .unwrap()
             .events[0]
             .sounds,
@@ -546,6 +547,34 @@ fn namesake_choice_uses_the_speakers_subjective_affinity_and_confusion() {
     );
     assert!(liked.validate(&HashSet::from([1, 2, 3]), 1).is_ok());
     assert!(liked.validate(&HashSet::from([1, 2]), 1).is_err());
+    let mut similar = state;
+    similar.minds[0].words.extend([
+        Word {
+            meaning: Meaning::Person(4),
+            sounds: vec![2, 0],
+        },
+        Word {
+            meaning: Meaning::Person(5),
+            sounds: vec![2],
+        },
+    ]);
+    let naming = similar.minds[0].naming.as_mut().unwrap();
+    naming.novel_value = None;
+    naming.near_confusion_weight = 4;
+    naming.namesakes[0].value = 15;
+    assert!(
+        similar
+            .prepare_grounded_with_affinity(std::slice::from_ref(&meeting), 7, 1, &|_, _| 0)
+            .unwrap()
+            .events
+            .is_empty()
+    );
+    let attached = similar
+        .prepare_grounded_with_affinity(&[meeting], 7, 1, &|a, b| {
+            if (a, b) == (1, 3) { 5 } else { 0 }
+        })
+        .unwrap();
+    assert_eq!(attached.events[0].sounds, [2, 2]);
     assert_eq!(
         serde_json::from_str::<Language>(&serde_json::to_string(&liked).unwrap()).unwrap(),
         liked

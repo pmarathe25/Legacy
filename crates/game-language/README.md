@@ -74,10 +74,12 @@ and share it; the listener can independently refuse or adopt the form. These
 are personal associations, not mandatory or globally unique names. An optional
 personal naming policy can value novel forms or reuse a known person's form,
 weighted by the speaker's directed affinity and their own signed tolerance for
-exact-form confusion. A speaker may instead decline to coin a form. Namesake
+exact-form confusion. The optional `near_confusion_weight` applies separately
+to familiar names one sound away by insertion, removal, or substitution.
+A speaker may instead decline to coin a form. Namesake
 forms must be in that speaker's vocabulary and within their phoneme inventory.
 See `content/scenarios/economy-core-namesake.toml` for an authored example.
-Naming absent people, similarity beyond exact forms, and transmission
+Naming absent people and transmission
 of general factual claims remain incomplete.
 
 A participant who previously noticed or personally remembers another

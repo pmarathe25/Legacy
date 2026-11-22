@@ -1,6 +1,7 @@
 //! Subjective choice among a new form and familiar personal names.
 use super::{Meaning, Mind};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -24,8 +25,98 @@ pub struct NamingPolicy {
     /// Signed cost for each known person with exactly the same form.
     #[serde(default)]
     pub confusion_weight: i32,
+    /// Signed cost for each known name one sound away.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub near_confusion_weight: i32,
     #[serde(default)]
     pub namesakes: Vec<Namesake>,
+}
+
+fn is_zero(value: &i32) -> bool {
+    *value == 0
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+struct Form {
+    sounds: u128,
+    length: usize,
+}
+
+impl Form {
+    fn new(sounds: &[u8]) -> Self {
+        let mut packed = [0; 16];
+        packed[..sounds.len()].copy_from_slice(sounds);
+        Self {
+            sounds: u128::from_le_bytes(packed),
+            length: sounds.len(),
+        }
+    }
+
+    fn without(self, position: usize) -> Self {
+        let shift = position as u32 * 8;
+        let prefix = self.sounds & ((1u128 << shift) - 1);
+        let suffix = self.sounds.checked_shr(shift + 8).unwrap_or(0) << shift;
+        Self {
+            sounds: prefix | suffix,
+            length: self.length - 1,
+        }
+    }
+}
+
+#[derive(Default)]
+struct PersonalNames {
+    exact: HashMap<Form, usize>,
+    substitutions: HashMap<(usize, Form), usize>,
+    longer: HashMap<Form, usize>,
+}
+
+impl PersonalNames {
+    fn from_words(mind: &Mind, near: bool) -> Self {
+        let mut names = Self::default();
+        for word in mind
+            .words
+            .iter()
+            .filter(|word| matches!(word.meaning, Meaning::Person(_)))
+        {
+            let form = Form::new(&word.sounds);
+            *names.exact.entry(form).or_default() += 1;
+            if near {
+                for (position, &sound) in word.sounds.iter().enumerate() {
+                    let shorter = form.without(position);
+                    *names.substitutions.entry((position, shorter)).or_default() += 1;
+                    // Deleting either of two adjacent identical sounds produces the same form.
+                    if position == 0 || word.sounds[position - 1] != sound {
+                        *names.longer.entry(shorter).or_default() += 1;
+                    }
+                }
+            }
+        }
+        names
+    }
+
+    fn confusion(&self, sounds: &[u8], policy: &NamingPolicy) -> i128 {
+        let form = Form::new(sounds);
+        let exact = self.exact.get(&form).copied().unwrap_or(0) as i128;
+        if policy.near_confusion_weight == 0 {
+            return exact * i128::from(policy.confusion_weight);
+        }
+        let mut near = self.longer.get(&form).copied().unwrap_or(0) as i128;
+        for (position, &sound) in sounds.iter().enumerate() {
+            let shorter = form.without(position);
+            // The substitution index also contains every exact match, once per position.
+            near += self
+                .substitutions
+                .get(&(position, shorter))
+                .copied()
+                .unwrap_or(0) as i128
+                - exact;
+            if position == 0 || sounds[position - 1] != sound {
+                near += self.exact.get(&shorter).copied().unwrap_or(0) as i128;
+            }
+        }
+        exact * i128::from(policy.confusion_weight)
+            + near * i128::from(policy.near_confusion_weight)
+    }
 }
 
 impl NamingPolicy {
@@ -48,14 +139,13 @@ pub(crate) fn choose<F: Fn(u64, u64) -> i32 + Sync>(
     tick: u64,
 ) -> Option<Vec<u8>> {
     let policy = mind.naming.as_ref()?;
-    let confusion = |sounds: &[u8]| {
-        mind.words
-            .iter()
-            .filter(|word| matches!(word.meaning, Meaning::Person(_)) && word.sounds == sounds)
-            .count() as i128
-    };
+    let names = (policy.confusion_weight != 0 || policy.near_confusion_weight != 0)
+        .then(|| PersonalNames::from_words(mind, policy.near_confusion_weight != 0));
     let score = |value: i128, sounds: &[u8]| {
-        value - i128::from(policy.confusion_weight) * confusion(sounds)
+        value
+            - names
+                .as_ref()
+                .map_or(0, |names| names.confusion(sounds, policy))
     };
     let mut candidates: Vec<_> = policy
         .novel_value
@@ -105,4 +195,43 @@ pub(crate) fn choose<F: Fn(u64, u64) -> i32 + Sync>(
         })
         .max()
         .map(|row| row.3)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::Word;
+
+    #[test]
+    fn similar_forms_count_people_once_and_keep_exact_matches_separate() {
+        let mut mind = Mind::fresh(1);
+        mind.words = [
+            vec![0, 0],
+            vec![0],
+            vec![0, 0, 0],
+            vec![0, 1],
+            vec![1, 1],
+            vec![0, 0],
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(index, sounds)| Word {
+            meaning: Meaning::Person(index as u64 + 2),
+            sounds,
+        })
+        .collect();
+        let names = PersonalNames::from_words(&mind, true);
+        let policy = NamingPolicy {
+            idle: 0,
+            act_on_tie: false,
+            novel_value: None,
+            confusion_weight: 10,
+            near_confusion_weight: 5,
+            namesakes: Vec::new(),
+        };
+        assert_eq!(names.confusion(&[0, 0], &policy), 35);
+        assert_eq!(names.confusion(&[0], &policy), 25);
+        let long = [255; 16];
+        assert_eq!(Form::new(&long).without(15), Form::new(&long[..15]));
+    }
 }
