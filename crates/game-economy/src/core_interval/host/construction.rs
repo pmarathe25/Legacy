@@ -199,6 +199,9 @@ impl CoreHost {
             maintenance.enroll(&sites.facilities);
         }
         let published: Vec<_> = next.events.par_iter().cloned().collect();
+        let (physical, storage) = self.stage_constructed_stores(
+            physical, owner, &sites.facilities, &published,
+        )?;
         if let Some(claims) = &mut claims {
             let built: Vec<_> = published
                 .par_iter()
@@ -226,6 +229,9 @@ impl CoreHost {
         }
         self.claims = claims;
         self.sites = Some(sites);
+        if let Some(storage) = storage {
+            self.local_transport = Some(storage);
+        }
         self.enroll_built_barriers(&published);
         self.construction = Some(next);
         self.work_checked_revision = None;

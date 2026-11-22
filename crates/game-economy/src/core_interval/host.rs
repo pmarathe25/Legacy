@@ -13,6 +13,7 @@ mod claims;
 mod confinement;
 mod conflict;
 mod construction;
+mod construction_storage;
 mod dependent_care;
 mod dreams;
 mod expedition_invitations;
@@ -80,7 +81,7 @@ pub use game_economy_expeditions::elapsed::{
 };
 pub use giving::CorePracticeWorkEvidence;
 pub use hauling::CoreHaulingResults;
-pub use local_transport::CoreLocalTransportResults;
+pub use local_transport::{CoreLocalTransportResults, NearbyStore};
 pub use market::CoreMarketResults;
 pub use mechanics::{
     CoreMechanics, CoreSharedApparatus, MechanicalCapability, MechanicalCommunication, MechanicalDesignInput,
@@ -1428,6 +1429,7 @@ impl CoreHost {
                     .regions().iter().copied().collect();
                 walking.validate(&core.people, &owner.stores, &regions, core.physical.tick())?;
             }
+            construction_storage::validate_stores(owner, sites.as_ref(), &core.physical)?;
         }
         if let Some(owner) = &mut writing {
             if !owner.compositions.is_empty()
@@ -1571,6 +1573,12 @@ impl CoreHost {
         if let Some(owner) = &mut construction {
             if owner.maintenance.is_some() {
                 return Err("interval maintenance belongs with the physical sites".into());
+            }
+            if owner.blueprints.par_iter().any(|row| row.storage.is_some())
+                && (core.physical.elapsed_expiry_time().is_none()
+                    || core.physical.ambient_storage_celsius().is_none())
+            {
+                return Err("cooled construction requires elapsed storage and a climate".into());
             }
             owner.normalize();
             let facilities = &sites
@@ -2060,14 +2068,27 @@ impl CoreHost {
     }
     /// A worker may independently stop work; inputs return at the boundary.
     pub fn abandon_work(&mut self, requests: &[(u64, u64)]) -> Result<(), String> {
+        self.abandon_work_with_exposure(requests, None)
+    }
+
+    fn abandon_work_with_exposure(
+        &mut self,
+        requests: &[(u64, u64)],
+        exposure: Option<game_lot_runtime::StorageExposureDraft>,
+    ) -> Result<(), String> {
         let tick = self.core.physical.tick();
         let offset = self.core.elapsed_millis().ok_or("no physical interval")?;
+        if requests.is_empty() && exposure.is_some() {
+            self.core.abandon_work_with_exposure(tick, offset, requests, exposure)?;
+            self.work_checked_revision = None;
+            return Ok(());
+        }
         let stopped: Vec<_> = requests.par_iter().map(|&(job, _)| (job, false)).collect();
         let next = self.stage_request_resolution(&stopped, tick, &self.core.people, false);
         let mut ended: Vec<_> = requests.par_iter().map(|&(job, _)| job).collect();
         ended.par_sort_unstable();
         let sites = self.stage_sites(&[], &ended, false);
-        self.core.abandon_work(tick, offset, requests)?;
+        self.core.abandon_work_with_exposure(tick, offset, requests, exposure)?;
         self.finished_shared_jobs(&ended, &[]);
         self.prune_successions();
         self.record_early_work_outcomes(&[], &ended);

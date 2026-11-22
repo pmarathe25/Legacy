@@ -33,6 +33,13 @@ cooling, favor warmth, or keep carrying the good. Storage capacity is
 arbitrated by the physical lot owner, and accepted transfers keep the
 lot's remaining age while changing how fast it ages.
 
+A construction blueprint can specify a `storage` table with `capacity`,
+`celsius`, and `walk_millis`. An accepted build opens a separate local
+holder with that capacity and temperature. With local walking enabled,
+people can travel between the new store and regional stock in the exact
+authored duration. Destroying the site exposes the remaining goods to
+ambient conditions and retains the holder, its contents, and its paths.
+
 Optional individual goal-fetching preferences allow people to seek missing inputs for their own active work goals in observed stores in their current region. They carry and deposit the actual goods across separate boundaries, can stop at any time, and do not gain knowledge of remote stores. Existing direct work choices take precedence.
 
 When personal input planning is enabled, the search also follows bounded recipe dependencies to locate supplies for intermediate work. Cycles and the number of alternatives explored per person are bounded, and available alternatives rotate between reviews.

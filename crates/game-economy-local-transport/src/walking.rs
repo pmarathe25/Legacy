@@ -5,19 +5,30 @@ use game_lots::{Place, View};
 use game_opinions::Opinions;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
+use std::num::NonZeroU64;
 use std::{borrow::Cow, collections::HashSet, sync::Arc};
 #[path = "elapsed_walking.rs"]
 mod elapsed;
 pub use elapsed::{Clock, Progress};
 
-/// A directed, data-defined walking time in simulation boundaries.
+/// A directed walking route with an explicit elapsed duration or an older distance unit.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Route {
     pub region: u64,
     pub from: Endpoint,
     pub to: Endpoint,
+    #[serde(default)]
     pub ticks: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration_millis: Option<NonZeroU64>,
+}
+impl Route {
+    fn duration(&self, clock: &Clock) -> Option<u64> {
+        self.duration_millis
+            .map(NonZeroU64::get)
+            .or_else(|| self.ticks.checked_mul(clock.unit_millis))
+    }
 }
 
 /// A person in transit has not yet reached either endpoint.
@@ -153,13 +164,14 @@ impl Walking {
             .any(|p| (p[0].region, p[0].from, p[0].to) >= (p[1].region, p[1].from, p[1].to))
             || self.routes.par_iter().any(|r| {
                 r.from == r.to
-                    || r.ticks == 0
+                    || (r.ticks == 0) != r.duration_millis.is_some()
+                    || (r.duration_millis.is_some() && self.elapsed.is_none())
                     || !endpoint(r.region, r.from)
                     || !endpoint(r.region, r.to)
                     || self
                         .elapsed
                         .as_ref()
-                        .is_some_and(|clock| r.ticks.checked_mul(clock.unit_millis).is_none())
+                        .is_some_and(|clock| r.duration(clock).is_none())
             })
             || self
                 .preferences
@@ -198,9 +210,7 @@ impl Walking {
                         } => self.route(region, from, to).is_none_or(|r| {
                             remaining == 0
                                 || self.elapsed.as_ref().map_or(remaining >= r.ticks, |clock| {
-                                    r.ticks
-                                        .checked_mul(clock.unit_millis)
-                                        .is_none_or(|duration| remaining > duration)
+                                    r.duration(clock).is_none_or(|duration| remaining > duration)
                                 })
                         }),
                     }
@@ -327,12 +337,9 @@ impl Walking {
                                         region,
                                         from: endpoint,
                                         to: route.to,
-                                        remaining: route.ticks
-                                            * self
-                                                .elapsed
-                                                .as_ref()
-                                                .expect("elapsed walk")
-                                                .unit_millis,
+                                        remaining: route
+                                            .duration(self.elapsed.as_ref().expect("elapsed walk"))
+                                            .expect("validated walk duration"),
                                     },
                                     Outcome::Progressed,
                                 ),
@@ -665,6 +672,7 @@ mod tests {
                 from: Endpoint::Stock,
                 to: Endpoint::Store { id: 7 },
                 ticks: 3,
+                duration_millis: None,
             }]
             .into(),
             positions: vec![],

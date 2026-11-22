@@ -36,6 +36,7 @@ pub(super) struct CoreTacticalSiteDraft {
     maintenance: Maintenance,
     destroyed: HashSet<u64>,
     interrupted: Vec<(u64, u64)>,
+    exposure: Option<game_lot_runtime::StorageExposureDraft>,
 }
 
 impl CoreHost {
@@ -107,10 +108,12 @@ impl CoreHost {
             .collect();
         interrupted.par_sort_unstable();
         interrupted.dedup();
+        let exposure = self.stage_storage_exposure(&destroyed)?;
         Ok(Some(CoreTacticalSiteDraft {
             maintenance,
             destroyed,
             interrupted,
+            exposure,
         }))
     }
 
@@ -123,9 +126,10 @@ impl CoreHost {
             maintenance,
             destroyed,
             interrupted,
+            exposure,
         } = draft;
-        if !interrupted.is_empty() {
-            self.abandon_work(&interrupted)?;
+        if !interrupted.is_empty() || exposure.is_some() {
+            self.abandon_work_with_exposure(&interrupted, exposure)?;
         }
         if destroyed.is_empty() {
             self.sites.as_mut().expect("site owner checked").maintenance = Some(maintenance);

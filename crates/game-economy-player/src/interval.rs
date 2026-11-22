@@ -2,7 +2,7 @@
 use game_economy::core_interval::{
     CoreHost, CoreMarkInscription, CoreMarkObservation, CorePlayerView, CorePromiseReply,
     CoreWorkInscription, CoreWorkObservation, EpisodeCue, MechanicalApparatus, MechanicalComparison,
-    MechanicalExperiment, MechanicalObservation, PastimePractice, RecalledEpisode,
+    MechanicalExperiment, MechanicalObservation, NearbyStore, PastimePractice, RecalledEpisode,
     WoundTreatment,
 };
 
@@ -283,6 +283,20 @@ impl<'a> Player<'a> {
 
     pub fn demolish(&mut self, site: u64) -> Result<bool, String> {
         self.host.demolish_controlled_site(self.person, site)
+    }
+
+    pub fn stores(&self) -> Result<Vec<NearbyStore>, String> {
+        self.host.controlled_local_stores(self.person)
+    }
+
+    pub fn carry_store(
+        &mut self,
+        store: u64,
+        good: u32,
+        quantity: u64,
+        deposit: bool,
+    ) -> Result<bool, String> {
+        self.host.carry_at_controlled_store(self.person, store, good, quantity, deposit)
     }
 
     pub fn salvage(&mut self, site: u64, good: u32, quantity: u64) -> Result<bool, String> {

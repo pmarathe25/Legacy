@@ -17,6 +17,16 @@ pub struct Store {
     pub id: u64,
     pub region: u64,
     pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub structure: Option<StoreStructure>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StoreStructure {
+    pub site: u64,
+    pub celsius: i16,
+    pub intact: bool,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
@@ -66,7 +76,7 @@ pub struct Event {
     pub quantity: u64,
     pub moved: bool,
 }
-#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LocalTransport {
     pub stores: Vec<Store>,
@@ -457,7 +467,7 @@ impl Context<'_> {
                 rows: vec![],
             });
         }
-        let mut rows = self.direct_choices();
+        let mut rows = if self.manual.is_some() { Vec::new() } else { self.direct_choices() };
         if let Some(manual) = self.manual {
             let person = self
                 .people
