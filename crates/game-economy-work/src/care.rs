@@ -1,5 +1,5 @@
 //! Individual dependent care and physical meal delivery.
-pub use game_dependent_care::{DependentCare, Event};
+pub use game_dependent_care::{DependentCare, Event, InferredVisit, Preference, SignalCue};
 use game_dependent_care::{FamilyView, Feelings};
 use game_economy_person::{
     Person, Rules,
@@ -86,11 +86,21 @@ impl Context<'_> {
     }
 
     pub fn prepare_at(&self, base: u64, now: Option<u128>) -> Result<Plan, String> {
-        self.prepare_visits(base, now, None)
+        self.prepare_visits(base, now, None, &[])
     }
 
     pub fn prepare_elapsed_at(&self, base: u64, now: u128, sequence: u64) -> Result<Plan, String> {
-        self.prepare_visits(base, Some(now), Some(sequence))
+        self.prepare_visits(base, Some(now), Some(sequence), &[])
+    }
+
+    pub fn prepare_with_observations(
+        &self,
+        base: u64,
+        now: u128,
+        sequence: Option<u64>,
+        inferred: &[InferredVisit],
+    ) -> Result<Plan, String> {
+        self.prepare_visits(base, Some(now), sequence, inferred)
     }
 
     fn prepare_visits(
@@ -98,6 +108,7 @@ impl Context<'_> {
         base: u64,
         now: Option<u128>,
         sequence: Option<u64>,
+        inferred: &[InferredVisit],
     ) -> Result<Plan, String> {
         let current_age = |member: &game_families::Member| {
             now.map_or(member.age, |now| self.family.age_at(member, now))
@@ -130,30 +141,22 @@ impl Context<'_> {
             })
         };
         let adult_age = self.family.rules.adult_age;
-        let draft = if let Some(sequence) = sequence {
-            let mut draft = self.care.prepare_elapsed_visits(
-                &family,
-                adult_age,
-                self.people,
-                self.busy,
-                (self.seed, sequence),
-                (colocated, feelings),
-            );
+        let mut draft = self.care.prepare_observed_visits(
+            &family,
+            adult_age,
+            self.people,
+            self.busy,
+            (self.seed, sequence.unwrap_or(self.tick)),
+            (colocated, feelings),
+            inferred,
+            sequence.is_some(),
+        );
+        if sequence.is_some() {
             draft
                 .events
                 .par_iter_mut()
                 .for_each(|row| row.tick = self.tick);
-            draft
-        } else {
-            self.care.prepare_with_preferences(
-                &family,
-                adult_age,
-                self.people,
-                self.busy,
-                (self.seed, self.tick),
-                (colocated, feelings),
-            )
-        };
+        }
         let edible: HashMap<_, _> = self
             .goods
             .iter()

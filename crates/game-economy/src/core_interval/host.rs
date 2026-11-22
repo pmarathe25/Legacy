@@ -868,7 +868,7 @@ impl CoreHost {
             }
             if let Some(signals) = &social.signals {
                 signals
-                    .validate(&people, communication_time)
+                    .validate_at(&people, communication_time, Some(now))
                     .map_err(str::to_owned)?;
                 let goods: HashSet<_> = core
                     .physical
@@ -1271,6 +1271,19 @@ impl CoreHost {
                 &people,
                 core.physical.tick(),
             )?;
+            if !owner.signal_responses.is_empty() {
+                let signals = social.as_ref().and_then(|social| social.signals.as_ref())
+                    .ok_or("care responses require a signal catalog")?;
+                if owner.signal_responses.par_iter().any(|response| {
+                    !signals.catalog.meanings.iter().any(|meaning| meaning.id == response.meaning)
+                }) {
+                    return Err("care response references an unknown signal meaning".into());
+                }
+            }
+            let now = core.simulated_millis();
+            if owner.events.par_iter().any(|row| row.signal.is_some_and(|signal| signal.noticed_at > now)) {
+                return Err("care visit references a future signal".into());
+            }
             if let Some(clock) = owner.elapsed {
                 clock
                     .validate(core.simulated_millis())

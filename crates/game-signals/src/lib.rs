@@ -134,6 +134,8 @@ pub struct Newborn {
 #[serde(deny_unknown_fields)]
 pub struct Observation {
     pub tick: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub at_millis: Option<u128>,
     pub actor: u64,
     pub form: u32,
     pub interpreted: Option<u32>,
@@ -244,6 +246,10 @@ fn random(mut value: u64) -> u64 {
 }
 
 impl Signals {
+    pub fn remembered(&self, person: u64) -> &[Observation] {
+        self.mind(person).map_or(&[], |mind| &mind.observations)
+    }
+
     fn mind(&self, person: u64) -> Option<&Mind> {
         self.minds
             .first()
@@ -385,6 +391,15 @@ impl Signals {
     }
 
     pub fn validate(&self, people: &HashSet<u64>, now: u64) -> Result<(), &'static str> {
+        self.validate_at(people, now, None)
+    }
+
+    pub fn validate_at(
+        &self,
+        people: &HashSet<u64>,
+        now: u64,
+        elapsed_now: Option<u128>,
+    ) -> Result<(), &'static str> {
         if !self.valid_state(now)
             || self.minds.par_iter().any(|mind| {
                 !people.contains(&mind.person)
@@ -395,7 +410,8 @@ impl Signals {
                     || mind
                         .observations
                         .iter()
-                        .any(|row| !people.contains(&row.actor))
+                        .any(|row| !people.contains(&row.actor)
+                            || row.at_millis.zip(elapsed_now).is_some_and(|(at, now)| at > now))
             })
             || self
                 .events
@@ -582,6 +598,17 @@ impl Signals {
         seed: u64,
         tick: u64,
     ) -> Result<Self, &'static str> {
+        self.prepare_with_directed_at(contacts, directed, seed, tick, None)
+    }
+
+    pub fn prepare_with_directed_at(
+        &self,
+        contacts: &[Contact],
+        directed: &[Directed],
+        seed: u64,
+        tick: u64,
+        now: Option<u128>,
+    ) -> Result<Self, &'static str> {
         if tick == 0 || !self.valid_state(tick) {
             return Err("invalid personal signal state");
         }
@@ -757,6 +784,7 @@ impl Signals {
             mind.observations
                 .extend(observed[first..end].iter().map(|event| Observation {
                     tick,
+                    at_millis: now,
                     actor: event.actor,
                     form: event.form,
                     interpreted: event.interpreted,

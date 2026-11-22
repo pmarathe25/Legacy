@@ -687,7 +687,8 @@ impl CoreHost {
                             && b.health > 0
                             && locations
                                 .region((a.id, a.region), (b.id, b.region))
-                                .is_some())
+                                .is_some()
+                            && crate::local_walking::people_together(self.walking(), a, b))
                         .then_some(game_signals::Directed {
                             actor,
                             observer,
@@ -696,7 +697,10 @@ impl CoreHost {
                     })
                     .collect();
                 signals
-                    .prepare_with_directed(&contacts, &directed, self.core.seed, communication_time)
+                    .prepare_with_directed_at(
+                        &contacts, &directed, self.core.seed, communication_time,
+                        Some(self.core.simulated_millis()),
+                    )
                     .map_err(str::to_owned)
             })
             .transpose()?;
