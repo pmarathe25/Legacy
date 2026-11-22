@@ -40,6 +40,14 @@ people can travel between the new store and regional stock in the exact
 authored duration. Destroying the site exposes the remaining goods to
 ambient conditions and retains the holder, its contents, and its paths.
 
+A preservation profile can set
+`own_cellar = { value = 0, walking_cost_per_hour = 4 }`. The builder
+remembers the design of their latest accepted cellar in this region. They
+can choose to carry a good there using the intended cooling and walking
+time. Capacity and the current temperature enter the deposit decision
+after the carrier arrives. A cellar that lost its cooling during the trip
+can therefore leave the carrier choosing to keep their goods.
+
 Optional individual goal-fetching preferences allow people to seek missing inputs for their own active work goals in observed stores in their current region. They carry and deposit the actual goods across separate boundaries, can stop at any time, and do not gain knowledge of remote stores. Existing direct work choices take precedence.
 
 When personal input planning is enabled, the search also follows bounded recipe dependencies to locate supplies for intermediate work. Cycles and the number of alternatives explored per person are bounded, and available alternatives rotate between reviews.

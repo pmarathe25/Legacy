@@ -210,6 +210,25 @@ impl CoreHost {
             self.opinions.as_ref(),
             (u32::MAX, self.core.physical.goods(), claims.as_ref()),
         );
+        if !owner.preservation.is_empty() {
+            let context = game_economy_local_transport::Context {
+                owner,
+                people: &self.core.people,
+                view: &view,
+                opinions: self.opinions.as_ref(),
+                claims: claims.as_ref(),
+                busy: &busy,
+                max_hunger: u32::MAX,
+                manual: None,
+                walking: Some(walking),
+                storage_celsius: &|place| self.core.physical.storage_celsius(place),
+            };
+            let cellars = context.cellar_walks(&choices);
+            if !cellars.is_empty() {
+                choices.par_extend(cellars);
+                choices.par_sort_unstable_by_key(|request| request.person);
+            }
+        }
         let mut attempts = Vec::new();
         if self.has_expedition_supply_walks() {
             let mut occupied = busy.clone();

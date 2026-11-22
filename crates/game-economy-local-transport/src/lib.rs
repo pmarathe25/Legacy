@@ -27,6 +27,8 @@ pub struct StoreStructure {
     pub site: u64,
     pub celsius: i16,
     pub intact: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub builder: Option<u64>,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
@@ -111,6 +113,27 @@ impl LocalTransport {
             || !self.preservation.is_empty()
     }
 
+    pub fn remember_built_cellars(&mut self, stores: &[Store]) {
+        if self.preservation.is_empty() {
+            return;
+        }
+        let mut built: Vec<_> = stores.par_iter().filter_map(|store| {
+            let structure = store.structure?;
+            Some(((structure.builder?, store.region, store.id), structure.celsius))
+        }).collect();
+        built.par_sort_unstable_by_key(|row| row.0);
+        self.preservation.par_iter_mut().for_each(|preference| {
+            let Some(profile) = &mut preference.own_cellar else { return };
+            let key = (preference.person, preference.region);
+            let end = built.partition_point(|row| (row.0.0, row.0.1) <= key);
+            if let Some(((builder, region, store), built_celsius)) = end.checked_sub(1).map(|i| built[i])
+                && (builder, region) == key
+            {
+                profile.known = Some(preservation::KnownCellar { store, built_celsius });
+            }
+        });
+    }
+
     fn valid_goal_search(&self, search: &goal::SearchPreference) -> bool {
         let Some(first) = self
             .stores
@@ -184,15 +207,24 @@ impl LocalTransport {
                 .is_some_and(|i| self.stores[i].region == region),
         };
         if self.stores.par_windows(2).any(|w| w[0].id >= w[1].id)
-            || self.stores.par_iter().any(|s| s.id == 0 || s.name.is_empty() || !regions.contains(&s.region) || view.container(Place::Inventory(s.id)).is_none())
+            || self.stores.par_iter().any(|s| s.id == 0 || s.name.is_empty() || !regions.contains(&s.region) || view.container(Place::Inventory(s.id)).is_none()
+                || s.structure.and_then(|row| row.builder).is_some_and(|builder| !people.contains(&builder)))
             || view.containers.par_iter().any(|c| matches!(c.place, Place::Inventory(id) if self.stores.binary_search_by_key(&id, |s| s.id).is_err()))
             || self.policies.par_windows(2).any(|w| w[0].person >= w[1].person)
             || self.preservation.par_windows(2).any(|w| w[0].person >= w[1].person)
             || self.preservation.par_iter().any(|p| {
                 let mut stores = HashSet::new();
-                !people.contains(&p.person) || !goods.contains(&p.good) || p.quantity == 0
+                !people.contains(&p.person) || !goods.contains(&p.good) || p.quantity == 0 || !regions.contains(&p.region)
                     || self.policies.binary_search_by_key(&p.person, |row| row.person).is_ok()
-                    || p.destinations.is_empty()
+                    || p.destinations.is_empty() && p.own_cellar.is_none()
+                    || p.own_cellar.and_then(|profile| profile.known).is_some_and(|known| {
+                        self.stores.binary_search_by_key(&known.store, |row| row.id)
+                            .ok().map(|index| &self.stores[index]).is_none_or(|store| {
+                                store.region != p.region || store.structure.is_none_or(|structure| {
+                                    structure.builder != Some(p.person) || structure.celsius != known.built_celsius
+                                })
+                            })
+                    })
                     || p.destinations.iter().any(|row| {
                         !stores.insert(row.store)
                             || !endpoint(Endpoint::Store { id: row.store }, p.region, p.good, p.person)

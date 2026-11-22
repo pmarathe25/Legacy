@@ -5,9 +5,118 @@ use game_lots::Place;
 use std::path::Path;
 
 fn scenario() -> CoreHost {
+    load("economy-constructed-storage.toml")
+}
+
+fn load(scenario: &str) -> CoreHost {
     let content = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content");
-    let path = content.join("scenarios/economy-constructed-storage.toml");
+    let path = content.join("scenarios").join(scenario);
     game_economy_cli::core_scenario(&path, &content).unwrap()
+}
+
+#[test]
+fn a_builder_reconsiders_preservation_after_reaching_their_cellar() {
+    use game_economy::core_interval::CoreRunEvent;
+    use game_economy::{LocalLocation as Location, LocalWalkOutcome as Outcome};
+
+    let run = |workers, chunks: &[u64], destroyed| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut host = load("economy-own-cellar.toml");
+                let mut arrivals = Vec::new();
+                let advance = |host: &mut CoreHost, elapsed, arrivals: &mut Vec<_>| {
+                    let run = host.advance_continuous(elapsed, &[]).unwrap();
+                    assert_eq!(run.failure, None);
+                    for event in run.events {
+                        if let CoreRunEvent::LocalWalking { at_millis, events } = event {
+                            arrivals.extend(events.into_iter().filter_map(|row| {
+                                (row.outcome == Outcome::Arrived).then_some((row.person, at_millis))
+                            }));
+                        }
+                    }
+                    let checkpoint = serde_json::to_vec(&host.snapshot()).unwrap();
+                    *host = CoreHost::resume(serde_json::from_slice(&checkpoint).unwrap()).unwrap();
+                };
+                advance(&mut host, 1, &mut arrivals);
+                let opening = host.snapshot();
+                let local = opening.local_transport.as_ref().unwrap();
+                assert_eq!(local.stores.len(), 3);
+                let known = |person| {
+                    local
+                        .preservation
+                        .iter()
+                        .find(|row| row.person == person)
+                        .unwrap()
+                        .own_cellar
+                        .unwrap()
+                        .known
+                        .unwrap()
+                };
+                let (preferred, unwanted) = (known(2), known(3));
+                assert_ne!(preferred.store, unwanted.store);
+                assert_eq!(preferred.built_celsius, 4);
+                let structure = local
+                    .stores
+                    .iter()
+                    .find(|row| row.id == preferred.store)
+                    .unwrap()
+                    .structure
+                    .unwrap();
+                assert_eq!(structure.builder, Some(2));
+                let mut forged = opening.clone();
+                forged.local_transport.as_mut().unwrap().preservation[0]
+                    .own_cellar
+                    .as_mut()
+                    .unwrap()
+                    .known = Some(unwanted);
+                assert!(CoreHost::resume(forged).is_err());
+
+                advance(&mut host, 17, &mut arrivals);
+                assert!(matches!(host.local_location(2), Some(Location::Walking {
+                    remaining: 22, to: LocalEndpoint::Store { id }, ..
+                }) if id == preferred.store));
+                assert!(matches!(
+                    host.local_location(3),
+                    Some(Location::At {
+                        endpoint: LocalEndpoint::Stock,
+                        ..
+                    })
+                ));
+                if destroyed {
+                    assert!(host.demolish_controlled_site(1, structure.site).unwrap());
+                }
+                for &chunk in chunks {
+                    advance(&mut host, chunk, &mut arrivals);
+                }
+                assert_eq!(host.core().simulated_millis(), 55);
+                assert_eq!(arrivals, [(2, 40)]);
+                let ending = host.snapshot();
+                let used = |place| {
+                    ending
+                        .core
+                        .physical
+                        .custody
+                        .containers
+                        .iter()
+                        .find(|row| row.place == place)
+                        .unwrap()
+                        .used
+                };
+                assert_eq!(
+                    used(Place::Inventory(preferred.store)),
+                    if destroyed { 0 } else { 2 }
+                );
+                assert_eq!(used(Place::Person(2)), if destroyed { 2 } else { 0 });
+                assert_eq!(used(Place::Inventory(unwanted.store)), 0);
+                assert_eq!(used(Place::Person(3)), 2);
+                (ending, arrivals)
+            })
+    };
+    assert_eq!(run(1, &[37], false), run(6, &[2, 15, 6, 14], false));
+    assert_eq!(run(1, &[37], true), run(6, &[2, 15, 6, 14], true));
 }
 
 #[test]

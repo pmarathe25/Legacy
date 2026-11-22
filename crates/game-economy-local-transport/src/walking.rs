@@ -236,6 +236,15 @@ impl Walking {
         self.route(region, from, to).is_some()
     }
 
+    pub(super) fn millis_to(&self, person: u64, region: u64, destination: Endpoint) -> Option<u64> {
+        let clock = self.elapsed.as_ref()?;
+        match self.location(person, region) {
+            Location::At { endpoint, .. } => self.route(region, endpoint, destination)?.duration(clock),
+            Location::Walking { to, remaining, .. } if to == destination => Some(remaining),
+            Location::Walking { .. } => None,
+        }
+    }
+
     /// Check whether an autonomous choice can advance toward this endpoint.
     pub fn can_advance(&self, person: u64, region: u64, destination: Endpoint) -> bool {
         match self.location(person, region) {

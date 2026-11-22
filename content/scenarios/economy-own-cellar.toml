@@ -1,0 +1,111 @@
+# Two builders choose differently about using their own cellar.
+seed = 44
+tick_millis = 3600000
+decision_period_millis = 17
+elapsed_spoilage = true
+stock_capacity = 20
+food_relief_divisor = 20
+
+[rules]
+hunger_rate = { units = 0, per_millis = 60000 }
+meal_threshold = 20
+starvation_threshold = 50
+max_health = 100
+max_work_hunger = 30
+carrying_capacity = 20
+
+[[regions]]
+id = 1
+storage = { timber = 10 }
+stock = { timber = 10 }
+
+[storage_climate]
+ambient_celsius = 20
+aging_rates = [
+    { from_celsius = -50, per_thousand = 500 },
+    { from_celsius = 12, per_thousand = 1000 },
+]
+
+[[people]]
+id = 1
+region = 1
+health = 100
+hunger = 0
+willing_to_work = false
+seek_meals = false
+controlled = true
+goods = { bread = 2 }
+
+[[people]]
+id = 2
+region = 1
+health = 100
+hunger = 0
+willing_to_work = false
+seek_meals = false
+goods = { bread = 2 }
+
+[[people]]
+id = 3
+region = 1
+health = 100
+hunger = 0
+willing_to_work = false
+seek_meals = false
+goods = { bread = 2 }
+
+[[local_transport.stores]]
+id = 50
+region = 1
+name = "Existing shelf"
+capacity = 8
+
+[local_transport.walking]
+routes = []
+
+[local_transport.walking.elapsed]
+unit_millis = 1000
+
+[work_sites]
+sites = []
+
+[construction]
+[[construction.blueprints]]
+id = 1
+name = "Stone cellar"
+kind = "shelter"
+capacity = 1
+kit = "timber"
+quantity = 5
+salvage = 2
+storage = { capacity = 8, celsius = 4, walk_millis = 23 }
+
+[[construction.policies]]
+person = 2
+blueprint = 1
+target_sites = 2
+willing = true
+
+[[construction.policies]]
+person = 3
+blueprint = 1
+target_sites = 2
+willing = true
+
+[[local_transport.preservation]]
+person = 2
+region = 1
+good = "bread"
+quantity = 2
+cooling_value_per_degree = 1
+keep_value = 10
+own_cellar = { walking_cost_per_hour = 360000 }
+
+[[local_transport.preservation]]
+person = 3
+region = 1
+good = "bread"
+quantity = 2
+cooling_value_per_degree = 1
+keep_value = 20
+own_cellar = { walking_cost_per_hour = 360000 }

@@ -37,7 +37,8 @@ pub use game_economy_local_transport::goal::{
     Preference as GoalFetchPreference, SearchPreference as GoalSearchPreference,
 };
 pub use game_economy_local_transport::preservation::{
-    Destination as StorageDestination, Preference as StoragePreference,
+    Destination as StorageDestination, OwnCellar as OwnCellarPreference,
+    Preference as StoragePreference,
 };
 pub use game_economy_local_transport::walking::{
     Event as LocalWalkEvent, Location as LocalLocation, Outcome as LocalWalkOutcome,
