@@ -60,13 +60,22 @@ impl StockTime {
         self.elapsed.map(|(millis, _)| millis)
     }
 
-    fn contains(self, tick: u64, instant: Option<u128>) -> bool {
-        tick <= self.tick && self.elapsed.is_none_or(|(millis, tick_millis)| {
-            instant.is_none_or(|instant| {
-                instant <= millis && instant.checked_div(u128::from(tick_millis)) == Some(u128::from(tick))
-            })
-        })
+    pub fn tick_millis(self) -> Option<u64> {
+        self.elapsed.map(|(_, period)| period)
     }
+
+    fn contains(self, tick: u64, instant: Option<u128>) -> bool {
+        tick <= self.tick && instant.zip(self.millis()).is_none_or(|(at, now)| at <= now)
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn recorded_dates_are_absolute_even_with_a_saved_boundary_offset() {
+    let time = StockTime::elapsed(10, 10_350, 1_000);
+    assert!(time.contains(9, Some(10_220)));
+    assert!(!time.contains(10, Some(10_351)));
+    assert!(!time.contains(11, Some(10_220)));
 }
 
 impl From<u64> for StockTime {

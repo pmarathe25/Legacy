@@ -3187,7 +3187,12 @@ fn elapsed_route_closure_reopens_inside_a_physical_interval_after_resume() {
 fn personal_route_backoff_uses_the_time_of_the_blocked_attempt() {
     use game_economy_person::travel::{Closure, DepartureOutcome, RouteObservation};
 
-    let run = |quantum, workers| {
+    let run = |quantum, workers, direct_millis| {
+        let (retry_key, retry_value, delay) = if direct_millis {
+            ("retry_millis", 127, 127)
+        } else {
+            ("retry_ticks", 3, 120)
+        };
         rayon::ThreadPoolBuilder::new()
             .num_threads(workers)
             .build()
@@ -3244,7 +3249,7 @@ fn personal_route_backoff_uses_the_time_of_the_blocked_attempt() {
                     "knowledge":{"max_records":4,"minds":[{"person":2,"records":[
                         {"region":2,"food":10,"observed_at":0,"witness":1,"learned_from":1}]}]},
                     "food_search":{"search":{"min_hunger":5,"min_report_food":1,"max_report_age":20,
-                        "retry_ticks":3,"people":[{"person":2,"enabled":true}]}}
+                        (retry_key):retry_value,"people":[{"person":2,"enabled":true}]}}
                 }))
                 .unwrap();
                 let mut host = CoreHost::begin(snapshot, &[(1, 1)]).unwrap();
@@ -3260,13 +3265,13 @@ fn personal_route_backoff_uses_the_time_of_the_blocked_attempt() {
                 let blocked = host.snapshot();
                 assert_eq!(
                     blocked.food_search.unwrap().search.people[0].next_review_millis,
-                    Some(220)
+                    Some(100 + u128::from(delay))
                 );
                 assert_eq!(
                     blocked.core.travel.unwrap().observations[0].observed_at_millis,
                     Some(100)
                 );
-                assert_eq!(host.advance_continuous(119, &[2]).unwrap().failure, None);
+                assert_eq!(host.advance_continuous(delay - 1, &[2]).unwrap().failure, None);
                 assert!(host.seek_food_autonomously(&[]).unwrap().is_empty());
                 let saved = serde_json::to_string(&host.snapshot()).unwrap();
                 let mut host = CoreHost::resume(serde_json::from_str(&saved).unwrap()).unwrap();
@@ -3279,7 +3284,7 @@ fn personal_route_backoff_uses_the_time_of_the_blocked_attempt() {
                     }]
                 );
                 let travel = host.snapshot().core.travel.unwrap();
-                assert_eq!(travel.observations[0].observed_at_millis, Some(220));
+                assert_eq!(travel.observations[0].observed_at_millis, Some(100 + u128::from(delay)));
                 assert_eq!(travel.journeys[0].destination, 2);
                 let mut player = host.snapshot();
                 player.core.people[1].controlled = true;
@@ -3291,8 +3296,10 @@ fn personal_route_backoff_uses_the_time_of_the_blocked_attempt() {
                 assert_eq!(private.route_reports, travel.observations);
             })
     };
-    run(1000, 1);
-    run(180, 4);
+    run(1000, 1, false);
+    run(180, 4, false);
+    run(1000, 1, true);
+    run(180, 4, true);
 }
 
 #[test]

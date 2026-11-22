@@ -54,8 +54,9 @@ impl CoreHost {
             busy: outside.as_deref().unwrap_or(&busy),
             review: travel::RouteReview {
                 tick: self.core.physical.tick(),
-                elapsed: Some((now, travel.unit_millis(self.core.physical.tick_millis()))),
+                elapsed: Some((now, u128::from(travel.unit_millis(self.core.physical.tick_millis())))),
                 delay: 1,
+                legacy_tick_millis: None,
             },
             controlled,
         });
