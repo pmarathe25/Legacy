@@ -22,7 +22,7 @@ capacity = 4
 person = 1
 initiative = 1000
 adoption = 1000
-syntax = { initiative = 1000, demonstrate = true }
+syntax = { initiative = 1000, demonstrate = true, role_marking = { initiative = 1000, preferred_role = "holder" } }
 [[language.minds]]
 person = 2
 initiative = 1000

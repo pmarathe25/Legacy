@@ -638,7 +638,7 @@ impl Language {
                     || m.words.len() > r.capacity
                     || m.syntax
                         .as_ref()
-                        .is_some_and(|syntax| !syntax.valid() || !syntax.knows_examples(people))
+                        .is_some_and(|syntax| !syntax.valid(r.sounds.len()) || !syntax.knows_examples(people))
                     || m.naming.as_ref().is_some_and(|policy| {
                         !policy.valid()
                             || policy
@@ -757,7 +757,7 @@ impl Language {
                         .iter()
                         .any(|sound| usize::from(*sound) >= self.rules.sounds.len())
                     || m.words.len() > self.rules.capacity
-                    || m.syntax.as_ref().is_some_and(|syntax| !syntax.valid())
+                    || m.syntax.as_ref().is_some_and(|syntax| !syntax.valid(self.rules.sounds.len()))
                     || m.naming.as_ref().is_some_and(|policy| !policy.valid())
                     || m.topic_policy.as_ref().is_some_and(|policy| {
                         policy

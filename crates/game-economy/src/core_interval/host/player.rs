@@ -30,6 +30,7 @@ pub struct CorePlayerFatigue {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CorePlayerLanguage {
     pub words: Vec<game_language::Word>,
+    pub role_marker: Option<game_language::syntax::roles::Marker>,
     pub associations: Vec<game_language::writing::Association>,
     pub observations: Vec<game_language::writing::Observation>,
 }
@@ -507,11 +508,16 @@ impl CoreHost {
             .as_ref()
             .and_then(|social| social.language.as_ref())
             .map(|language| {
-                let words = language
+                let mind = language
                     .minds
                     .binary_search_by_key(&id, |mind| mind.person)
                     .ok()
-                    .map_or_else(Vec::new, |index| language.minds[index].words.clone());
+                    .map(|index| &language.minds[index]);
+                let words = mind.map_or_else(Vec::new, |mind| mind.words.clone());
+                let role_marker = mind
+                    .and_then(|mind| mind.syntax.as_ref())
+                    .and_then(|syntax| syntax.role_marking)
+                    .and_then(|marking| marking.marker);
                 let associations = language
                     .writing
                     .as_ref()
@@ -533,6 +539,7 @@ impl CoreHost {
                 });
                 CorePlayerLanguage {
                     words,
+                    role_marker,
                     associations,
                     observations,
                 }

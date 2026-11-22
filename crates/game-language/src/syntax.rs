@@ -1,4 +1,5 @@
-//! Personal two-word constructions learned during physical demonstrations.
+//! Personal constructions learned during physical demonstrations.
+pub mod roles;
 use super::{Event, Language, Meaning, random};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -62,6 +63,8 @@ pub struct Mind {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub order: Option<Order>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub role_marking: Option<roles::Mind>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     example: Option<Example>,
 }
 
@@ -76,9 +79,13 @@ impl Mind {
         }
     }
 
-    pub(super) fn valid(&self) -> bool {
+    pub(super) fn valid(&self, sounds: usize) -> bool {
         self.initiative <= 1000
             && self.inference <= 1000
+            && self
+                .role_marking
+                .as_ref()
+                .is_none_or(|mind| mind.valid(sounds))
             && self.example.is_none_or(|example| {
                 self.order.is_none() && example.scene.holder != 0 && example.scene.object != 0
             })
@@ -87,6 +94,10 @@ impl Mind {
     pub(super) fn knows_examples(&self, people: &HashSet<u64>) -> bool {
         self.example
             .is_none_or(|example| example.scene.valid(people))
+            && self
+                .role_marking
+                .as_ref()
+                .is_none_or(|mind| mind.knows_examples(people))
     }
 
     fn consider(&mut self, order: Order, scene: Holdings) -> Option<Order> {
@@ -119,6 +130,8 @@ pub struct Clause {
     pub demonstrated: bool,
     pub interpreted: Option<Holdings>,
     pub adopted_order: Option<Order>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub role_marker: Option<roles::Use>,
 }
 
 impl Clause {
@@ -137,6 +150,9 @@ impl Clause {
             && self
                 .adopted_order
                 .is_none_or(|_| event.heard && self.demonstrated)
+            && self
+                .role_marker
+                .is_none_or(|marker| marker.valid(event.heard, self.demonstrated, sounds))
     }
 }
 
@@ -198,9 +214,29 @@ pub(super) fn extend_grounded_objects(opening: &Language, next: &mut Language, s
                         Order::ObjectFirst
                     }
                 });
-                if source_syntax.order.is_none() {
+                let mut source_changed = source_syntax.order.is_none();
+                if source_changed {
                     source_syntax.order = Some(order);
                     source_syntax.example = None;
+                }
+                let role_marker = source_syntax.role_marking.as_mut().and_then(|mind| {
+                    let before = *mind;
+                    let marker = mind.speak(
+                        random(chance ^ 0x7061727469636c65),
+                        random(seed ^ event.speaker.rotate_left(19)),
+                        &source.phonemes,
+                        opening.rules.sounds.len(),
+                    )?;
+                    source_changed |= *mind != before;
+                    let noun = u8::from(roles::Role::from_order(order, 0) != marker.role);
+                    Some(roles::Use {
+                        sound: marker.sound,
+                        noun,
+                        intended_role: marker.role,
+                        adopted: None,
+                    })
+                });
+                if source_changed {
                     changes[0] = Some((event.speaker, source_syntax.clone()));
                 }
                 let parts = order.arrange(
@@ -217,6 +253,7 @@ pub(super) fn extend_grounded_objects(opening: &Language, next: &mut Language, s
                     demonstrated: source_syntax.demonstrate,
                     interpreted: None,
                     adopted_order: None,
+                    role_marker,
                 };
                 if event.heard
                     && let Some(target) = mind(event.listener)
@@ -228,6 +265,7 @@ pub(super) fn extend_grounded_objects(opening: &Language, next: &mut Language, s
                     clause.interpreted = syntax
                         .order
                         .and_then(|order| reading(target, &clause.parts, order));
+                    let mut listener_changed = false;
                     if clause.demonstrated
                         && target.learn
                         && syntax.order.is_none()
@@ -240,8 +278,40 @@ pub(super) fn extend_grounded_objects(opening: &Language, next: &mut Language, s
                             .find(|order| reading(target, &clause.parts, *order) == Some(scene));
                         if let Some(candidate) = candidate {
                             clause.adopted_order = syntax.consider(candidate, scene);
-                            changes[1] = Some((event.listener, syntax));
+                            listener_changed = true;
                         }
+                    }
+                    if let Some(used) = &mut clause.role_marker
+                        && let Some(mind) = &mut syntax.role_marking
+                    {
+                        if let Some(known) = mind.marker.filter(|known| known.sound == used.sound) {
+                            clause.interpreted =
+                                reading(target, &clause.parts, known.role.order_at(used.noun));
+                        }
+                        // A visible demonstration and the listener's own
+                        // nouns are the evidence for assigning the particle.
+                        if clause.demonstrated
+                            && target.learn
+                            && reading(
+                                target,
+                                &clause.parts,
+                                used.intended_role.order_at(used.noun),
+                            ) == Some(scene)
+                        {
+                            let before = *mind;
+                            used.adopted = mind.consider(
+                                roles::Marker {
+                                    sound: used.sound,
+                                    role: used.intended_role,
+                                },
+                                scene,
+                                random(chance ^ event.listener.rotate_left(38)),
+                            );
+                            listener_changed |= *mind != before;
+                        }
+                    }
+                    if listener_changed {
+                        changes[1] = Some((event.listener, syntax));
                     }
                 }
                 event.clause = Some(clause);
