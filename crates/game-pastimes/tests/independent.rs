@@ -116,6 +116,7 @@ fn concentrated_audience_reads_one_venue_per_person_and_has_stable_choices() {
                         })
                         .collect(),
                     attendance: Vec::new(),
+                    music: None,
                 };
                 let sessions: Vec<_> = (1..=PEOPLE)
                     .map(|person| Session {

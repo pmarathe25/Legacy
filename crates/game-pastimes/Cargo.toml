@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+game-genetics = { path = "../game-genetics" }
 game-production-model = { path = "../game-production-model" }
 rayon.workspace = true
 serde.workspace = true

@@ -7,9 +7,23 @@ pub(super) struct SettledPastimes {
     pub activities: Vec<Event>,
     pub conclusions: Vec<MechanicalConclusion>,
     pub hearings: Vec<HeardPerformance>,
+    pub music: Vec<game_pastimes::music::Record>,
 }
 
 impl CoreHost {
+    pub fn musical_phrases_controlled(
+        &self,
+        person: u64,
+    ) -> Result<&[game_pastimes::music::Record], String> {
+        self.controlled_person(person)?;
+        Ok(self
+            .pastimes
+            .as_ref()
+            .and_then(|owner| owner.culture.as_ref())
+            .and_then(|culture| culture.music.as_ref())
+            .map_or(&[], |music| music.remembered(person)))
+    }
+
     pub fn pastime_practice_controlled(&self, person: u64) -> Result<&[PastimePractice], String> {
         self.controlled_person(person)?;
         Ok(self
@@ -271,7 +285,7 @@ impl CoreHost {
                     .is_err()
             });
         }
-        Ok(owner.start(accepted))
+        Ok(owner.start_with_seed(accepted, self.core.seed))
     }
 
     pub(super) fn settle_pastimes(&mut self, blocked: &[u64]) -> SettledPastimes {
@@ -319,6 +333,7 @@ impl CoreHost {
                     },
                 )
             });
+        let mut music = Vec::new();
         if let Some(culture) = &mut owner.culture {
             let sustained = culture.finish_attendance(&events);
             if !sustained.is_empty() {
@@ -326,6 +341,9 @@ impl CoreHost {
                 hearings.par_sort_unstable_by_key(|row| row.listener);
             }
             culture.remember(&hearings);
+            if let Some(repertoire) = &mut culture.music {
+                music = repertoire.settle(&events, &hearings, self.core.seed);
+            }
         }
         self.pastimes = Some(owner);
         self.remember_pastimes(&events);
@@ -350,6 +368,7 @@ impl CoreHost {
             activities: events,
             conclusions,
             hearings,
+            music,
         }
     }
 }

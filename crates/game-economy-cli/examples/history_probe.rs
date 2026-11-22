@@ -189,6 +189,10 @@ fn run_steps(
                     )?;
                     ("local_goal_search_expiry", people.len())
                 }
+                CoreRunEvent::MusicalPhrases(events) => {
+                    write_line(&mut writer, &json!({"kind":"musical_phrases","step":step,"events":events}))?;
+                    ("musical_phrases", events.len())
+                }
                 CoreRunEvent::Disease(rows) => {
                     write_line(
                         &mut writer,

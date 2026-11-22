@@ -138,6 +138,10 @@ Use `present ACTIVITY on|off` to share or withdraw a performance.
 `attend PERFORMER MINIMUM_MILLISECONDS` starts listening, and `attend leave`
 ends their attention. Crossing to another endpoint breaks continuous
 attendance, even if the person returns before the performance ends.
+Optional personal music profiles add playable notes and separate preferences for
+composing, replaying, adopting, and varying a phrase. Characters who meet their
+own listening threshold can choose how to remember the phrase. `repertoire`
+lists the selected character's remembered phrases and their sources.
 
 `compose SOUNDS SOUNDS ...` writes an ordered sequence of personal forms on
 one carried object. Each form must have marks the character already chose.

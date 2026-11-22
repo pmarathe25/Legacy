@@ -79,6 +79,8 @@ pub struct Culture {
     pub listeners: Vec<Listener>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub attendance: Vec<Attendance>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub music: Option<super::music::Music>,
 }
 
 impl Culture {
@@ -86,6 +88,9 @@ impl Culture {
         self.presentations.sort_unstable();
         self.listeners.sort_unstable_by_key(|row| row.person);
         self.attendance.sort_unstable_by_key(|row| row.listener);
+        if let Some(music) = &mut self.music {
+            music.normalize();
+        }
         for listener in &mut self.listeners {
             listener.interests.sort_unstable_by_key(|row| row.activity);
         }

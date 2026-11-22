@@ -105,6 +105,7 @@ fn observation(event: &CoreRunEvent, current_tick: &mut u64) -> Option<Value> {
         CoreRunEvent::WoundRecovery { at_millis, people } => Some(json!({"kind":"wound_recovery","at_millis":at_millis,"people":people})),
         CoreRunEvent::Campaign(events) => Some(json!({"kind":"campaign","events":events})),
         CoreRunEvent::HeardPerformances(events) => Some(json!({"kind":"heard_performances","events":events})),
+        CoreRunEvent::MusicalPhrases(events) => Some(json!({"kind":"musical_phrases","events":events})),
         CoreRunEvent::Pastimes(events) if !events.is_empty() => Some(json!({"kind":"pastimes","events":events})),
         CoreRunEvent::Care(visit) => Some(json!({"kind":"care","at_millis":visit.at_millis,"events":visit.events,"transfers":visit.transfers,"incapacitated":visit.incapacitated})),
         CoreRunEvent::WildPlants(cycle) => Some(json!({"kind":"wild_plant_cycles","at_millis":cycle.at_millis,"events":cycle.changes})),

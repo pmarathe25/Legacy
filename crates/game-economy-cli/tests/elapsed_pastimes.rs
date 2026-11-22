@@ -28,6 +28,98 @@ fn load(scenario: &str, quantum: u64) -> CoreHost {
 }
 
 #[test]
+fn listeners_can_replay_vary_or_ignore_a_personally_composed_phrase() {
+    use game_pastimes::music::Choice;
+    let run = |workers, quantum, intervals: &[u64]| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut host = load("economy-musical-phrases.toml", quantum);
+                let mut phrases = Vec::new();
+                for &elapsed in intervals {
+                    let run = host.advance_continuous(elapsed, &[]).unwrap();
+                    assert_eq!(run.failure, None);
+                    phrases.extend(
+                        run.events
+                            .into_iter()
+                            .filter_map(|event| match event {
+                                CoreRunEvent::MusicalPhrases(rows) => Some(rows),
+                                _ => None,
+                            })
+                            .flatten(),
+                    );
+                    let checkpoint = serde_json::to_vec(&host.snapshot()).unwrap();
+                    host = CoreHost::resume(serde_json::from_slice(&checkpoint).unwrap()).unwrap();
+                }
+                assert_eq!(phrases.len(), 4);
+                let original = phrases[0];
+                let exact = phrases[1];
+                let variation = phrases[2];
+                let replay = phrases[3];
+                assert_eq!(
+                    (original.person, original.choice, original.at_millis),
+                    (1, Choice::Composed, 600000)
+                );
+                assert_eq!(
+                    (exact.person, exact.choice, exact.from),
+                    (2, Choice::Adopted, Some(1))
+                );
+                assert_eq!(exact.phrase, original.phrase);
+                assert_eq!(
+                    (variation.person, variation.choice, variation.from),
+                    (3, Choice::Varied, Some(1))
+                );
+                assert_eq!(
+                    variation
+                        .phrase
+                        .iter()
+                        .zip(&original.phrase)
+                        .filter(|(left, right)| left != right)
+                        .count(),
+                    1
+                );
+                assert_eq!(
+                    (replay.person, replay.choice, replay.from, replay.at_millis),
+                    (2, Choice::Replayed, Some(1), 1200000)
+                );
+                assert_eq!(replay.phrase, original.phrase);
+                let state = host.snapshot();
+                let culture = state.pastimes.unwrap().culture.unwrap();
+                assert_eq!(culture.remembered(4).count(), 1);
+                assert!(culture.music.as_ref().unwrap().remembered(4).is_empty());
+                phrases
+            })
+    };
+    assert_eq!(
+        run(1, 3600000, &[1200000]),
+        run(6, 473003, &[115000, 358002, 234000, 492998])
+    );
+}
+
+#[test]
+fn ending_a_performance_early_leaves_no_phrase_to_learn() {
+    let mut host = load("economy-musical-phrases.toml", 3_600_000);
+    let mut opening = host.snapshot();
+    opening.core.people[0].controlled = true;
+    host = CoreHost::resume(opening).unwrap();
+    assert!(host.start_pastime_controlled(1, 1).unwrap().is_some());
+    let first = host.advance_continuous(310_000, &[]).unwrap();
+    assert_eq!(first.failure, None);
+    host = CoreHost::resume(
+        serde_json::from_slice(&serde_json::to_vec(&host.snapshot()).unwrap()).unwrap(),
+    )
+    .unwrap();
+    assert!(host.stop_pastime_controlled(1).unwrap().is_some());
+    let remainder = host.advance_continuous(890_000, &[]).unwrap();
+    assert_eq!(remainder.failure, None);
+    for event in first.events.iter().chain(&remainder.events) {
+        assert!(!matches!(event, CoreRunEvent::MusicalPhrases(_)));
+    }
+}
+
+#[test]
 fn listeners_choose_sustained_attention_and_an_interruption_breaks_it() {
     use game_economy::LocalEndpoint;
     use game_pastimes::Heard;

@@ -695,6 +695,7 @@ impl CoreSchedule {
 pub enum CoreRunEvent {
     Pastimes(Vec<game_pastimes::Event>),
     HeardPerformances(Vec<HeardPerformance>),
+    MusicalPhrases(Vec<game_pastimes::music::Record>),
     WrittenWorks(Vec<CoreWorkEdition>),
     AgreementExpiry {
         at_millis: u128,
@@ -880,6 +881,9 @@ impl CoreRun {
         }
         if !settled.hearings.is_empty() {
             self.events.push(CoreRunEvent::HeardPerformances(settled.hearings));
+        }
+        if !settled.music.is_empty() {
+            self.events.push(CoreRunEvent::MusicalPhrases(settled.music));
         }
         activities_ended
     }

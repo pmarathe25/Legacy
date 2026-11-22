@@ -322,6 +322,7 @@ impl Chronicle {
                 | "soil_amendments"
                 | "pastimes"
                 | "heard_performances"
+                | "musical_phrases"
                 | "work_requests"
                 | "maturation"
                 | "recipe_learning"
@@ -554,6 +555,16 @@ fn classify(kind: &str, row: &Value) -> Option<Receipt> {
             actor: Some(row["listener"].as_u64()?),
             other: Some(row["performer"].as_u64()?),
         });
+    }
+    if kind == "musical_phrases" {
+        let label = match row["choice"].as_str()? {
+            "composed" => "musical phrases composed",
+            "replayed" => "musical phrases replayed",
+            "adopted" => "musical phrases adopted",
+            "varied" => "musical phrases varied",
+            _ => return None,
+        };
+        return Some(Receipt { label, actor: row["person"].as_u64(), other: row["from"].as_u64() });
     }
     if kind == "care_recognitions" {
         return Some(Receipt {
