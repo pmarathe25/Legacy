@@ -1,6 +1,6 @@
 use super::*;
 use game_family_index::OrderedMemberIndex;
-use game_genetics::inherit;
+use game_genetics::Inheritance;
 use game_matching::resolve;
 use rayon::prelude::*;
 use std::collections::BTreeSet;
@@ -39,9 +39,10 @@ fn eligible_at_age(m: &Member, p: &LifeInput, rules: &FamilyRules, age: u64) -> 
 fn eligible_for_partnership(m: &Member, p: &LifeInput, rules: &FamilyRules) -> bool {
     m.alive && m.age >= rules.adult_age && p.health > 0 && p.region.is_some()
 }
-fn seeks_mate(m: &Member, p: &LifeInput, dependents: u64, seed: u64, tick: u64) -> bool {
+fn seeks_mate(m: &Member, p: &LifeInput, dependents: u64, seed: u64, tick: u64, traits: Option<&TraitCatalog>) -> bool {
     let pref = m.mate_preference.unwrap_or_default();
-    let genetic = (i128::from(m.genome.expressed_mate_desire()) - 500)
+    let expressed = traits.map_or_else(|| m.genome.expressed_mate_desire(), |catalog| catalog.mate_desire(&m.genome));
+    let genetic = (i128::from(expressed) - 500)
         * i128::from(pref.genetic_weight)
         / 500;
     let desire = i128::from(pref.desire)
@@ -135,6 +136,7 @@ fn subjective_partnerships(
     dependent_count: &(impl Fn(u64) -> u64 + Sync),
     seed: u64,
     tick: u64,
+    traits: Option<&TraitCatalog>,
 ) -> Vec<(u64, u64, u64)> {
     if group.len() < 2 {
         return Vec::new();
@@ -151,6 +153,7 @@ fn subjective_partnerships(
                 dependent_count(person.id),
                 seed,
                 tick,
+                traits,
             ) {
                 return None;
             }
@@ -226,6 +229,7 @@ impl Families {
     fn parallel_copy(&self) -> Self {
         Self {
             rules: self.rules.clone(),
+            traits: self.traits.clone(),
             members: self.members.par_iter().cloned().collect(),
             next_id: self.next_id,
             last_tick: self.last_tick,
@@ -358,7 +362,7 @@ impl Families {
             self.next_id,
             &self.members,
             &OrderedMemberIndex::new(&self.members),
-            &self.rules,
+            self,
             physical,
             seed,
             BirthTime {
@@ -576,6 +580,7 @@ impl Families {
                         &dependent_count,
                         seed,
                         tick,
+                        self.traits.as_deref(),
                     );
                 }
                 let area = group[0].0;
@@ -650,7 +655,7 @@ impl Families {
             self.next_id,
             &members,
             &index,
-            rules,
+            self,
             physical,
             seed,
             BirthTime { tick, millis: None },
@@ -781,6 +786,7 @@ impl Families {
         Ok(Draft {
             families: Families {
                 rules: rules.clone(),
+                traits: self.traits.clone(),
                 members,
                 next_id,
                 last_tick: tick,
@@ -878,7 +884,14 @@ fn prepare_conceptions(
             sources
                 .par_iter()
                 .filter_map(|(area, source, person)| {
-                    if !seeks_mate(source, person, dependent_count(source.id), seed, entropy) {
+                    if !seeks_mate(
+                        source,
+                        person,
+                        dependent_count(source.id),
+                        seed,
+                        entropy,
+                        family.traits.as_deref(),
+                    ) {
                         return None;
                     }
                     let first = targets.partition_point(|row| row.0 < *area);
@@ -1094,11 +1107,12 @@ fn stage_births(
     first_id: u64,
     members: &[Member],
     index: &OrderedMemberIndex<'_>,
-    rules: &FamilyRules,
+    family: &Families,
     physical: &impl game_family_model::PhysicalView,
     seed: u64,
     time: BirthTime,
 ) -> Result<BirthStage, &'static str> {
+    let rules = &family.rules;
     let tick = time.tick;
     let entropy = time.millis.map_or(tick, |now| {
         now as u64 ^ ((now >> 64) as u64).rotate_left(29)
@@ -1125,15 +1139,13 @@ fn stage_births(
         .map(|(offset, mother)| {
             let father = &index[&mother.pregnancy.as_ref().unwrap().father];
             let id = first_id + offset as u64;
-            let genome = inherit(
-                &mother.genome,
-                &father.genome,
+            let genome = Inheritance {
                 seed,
-                mother.id,
-                entropy,
-                rules.mutation_per_million,
-                rules.mutation_step,
-            );
+                mother: mother.id,
+                time: entropy,
+                mutation_per_million: rules.mutation_per_million,
+                mutation_step: rules.mutation_step,
+            }.child(&mother.genome, &father.genome, family.traits.as_deref());
             let child = Member {
                 id,
                 born: Some(tick),

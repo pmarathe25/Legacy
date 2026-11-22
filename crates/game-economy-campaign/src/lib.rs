@@ -286,6 +286,7 @@ pub fn family_with_cost(
     }
     let mut next = Families {
         rules: old.rules.clone(),
+        traits: old.traits.clone(),
         members: old.members.par_iter().cloned().collect(),
         next_id: old.next_id,
         last_tick: old.last_tick,

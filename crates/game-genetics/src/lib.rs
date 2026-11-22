@@ -1,5 +1,8 @@
 //! Deterministic diploid inheritance for the parallel engine.
+mod named;
+pub use named::{Inheritance, Locus, NamedAlleles, TraitCatalog};
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Sex {
@@ -15,6 +18,9 @@ pub struct Genome {
     /// A separate diploid tendency to seek reproductive encounters.
     #[serde(default = "neutral_desire")]
     pub mate_desire: [u16; 2],
+    /// Only variants that differ from the catalog's default pair are needed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub named_loci: Option<Arc<Vec<NamedAlleles>>>,
 }
 fn neutral_desire() -> [u16; 2] {
     [500, 500]
@@ -85,5 +91,6 @@ pub fn inherit(
         },
         alleles,
         mate_desire,
+        named_loci: None,
     }
 }

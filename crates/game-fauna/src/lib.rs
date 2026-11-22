@@ -980,6 +980,7 @@ impl Fauna {
                         || a.health > s.max_health
                         || a.genome.alleles.iter().flatten().any(|value| *value > 1000)
                         || a.genome.mate_desire.iter().any(|value| *value > 1000)
+                        || a.genome.named_loci.is_some()
                         || a.social_response
                             .as_ref()
                             .map_or(!a.opinions.is_empty(), |response| {

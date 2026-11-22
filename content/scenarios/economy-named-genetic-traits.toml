@@ -1,0 +1,87 @@
+# Named variants modify individually weighted desire and are inherited at birth.
+seed = 13
+tick_millis = 1000
+decision_period_millis = 1000
+stock_capacity = 100
+food_relief_divisor = 20
+
+[rules]
+hunger_per_tick = 0
+meal_threshold = 5
+starvation_threshold = 50
+starvation_damage = 1
+max_health = 100
+carrying_capacity = 10
+max_work_hunger = 20
+
+[[regions]]
+id = 1
+stock = {}
+
+[[people]]
+id = 1
+region = 1
+health = 100
+hunger = 0
+willing_to_work = false
+seek_meals = false
+
+[[people]]
+id = 2
+region = 1
+health = 100
+hunger = 0
+willing_to_work = false
+seek_meals = false
+
+[family]
+next_id = 3
+
+[family.rules]
+adult_age = 2
+fertile_until = 20
+gestation = 2
+birth_spacing = 3
+lifespan_min = 40
+lifespan_max = 40
+conception_one_in = 1
+minimum_health = 1
+maximum_hunger = 100
+newborn_health = 50
+mutation_per_million = 0
+mutation_step = 0
+subjective_mating = true
+
+[family.elapsed_lifetimes]
+unit_millis = 200
+elapsed_gestation = true
+conception_period_millis = 200
+
+[family.traits]
+mate_desire_locus = 11
+loci = [
+    { id = 11, name = "courtship-drive", default_alleles = [500, 500] },
+    { id = 19, name = "foraging-caution", default_alleles = [200, 200] },
+]
+
+[[family.members]]
+id = 1
+age = 3
+mate_preference = { desire = 0, genetic_weight = 0, affinity_weight = 0, attraction_weight = 0, hunger_weight = 0, dependent_weight = 0 }
+[family.members.genome]
+sex = "Male"
+alleles = [[500, 500], [500, 500], [500, 500], [500, 500]]
+named_loci = [{ locus = 19, alleles = [750, 750] }]
+
+[[family.members]]
+id = 2
+age = 3
+mate_preference = { desire = 500, genetic_weight = 500, affinity_weight = 0, attraction_weight = 0, hunger_weight = 0, dependent_weight = 0 }
+[family.members.genome]
+sex = "Female"
+alleles = [[1000, 1000], [500, 500], [500, 500], [500, 500]]
+mate_desire = [1000, 1000]
+named_loci = [
+    { locus = 11, alleles = [1000, 1000] },
+    { locus = 19, alleles = [250, 250] },
+]

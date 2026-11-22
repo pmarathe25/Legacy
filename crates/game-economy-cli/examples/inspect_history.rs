@@ -12,6 +12,8 @@ mod coordination;
 mod cultivars;
 #[path = "history_support/lexicon.rs"]
 mod lexicon;
+#[path = "history_support/named_traits.rs"]
+mod named_traits;
 
 #[derive(Clone, Copy)]
 enum Focus {

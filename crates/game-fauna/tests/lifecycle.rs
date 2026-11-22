@@ -10,6 +10,7 @@ fn genome(sex: Sex, allele: u16) -> Genome {
         sex,
         alleles: [[allele; 2]; 4],
         mate_desire: [500, 500],
+        named_loci: None,
     }
 }
 fn species() -> Species {

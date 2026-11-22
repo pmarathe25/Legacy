@@ -498,6 +498,7 @@ pub fn founders(seed: u64, profiles: &[Profile]) -> Result<Vec<game_families::Me
                             game_genetics::Sex::Male
                         },
                         alleles,
+                        named_loci: None,
                         mate_desire: [
                             rule.min_allele
                                 + (random(4) % u64::from(rule.max_allele - rule.min_allele + 1))

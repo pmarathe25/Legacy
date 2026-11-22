@@ -12,6 +12,7 @@ fn member(id: u64, parents: &[u64]) -> Member {
             sex: Sex::Female,
             alleles: [[1000, 1000]; 4],
             mate_desire: [500, 500],
+            named_loci: None,
         },
         parents: parents.iter().copied().collect(),
         partner: None,

@@ -78,6 +78,7 @@ pub(super) struct Chronicle {
     recipes: BTreeMap<u64, String>,
     lexicon: super::lexicon::LexiconHistory,
     coordination: super::coordination::History,
+    inherited_traits: super::named_traits::History,
     recipe_learning: BTreeMap<u64, RecipeTransmission>,
     crews: BTreeMap<u64, CrewParticipation>,
     counts: BTreeMap<&'static str, u64>,
@@ -101,6 +102,7 @@ struct Receipt {
 impl Chronicle {
     pub(super) fn snapshot(&mut self, state: &Value, year: u64, opening: bool) {
         self.lexicon.observe(state, year);
+        self.inherited_traits.observe(state, year);
         if opening {
             self.recipes = state
                 .pointer("/core/physical/recipes")
@@ -438,6 +440,7 @@ impl Chronicle {
             "coordination_patterns": self.coordination.summary(),
             "recent_mechanical_findings": self.mechanical_findings,
             "lexicon": self.lexicon.summary(),
+            "named_inherited_traits": self.inherited_traits.summary(),
             "recipe_transmission": transmissions.iter().map(|&(&id, learning)| json!({
                 "recipe": id, "name": self.recipes.get(&id),
                 "first_year": learning.first_year, "last_year": learning.last_year,
@@ -644,6 +647,15 @@ pub(super) fn write_world(text: &mut String, chronicle: &Value) {
             writeln!(text, "- Person {} received deliveries or was joined by helpers in {} recorded years, spanning years {} through {}. Their largest recorded group in one year was {} people in year {}. The evidence includes {} choices to join their work and {} annual delivery relationships.",
                 row["person"], row["active_years"], row["first_year"], row["latest_year"], row["peak_collaborators"],
                 row["peak_year"], row["crew_choices"], row["annual_delivery_ties"]).unwrap();
+        }
+        text.push('\n');
+    }
+    if let Some(traits) = chronicle["named_inherited_traits"].as_array().filter(|rows| !rows.is_empty()) {
+        text.push_str("## Named inherited traits\n\n");
+        for row in traits {
+            writeln!(text, "- The mean allele value for {} was {} among {} living people in year {} and {} among {} in year {}. The latest sample recorded {} people with a different allele pair from the catalog default.",
+                row["name"].as_str().unwrap_or("Unnamed trait"), row["first"]["mean"], row["first"]["people"], row["first"]["year"],
+                row["latest"]["mean"], row["latest"]["people"], row["latest"]["year"], row["latest"]["variants"]).unwrap();
         }
         text.push('\n');
     }

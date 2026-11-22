@@ -66,7 +66,9 @@ pub(super) fn review(
     let formed: Vec<_> = local
         .par_chunk_by(|a, b| (a.0, a.1) == (b.0, b.1))
         .flat_map_iter(|group| {
-            subjective_partnerships(group, &index, physical, dependents, seed, entropy)
+            subjective_partnerships(
+                group, &index, physical, dependents, seed, entropy, family.traits.as_deref(),
+            )
         })
         .collect();
     let mut changes: Vec<_> = formed

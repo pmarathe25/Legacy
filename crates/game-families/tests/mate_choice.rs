@@ -92,6 +92,7 @@ fn member(id: u64, sex: Sex, partner: Option<u64>) -> Member {
             sex,
             alleles: [[1000; 2]; 4],
             mate_desire: [500; 2],
+            named_loci: None,
         },
         parents: Default::default(),
         partner,
@@ -105,6 +106,7 @@ fn member(id: u64, sex: Sex, partner: Option<u64>) -> Member {
 }
 fn family() -> Families {
     Families {
+        traits: None,
         rules: FamilyRules {
             adult_age: 16,
             min_work_age: 0,

@@ -150,6 +150,7 @@ mod tests {
                 sex: Sex::Female,
                 alleles: [[0; 2]; 4],
                 mate_desire: [500, 500],
+                named_loci: None,
             },
             parents: parents.iter().copied().collect(),
             partner: None,

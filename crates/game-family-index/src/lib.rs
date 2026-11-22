@@ -218,6 +218,7 @@ mod tests {
                 sex: Sex::Female,
                 alleles: [[0, 0]; 4],
                 mate_desire: [500, 500],
+                named_loci: None,
             },
             parents: vec![].into(),
             partner: None,

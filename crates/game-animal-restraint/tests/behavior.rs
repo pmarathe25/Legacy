@@ -66,6 +66,7 @@ fn fixture(count: u64, shared: bool) -> (Vec<Person>, Fauna, Restraints) {
                     sex: Sex::Male,
                     alleles: [[500; 2]; 4],
                     mate_desire: [500, 500],
+                    named_loci: None,
                 },
                 pregnancy: None,
                 parents: None,

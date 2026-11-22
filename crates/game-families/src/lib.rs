@@ -8,6 +8,7 @@ pub use lifetimes::ElapsedLifetimes;
 pub use phase::{Draft, ElapsedFamilyDraft};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -54,11 +55,13 @@ impl FamilyRules {
     }
 }
 pub(crate) use game_genetics::random;
-pub use game_genetics::{Genome, Sex};
+pub use game_genetics::{Genome, Sex, TraitCatalog};
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Families {
     pub rules: FamilyRules,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub traits: Option<Arc<TraitCatalog>>,
     pub members: Vec<Member>,
     pub next_id: u64,
     #[serde(default)]
@@ -260,6 +263,9 @@ impl Families {
         now: u64,
     ) -> Result<PhysicalIndex<'a>, &'static str> {
         self.rules.validate()?;
+        if self.traits.as_ref().is_some_and(|catalog| !catalog.validate()) {
+            return Err("invalid family trait catalog");
+        }
         let people = PhysicalIndex::new(inputs)?;
         let members = MemberIndex::new(&self.members)?;
         if self.next_id == 0
@@ -282,6 +288,10 @@ impl Families {
                 })
                 || m.genome.alleles.iter().flatten().any(|a| *a > 1000)
                 || m.genome.mate_desire.iter().any(|a| *a > 1000)
+                || self.traits.as_ref().map_or_else(
+                    || m.genome.named_loci.is_some(),
+                    |catalog| !catalog.validate_variants(&m.genome),
+                )
                 || !(m.parents.is_empty() || m.parents.len() == 2 && m.parents[0] != m.parents[1])
                 || m.parents
                     .iter()

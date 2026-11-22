@@ -15,6 +15,7 @@ fn member(id: u64, age: u64, parents: Vec<u64>) -> Member {
             alleles: [[0; 2]; 4],
 
             mate_desire: [500, 500],
+            named_loci: None,
         },
         parents: parents.into(),
         partner: None,
