@@ -8818,6 +8818,7 @@ fn core_host_cultivation_benchmark() {
                 pressured_by: None, pressure_threshold: None,
             }).collect::<Vec<_>>().into(), ..Default::default()
         }), animal_products: products.then(|| game_economy::AnimalProducts {
+            elapsed_actions: false,
             rules: vec![game_economy::AnimalProductRule { species: 1, good: 2, quantity: 1, grow_ticks: 1, min_age: 1, min_health: 1, max_hunger: 10 }],
             progress: (1..=count).map(|animal| game_economy::AnimalProductProgress { animal, growth: 1 }).collect(),
             policies: (2..=count).map(|person| game_economy::AnimalProductPolicy { person, animal: if product_contested { 1 } else { person }, willing: true, force_if_held: false, pressured_by: None, pressure_threshold: None }).collect(),

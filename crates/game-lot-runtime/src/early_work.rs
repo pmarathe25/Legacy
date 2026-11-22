@@ -511,6 +511,16 @@ impl Runtime {
     }
 
     /// Stage personal yields from domain-validated withdrawals from resource nodes.
+    pub fn prepare_interval_animal_products(
+        &self,
+        outputs: &[game_lot_content::AnimalProduct],
+        seed: u64,
+    ) -> Result<IntervalConsumptionDraft, String> {
+        self.prepare_interval_output(seed, |catalog, now| {
+            game_lot_content::prepare_animal_products(catalog, outputs, now)
+        })
+    }
+
     pub fn prepare_interval_gathering(
         &self,
         outputs: &[crate::Gathered],

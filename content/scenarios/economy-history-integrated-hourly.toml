@@ -1794,11 +1794,12 @@ max_hunger = 120
 period_millis = 3600000
 
 [animal_products]
+elapsed_actions = true
 [[animal_products.rules]]
 species = 1
 good = "raw-wool"
 quantity = 1
-grow_ticks = 8760
+grow_cycles = 8760
 min_age = 17520
 min_health = 1
 max_hunger = 10

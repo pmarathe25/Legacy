@@ -130,6 +130,14 @@ the yield into actual personal custody at that same instant. A full bag
 leaves the animal alive. History retains that physical cause and the
 hunter's identity, and the player can attempt `hunt ANIMAL` directly.
 
+With `animal_products.elapsed_actions = true`, products such as fleece
+accumulate over the configured wildlife lifecycle. The `grow_cycles` field
+defines how many eligible ecological cycles are needed. The wildlife's
+opening condition governs that cycle. Handlers reconsider on the personal
+decision clock. A refusal or insufficient cargo space keeps the product
+available for another attempt. Only a transfer into actual custody resets
+the growth.
+
 An optional `fauna.dispersal` defines directed wildlife corridors and policies
 by species. At each lifecycle event, a surviving animal can explore one
 corridor after grazing and reproduction. Its hunger, age, inherited drive,

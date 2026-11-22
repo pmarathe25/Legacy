@@ -184,6 +184,11 @@ impl CoreHost {
         draft: Option<CoreFaunaDraft>,
         transitions: Option<&CoreFaunaTransitions>,
     ) {
+        if transitions.is_some()
+            && let Some(products) = self.animal_products.as_mut().filter(|owner| owner.elapsed_actions)
+        {
+            products.renew_at_lifecycle(self.fauna.as_ref().expect("elapsed livestock"));
+        }
         self.publish_fauna(draft);
         if transitions.is_some_and(|events| !events.deaths.is_empty())
             && let Some(restraints) = &mut self.animal_restraints

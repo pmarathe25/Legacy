@@ -58,6 +58,8 @@ pub struct Event {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AnimalProducts {
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub elapsed_actions: bool,
     pub rules: Vec<Rule>,
     #[serde(default)]
     pub progress: Vec<Progress>,
@@ -69,6 +71,8 @@ pub struct AnimalProducts {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
+    #[serde(default)]
+    elapsed_actions: bool,
     rules: Vec<RuleConfig>,
     #[serde(default)]
     policies: Vec<Policy>,
@@ -79,6 +83,7 @@ struct RuleConfig {
     species: u32,
     good: String,
     quantity: u64,
+    #[serde(alias = "grow_cycles")]
     grow_ticks: u64,
     min_age: u64,
     min_health: u32,
@@ -103,6 +108,7 @@ impl Config {
             })
             .collect::<Result<Vec<_>, String>>()?;
         Ok(AnimalProducts {
+            elapsed_actions: self.elapsed_actions,
             rules,
             progress: vec![],
             policies: self.policies,
@@ -126,6 +132,9 @@ impl AnimalProducts {
         tick: u64,
     ) -> Result<(), String> {
         let fauna = fauna.ok_or("animal products require wildlife")?;
+        if self.elapsed_actions && fauna.lifecycle_period_millis.is_none() {
+            return Err("elapsed animal products require a wildlife lifecycle clock".into());
+        }
         self.rules.par_sort_unstable_by_key(|r| r.species);
         self.progress.par_sort_unstable_by_key(|r| r.animal);
         self.policies.par_sort_unstable_by_key(|p| p.person);
@@ -184,6 +193,29 @@ impl AnimalProducts {
         Ok(())
     }
     pub fn advance(&self, fauna: &Fauna, events: Vec<Event>) -> AnimalProducts {
+        AnimalProducts {
+            elapsed_actions: self.elapsed_actions,
+            rules: self.rules.clone(),
+            progress: self.growth_update(fauna, &events),
+            policies: self.policies.par_iter().cloned().collect(),
+            events,
+        }
+    }
+
+    pub fn renew_at_lifecycle(&mut self, opening: &Fauna) {
+        self.progress = self.growth_update(opening, &[]);
+    }
+
+    pub fn record_collection(&mut self, events: Vec<Event>) {
+        for event in events.iter().filter(|row| row.outcome == Outcome::Collected) {
+            let index = index_by(&self.progress, event.animal, |row| row.animal)
+                .expect("admitted product had mature growth");
+            self.progress[index].growth = 0;
+        }
+        self.events = events;
+    }
+
+    fn growth_update(&self, fauna: &Fauna, events: &[Event]) -> Vec<Progress> {
         let mut collected: Vec<_> = events
             .par_iter()
             .filter(|e| e.outcome == Outcome::Collected)
@@ -222,12 +254,7 @@ impl AnimalProducts {
         if progress.par_windows(2).any(|w| w[0].animal > w[1].animal) {
             progress.par_sort_unstable_by_key(|p| p.animal);
         }
-        AnimalProducts {
-            rules: self.rules.clone(),
-            progress,
-            policies: self.policies.par_iter().cloned().collect(),
-            events,
-        }
+        progress
     }
 }
 #[derive(Clone, Copy)]
@@ -254,6 +281,7 @@ pub struct Context<'a> {
     pub max_hunger: u32,
     pub manual: Option<(u64, u64, bool)>,
     pub seed: u64,
+    pub draw_key: u64,
     pub tick: u64,
 }
 impl Context<'_> {
@@ -325,7 +353,7 @@ impl Context<'_> {
                 {
                     return None;
                 }
-                let mut priority = self.seed ^ self.tick.rotate_left(17) ^ p.person;
+                let mut priority = self.seed ^ self.draw_key.rotate_left(17) ^ p.person;
                 priority = (priority ^ (priority >> 30)).wrapping_mul(0xbf58476d1ce4e5b9);
                 priority = (priority ^ (priority >> 27)).wrapping_mul(0x94d049bb133111eb);
                 priority ^= priority >> 31;
@@ -478,17 +506,20 @@ impl Context<'_> {
     }
 }
 impl Plan {
-    pub fn publish(mut self, events: &Events) -> (Vec<Event>, Vec<handling::Event>) {
+    pub fn publish(self, events: &Events) -> (Vec<Event>, Vec<handling::Event>) {
+        self.publish_receipts(&events.physical_actions)
+    }
+
+    pub fn publish_receipts(mut self, receipts: &[game_lots::TransactionOutcome]) -> (Vec<Event>, Vec<handling::Event>) {
         if self.yields.is_empty() {
             return (self.events, self.handling);
         }
         let first = self.yields[0].action;
-        if let Some(start) = events
-            .physical_actions
+        if let Some(start) = receipts
             .par_iter()
             .position_any(|e| e.id == first)
             && let Some(end) = start.checked_add(self.yields.len())
-            && let Some(receipts) = events.physical_actions.get(start..end)
+            && let Some(receipts) = receipts.get(start..end)
             && receipts
                 .par_iter()
                 .zip(self.yields.par_iter())
@@ -503,8 +534,7 @@ impl Plan {
             });
             return (self.events, self.handling);
         }
-        let accepted: HashSet<_> = events
-            .physical_actions
+        let accepted: HashSet<_> = receipts
             .par_iter()
             .filter(|e| e.accepted)
             .map(|e| e.id)

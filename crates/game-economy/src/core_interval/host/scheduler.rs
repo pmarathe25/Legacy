@@ -796,6 +796,10 @@ pub enum CoreRunEvent {
         at_millis: u128,
         events: Vec<crate::hunting::Receipt>,
     },
+    ElapsedAnimalProducts {
+        at_millis: u128,
+        events: Vec<crate::animal_products::Event>,
+    },
     WildPlants(game_economy_agriculture::wild_plants::Cycle),
     InvocationWarning {
         at_millis: u128,
@@ -3966,6 +3970,18 @@ impl CoreHost {
                                 deaths: hunt.deaths,
                                 migrations: Vec::new(),
                             }));
+                        }
+                        let products = attempt!('run, self.collect_products_at_decision(&busy));
+                        if !products.actors.is_empty() {
+                            busy.par_extend(products.actors);
+                            busy.par_sort_unstable();
+                            busy.dedup();
+                        }
+                        if !products.events.is_empty() {
+                            run.events.push(CoreRunEvent::ElapsedAnimalProducts {
+                                at_millis: self.core.simulated_millis(),
+                                events: products.events,
+                            });
                         }
                         let walking = attempt!('run, self.walk_autonomously(&busy));
                         if !walking.is_empty() {

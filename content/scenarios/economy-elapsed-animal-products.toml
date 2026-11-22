@@ -1,0 +1,109 @@
+# Fleece grows on wildlife cycles and collection follows the handler's decision clock.
+seed = 23
+tick_millis = 37
+decision_period_millis = 51
+stock_capacity = 20
+food_relief_divisor = 20
+good_footprints = { raw-wool = 3 }
+
+[rules]
+hunger_rate = { units = 0, per_millis = 1000 }
+meal_threshold = 20
+starvation_threshold = 50
+max_health = 100
+max_work_hunger = 30
+carrying_capacity = 8
+
+[[regions]]
+id = 1
+storage = { barley = 20 }
+stock = { barley = 12 }
+
+[[people]]
+id = 1
+region = 1
+health = 100
+hunger = 0
+willing_to_work = false
+seek_meals = false
+
+[[people]]
+id = 2
+region = 1
+health = 100
+hunger = 0
+willing_to_work = false
+seek_meals = false
+
+[[people]]
+id = 3
+region = 1
+health = 100
+hunger = 0
+willing_to_work = false
+seek_meals = false
+goods = { bread = 8 }
+
+[fauna]
+next_id = 4
+last_tick = 0
+lifecycle_period_millis = 101
+
+[[fauna.species]]
+id = 1
+name = "Fixture wool grazer"
+food_good = "barley"
+intake = 1
+hunger_per_tick = 1
+relief_per_unit = 4
+starvation_threshold = 20
+starvation_damage = 1
+max_health = 100
+adult_age = 2
+fertile_until = 25
+lifespan = 50
+gestation = 4
+conception_one_in = 5
+breeding_max_hunger = 10
+newborn_health = 100
+mutation_per_million = 0
+mutation_step = 0
+
+[[fauna.animals]]
+id = 1
+species = 1
+region = 1
+age = 2
+health = 100
+hunger = 0
+genome = { sex = "Female", alleles = [[500, 500], [500, 500], [500, 500], [500, 500]] }
+handling_response = { willing = true, on_accept = 0, on_refuse = 0 }
+
+[[fauna.animals]]
+id = 2
+species = 1
+region = 1
+age = 2
+health = 100
+hunger = 0
+genome = { sex = "Female", alleles = [[500, 500], [500, 500], [500, 500], [500, 500]] }
+handling_response = { willing = false, on_accept = 0, on_refuse = 0 }
+
+[[fauna.animals]]
+id = 3
+species = 1
+region = 1
+age = 2
+health = 100
+hunger = 0
+genome = { sex = "Female", alleles = [[500, 500], [500, 500], [500, 500], [500, 500]] }
+handling_response = { willing = true, on_accept = 0, on_refuse = 0 }
+
+[animal_products]
+elapsed_actions = true
+rules = [{ species = 1, good = "raw-wool", quantity = 2, grow_cycles = 2, min_age = 2, min_health = 1, max_hunger = 6 }]
+policies = [
+    { person = 1, animal = 1, willing = true },
+    { person = 2, animal = 2, willing = true },
+    { person = 3, animal = 3, willing = true },
+]
