@@ -4,7 +4,7 @@ use game_families::Families;
 use game_knowledge::Observation;
 pub use game_knowledge::{
     Knowledge, Mind, Misreport, PersonReport, RecallTrace, Record, Reporting, Retention, SeenPerson,
-    StockTime,
+    StockSurvey, StockTime,
 };
 pub use game_knowledge::episodes;
 use game_lots::{Place, View};
@@ -12,7 +12,7 @@ use game_opinions::Opinions;
 use game_production_model::Good;
 use game_social::Social;
 use rayon::prelude::*;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 fn regions(view: &View) -> HashSet<u64> {
     view.containers
@@ -26,6 +26,7 @@ fn regions(view: &View) -> HashSet<u64> {
 pub fn validate(
     owner: Option<&Knowledge>,
     people: &HashSet<u64>,
+    goods: &[Good],
     view: &View,
     now: StockTime,
 ) -> Result<(), String> {
@@ -33,13 +34,22 @@ pub fn validate(
         owner
             .validate_at(people, &regions(view), now)
             .map_err(str::to_owned)?;
+        let food: HashSet<_> = goods.iter().filter(|good| good.food.is_some()).map(|good| good.id).collect();
+        if owner.minds.par_iter().any(|mind| {
+            mind.stock_survey.iter().chain(mind.records.iter().filter_map(|row| row.survey.as_ref()))
+                .any(|survey| survey.goods.iter().any(|good| !food.contains(good)))
+        }) {
+            return Err("food survey refers to an unknown or inedible good".into());
+        }
     }
     Ok(())
 }
 #[macro_export]
 macro_rules! validate_world {
     ($state:expr, $ids:expr, $view:expr, $physical:expr) => {
-        $crate::validate($state.knowledge.as_ref(), &$ids, &$view, $physical.tick().into())?
+        $crate::validate(
+            $state.knowledge.as_ref(), &$ids, $physical.goods(), &$view, $physical.tick().into(),
+        )?
     };
 }
 pub struct ObservationAccess<'a> {
@@ -70,6 +80,7 @@ pub fn advance(
         .filter_map(|c| match c.place {
             Place::Stock { region, good } => Some((
                 region,
+                good,
                 if edible.contains(&good) {
                     c.quantity(good)
                 } else {
@@ -82,20 +93,41 @@ pub fn advance(
     let food: Vec<_> = stocks
         .par_chunk_by(|a, b| a.0 == b.0)
         .map(|group| {
-            let total: u128 = group.par_iter().map(|row| u128::from(row.1)).sum();
-            (group[0].0, total.min(u128::from(u32::MAX)) as u32)
+            let total: u128 = group.par_iter().map(|row| u128::from(row.2)).sum();
+            (group[0].0, total, group)
         })
+        .collect();
+    let surveys: HashMap<_, _> = owner
+        .minds
+        .par_iter()
+        .filter_map(|mind| mind.stock_survey.as_ref().map(|survey| (mind.person, survey)))
         .collect();
     let observations: Vec<_> = people
         .par_iter()
         .map(|p| {
+            let survey = surveys.get(&p.id).copied();
             let local = p
                 .region
                 .filter(|_| access.not_at_stock.binary_search(&p.id).is_err())
                 .map(|region| {
                     food.binary_search_by_key(&region, |r| r.0)
                         .ok()
-                        .map(|i| (region, food[i].1))
+                        .map(|i| {
+                            let (_, total, group) = food[i];
+                            let amount = survey.map_or(total, |survey| {
+                                let amount = if survey.goods.is_empty() {
+                                    total
+                                } else {
+                                    survey.goods.iter().filter_map(|good| {
+                                        let index = group.binary_search_by_key(good, |row| row.1).ok()?;
+                                        Some(u128::from(group[index].2))
+                                    }).sum()
+                                };
+                                let step = u128::from(survey.count_step.get());
+                                amount / step * step
+                            });
+                            (region, amount.min(u128::from(u32::MAX)) as u32)
+                        })
                         .ok_or("unknown observation region")
                 })
                 .transpose()?;
@@ -103,6 +135,7 @@ pub fn advance(
                 person: p.id,
                 health: p.health,
                 local,
+                survey: local.and(survey).cloned(),
             })
         })
         .collect::<Result<_, &str>>()
@@ -158,7 +191,7 @@ pub fn inherit(knowledge: &mut Option<Knowledge>, family: &Families, births: &[u
             people_reporting: None,
             people_reports: vec![],
             people_seen: vec![],
-            misreport: None,
+            stock_survey: None, misreport: None,
             records: vec![],
         }));
 }
@@ -218,6 +251,7 @@ pub fn discrepancies(
                     person: person.id,
                     health: person.health,
                     local: Some((region, current.food)),
+                    survey: current.survey.clone(),
                 },
             )
         })

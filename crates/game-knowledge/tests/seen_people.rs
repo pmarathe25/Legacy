@@ -11,7 +11,7 @@ fn encounter_reports_are_personal_bounded_and_keep_their_source() {
         people_reports: vec![],
         people_seen: vec![],
         reporting: None,
-        misreport: None,
+        stock_survey: None, misreport: None,
         records: vec![],
     };
     let mut speaker = empty(1);
@@ -30,16 +30,19 @@ fn encounter_reports_are_personal_bounded_and_keep_their_source() {
         Observation {
             person: 1,
             health: 10,
+            survey: None,
             local: Some((1, 0)),
         },
         Observation {
             person: 2,
             health: 10,
+            survey: None,
             local: Some((1, 0)),
         },
         Observation {
             person: 3,
             health: 10,
+            survey: None,
             local: Some((2, 0)),
         },
     ];
@@ -124,7 +127,7 @@ fn personal_encounter_memories_are_bounded_and_do_not_depend_on_report_acceptanc
                 people_reports: vec![],
                 people_seen: vec![],
                 reporting: None,
-                misreport: None,
+                stock_survey: None, misreport: None,
                 records: vec![],
             },
             Mind {
@@ -134,7 +137,7 @@ fn personal_encounter_memories_are_bounded_and_do_not_depend_on_report_acceptanc
                 people_reports: vec![],
                 people_seen: vec![],
                 reporting: None,
-                misreport: None,
+                stock_survey: None, misreport: None,
                 records: vec![],
             },
         ],
@@ -151,16 +154,19 @@ fn personal_encounter_memories_are_bounded_and_do_not_depend_on_report_acceptanc
                     Observation {
                         person: 1,
                         health: 10,
+                        survey: None,
                         local: Some((1, 0)),
                     },
                     Observation {
                         person: 2,
                         health: 10,
+                        survey: None,
                         local: Some((1, 0)),
                     },
                     Observation {
                         person: 3,
                         health: 10,
+                        survey: None,
                         local: Some((2, 0)),
                     },
                 ];
@@ -188,16 +194,19 @@ fn personal_encounter_memories_are_bounded_and_do_not_depend_on_report_acceptanc
                     Observation {
                         person: 1,
                         health: 10,
+                        survey: None,
                         local: Some((2, 0)),
                     },
                     Observation {
                         person: 2,
                         health: 10,
+                        survey: None,
                         local: Some((1, 0)),
                     },
                     Observation {
                         person: 3,
                         health: 10,
+                        survey: None,
                         local: Some((2, 0)),
                     },
                 ];

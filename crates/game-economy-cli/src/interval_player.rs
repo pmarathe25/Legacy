@@ -53,7 +53,7 @@ fn command(host: &mut CoreHost, person: u64, words: &[&str]) -> Result<bool, Str
     match words {
         [] => {}
         ["help"] => println!(
-            "look | wait MILLISECONDS | move REGION | walk stock|store ID | pause-walk | resume-walk | trip REGION VISIT_MILLISECONDS [food] | trip go|survey|back|cancel | trip leave-in MILLISECONDS | trip meet GROUP MINIMUM WAIT_MILLISECONDS | trip meet off | fight PERSON | join-fight BENEFICIARY OPPONENT | tactic wait|defend|retreat | tactic attack PERSON | tactic attack-site SITE | tactic move X Y | confine PERSON SITE | guard SITE | release PERSON | escape | build BLUEPRINT | demolish SITE | salvage SITE GOOD QUANTITY | gather NODE | cultivate FIELD [CARRIED_SEED_BATCH] | amend FIELD | water FIELD QUANTITY | pastime ACTIVITY | pastime stop | report-food on|off | misreport-food DELTA [PERSON] | food-reports | listen-for ACTIVITY VALUE | performances | memories [PERSON] | reflect-memory PERSON | reflect-memory activity ACTIVITY | findings | assemble APPARATUS PART... | mount APPARATUS STORE | unmount APPARATUS STORE | experiment APPARATUS OUTPUT FORCE DISTANCE LOAD | promise PERSON GOOD QUANTITY DUE_IN_MILLISECONDS | respond PROMISE accept|decline|withdraw | deliver PROMISE QUANTITY | eat GOOD | treat GOOD | wear GOOD | unwear | work RECIPE UNITS | stop JOB | stop-assist | rest on|off | word place|person|object ID SOUNDS | form SOUNDS MARKS | inscribe SOUNDS | compose SOUNDS SOUNDS ... | read-work PAGE | read PAGE | recall PAGE | save PATH | load PATH | quit (SOUNDS and MARKS are comma-separated numbers)"
+            "look | wait MILLISECONDS | move REGION | walk stock|store ID | pause-walk | resume-walk | trip REGION VISIT_MILLISECONDS [food] | trip go|survey|back|cancel | trip leave-in MILLISECONDS | trip meet GROUP MINIMUM WAIT_MILLISECONDS | trip meet off | fight PERSON | join-fight BENEFICIARY OPPONENT | tactic wait|defend|retreat | tactic attack PERSON | tactic attack-site SITE | tactic move X Y | confine PERSON SITE | guard SITE | release PERSON | escape | build BLUEPRINT | demolish SITE | salvage SITE GOOD QUANTITY | gather NODE | cultivate FIELD [CARRIED_SEED_BATCH] | amend FIELD | water FIELD QUANTITY | pastime ACTIVITY | pastime stop | report-food on|off | misreport-food DELTA [PERSON] | survey-food exact|STEP [GOOD...] | food-reports | listen-for ACTIVITY VALUE | performances | memories [PERSON] | reflect-memory PERSON | reflect-memory activity ACTIVITY | findings | assemble APPARATUS PART... | mount APPARATUS STORE | unmount APPARATUS STORE | experiment APPARATUS OUTPUT FORCE DISTANCE LOAD | promise PERSON GOOD QUANTITY DUE_IN_MILLISECONDS | respond PROMISE accept|decline|withdraw | deliver PROMISE QUANTITY | eat GOOD | treat GOOD | wear GOOD | unwear | work RECIPE UNITS | stop JOB | stop-assist | rest on|off | word place|person|object ID SOUNDS | form SOUNDS MARKS | inscribe SOUNDS | compose SOUNDS SOUNDS ... | read-work PAGE | read PAGE | recall PAGE | save PATH | load PATH | quit (SOUNDS and MARKS are comma-separated numbers)"
         ),
         ["quit"] | ["exit"] => return Ok(false),
         ["look"] => {
@@ -538,14 +538,23 @@ fn command(host: &mut CoreHost, person: u64, words: &[&str]) -> Result<bool, Str
             host.set_food_misreport_controlled(person, number(delta)?, target)?;
             println!("food statement preference updated");
         }
+        ["survey-food", "exact"] => host.set_food_survey_controlled(person, None)?,
+        ["survey-food", step, goods @ ..] => {
+            let count_step = std::num::NonZeroU32::new(number(step)?)
+                .ok_or("the count step must be positive")?;
+            let mut goods = goods.iter().map(|good| number(good)).collect::<Result<Vec<_>, _>>()?;
+            goods.sort_unstable();
+            host.set_food_survey_controlled(person, Some(game_economy::StockSurvey { goods, count_step }))?;
+        }
         ["food-reports"] => {
             let records = host.food_reports_controlled(person)?;
             if records.is_empty() {
                 println!("No remembered food reports.");
             }
             for row in records {
+                let survey = row.survey.as_ref().map(|survey| (survey.count_step.get(), survey.goods.as_slice()));
                 println!(
-                    "region={} food={} observed_tick={} observed_millis={:?} witness={} learned_from={:?}",
+                    "region={} food={} observed_tick={} observed_millis={:?} witness={} learned_from={:?} survey={survey:?}",
                     row.region, row.food, row.observed_at, row.observed_at_millis, row.witness, row.learned_from,
                 );
             }

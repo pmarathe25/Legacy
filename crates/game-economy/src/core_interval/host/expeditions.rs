@@ -6,6 +6,7 @@ use game_economy_expeditions::{
     rendezvous::Rendezvous,
 };
 use game_lots::Place;
+use std::collections::HashMap;
 
 impl CoreHost {
     pub(super) fn next_expedition_deadline(&self) -> Option<u64> {
@@ -323,7 +324,6 @@ impl CoreHost {
                 )
             })
             .collect();
-        observations.par_sort_unstable();
         if let Some(knowledge) = &self.knowledge {
             let observers: HashSet<_> = observers.par_iter().map(|&(person, _)| person).collect();
             let blocked: Vec<_> = self
@@ -344,7 +344,26 @@ impl CoreHost {
                     not_at_stock: &blocked,
                 },
             )?;
+            let next = self.knowledge.as_ref().expect("enabled knowledge owner");
+            let scoped: HashMap<_, _> = next.minds.par_iter().filter_map(|mind| {
+                if !observers.contains(&mind.person) || mind.stock_survey.is_none() {
+                    return None;
+                }
+                let record = mind.records.iter().find(|record| {
+                    record.learned_from.is_none()
+                        && record.witness == mind.person
+                        && record.observed_at_millis == Some(now)
+                        && record.survey.is_some()
+                })?;
+                Some(((mind.person, record.region), u64::from(record.food)))
+            }).collect();
+            observations.par_iter_mut().for_each(|(person, region, food)| {
+                if let Some(&amount) = scoped.get(&(*person, *region)) {
+                    *food = amount;
+                }
+            });
         }
+        observations.par_sort_unstable();
         Ok(self
             .expeditions
             .as_mut()

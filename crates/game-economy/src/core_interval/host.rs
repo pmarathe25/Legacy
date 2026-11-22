@@ -822,7 +822,7 @@ impl CoreHost {
             let now = game_economy_knowledge::StockTime::elapsed(
                 core.physical.tick(), core.simulated_millis(), core.physical.tick_millis(),
             );
-            game_economy_knowledge::validate(Some(owner), &people, &view, now)?;
+            game_economy_knowledge::validate(Some(owner), &people, core.physical.goods(), &view, now)?;
             if let Some(memory) = &owner.episodes {
                 memory.validate_at(core.simulated_millis())?;
             }

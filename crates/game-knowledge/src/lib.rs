@@ -5,6 +5,8 @@ use game_social::Encounter;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
+use std::num::NonZeroU32;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -235,6 +237,9 @@ pub struct Mind {
     /// A private choice about what to tell a particular listener, or everyone.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub misreport: Option<Misreport>,
+    /// The kinds this person attends to and the precision of their counts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stock_survey: Option<Arc<StockSurvey>>,
     #[serde(default)]
     pub records: Vec<Record>,
 }
@@ -270,6 +275,24 @@ pub struct Misreport {
     /// Signed change to the quantity in the speaker's remembered report.
     pub food_delta: i64,
 }
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StockSurvey {
+    /// Empty includes every edible kind accessible at the current endpoint.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub goods: Vec<u32>,
+    /// Count full groups of this size, reporting the resulting lower estimate.
+    pub count_step: NonZeroU32,
+}
+
+impl StockSurvey {
+    pub fn valid(&self) -> bool {
+        self.goods.first().is_none_or(|&id| id != 0)
+            && self.goods.windows(2).all(|rows| rows[0] < rows[1])
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Record {
@@ -278,6 +301,9 @@ pub struct Record {
     pub observed_at: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub observed_at_millis: Option<u128>,
+    /// The access and precision claimed by the original observation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub survey: Option<Arc<StockSurvey>>,
     pub witness: u64,
     pub learned_from: Option<u64>,
 }
@@ -309,11 +335,12 @@ impl Record {
         statement
     }
 }
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub struct Observation {
     pub person: u64,
     pub health: u32,
     pub local: Option<(u64, u32)>,
+    pub survey: Option<Arc<StockSurvey>>,
 }
 /// A personal observation differs from a remembered report. Stock can change,
 /// so this observation does not establish whether the speaker was dishonest.
@@ -321,7 +348,7 @@ pub fn report_discrepancy(records: &[Record], observation: Observation) -> Optio
     let (region, food) = observation.local.filter(|_| observation.health > 0)?;
     let previous = records.iter().find(|record| record.region == region)?;
     let speaker = previous.learned_from?;
-    (previous.food != food && speaker != observation.person)
+    (previous.food != food && speaker != observation.person && previous.survey == observation.survey)
         .then_some((observation.person, speaker))
 }
 
@@ -621,6 +648,7 @@ impl Knowledge {
                 || mind.records.len() > self.max_records
                 || mind.people_seen.len() > self.max_records
                 || mind.people_reports.len() > self.max_records
+                || mind.stock_survey.as_ref().is_some_and(|survey| !survey.valid())
                 || mind
                     .misreport
                     .and_then(|p| p.target)
@@ -656,6 +684,7 @@ impl Knowledge {
                 if !regions.contains(&r.region)
                     || !people.contains(&r.witness)
                     || !r.available_at(now)
+                    || r.survey.as_ref().is_some_and(|survey| !survey.valid())
                     || r.learned_from
                         .is_some_and(|id| !people.contains(&id) || id == mind.person)
                     || !recorded.insert(r.region)
@@ -874,6 +903,7 @@ impl Knowledge {
                             .binary_search_by_key(&r.witness, |o| o.person)
                             .is_err()
                         || !r.available_at(now)
+                        || r.survey.as_ref().is_some_and(|survey| !survey.valid())
                         || r.learned_from.is_some_and(|id| {
                             id == mind.person
                                 || observations
@@ -943,11 +973,11 @@ impl Knowledge {
                 let a = observations
                     .binary_search_by_key(&e.a, |o| o.person)
                     .ok()
-                    .map(|i| observations[i]);
+                    .map(|i| &observations[i]);
                 let b = observations
                     .binary_search_by_key(&e.b, |o| o.person)
                     .ok()
-                    .map(|i| observations[i]);
+                    .map(|i| &observations[i]);
                 e.tick != now.tick.saturating_add(1)
                     || e.a >= e.b
                     || a.is_none_or(|p| p.health == 0 || p.local.is_none_or(|(r, _)| r != e.region))
@@ -1035,7 +1065,7 @@ impl Knowledge {
             .map(|old| {
                 let mut mind = old.clone();
                 let position = observation_index(mind.person).expect("validated mind");
-                let observation = observations[position];
+                let observation = &observations[position];
                 if observation.health == 0 {
                     return mind;
                 }
@@ -1089,6 +1119,7 @@ impl Knowledge {
                         food,
                         observed_at: now.tick,
                         observed_at_millis: now.millis(),
+                        survey: observation.survey.clone(),
                         witness: mind.person,
                         learned_from: None,
                     };
@@ -1257,7 +1288,7 @@ impl Knowledge {
                     else {
                         return policy;
                     };
-                    let observation = observation_index(policy.person).map(|i| observations[i]);
+                    let observation = observation_index(policy.person).map(|i| &observations[i]);
                     policy.traces.retain(|trace| {
                         new_mind
                             .records
@@ -1306,7 +1337,8 @@ impl Knowledge {
     }
 }
 fn same_evidence(a: &Record, b: &Record) -> bool {
-    (a.region, a.food, a.observed(), a.witness) == (b.region, b.food, b.observed(), b.witness)
+    (a.region, a.food, a.observed(), a.witness, &a.survey)
+        == (b.region, b.food, b.observed(), b.witness, &b.survey)
 }
 fn remember(
     records: &mut Vec<Record>,

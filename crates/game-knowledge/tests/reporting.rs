@@ -19,13 +19,14 @@ fn speaker_can_withhold_or_report_under_their_own_pressure() {
                 people_reporting: None,
                 people_reports: vec![],
                 people_seen: vec![],
-                misreport: Some(Misreport {
+                stock_survey: None, misreport: Some(Misreport {
                     target: Some(2),
                     food_delta: 5,
                 }),
                 records: vec![Record {
                     region: 2,
                     food: 10,
+                    survey: None,
                     observed_at_millis: None,
                     observed_at: 0,
                     witness: 1,
@@ -39,7 +40,7 @@ fn speaker_can_withhold_or_report_under_their_own_pressure() {
                 people_reporting: None,
                 people_reports: vec![],
                 people_seen: vec![],
-                misreport: None,
+                stock_survey: None, misreport: None,
                 records: vec![],
             },
         ],
@@ -48,11 +49,13 @@ fn speaker_can_withhold_or_report_under_their_own_pressure() {
         Observation {
             person: 1,
             health: 10,
+            survey: None,
             local: Some((1, 0)),
         },
         Observation {
             person: 2,
             health: 10,
+            survey: None,
             local: Some((1, 0)),
         },
     ];

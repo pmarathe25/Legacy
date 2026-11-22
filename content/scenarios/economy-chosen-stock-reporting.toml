@@ -16,7 +16,7 @@ max_work_hunger = 40
 
 [[regions]]
 id = 1
-stock = {}
+stock = { bread = 9, barley = 4 }
 [[regions]]
 id = 2
 stock = { bread = 7 }
@@ -38,8 +38,16 @@ hunger = 0
 willing_to_work = false
 seek_meals = false
 
+[[people]]
+id = 3
+region = 2
+health = 100
+hunger = 0
+willing_to_work = false
+seek_meals = false
+
 [dynamics.social]
-participants = [{ person = 1, willing = true }, { person = 2, willing = true }]
+participants = [{ person = 1, willing = true }, { person = 2, willing = true }, { person = 3, willing = true }]
 [dynamics.social.rules]
 interval = 1
 min_health = 1
@@ -57,7 +65,15 @@ records = [{ region = 2, food = 7, observed_at = 0, witness = 1 }]
 [[knowledge.minds]]
 person = 2
 
+[[knowledge.minds]]
+person = 3
+
 [[knowledge.retention]]
 person = 2
 duration_millis = 23
+
+[[stock_surveys]]
+person = 1
+goods = ["bread"]
+count_step = 4
 
