@@ -76,8 +76,9 @@ preferences = [
 
 [pastimes]
 catalogs = ["pastimes/daily.toml", "pastimes/literature.toml"]
-activities = { "compose-song" = 1, "play-reed-pipe" = 2, paint = 3 }
+activities = { "compose-song" = 1, "play-reed-pipe" = 2, paint = 3, "compare-trials" = 4 }
 minds = [
+    { person = 3, interests = [{ activity = 4, value = 5, recent_value = -6 }] },
     { person = 33, interests = [{ activity = 1, value = 4, recent_value = -6 }] },
     { person = 34, interests = [{ activity = 2, value = 3, recent_value = -5 }] },
     { person = 35, interests = [{ activity = 3, value = 5, recent_value = -6 }] },
@@ -476,6 +477,7 @@ health = 100
 hunger = 0
 willing_to_work = false
 seek_meals = true
+goods = { paper = 1, ink = 1 }
 
 [[people]]
 id = 44
@@ -1637,7 +1639,7 @@ elapsed_renewal = true
 elapsed_actions = true
 inherit_births = true
 max_hunger = 120
-policies = [{ person = 1, node = 1, willing = true }, { person = 2, node = 1, willing = true }, { person = 3, node = 1, willing = true }, { person = 4, node = 1, willing = true }, { person = 5, node = 1, willing = true }, { person = 6, node = 1, willing = true }, { person = 7, node = 1, willing = true }, { person = 8, node = 1, willing = true }, { person = 9, node = 1, willing = true }, { person = 10, node = 1, willing = true }, { person = 11, node = 1, willing = true }, { person = 12, node = 1, willing = true }, { person = 13, node = 1, willing = true }, { person = 14, node = 1, willing = true }, { person = 15, node = 1, willing = true }, { person = 16, node = 1, willing = true }, { person = 17, node = 1, willing = true }, { person = 18, node = 1, willing = true }, { person = 19, node = 1, willing = true }, { person = 20, node = 1, willing = true }, { person = 21, node = 1, willing = true }, { person = 22, node = 1, willing = true }, { person = 23, node = 1, willing = true }, { person = 24, node = 1, willing = true }, { person = 25, node = 1, willing = true }, { person = 26, node = 1, willing = true }, { person = 27, node = 1, willing = true }, { person = 28, node = 1, willing = true }, { person = 29, node = 1, willing = true }, { person = 30, node = 1, willing = true }, { person = 31, node = 1, willing = true }, { person = 32, node = 1, willing = true }, { person = 33, node = 1, willing = false }, { person = 34, node = 1, willing = false }, { person = 35, node = 1, willing = false }, { person = 36, node = 1, willing = true }, { person = 37, node = 1, willing = true }, { person = 38, node = 1, willing = true }, { person = 39, node = 1, willing = true }, { person = 40, node = 1, willing = true }, { person = 41, node = 1, willing = true }, { person = 42, node = 1, willing = true }, { person = 43, node = 1, willing = true }, { person = 44, node = 1, willing = true }, { person = 45, node = 1, willing = true }, { person = 46, node = 1, willing = true }, { person = 47, node = 1, willing = true }, { person = 48, node = 1, willing = true }, { person = 49, node = 2, willing = true }, { person = 50, node = 2, willing = true }, { person = 51, node = 2, willing = true }, { person = 52, node = 2, willing = true }, { person = 53, node = 2, willing = true }, { person = 54, node = 2, willing = true }, { person = 55, node = 2, willing = true }, { person = 56, node = 2, willing = true }, { person = 57, node = 2, willing = true }, { person = 58, node = 2, willing = true }, { person = 59, node = 2, willing = true }, { person = 60, node = 2, willing = true }, { person = 11, node = 5, willing = true }, { person = 12, node = 5, willing = true }, { person = 1, node = 6, willing = true }, { person = 49, node = 7, willing = true }]
+policies = [{ person = 1, node = 1, willing = true }, { person = 2, node = 1, willing = true }, { person = 3, node = 1, willing = false }, { person = 4, node = 1, willing = true }, { person = 5, node = 1, willing = true }, { person = 6, node = 1, willing = true }, { person = 7, node = 1, willing = true }, { person = 8, node = 1, willing = true }, { person = 9, node = 1, willing = true }, { person = 10, node = 1, willing = true }, { person = 11, node = 1, willing = true }, { person = 12, node = 1, willing = true }, { person = 13, node = 1, willing = true }, { person = 14, node = 1, willing = true }, { person = 15, node = 1, willing = true }, { person = 16, node = 1, willing = true }, { person = 17, node = 1, willing = true }, { person = 18, node = 1, willing = true }, { person = 19, node = 1, willing = true }, { person = 20, node = 1, willing = true }, { person = 21, node = 1, willing = true }, { person = 22, node = 1, willing = true }, { person = 23, node = 1, willing = true }, { person = 24, node = 1, willing = true }, { person = 25, node = 1, willing = true }, { person = 26, node = 1, willing = true }, { person = 27, node = 1, willing = true }, { person = 28, node = 1, willing = true }, { person = 29, node = 1, willing = true }, { person = 30, node = 1, willing = true }, { person = 31, node = 1, willing = true }, { person = 32, node = 1, willing = true }, { person = 33, node = 1, willing = false }, { person = 34, node = 1, willing = false }, { person = 35, node = 1, willing = false }, { person = 36, node = 1, willing = true }, { person = 37, node = 1, willing = true }, { person = 38, node = 1, willing = true }, { person = 39, node = 1, willing = true }, { person = 40, node = 1, willing = true }, { person = 41, node = 1, willing = true }, { person = 42, node = 1, willing = true }, { person = 43, node = 1, willing = false }, { person = 44, node = 1, willing = true }, { person = 45, node = 1, willing = true }, { person = 46, node = 1, willing = true }, { person = 47, node = 1, willing = true }, { person = 48, node = 1, willing = true }, { person = 49, node = 2, willing = true }, { person = 50, node = 2, willing = true }, { person = 51, node = 2, willing = true }, { person = 52, node = 2, willing = true }, { person = 53, node = 2, willing = true }, { person = 54, node = 2, willing = true }, { person = 55, node = 2, willing = true }, { person = 56, node = 2, willing = true }, { person = 57, node = 2, willing = true }, { person = 58, node = 2, willing = true }, { person = 59, node = 2, willing = true }, { person = 60, node = 2, willing = true }, { person = 11, node = 5, willing = true }, { person = 12, node = 5, willing = true }, { person = 1, node = 6, willing = true }, { person = 49, node = 7, willing = true }]
 
 [[gathering.nodes]]
 id = 1
@@ -2030,6 +2032,7 @@ paper_quantity = 1
 ink_quantity = 1
 next_item = 1
 literacy = [{person=1,script=1,read=true,auto_read=true},{person=2,script=1,read=true,write=true}]
+compositions = [{ person = 43, topics = [{ kind = "place", id = 1 }, { kind = "person", id = 1 }], value = 9 }]
 [[writing.practice]]
 person = 1
 script = 1
@@ -2639,7 +2642,7 @@ preferences = [{ domain = 1, enabled = true, bias = 4 }, { domain = 2, enabled =
 [[personal_choices]]
 id = 43
 idle = 0
-preferences = [{ domain = 1, enabled = true, bias = 4 }, { domain = 2, enabled = true, bias = 2 }, { domain = 3, enabled = true, bias = 4 }, { domain = 4, enabled = true, bias = 3 }, { domain = 6, enabled = true, bias = 2 }, { domain = 7, enabled = true, bias = -17 }, { domain = 8, enabled = true, bias = 3 }, { domain = 9, enabled = true, bias = -12 }, { domain = 11, enabled = true, bias = 5 }, { domain = 17, enabled = true, bias = 1 }, { domain = 18, enabled = true, bias = 1 }, { domain = 19, enabled = true, bias = 1 }, { domain = 20, enabled = true, bias = 2 }, { domain = 21, enabled = true, bias = -16 }, { domain = 22, enabled = true, bias = -26 }]
+preferences = [{ domain = 1, enabled = true, bias = 4 }, { domain = 2, enabled = true, bias = 2 }, { domain = 3, enabled = true, bias = 4 }, { domain = 4, enabled = true, bias = 3 }, { domain = 6, enabled = true, bias = 2 }, { domain = 7, enabled = true, bias = -17 }, { domain = 8, enabled = true, bias = 3 }, { domain = 9, enabled = true, bias = -12 }, { domain = 11, enabled = true, bias = 5 }, { domain = 17, enabled = true, bias = 1 }, { domain = 18, enabled = false, bias = 1 }, { domain = 19, enabled = true, bias = 1 }, { domain = 20, enabled = true, bias = 2 }, { domain = 21, enabled = true, bias = -16 }, { domain = 22, enabled = true, bias = -26 }]
 
 [[personal_choices]]
 id = 44
@@ -2779,8 +2782,9 @@ person = 3
 capacity = 8
 retain = true
 design = { inputs = [{ component = 1, value = 9 }], extra_part_value = 5 }
-reactions = { moved = 4, stalled = -1, broken = -6 }
+reactions = { moved = 4, stalled = -11, broken = -6 }
 exploration = { moved = { load = 2 }, stalled = { load = -2, distance = 1 } }
+inquiry = { activity = 4, trial_limit = 8, capacity = 4, assessment = { likely_moved = 8, likely_stalled = -3, uncertain = 1 } }
 
 [[mechanics.memories]]
 person = 4
