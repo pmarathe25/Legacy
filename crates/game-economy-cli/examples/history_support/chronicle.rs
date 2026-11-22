@@ -1,4 +1,6 @@
 //! Summaries of attributed actions in the archive, outside simulation state.
+#[path = "chronicle/crew_turnover.rs"]
+mod crew_turnover;
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write;
@@ -31,7 +33,7 @@ struct CrewParticipation {
 
 #[derive(Default)]
 struct CrewYear {
-    helpers: BTreeSet<u64>,
+    helpers: BTreeMap<u64, u64>,
     starts: u64,
 }
 
@@ -41,7 +43,8 @@ impl CrewParticipation {
         self.helpers.insert(helper);
         let annual = self.years.entry(year).or_default();
         annual.starts = annual.starts.saturating_add(1);
-        annual.helpers.insert(helper);
+        let starts = annual.helpers.entry(helper).or_default();
+        *starts = starts.saturating_add(1);
     }
 
     fn summary(&self, lead: u64) -> Value {
@@ -60,7 +63,7 @@ impl CrewParticipation {
             "last_year": self.years.last_key_value().map(|(year, _)| year),
             "peak": peak,
             "years": self.years.iter().map(|(year, row)| json!({
-                "year": year, "starts": row.starts, "helpers": row.helpers
+                "year": year, "starts": row.starts, "helpers": row.helpers.keys().collect::<Vec<_>>()
             })).collect::<Vec<_>>(),
         })
     }
@@ -193,6 +196,9 @@ impl Chronicle {
                 else {
                     continue;
                 };
+                if helper == 0 || lead == 0 || helper == lead {
+                    continue;
+                }
                 self.crews.entry(lead).or_default().record(year, helper);
                 self.coordination.observe(lead, helper, year, super::coordination::Evidence::Crew);
                 self.record(
@@ -439,6 +445,7 @@ impl Chronicle {
         crews.truncate(10);
         json!({
             "shared_crews": crews.iter().map(|&(&lead, crew)| crew.summary(lead)).collect::<Vec<_>>(),
+            "crew_turnover": crew_turnover::transitions(&self.crews),
             "counts": self.counts,
             "coordination_patterns": self.coordination.summary(),
             "recent_mechanical_findings": self.mechanical_findings,
@@ -687,6 +694,16 @@ pub(super) fn write_world(text: &mut String, chronicle: &Value) {
                 write!(text, " The archive recorded {delivery_ties} annual delivery relationships.").unwrap();
             }
             text.push('\n');
+        }
+        text.push('\n');
+    }
+    if let Some(rows) = chronicle["crew_turnover"].as_array().filter(|rows| !rows.is_empty()) {
+        text.push_str("## Changes in who led crews\n\n");
+        for row in rows {
+            let workers = row["helpers"].as_array().into_iter().flatten()
+                .filter_map(Value::as_u64).map(|id| id.to_string()).collect::<Vec<_>>();
+            writeln!(text, "- People {} joined crews led most often by person {} in year {}, and by person {} in year {}.",
+                workers.join(", "), row["previous_lead"], row["previous_year"], row["lead"], row["year"]).unwrap();
         }
         text.push('\n');
     }
