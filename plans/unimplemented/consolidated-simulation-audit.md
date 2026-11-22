@@ -30,7 +30,11 @@ to track rates, deadlines, and behavior under different advance sizes. The
   whether to retain their goods. The composed scenario checks that people
   can choose opposite temperatures, that competing deposits respect one
   cellar's capacity, and that an accepted deposit changes actual shelf life.
-  Building protected storage remains a separate follow-up.
+  A chosen build can create cooled storage after actual materials are spent.
+  A new store has its own capacity and elapsed walking routes. If the site
+  is demolished or collapses during a tactical engagement, the store keeps
+  its contents and switches to ambient conditions at that instant. Tests
+  cover competing builders, reach, stored food age, and both destruction paths.
 - Mechanical designs use actual identified parts. Each character can rank
   alternative input components or a branched design. The mechanical owner
   computes force and travel in physical connection order and records which
@@ -181,6 +185,10 @@ to track rates, deadlines, and behavior under different advance sizes. The
   An authored diploid locus can influence individual courtship desire.
   Inherited variants survive saves, and annual history measures allele
   values among living characters.
+- A named inherited trait can supply physical work vigor. Two people of
+  the same age with the same supplies can make the same work request
+  and differ in whether their bodies can carry it out. The feature uses
+  actual recipe requirements and reserves inputs only for admitted work.
 - Wildlife species can bind named loci to their courtship and climate
   responses. Tests cover exposure deaths, offspring inheriting real parental
   alleles, worker-count invariance, and the elapsed host across saves. The
@@ -280,7 +288,7 @@ reports.
 | Production, knowledge, and work | Workshop recipes support several outputs or byproducts. Multiple recipes per character, specific recipe teaching, and practice across creative activities have interval slices. Extend choice and practice across work, and keep exact recipe knowledge distinct from skill and personal preferences. |
 | Reach and apparatus | Regional colocation is a coarse default and mechanically usable parts currently often have to be in one actor's custody. Use shared physical reach and access semantics for installed, carried, and jointly used equipment. Broaden bounded design generation beyond the first compatible component mapping. Preserve identity, wear, breakage, loads, and separate judgments about claims, permission, and cooperation. |
 | Nutrition, diets, and crops | Authored food rejects unsupported nutrient names, and interval scenarios can set exact metabolism deadlines. The nutrient types are still fixed. Design an extensible nutrient catalog, wider diets and preferences, multiple seed or crop outputs, and meaningful byproducts. Exercise a new food, diet, and crop archetype defined in content. |
-| Genetics and expressive traits | Human families and wildlife support named diploid loci, with bindings for courtship desire and wildlife hardiness. Extend data-defined expression to other abilities. Keep inheritance, mutation, and selection reproducible and retain compact storage and provenance. |
+| Genetics and expressive traits | Human families and wildlife support named diploid loci, with bindings for courtship desire, physical work vigor, and wildlife hardiness. Broaden expression to other abilities and developmental outcomes. Keep inheritance, mutation, and selection reproducible and retain compact storage and provenance. |
 | Time and system registration | Use explicit units and distinguish simulated time, the caller's advance size, physical deadlines, and decision cadence. Follow the [elapsed-time notes](../../docs/research/elapsed-time-migration.md) for save compatibility and hazard clocks. Reduce central enumerations and fixed-width domain masks where they make independent owner additions costly. Keep typed, batched owner boundaries and use efficient declared schedules or dispatch where useful. |
 
 ## Autonomy follow-ups

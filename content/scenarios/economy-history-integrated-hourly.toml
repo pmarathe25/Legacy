@@ -637,10 +637,10 @@ elapsed_gestation = true
 conception_period_millis = 3600000
 review_partnerships = true
 
-# This catalog follows the same opening courtship alleles as the base genomes.
+# The named loci carry the founders' existing courtship and work-vigor variation.
 [family.traits]
 mate_desire_locus = 11
-loci = [{ id = 11, name = "courtship-drive", default_alleles = [500, 500] }]
+loci = [{ id = 11, name = "courtship-drive", default_alleles = [500, 500] }, { id = 27, name = "work-vigor", default_alleles = [500, 500] }]
 
 [family.rules]
 adult_age = 140160
@@ -662,362 +662,362 @@ subjective_mating = true
 [[family.members]]
 id = 1
 age = 166440
-genome = { sex = "Female", alleles = [[720,740], [310,510], [405,605], [510,710]], mate_desire = [367, 401], named_loci = [{ locus = 11, alleles = [367, 401] }] }
+genome = { sex = "Female", alleles = [[720,740], [310,510], [405,605], [510,710]], mate_desire = [367, 401], named_loci = [{ locus = 11, alleles = [367, 401] }, { locus = 27, alleles = [310, 510] }] }
 mate_preference = { desire = 650, genetic_weight = 150, affinity_weight = 4, trust_weight = 2, fear_weight = 3, obligation_weight = 2, attraction_weight = 60, hunger_weight = -1, minimum = -20 }
 
 [[family.members]]
 id = 2
 age = 175200
-genome = { sex = "Male", alleles = [[740,760], [320,520], [410,610], [520,720]], mate_desire = [434, 502], named_loci = [{ locus = 11, alleles = [434, 502] }] }
+genome = { sex = "Male", alleles = [[740,760], [320,520], [410,610], [520,720]], mate_desire = [434, 502], named_loci = [{ locus = 11, alleles = [434, 502] }, { locus = 27, alleles = [320, 520] }] }
 mate_preference = { desire = 750, genetic_weight = 200, affinity_weight = 8, trust_weight = 1, fear_weight = -2, obligation_weight = 0, attraction_weight = 100, hunger_weight = -1, minimum = -40 }
 
 [[family.members]]
 id = 3
 age = 183960
-genome = { sex = "Female", alleles = [[760,780], [330,530], [415,615], [530,730]], mate_desire = [501, 603], named_loci = [{ locus = 11, alleles = [501, 603] }] }
+genome = { sex = "Female", alleles = [[760,780], [330,530], [415,615], [530,730]], mate_desire = [501, 603], named_loci = [{ locus = 11, alleles = [501, 603] }, { locus = 27, alleles = [330, 530] }] }
 mate_preference = { desire = 850, genetic_weight = 250, affinity_weight = 12, attraction_weight = 140, hunger_weight = -1, minimum = -60 }
 
 [[family.members]]
 id = 4
 age = 192720
-genome = { sex = "Male", alleles = [[780,800], [340,540], [420,620], [540,740]], mate_desire = [568, 303], named_loci = [{ locus = 11, alleles = [568, 303] }] }
+genome = { sex = "Male", alleles = [[780,800], [340,540], [420,620], [540,740]], mate_desire = [568, 303], named_loci = [{ locus = 11, alleles = [568, 303] }, { locus = 27, alleles = [340, 540] }] }
 mate_preference = { desire = 650, genetic_weight = 300, affinity_weight = 16, attraction_weight = 60, hunger_weight = -1, minimum = -20 }
 
 [[family.members]]
 id = 5
 age = 201480
-genome = { sex = "Female", alleles = [[800,820], [350,550], [425,625], [550,750]], mate_desire = [635, 404], named_loci = [{ locus = 11, alleles = [635, 404] }] }
+genome = { sex = "Female", alleles = [[800,820], [350,550], [425,625], [550,750]], mate_desire = [635, 404], named_loci = [{ locus = 11, alleles = [635, 404] }, { locus = 27, alleles = [350, 550] }] }
 mate_preference = { desire = 750, genetic_weight = 150, affinity_weight = 4, attraction_weight = 100, hunger_weight = -1, minimum = -40 }
 
 [[family.members]]
 id = 6
 age = 157680
-genome = { sex = "Male", alleles = [[820,840], [360,560], [430,630], [560,760]], mate_desire = [301, 505], named_loci = [{ locus = 11, alleles = [301, 505] }] }
+genome = { sex = "Male", alleles = [[820,840], [360,560], [430,630], [560,760]], mate_desire = [301, 505], named_loci = [{ locus = 11, alleles = [301, 505] }, { locus = 27, alleles = [360, 560] }] }
 mate_preference = { desire = 850, genetic_weight = 200, affinity_weight = 8, attraction_weight = 140, hunger_weight = -1, minimum = -60 }
 
 [[family.members]]
 id = 7
 age = 166440
-genome = { sex = "Female", alleles = [[840,860], [370,570], [435,635], [570,770]], mate_desire = [368, 606], named_loci = [{ locus = 11, alleles = [368, 606] }] }
+genome = { sex = "Female", alleles = [[840,860], [370,570], [435,635], [570,770]], mate_desire = [368, 606], named_loci = [{ locus = 11, alleles = [368, 606] }, { locus = 27, alleles = [370, 570] }] }
 mate_preference = { desire = 650, genetic_weight = 250, affinity_weight = 12, attraction_weight = 60, hunger_weight = -1, minimum = -20 }
 
 [[family.members]]
 id = 8
 age = 175200
-genome = { sex = "Male", alleles = [[860,880], [380,580], [440,640], [580,780]], mate_desire = [435, 306], named_loci = [{ locus = 11, alleles = [435, 306] }] }
+genome = { sex = "Male", alleles = [[860,880], [380,580], [440,640], [580,780]], mate_desire = [435, 306], named_loci = [{ locus = 11, alleles = [435, 306] }, { locus = 27, alleles = [380, 580] }] }
 mate_preference = { desire = 750, genetic_weight = 300, affinity_weight = 16, attraction_weight = 100, hunger_weight = -1, minimum = -40 }
 
 [[family.members]]
 id = 9
 age = 183960
-genome = { sex = "Female", alleles = [[880,900], [390,590], [445,645], [590,790]], mate_desire = [502, 407], named_loci = [{ locus = 11, alleles = [502, 407] }] }
+genome = { sex = "Female", alleles = [[880,900], [390,590], [445,645], [590,790]], mate_desire = [502, 407], named_loci = [{ locus = 11, alleles = [502, 407] }, { locus = 27, alleles = [390, 590] }] }
 mate_preference = { desire = 850, genetic_weight = 150, affinity_weight = 4, attraction_weight = 140, hunger_weight = -1, minimum = -60 }
 
 [[family.members]]
 id = 10
 age = 192720
-genome = { sex = "Male", alleles = [[900,920], [400,600], [450,650], [600,800]], mate_desire = [569, 508], named_loci = [{ locus = 11, alleles = [569, 508] }] }
+genome = { sex = "Male", alleles = [[900,920], [400,600], [450,650], [600,800]], mate_desire = [569, 508], named_loci = [{ locus = 11, alleles = [569, 508] }, { locus = 27, alleles = [400, 600] }] }
 mate_preference = { desire = 650, genetic_weight = 200, affinity_weight = 8, attraction_weight = 60, hunger_weight = -1, minimum = -20 }
 
 [[family.members]]
 id = 11
 age = 201480
-genome = { sex = "Female", alleles = [[920,940], [410,610], [455,655], [610,810]], mate_desire = [636, 609], named_loci = [{ locus = 11, alleles = [636, 609] }] }
+genome = { sex = "Female", alleles = [[920,940], [410,610], [455,655], [610,810]], mate_desire = [636, 609], named_loci = [{ locus = 11, alleles = [636, 609] }, { locus = 27, alleles = [410, 610] }] }
 mate_preference = { desire = 750, genetic_weight = 250, affinity_weight = 12, attraction_weight = 100, hunger_weight = -1, minimum = -40 }
 
 [[family.members]]
 id = 12
 age = 157680
-genome = { sex = "Male", alleles = [[940,960], [420,620], [460,660], [620,820]], mate_desire = [302, 309], named_loci = [{ locus = 11, alleles = [302, 309] }] }
+genome = { sex = "Male", alleles = [[940,960], [420,620], [460,660], [620,820]], mate_desire = [302, 309], named_loci = [{ locus = 11, alleles = [302, 309] }, { locus = 27, alleles = [420, 620] }] }
 mate_preference = { desire = 850, genetic_weight = 300, affinity_weight = 16, attraction_weight = 140, hunger_weight = -1, minimum = -60 }
 
 
 [[family.members]]
 id = 13
 age = 166440
-genome = { sex = "Female", alleles = [[502,502], [400,600], [400,600], [500,700]], mate_desire = [577, 692], named_loci = [{ locus = 11, alleles = [577, 692] }] }
+genome = { sex = "Female", alleles = [[502,502], [400,600], [400,600], [500,700]], mate_desire = [577, 692], named_loci = [{ locus = 11, alleles = [577, 692] }, { locus = 27, alleles = [400, 600] }] }
 mate_preference = { desire = 750, genetic_weight = 200, affinity_weight = 8, attraction_weight = 100, hunger_weight = -1, minimum = -40 }
 
 [[family.members]]
 id = 14
 age = 227760
-genome = { sex = "Male", alleles = [[533,533], [400,600], [400,600], [500,700]], mate_desire = [660, 352], named_loci = [{ locus = 11, alleles = [660, 352] }] }
+genome = { sex = "Male", alleles = [[533,533], [400,600], [400,600], [500,700]], mate_desire = [660, 352], named_loci = [{ locus = 11, alleles = [660, 352] }, { locus = 27, alleles = [400, 600] }] }
 mate_preference = { desire = 850, genetic_weight = 250, affinity_weight = 12, attraction_weight = 140, hunger_weight = -1, minimum = -60 }
 
 [[family.members]]
 id = 15
 age = 289080
-genome = { sex = "Female", alleles = [[564,564], [400,600], [400,600], [500,700]], mate_desire = [342, 413], named_loci = [{ locus = 11, alleles = [342, 413] }] }
+genome = { sex = "Female", alleles = [[564,564], [400,600], [400,600], [500,700]], mate_desire = [342, 413], named_loci = [{ locus = 11, alleles = [342, 413] }, { locus = 27, alleles = [400, 600] }] }
 mate_preference = { desire = 650, genetic_weight = 300, affinity_weight = 16, attraction_weight = 60, hunger_weight = -1, minimum = -20 }
 
 [[family.members]]
 id = 16
 age = 192720
-genome = { sex = "Male", alleles = [[595,595], [400,600], [400,600], [500,700]], mate_desire = [425, 474], named_loci = [{ locus = 11, alleles = [425, 474] }] }
+genome = { sex = "Male", alleles = [[595,595], [400,600], [400,600], [500,700]], mate_desire = [425, 474], named_loci = [{ locus = 11, alleles = [425, 474] }, { locus = 27, alleles = [400, 600] }] }
 mate_preference = { desire = 750, genetic_weight = 150, affinity_weight = 4, attraction_weight = 100, hunger_weight = -1, minimum = -40 }
 
 [[family.members]]
 id = 17
 age = 254040
-genome = { sex = "Female", alleles = [[626,626], [400,600], [400,600], [500,700]], mate_desire = [508, 535], named_loci = [{ locus = 11, alleles = [508, 535] }] }
+genome = { sex = "Female", alleles = [[626,626], [400,600], [400,600], [500,700]], mate_desire = [508, 535], named_loci = [{ locus = 11, alleles = [508, 535] }, { locus = 27, alleles = [400, 600] }] }
 mate_preference = { desire = 850, genetic_weight = 200, affinity_weight = 8, attraction_weight = 140, hunger_weight = -1, minimum = -60 }
 
 [[family.members]]
 id = 18
 age = 157680
-genome = { sex = "Male", alleles = [[657,657], [400,600], [400,600], [500,700]], mate_desire = [591, 596], named_loci = [{ locus = 11, alleles = [591, 596] }] }
+genome = { sex = "Male", alleles = [[657,657], [400,600], [400,600], [500,700]], mate_desire = [591, 596], named_loci = [{ locus = 11, alleles = [591, 596] }, { locus = 27, alleles = [400, 600] }] }
 mate_preference = { desire = 650, genetic_weight = 250, affinity_weight = 12, attraction_weight = 60, hunger_weight = -1, minimum = -20 }
 
 [[family.members]]
 id = 19
 age = 219000
-genome = { sex = "Female", alleles = [[688,688], [400,600], [400,600], [500,700]], mate_desire = [674, 657], named_loci = [{ locus = 11, alleles = [674, 657] }] }
+genome = { sex = "Female", alleles = [[688,688], [400,600], [400,600], [500,700]], mate_desire = [674, 657], named_loci = [{ locus = 11, alleles = [674, 657] }, { locus = 27, alleles = [400, 600] }] }
 mate_preference = { desire = 750, genetic_weight = 300, affinity_weight = 16, attraction_weight = 100, hunger_weight = -1, minimum = -40 }
 
 [[family.members]]
 id = 20
 age = 280320
-genome = { sex = "Male", alleles = [[719,719], [400,600], [400,600], [500,700]], mate_desire = [356, 317], named_loci = [{ locus = 11, alleles = [356, 317] }] }
+genome = { sex = "Male", alleles = [[719,719], [400,600], [400,600], [500,700]], mate_desire = [356, 317], named_loci = [{ locus = 11, alleles = [356, 317] }, { locus = 27, alleles = [400, 600] }] }
 mate_preference = { desire = 850, genetic_weight = 150, affinity_weight = 4, attraction_weight = 140, hunger_weight = -1, minimum = -60 }
 
 [[family.members]]
 id = 21
 age = 183960
-genome = { sex = "Female", alleles = [[750,750], [400,600], [400,600], [500,700]], mate_desire = [439, 378], named_loci = [{ locus = 11, alleles = [439, 378] }] }
+genome = { sex = "Female", alleles = [[750,750], [400,600], [400,600], [500,700]], mate_desire = [439, 378], named_loci = [{ locus = 11, alleles = [439, 378] }, { locus = 27, alleles = [400, 600] }] }
 mate_preference = { desire = 650, genetic_weight = 200, affinity_weight = 8, attraction_weight = 60, hunger_weight = -1, minimum = -20 }
 
 [[family.members]]
 id = 22
 age = 245280
-genome = { sex = "Male", alleles = [[781,781], [400,600], [400,600], [500,700]], mate_desire = [522, 439], named_loci = [{ locus = 11, alleles = [522, 439] }] }
+genome = { sex = "Male", alleles = [[781,781], [400,600], [400,600], [500,700]], mate_desire = [522, 439], named_loci = [{ locus = 11, alleles = [522, 439] }, { locus = 27, alleles = [400, 600] }] }
 mate_preference = { desire = 750, genetic_weight = 250, affinity_weight = 12, attraction_weight = 100, hunger_weight = -1, minimum = -40 }
 
 [[family.members]]
 id = 23
 age = 306600
-genome = { sex = "Female", alleles = [[812,812], [400,600], [400,600], [500,700]], mate_desire = [605, 500], named_loci = [{ locus = 11, alleles = [605, 500] }] }
+genome = { sex = "Female", alleles = [[812,812], [400,600], [400,600], [500,700]], mate_desire = [605, 500], named_loci = [{ locus = 11, alleles = [605, 500] }, { locus = 27, alleles = [400, 600] }] }
 mate_preference = { desire = 850, genetic_weight = 300, affinity_weight = 16, attraction_weight = 140, hunger_weight = -1, minimum = -60 }
 
 [[family.members]]
 id = 24
 age = 210240
-genome = { sex = "Male", alleles = [[843,843], [400,600], [400,600], [500,700]], mate_desire = [688, 561], named_loci = [{ locus = 11, alleles = [688, 561] }] }
+genome = { sex = "Male", alleles = [[843,843], [400,600], [400,600], [500,700]], mate_desire = [688, 561], named_loci = [{ locus = 11, alleles = [688, 561] }, { locus = 27, alleles = [400, 600] }] }
 mate_preference = { desire = 650, genetic_weight = 150, affinity_weight = 4, attraction_weight = 60, hunger_weight = -1, minimum = -20 }
 
 [[family.members]]
 id = 25
 age = 271560
-genome = { sex = "Female", alleles = [[874,874], [400,600], [400,600], [500,700]], mate_desire = [370, 622], named_loci = [{ locus = 11, alleles = [370, 622] }] }
+genome = { sex = "Female", alleles = [[874,874], [400,600], [400,600], [500,700]], mate_desire = [370, 622], named_loci = [{ locus = 11, alleles = [370, 622] }, { locus = 27, alleles = [400, 600] }] }
 mate_preference = { desire = 750, genetic_weight = 200, affinity_weight = 8, attraction_weight = 100, hunger_weight = -1, minimum = -40 }
 
 [[family.members]]
 id = 26
 age = 175200
-genome = { sex = "Male", alleles = [[504,504], [400,600], [400,600], [500,700]], mate_desire = [453, 683], named_loci = [{ locus = 11, alleles = [453, 683] }] }
+genome = { sex = "Male", alleles = [[504,504], [400,600], [400,600], [500,700]], mate_desire = [453, 683], named_loci = [{ locus = 11, alleles = [453, 683] }, { locus = 27, alleles = [400, 600] }] }
 mate_preference = { desire = 850, genetic_weight = 250, affinity_weight = 12, attraction_weight = 140, hunger_weight = -1, minimum = -60 }
 
 [[family.members]]
 id = 27
 age = 236520
-genome = { sex = "Female", alleles = [[535,535], [400,600], [400,600], [500,700]], mate_desire = [536, 343], named_loci = [{ locus = 11, alleles = [536, 343] }] }
+genome = { sex = "Female", alleles = [[535,535], [400,600], [400,600], [500,700]], mate_desire = [536, 343], named_loci = [{ locus = 11, alleles = [536, 343] }, { locus = 27, alleles = [400, 600] }] }
 mate_preference = { desire = 650, genetic_weight = 300, affinity_weight = 16, attraction_weight = 60, hunger_weight = -1, minimum = -20 }
 
 [[family.members]]
 id = 28
 age = 297840
-genome = { sex = "Male", alleles = [[566,566], [400,600], [400,600], [500,700]], mate_desire = [619, 404], named_loci = [{ locus = 11, alleles = [619, 404] }] }
+genome = { sex = "Male", alleles = [[566,566], [400,600], [400,600], [500,700]], mate_desire = [619, 404], named_loci = [{ locus = 11, alleles = [619, 404] }, { locus = 27, alleles = [400, 600] }] }
 mate_preference = { desire = 750, genetic_weight = 150, affinity_weight = 4, attraction_weight = 100, hunger_weight = -1, minimum = -40 }
 
 [[family.members]]
 id = 29
 age = 201480
-genome = { sex = "Female", alleles = [[597,597], [400,600], [400,600], [500,700]], mate_desire = [301, 465], named_loci = [{ locus = 11, alleles = [301, 465] }] }
+genome = { sex = "Female", alleles = [[597,597], [400,600], [400,600], [500,700]], mate_desire = [301, 465], named_loci = [{ locus = 11, alleles = [301, 465] }, { locus = 27, alleles = [400, 600] }] }
 mate_preference = { desire = 850, genetic_weight = 200, affinity_weight = 8, attraction_weight = 140, hunger_weight = -1, minimum = -60 }
 
 [[family.members]]
 id = 30
 age = 262800
-genome = { sex = "Male", alleles = [[628,628], [400,600], [400,600], [500,700]], mate_desire = [384, 526], named_loci = [{ locus = 11, alleles = [384, 526] }] }
+genome = { sex = "Male", alleles = [[628,628], [400,600], [400,600], [500,700]], mate_desire = [384, 526], named_loci = [{ locus = 11, alleles = [384, 526] }, { locus = 27, alleles = [400, 600] }] }
 mate_preference = { desire = 650, genetic_weight = 250, affinity_weight = 12, attraction_weight = 60, hunger_weight = -1, minimum = -20 }
 
 [[family.members]]
 id = 31
 age = 166440
-genome = { sex = "Female", alleles = [[659,659], [400,600], [400,600], [500,700]], mate_desire = [467, 587], named_loci = [{ locus = 11, alleles = [467, 587] }] }
+genome = { sex = "Female", alleles = [[659,659], [400,600], [400,600], [500,700]], mate_desire = [467, 587], named_loci = [{ locus = 11, alleles = [467, 587] }, { locus = 27, alleles = [400, 600] }] }
 mate_preference = { desire = 750, genetic_weight = 300, affinity_weight = 16, attraction_weight = 100, hunger_weight = -1, minimum = -40 }
 
 [[family.members]]
 id = 32
 age = 227760
-genome = { sex = "Male", alleles = [[690,690], [400,600], [400,600], [500,700]], mate_desire = [550, 648], named_loci = [{ locus = 11, alleles = [550, 648] }] }
+genome = { sex = "Male", alleles = [[690,690], [400,600], [400,600], [500,700]], mate_desire = [550, 648], named_loci = [{ locus = 11, alleles = [550, 648] }, { locus = 27, alleles = [400, 600] }] }
 mate_preference = { desire = 850, genetic_weight = 150, affinity_weight = 4, attraction_weight = 140, hunger_weight = -1, minimum = -60 }
 
 [[family.members]]
 id = 33
 age = 289080
-genome = { sex = "Female", alleles = [[721,721], [400,600], [400,600], [500,700]], mate_desire = [633, 308], named_loci = [{ locus = 11, alleles = [633, 308] }] }
+genome = { sex = "Female", alleles = [[721,721], [400,600], [400,600], [500,700]], mate_desire = [633, 308], named_loci = [{ locus = 11, alleles = [633, 308] }, { locus = 27, alleles = [400, 600] }] }
 mate_preference = { desire = 650, genetic_weight = 200, affinity_weight = 8, attraction_weight = 60, hunger_weight = -1, minimum = -20 }
 
 [[family.members]]
 id = 34
 age = 192720
-genome = { sex = "Male", alleles = [[752,752], [400,600], [400,600], [500,700]], mate_desire = [315, 369], named_loci = [{ locus = 11, alleles = [315, 369] }] }
+genome = { sex = "Male", alleles = [[752,752], [400,600], [400,600], [500,700]], mate_desire = [315, 369], named_loci = [{ locus = 11, alleles = [315, 369] }, { locus = 27, alleles = [400, 600] }] }
 mate_preference = { desire = 750, genetic_weight = 250, affinity_weight = 12, attraction_weight = 100, hunger_weight = -1, minimum = -40 }
 
 [[family.members]]
 id = 35
 age = 254040
-genome = { sex = "Female", alleles = [[783,783], [400,600], [400,600], [500,700]], mate_desire = [398, 430], named_loci = [{ locus = 11, alleles = [398, 430] }] }
+genome = { sex = "Female", alleles = [[783,783], [400,600], [400,600], [500,700]], mate_desire = [398, 430], named_loci = [{ locus = 11, alleles = [398, 430] }, { locus = 27, alleles = [400, 600] }] }
 mate_preference = { desire = 850, genetic_weight = 300, affinity_weight = 16, attraction_weight = 140, hunger_weight = -1, minimum = -60 }
 
 [[family.members]]
 id = 36
 age = 157680
-genome = { sex = "Male", alleles = [[814,814], [400,600], [400,600], [500,700]], mate_desire = [481, 491], named_loci = [{ locus = 11, alleles = [481, 491] }] }
+genome = { sex = "Male", alleles = [[814,814], [400,600], [400,600], [500,700]], mate_desire = [481, 491], named_loci = [{ locus = 11, alleles = [481, 491] }, { locus = 27, alleles = [400, 600] }] }
 mate_preference = { desire = 650, genetic_weight = 150, affinity_weight = 4, attraction_weight = 60, hunger_weight = -1, minimum = -20 }
 
 [[family.members]]
 id = 37
 age = 219000
-genome = { sex = "Female", alleles = [[845,845], [400,600], [400,600], [500,700]], mate_desire = [564, 552], named_loci = [{ locus = 11, alleles = [564, 552] }] }
+genome = { sex = "Female", alleles = [[845,845], [400,600], [400,600], [500,700]], mate_desire = [564, 552], named_loci = [{ locus = 11, alleles = [564, 552] }, { locus = 27, alleles = [400, 600] }] }
 mate_preference = { desire = 750, genetic_weight = 200, affinity_weight = 8, attraction_weight = 100, hunger_weight = -1, minimum = -40 }
 
 [[family.members]]
 id = 38
 age = 280320
-genome = { sex = "Male", alleles = [[876,876], [400,600], [400,600], [500,700]], mate_desire = [647, 613], named_loci = [{ locus = 11, alleles = [647, 613] }] }
+genome = { sex = "Male", alleles = [[876,876], [400,600], [400,600], [500,700]], mate_desire = [647, 613], named_loci = [{ locus = 11, alleles = [647, 613] }, { locus = 27, alleles = [400, 600] }] }
 mate_preference = { desire = 850, genetic_weight = 250, affinity_weight = 12, attraction_weight = 140, hunger_weight = -1, minimum = -60 }
 
 [[family.members]]
 id = 39
 age = 183960
-genome = { sex = "Female", alleles = [[506,506], [400,600], [400,600], [500,700]], mate_desire = [329, 674], named_loci = [{ locus = 11, alleles = [329, 674] }] }
+genome = { sex = "Female", alleles = [[506,506], [400,600], [400,600], [500,700]], mate_desire = [329, 674], named_loci = [{ locus = 11, alleles = [329, 674] }, { locus = 27, alleles = [400, 600] }] }
 mate_preference = { desire = 650, genetic_weight = 300, affinity_weight = 16, attraction_weight = 60, hunger_weight = -1, minimum = -20 }
 
 [[family.members]]
 id = 40
 age = 245280
-genome = { sex = "Male", alleles = [[537,537], [400,600], [400,600], [500,700]], mate_desire = [412, 334], named_loci = [{ locus = 11, alleles = [412, 334] }] }
+genome = { sex = "Male", alleles = [[537,537], [400,600], [400,600], [500,700]], mate_desire = [412, 334], named_loci = [{ locus = 11, alleles = [412, 334] }, { locus = 27, alleles = [400, 600] }] }
 mate_preference = { desire = 750, genetic_weight = 150, affinity_weight = 4, attraction_weight = 100, hunger_weight = -1, minimum = -40 }
 
 [[family.members]]
 id = 41
 age = 306600
-genome = { sex = "Female", alleles = [[568,568], [400,600], [400,600], [500,700]], mate_desire = [495, 395], named_loci = [{ locus = 11, alleles = [495, 395] }] }
+genome = { sex = "Female", alleles = [[568,568], [400,600], [400,600], [500,700]], mate_desire = [495, 395], named_loci = [{ locus = 11, alleles = [495, 395] }, { locus = 27, alleles = [400, 600] }] }
 mate_preference = { desire = 850, genetic_weight = 200, affinity_weight = 8, attraction_weight = 140, hunger_weight = -1, minimum = -60 }
 
 [[family.members]]
 id = 42
 age = 210240
-genome = { sex = "Male", alleles = [[599,599], [400,600], [400,600], [500,700]], mate_desire = [578, 456], named_loci = [{ locus = 11, alleles = [578, 456] }] }
+genome = { sex = "Male", alleles = [[599,599], [400,600], [400,600], [500,700]], mate_desire = [578, 456], named_loci = [{ locus = 11, alleles = [578, 456] }, { locus = 27, alleles = [400, 600] }] }
 mate_preference = { desire = 650, genetic_weight = 250, affinity_weight = 12, attraction_weight = 60, hunger_weight = -1, minimum = -20 }
 
 [[family.members]]
 id = 43
 age = 271560
-genome = { sex = "Female", alleles = [[630,630], [400,600], [400,600], [500,700]], mate_desire = [661, 517], named_loci = [{ locus = 11, alleles = [661, 517] }] }
+genome = { sex = "Female", alleles = [[630,630], [400,600], [400,600], [500,700]], mate_desire = [661, 517], named_loci = [{ locus = 11, alleles = [661, 517] }, { locus = 27, alleles = [400, 600] }] }
 mate_preference = { desire = 750, genetic_weight = 300, affinity_weight = 16, attraction_weight = 100, hunger_weight = -1, minimum = -40 }
 
 [[family.members]]
 id = 44
 age = 175200
-genome = { sex = "Male", alleles = [[661,661], [400,600], [400,600], [500,700]], mate_desire = [343, 578], named_loci = [{ locus = 11, alleles = [343, 578] }] }
+genome = { sex = "Male", alleles = [[661,661], [400,600], [400,600], [500,700]], mate_desire = [343, 578], named_loci = [{ locus = 11, alleles = [343, 578] }, { locus = 27, alleles = [400, 600] }] }
 mate_preference = { desire = 850, genetic_weight = 150, affinity_weight = 4, attraction_weight = 140, hunger_weight = -1, minimum = -60 }
 
 [[family.members]]
 id = 45
 age = 236520
-genome = { sex = "Female", alleles = [[692,692], [400,600], [400,600], [500,700]], mate_desire = [426, 639], named_loci = [{ locus = 11, alleles = [426, 639] }] }
+genome = { sex = "Female", alleles = [[692,692], [400,600], [400,600], [500,700]], mate_desire = [426, 639], named_loci = [{ locus = 11, alleles = [426, 639] }, { locus = 27, alleles = [400, 600] }] }
 mate_preference = { desire = 650, genetic_weight = 200, affinity_weight = 8, attraction_weight = 60, hunger_weight = -1, minimum = -20 }
 
 [[family.members]]
 id = 46
 age = 297840
-genome = { sex = "Male", alleles = [[723,723], [400,600], [400,600], [500,700]], mate_desire = [509, 700], named_loci = [{ locus = 11, alleles = [509, 700] }] }
+genome = { sex = "Male", alleles = [[723,723], [400,600], [400,600], [500,700]], mate_desire = [509, 700], named_loci = [{ locus = 11, alleles = [509, 700] }, { locus = 27, alleles = [400, 600] }] }
 mate_preference = { desire = 750, genetic_weight = 250, affinity_weight = 12, attraction_weight = 100, hunger_weight = -1, minimum = -40 }
 
 [[family.members]]
 id = 47
 age = 201480
-genome = { sex = "Female", alleles = [[754,754], [400,600], [400,600], [500,700]], mate_desire = [592, 360], named_loci = [{ locus = 11, alleles = [592, 360] }] }
+genome = { sex = "Female", alleles = [[754,754], [400,600], [400,600], [500,700]], mate_desire = [592, 360], named_loci = [{ locus = 11, alleles = [592, 360] }, { locus = 27, alleles = [400, 600] }] }
 mate_preference = { desire = 850, genetic_weight = 300, affinity_weight = 16, attraction_weight = 140, hunger_weight = -1, minimum = -60 }
 
 [[family.members]]
 id = 48
 age = 262800
-genome = { sex = "Male", alleles = [[785,785], [400,600], [400,600], [500,700]], mate_desire = [675, 421], named_loci = [{ locus = 11, alleles = [675, 421] }] }
+genome = { sex = "Male", alleles = [[785,785], [400,600], [400,600], [500,700]], mate_desire = [675, 421], named_loci = [{ locus = 11, alleles = [675, 421] }, { locus = 27, alleles = [400, 600] }] }
 mate_preference = { desire = 650, genetic_weight = 150, affinity_weight = 4, attraction_weight = 60, hunger_weight = -1, minimum = -20 }
 
 [[family.members]]
 id = 49
 age = 166440
-genome = { sex = "Female", alleles = [[816,816], [400,600], [400,600], [500,700]], mate_desire = [357, 482], named_loci = [{ locus = 11, alleles = [357, 482] }] }
+genome = { sex = "Female", alleles = [[816,816], [400,600], [400,600], [500,700]], mate_desire = [357, 482], named_loci = [{ locus = 11, alleles = [357, 482] }, { locus = 27, alleles = [400, 600] }] }
 mate_preference = { desire = 750, genetic_weight = 200, affinity_weight = 8, attraction_weight = 100, hunger_weight = -1, minimum = -40 }
 
 [[family.members]]
 id = 50
 age = 227760
-genome = { sex = "Male", alleles = [[847,847], [400,600], [400,600], [500,700]], mate_desire = [440, 543], named_loci = [{ locus = 11, alleles = [440, 543] }] }
+genome = { sex = "Male", alleles = [[847,847], [400,600], [400,600], [500,700]], mate_desire = [440, 543], named_loci = [{ locus = 11, alleles = [440, 543] }, { locus = 27, alleles = [400, 600] }] }
 mate_preference = { desire = 850, genetic_weight = 250, affinity_weight = 12, attraction_weight = 140, hunger_weight = -1, minimum = -60 }
 
 [[family.members]]
 id = 51
 age = 289080
-genome = { sex = "Female", alleles = [[878,878], [400,600], [400,600], [500,700]], mate_desire = [523, 604], named_loci = [{ locus = 11, alleles = [523, 604] }] }
+genome = { sex = "Female", alleles = [[878,878], [400,600], [400,600], [500,700]], mate_desire = [523, 604], named_loci = [{ locus = 11, alleles = [523, 604] }, { locus = 27, alleles = [400, 600] }] }
 mate_preference = { desire = 650, genetic_weight = 300, affinity_weight = 16, attraction_weight = 60, hunger_weight = -1, minimum = -20 }
 
 [[family.members]]
 id = 52
 age = 192720
-genome = { sex = "Male", alleles = [[508,508], [400,600], [400,600], [500,700]], mate_desire = [606, 665], named_loci = [{ locus = 11, alleles = [606, 665] }] }
+genome = { sex = "Male", alleles = [[508,508], [400,600], [400,600], [500,700]], mate_desire = [606, 665], named_loci = [{ locus = 11, alleles = [606, 665] }, { locus = 27, alleles = [400, 600] }] }
 mate_preference = { desire = 750, genetic_weight = 150, affinity_weight = 4, attraction_weight = 100, hunger_weight = -1, minimum = -40 }
 
 [[family.members]]
 id = 53
 age = 254040
-genome = { sex = "Female", alleles = [[539,539], [400,600], [400,600], [500,700]], mate_desire = [689, 325], named_loci = [{ locus = 11, alleles = [689, 325] }] }
+genome = { sex = "Female", alleles = [[539,539], [400,600], [400,600], [500,700]], mate_desire = [689, 325], named_loci = [{ locus = 11, alleles = [689, 325] }, { locus = 27, alleles = [400, 600] }] }
 mate_preference = { desire = 850, genetic_weight = 200, affinity_weight = 8, attraction_weight = 140, hunger_weight = -1, minimum = -60 }
 
 [[family.members]]
 id = 54
 age = 157680
-genome = { sex = "Male", alleles = [[570,570], [400,600], [400,600], [500,700]], mate_desire = [371, 386], named_loci = [{ locus = 11, alleles = [371, 386] }] }
+genome = { sex = "Male", alleles = [[570,570], [400,600], [400,600], [500,700]], mate_desire = [371, 386], named_loci = [{ locus = 11, alleles = [371, 386] }, { locus = 27, alleles = [400, 600] }] }
 mate_preference = { desire = 650, genetic_weight = 250, affinity_weight = 12, attraction_weight = 60, hunger_weight = -1, minimum = -20 }
 
 [[family.members]]
 id = 55
 age = 219000
-genome = { sex = "Female", alleles = [[601,601], [400,600], [400,600], [500,700]], mate_desire = [454, 447], named_loci = [{ locus = 11, alleles = [454, 447] }] }
+genome = { sex = "Female", alleles = [[601,601], [400,600], [400,600], [500,700]], mate_desire = [454, 447], named_loci = [{ locus = 11, alleles = [454, 447] }, { locus = 27, alleles = [400, 600] }] }
 mate_preference = { desire = 750, genetic_weight = 300, affinity_weight = 16, attraction_weight = 100, hunger_weight = -1, minimum = -40 }
 
 [[family.members]]
 id = 56
 age = 280320
-genome = { sex = "Male", alleles = [[632,632], [400,600], [400,600], [500,700]], mate_desire = [537, 508], named_loci = [{ locus = 11, alleles = [537, 508] }] }
+genome = { sex = "Male", alleles = [[632,632], [400,600], [400,600], [500,700]], mate_desire = [537, 508], named_loci = [{ locus = 11, alleles = [537, 508] }, { locus = 27, alleles = [400, 600] }] }
 mate_preference = { desire = 850, genetic_weight = 150, affinity_weight = 4, attraction_weight = 140, hunger_weight = -1, minimum = -60 }
 
 [[family.members]]
 id = 57
 age = 183960
-genome = { sex = "Female", alleles = [[663,663], [400,600], [400,600], [500,700]], mate_desire = [620, 569], named_loci = [{ locus = 11, alleles = [620, 569] }] }
+genome = { sex = "Female", alleles = [[663,663], [400,600], [400,600], [500,700]], mate_desire = [620, 569], named_loci = [{ locus = 11, alleles = [620, 569] }, { locus = 27, alleles = [400, 600] }] }
 mate_preference = { desire = 650, genetic_weight = 200, affinity_weight = 8, attraction_weight = 60, hunger_weight = -1, minimum = -20 }
 
 [[family.members]]
 id = 58
 age = 245280
-genome = { sex = "Male", alleles = [[694,694], [400,600], [400,600], [500,700]], mate_desire = [302, 630], named_loci = [{ locus = 11, alleles = [302, 630] }] }
+genome = { sex = "Male", alleles = [[694,694], [400,600], [400,600], [500,700]], mate_desire = [302, 630], named_loci = [{ locus = 11, alleles = [302, 630] }, { locus = 27, alleles = [400, 600] }] }
 mate_preference = { desire = 750, genetic_weight = 250, affinity_weight = 12, attraction_weight = 100, hunger_weight = -1, minimum = -40 }
 
 [[family.members]]
 id = 59
 age = 306600
-genome = { sex = "Female", alleles = [[725,725], [400,600], [400,600], [500,700]], mate_desire = [385, 691], named_loci = [{ locus = 11, alleles = [385, 691] }] }
+genome = { sex = "Female", alleles = [[725,725], [400,600], [400,600], [500,700]], mate_desire = [385, 691], named_loci = [{ locus = 11, alleles = [385, 691] }, { locus = 27, alleles = [400, 600] }] }
 mate_preference = { desire = 850, genetic_weight = 300, affinity_weight = 16, attraction_weight = 140, hunger_weight = -1, minimum = -60 }
 
 [[family.members]]
 id = 60
 age = 210240
-genome = { sex = "Male", alleles = [[756,756], [400,600], [400,600], [500,700]], mate_desire = [468, 351], named_loci = [{ locus = 11, alleles = [468, 351] }] }
+genome = { sex = "Male", alleles = [[756,756], [400,600], [400,600], [500,700]], mate_desire = [468, 351], named_loci = [{ locus = 11, alleles = [468, 351] }, { locus = 27, alleles = [400, 600] }] }
 mate_preference = { desire = 650, genetic_weight = 150, affinity_weight = 4, attraction_weight = 60, hunger_weight = -1, minimum = -20 }
 
 [fauna]
@@ -1968,6 +1968,7 @@ capacity = 4
 kit = "timber"
 quantity = 2
 salvage = 1
+storage = { capacity = 60, celsius = 8, walk_millis = 900000 }
 [[construction.policies]]
 person = 3
 blueprint = 1
@@ -2413,6 +2414,14 @@ max_report_age_millis = 31536000000
 retry_millis = 86400000
 people = [{ person = 18, enabled = true }]
 
+[[food_search.travel_choices]]
+person = 18
+time_unit_millis = 3600000
+food_weight = 1
+duration_cost = 1
+testimony_cost = 2
+continuation_value = 5
+
 [[aspirations]]
 person = 3
 recipe = "fixture-tool"
@@ -2791,8 +2800,9 @@ preferences = [{ domain = 4, enabled = true, bias = 4, locus = 1, genetic_bias =
 
 [work_capabilities]
 growth = [{ age = 0, strength = 0 }, { age = 140160, strength = 100 }]
-vigor_base = 1000
-vigor_weight = 0
+vigor_locus = "work-vigor"
+vigor_base = 800
+vigor_weight = 400
 default_strength = 20
 missing_strength = 50
 
