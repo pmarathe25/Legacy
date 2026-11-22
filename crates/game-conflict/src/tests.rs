@@ -228,7 +228,7 @@ fn cleanup_uses_original_unsorted_roster_to_remove_retreats_and_dead_targets() {
     assert!(
         fighters
             .iter()
-            .all(|fighter| matches!(fighter.order, Order::Defend))
+            .all(|fighter| matches!(fighter.order, Order::Wait))
     );
 }
 

@@ -1,4 +1,40 @@
 use game_economy::core_interval::{CoreHost, CoreRunEvent, TacticalChoice};
+use std::path::Path;
+
+#[test]
+fn a_target_gets_active_protection_only_when_they_choose_to_defend() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let template = std::fs::read_to_string(
+        root.join("content/scenarios/economy-combat-collapse.toml"),
+    ).unwrap().replace("\r\n", "\n");
+    let run = |workers, policy: &str, chunks: &[u64]| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let input = template
+                    .replace("tick_millis = 3600000", "tick_millis = 1000\ncombat_round_millis = 101")
+                    .replace("[combat]\ndamage = 1", &format!("[combat]\ndamage = 6\n{policy}"));
+                let path = std::env::temp_dir().join(format!("legacy-personal-guard-{}.toml", std::process::id()));
+                std::fs::write(&path, input).unwrap();
+                let loaded = game_economy_cli::core_scenario(&path, &root.join("content"));
+                std::fs::remove_file(path).unwrap();
+                let mut host = loaded.unwrap();
+                let before = host.snapshot().core.people[1].health;
+                host.start_controlled_engagement(1, 2).unwrap();
+                for &advance in chunks {
+                    assert_eq!(host.advance_continuous(advance, &[]).unwrap().failure, None);
+                    let save = serde_json::to_vec(&host.snapshot()).unwrap();
+                    host = CoreHost::resume(serde_json::from_slice(&save).unwrap()).unwrap();
+                }
+                before - host.snapshot().core.people[1].health
+            })
+    };
+    assert_eq!(run(1, "", &[101]), 6);
+    assert_eq!(run(6, "reactions = [{ person = 2, response = \"wait\" }]", &[29, 72]), 6);
+    assert_eq!(run(6, "reactions = [{ person = 2, response = \"defend\" }]", &[19, 82]), 3);
+}
 
 #[test]
 fn tactical_damage_collapses_a_real_workshop_and_interrupts_its_work() {

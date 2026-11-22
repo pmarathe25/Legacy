@@ -1,5 +1,5 @@
 //! Bounded personal decisions to initiate tactical conflict.
-use super::{Battle, Draft, Encounter, Fighter, Order, Placement, Plan, Point, Response, Runtime};
+use super::{Battle, Draft, Encounter, Fighter, Order, Placement, Plan, Point, Runtime, opening_order};
 use game_economy_person::Person;
 use game_opinions::Opinions;
 use rayon::prelude::*;
@@ -302,21 +302,11 @@ impl Draft {
             .enumerate()
             .map(|(i, row)| {
                 let target = find(row.target).expect("selected target");
-                let response = reactions
-                    .binary_search_by_key(&row.target, |r| r.person)
-                    .ok()
+                let response = (!target.controlled)
+                    .then(|| reactions.binary_search_by_key(&row.target, |r| r.person).ok())
+                    .flatten()
                     .map(|i| &reactions[i].response);
-                let order = if target.controlled {
-                    Order::Defend
-                } else {
-                    match response {
-                        Some(Response::Fight) => Order::Attack { target: row.actor },
-                        Some(Response::Retreat) if !immobilized.contains(&row.target) => {
-                            Order::Retreat
-                        }
-                        _ => Order::Defend,
-                    }
-                };
+                let order = opening_order(response, row.actor, immobilized.contains(&row.target));
                 let mut fighters = vec![
                     Fighter {
                         person: row.actor,
@@ -382,6 +372,15 @@ impl Draft {
 mod tests {
     use super::*;
     use game_opinions::{Confrontation, Opinion, Rules, Sensitivity};
+
+    #[test]
+    fn unchosen_or_prevented_reactions_open_in_a_waiting_stance() {
+        use crate::Response;
+        assert_eq!(opening_order(None, 1, false), Order::Wait);
+        assert_eq!(opening_order(Some(&Response::Wait), 1, false), Order::Wait);
+        assert_eq!(opening_order(Some(&Response::Retreat), 1, true), Order::Wait);
+        assert_eq!(opening_order(Some(&Response::Defend), 1, false), Order::Defend);
+    }
 
     #[test]
     fn explicit_encounters_are_batched_and_require_disjoint_live_local_people() {
