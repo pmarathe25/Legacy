@@ -660,9 +660,23 @@ pub(super) fn write_world(text: &mut String, chronicle: &Value) {
     if let Some(patterns) = chronicle["coordination_patterns"].as_array().filter(|rows| !rows.is_empty()) {
         text.push_str("## Recurring cooperation\n\n");
         for row in patterns {
-            writeln!(text, "- Person {} received deliveries or was joined by helpers in {} recorded years, spanning years {} through {}. Their largest recorded group in one year was {} people in year {}. The evidence includes {} choices to join their work and {} annual delivery relationships.",
+            let crew_choices = row["crew_choices"].as_u64().unwrap_or(0);
+            let delivery_ties = row["annual_delivery_ties"].as_u64().unwrap_or(0);
+            let action = match (crew_choices > 0, delivery_ties > 0) {
+                (true, true) => "received deliveries and was joined by helpers",
+                (true, false) => "was joined by helpers",
+                _ => "received deliveries",
+            };
+            write!(text, "- Person {} {action} in {} recorded years, spanning years {} through {}. Their peak was {} distinct collaborators in year {}.",
                 row["person"], row["active_years"], row["first_year"], row["latest_year"], row["peak_collaborators"],
-                row["peak_year"], row["crew_choices"], row["annual_delivery_ties"]).unwrap();
+                row["peak_year"]).unwrap();
+            if crew_choices > 0 {
+                write!(text, " The archive recorded {crew_choices} accepted crew starts.").unwrap();
+            }
+            if delivery_ties > 0 {
+                write!(text, " The archive recorded {delivery_ties} annual delivery relationships.").unwrap();
+            }
+            text.push('\n');
         }
         text.push('\n');
     }

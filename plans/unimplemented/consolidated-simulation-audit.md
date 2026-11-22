@@ -111,6 +111,9 @@ to track rates, deadlines, and behavior under different advance sizes. The
   recipient can change their trust using their own view of fulfillment or
   default. Recipients with opposite responses make different choices after
   the same outcome. Elapsed decision rounds consider only open agreements.
+  A debtor can condition delivery on their own hunger. Personal fear or
+  obligation may still motivate them. History dates accepted transfers and
+  identifies the actual participants, goods, and quantity.
 - On the elapsed family clock either participant can seek a mating
   encounter. The other participant evaluates it independently, and a
   separately chosen partnership can form or end at its review instant.
