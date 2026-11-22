@@ -31,6 +31,8 @@ fn species() -> Species {
         conception_one_in: 1,
         mate_desire: None,
         mate_choice: None,
+        traits: None,
+        hardiness_trait: None,
         breeding_max_hunger: 5,
         newborn_health: 8,
         mutation_per_million: 0,
@@ -1651,4 +1653,109 @@ fn held_animals_stay_and_quiet_dispersal_matches_the_full_lifecycle() {
     assert_eq!(fauna.animals[0].region, 1);
     assert_eq!(fauna.animals[1].region, 2);
     assert_eq!(fauna.animals[1].hunger, 4);
+}
+
+#[test]
+fn named_variants_affect_mating_and_exposure_and_pass_to_wild_offspring() {
+    use game_genetics::{Locus, NamedAlleles, TraitCatalog};
+    use std::sync::Arc;
+
+    let run = |workers, seeking| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut fauna = initial();
+                fauna.lifecycle_period_millis = Some(100);
+                let species = &mut fauna.species[0];
+                species.mate_desire = Some(MateDesire {
+                    base: 500,
+                    genetic_weight: 500,
+                    hunger_weight: 0,
+                });
+                species.hardiness_trait = Some(18);
+                species.climate = Some(Climate {
+                    tolerance: 0,
+                    inherited_tolerance: 10,
+                    hardiness_locus: 4,
+                    damage_per_excess: 3,
+                });
+                species.traits = Some(Arc::new(TraitCatalog {
+                    mate_desire_locus: Some(12),
+                    loci: vec![
+                        Locus {
+                            id: 12,
+                            name: "seeking".into(),
+                            default_alleles: [0, 0],
+                        },
+                        Locus {
+                            id: 18,
+                            name: "hardiness".into(),
+                            default_alleles: [0, 0],
+                        },
+                    ],
+                }));
+                for animal in &mut fauna.animals {
+                    let desire = if animal.id != 1 || seeking { 1000 } else { 0 };
+                    animal.genome.named_loci = Some(Arc::new(vec![
+                        NamedAlleles {
+                            locus: 12,
+                            alleles: [desire, desire],
+                        },
+                        NamedAlleles {
+                            locus: 18,
+                            alleles: [1000, 1000],
+                        },
+                    ]));
+                }
+                fauna.animals.push(animal(3, Sex::Female, 1000));
+                fauna.next_id = 4;
+                let regions = HashSet::from([1]);
+                let goods = HashSet::from([1]);
+                fauna.validate(&regions, &goods, 0).unwrap();
+                let exposure = [Exposure {
+                    region: 1,
+                    severity: 5,
+                }];
+                for tick in 1..=2 {
+                    let expected = fauna
+                        .advance_with_hunts(&[], &[], &exposure, &[], 7, tick)
+                        .unwrap()
+                        .fauna;
+                    if tick == 1 {
+                        assert_eq!(expected.animals[0].pregnancy.is_some(), seeking);
+                        assert_eq!(
+                            expected.recent_deaths,
+                            [AnimalDeath {
+                                animal: 3,
+                                tick,
+                                cause: DeathCause::Exposure
+                            }]
+                        );
+                    }
+                    let compact = fauna
+                        .prepare_compact(&[], &[], &exposure, &[], 7, tick)
+                        .unwrap()
+                        .unwrap();
+                    fauna.validate_quiet(&compact).unwrap();
+                    fauna.publish_quiet_validated(compact);
+                    assert_eq!(expected, fauna);
+                    fauna = serde_json::from_slice(&serde_json::to_vec(&fauna).unwrap()).unwrap();
+                    fauna.validate(&regions, &goods, tick).unwrap();
+                }
+                if seeking {
+                    let child = &fauna.animals[3];
+                    assert_eq!(child.parents, Some([1, 2]));
+                    let variants = child.genome.named_loci.as_ref().unwrap();
+                    assert_eq!(variants[0].alleles, [1000, 1000]);
+                    assert_eq!(variants[1].alleles, [1000, 1000]);
+                } else {
+                    assert_eq!(fauna.animals.len(), 3);
+                }
+                fauna
+            })
+    };
+    assert_eq!(run(1, true), run(6, true));
+    run(6, false);
 }

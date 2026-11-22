@@ -1,0 +1,86 @@
+# Named wildlife variants pass through the elapsed lifecycle.
+seed = 7
+tick_millis = 1000
+decision_period_millis = 500
+stock_capacity = 100
+food_relief_divisor = 20
+
+[rules]
+hunger_rate = { units = 0, per_millis = 1000 }
+meal_threshold = 10
+starvation_threshold = 50
+max_health = 100
+carrying_capacity = 10
+max_work_hunger = 30
+
+[[regions]]
+id = 1
+stock = {}
+
+[[people]]
+id = 1
+region = 1
+health = 100
+hunger = 0
+willing_to_work = false
+seek_meals = false
+
+[fauna]
+next_id = 4
+lifecycle_period_millis = 100
+
+[[fauna.species]]
+id = 1
+name = "marsh grazer"
+food_good = "barley"
+intake = 1
+hunger_per_tick = 1
+relief_per_unit = 1
+starvation_threshold = 60
+starvation_damage = 1
+max_health = 10
+adult_age = 2
+fertile_until = 30
+lifespan = 50
+gestation = 2
+conception_one_in = 1
+breeding_max_hunger = 20
+newborn_health = 10
+mate_desire = { base = 500, genetic_weight = 500, hunger_weight = 0 }
+hardiness_trait = 18
+climate = { tolerance = 1, inherited_tolerance = 2, hardiness_locus = 0, damage_per_excess = 1 }
+
+[fauna.species.traits]
+mate_desire_locus = 12
+loci = [
+    { id = 12, name = "courtship-drive", default_alleles = [0, 0] },
+    { id = 18, name = "frost-hardiness", default_alleles = [300, 300] },
+]
+
+[[fauna.animals]]
+id = 1
+species = 1
+region = 1
+age = 2
+health = 10
+hunger = 0
+genome = { sex = "Female", alleles = [[500, 500], [500, 500], [500, 500], [500, 500]], mate_desire = [0, 0], named_loci = [{ locus = 12, alleles = [1000, 1000] }, { locus = 18, alleles = [900, 900] }] }
+
+[[fauna.animals]]
+id = 2
+species = 1
+region = 1
+age = 2
+health = 10
+hunger = 0
+genome = { sex = "Male", alleles = [[500, 500], [500, 500], [500, 500], [500, 500]], mate_desire = [0, 0], named_loci = [{ locus = 12, alleles = [1000, 1000] }, { locus = 18, alleles = [700, 700] }] }
+
+[[fauna.animals]]
+id = 3
+species = 1
+region = 1
+age = 2
+health = 10
+hunger = 0
+genome = { sex = "Female", alleles = [[500, 500], [500, 500], [500, 500], [500, 500]], mate_desire = [1000, 1000] }
+

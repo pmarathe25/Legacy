@@ -3,7 +3,9 @@ use crate::{
     Animal, Climate, Fauna, HuntYield, MateChoice, MateDesire, SocialResponse, Species, handling,
     restraint,
 };
+use game_genetics::TraitCatalog;
 use serde::Deserialize;
+use std::sync::Arc;
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -39,6 +41,10 @@ struct SpeciesConfig {
     mate_desire: Option<MateDesire>,
     #[serde(default)]
     mate_choice: Option<MateChoice>,
+    #[serde(default)]
+    traits: Option<Arc<TraitCatalog>>,
+    #[serde(default)]
+    hardiness_trait: Option<u32>,
     breeding_max_hunger: u32,
     newborn_health: u32,
     #[serde(default)]
@@ -88,6 +94,8 @@ impl Config {
                     conception_one_in: s.conception_one_in,
                     mate_desire: s.mate_desire,
                     mate_choice: s.mate_choice,
+                    traits: s.traits,
+                    hardiness_trait: s.hardiness_trait,
                     breeding_max_hunger: s.breeding_max_hunger,
                     newborn_health: s.newborn_health,
                     mutation_per_million: s.mutation_per_million,

@@ -40,12 +40,21 @@ pub(super) fn stage_health(
             .binary_search_by_key(&animal.region, |row| row.region)
             .ok()
             .map_or(0, |i| exposure[i].severity);
-        let alleles = animal
-            .genome
-            .alleles
-            .get(climate.hardiness_locus)
-            .ok_or("invalid climate hardiness locus")?;
-        let mean = (u32::from(alleles[0]) + u32::from(alleles[1])) / 2;
+        let mean = if let Some(locus) = species.hardiness_trait {
+            species
+                .traits
+                .as_ref()
+                .and_then(|catalog| catalog.expression(&animal.genome, locus))
+                .map(u32::from)
+                .ok_or("unknown named hardiness trait")?
+        } else {
+            let alleles = animal
+                .genome
+                .alleles
+                .get(climate.hardiness_locus)
+                .ok_or("invalid climate hardiness locus")?;
+            (u32::from(alleles[0]) + u32::from(alleles[1])) / 2
+        };
         let inherited = (u64::from(mean) * u64::from(climate.inherited_tolerance) / 1000)
             .min(u64::from(u32::MAX)) as u32;
         let excess = severity.saturating_sub(climate.tolerance.saturating_add(inherited));

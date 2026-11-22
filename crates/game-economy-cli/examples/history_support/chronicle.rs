@@ -661,9 +661,18 @@ pub(super) fn write_world(text: &mut String, chronicle: &Value) {
     if let Some(traits) = chronicle["named_inherited_traits"].as_array().filter(|rows| !rows.is_empty()) {
         text.push_str("## Named inherited traits\n\n");
         for row in traits {
-            writeln!(text, "- The mean allele value for {} was {} among {} living people in year {} and {} among {} in year {}. The latest sample recorded {} people with a different allele pair from the catalog default.",
-                row["name"].as_str().unwrap_or("Unnamed trait"), row["first"]["mean"], row["first"]["people"], row["first"]["year"],
-                row["latest"]["mean"], row["latest"]["people"], row["latest"]["year"], row["latest"]["variants"]).unwrap();
+            let name = row["name"].as_str().unwrap_or("unnamed trait");
+            let subject = row["species_name"].as_str().map_or_else(
+                || format!("{name} in people"),
+                |species| format!("{name} in {species}"),
+            );
+            write!(text, "- The mean allele value for {subject} was {} among {} living individuals in year {} and {} among {} in year {}. The latest sample with living individuals recorded {} with an allele pair different from the catalog default.",
+                row["first"]["mean"], row["first"]["people"], row["first"]["year"], row["latest"]["mean"],
+                row["latest"]["people"], row["latest"]["year"], row["latest"]["variants"]).unwrap();
+            if let Some(year) = row["first_year_without_living_members"].as_u64() {
+                write!(text, " The year-{year} checkpoint recorded no living members of this population.").unwrap();
+            }
+            text.push('\n');
         }
         text.push('\n');
     }
