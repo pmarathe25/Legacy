@@ -173,7 +173,6 @@ pub fn augment(
         .map(|recipe| recipe.id)
         .max()
         .unwrap_or(0);
-    let mut required = BTreeMap::<u32, u64>::new();
     let mut recipe_ids: HashSet<_> = next.recipes.iter().map(|recipe| recipe.id).collect();
     let mut recipe_names: HashSet<_> = next
         .recipes
@@ -216,12 +215,6 @@ pub fn augment(
                 Ok(Amount { good: id, quantity })
             })
             .collect::<Result<Vec<_>, String>>()?;
-        for input in &amounts {
-            required
-                .entry(input.good)
-                .and_modify(|value| *value = (*value).max(input.quantity))
-                .or_insert(input.quantity);
-        }
         let outputs =
             recipe_outputs(&row, &resolve).map_err(|error| format!("recipe {key}: {error}"))?;
         let duration =
@@ -249,12 +242,6 @@ pub fn augment(
                 category: category.to_owned(),
             });
         }
-        for output in &outputs {
-            required
-                .entry(output.good)
-                .and_modify(|value| *value = (*value).max(output.quantity))
-                .or_insert(output.quantity);
-        }
         next.recipes.push(Recipe {
             id: assigned,
             name: key,
@@ -265,17 +252,12 @@ pub fn augment(
     }
     for inventory in &mut next.inventories {
         let mut existing: HashSet<_> = inventory.stocks.iter().map(|stock| stock.good).collect();
-        for stock in &mut inventory.stocks {
-            if let Some(&minimum) = required.get(&stock.good) {
-                stock.capacity = stock.capacity.max(minimum);
-            }
-        }
         for good in &next.goods {
             if existing.insert(good.id) {
                 inventory.stocks.push(Stock {
                     good: good.id,
                     quantity: 0,
-                    capacity: capacity.max(required.get(&good.id).copied().unwrap_or(0)),
+                    capacity,
                 });
             }
         }
@@ -319,6 +301,35 @@ fn recipe_outputs(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn recipe_amounts_do_not_change_physical_storage_capacity() {
+        let content = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content");
+        let mut production = Production {
+            max_work_hunger: 20,
+            goods: vec![Good {
+                id: 1,
+                name: "bread".into(),
+                food: None,
+                maturation: None,
+            }],
+            recipes: Vec::new(),
+            recipe_categories: Vec::new(),
+            inventories: vec![game_production::Inventory {
+                region: 1,
+                stocks: vec![Stock { good: 1, quantity: 1, capacity: 1 }],
+            }],
+            jobs: Vec::new(),
+            events: Vec::new(),
+        };
+        augment(&mut production, &content.join("objects"), &content.join("workshop"), 1_000, 2, 20)
+            .unwrap();
+        assert!(production.recipes.iter().flat_map(|recipe| &recipe.outputs)
+            .any(|output| output.good == 1 && output.quantity > 1));
+        let stocks = &production.inventories[0].stocks;
+        assert_eq!(stocks.iter().find(|stock| stock.good == 1).map(|stock| (stock.quantity, stock.capacity)), Some((1, 1)));
+        assert!(stocks.iter().filter(|stock| stock.good != 1).all(|stock| stock.capacity == 2));
+    }
 
     #[test]
     fn validates_packs_atomically_and_preserves_explicit_catalog_ids() {
