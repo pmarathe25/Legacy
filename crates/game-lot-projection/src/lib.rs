@@ -23,11 +23,15 @@ pub fn inventories(view: &View) -> Vec<Inventory> {
             _ => None,
         })
         .collect();
-    stocks
-        .par_chunk_by(|a, b| a.0 == b.0)
-        .map(|group| Inventory {
-            region: group[0].0,
-            stocks: group.iter().map(|row| row.1.clone()).collect(),
+    view.regions()
+        .par_iter()
+        .map(|&region| {
+            let start = stocks.partition_point(|row| row.0 < region);
+            let end = stocks.partition_point(|row| row.0 <= region);
+            Inventory {
+                region,
+                stocks: stocks[start..end].iter().map(|row| row.1.clone()).collect(),
+            }
         })
         .collect()
 }

@@ -20,6 +20,7 @@ pub use receipts::{
     ExternalReceipt, ExternalReceiptBatch, ExternalReceiptHeader, ExternalReceiptRef,
 };
 use std::collections::HashSet;
+use std::sync::Arc;
 
 pub struct PhysicalOutcomes {
     pub transactions: Vec<TransactionOutcome>,
@@ -42,6 +43,8 @@ pub struct ElapsedExpiryEvents {
 
 pub struct Runtime {
     store: Store,
+    region_ids: Option<Arc<[u64]>>,
+    complete_stock: bool,
     catalog: Catalog,
     goods: Vec<Good>,
     recipes: Vec<Recipe>,
@@ -68,6 +71,24 @@ impl Runtime {
     }
 
     pub fn compile(mut state: Snapshot) -> Result<Self, String> {
+        if let Some(regions) = &mut state.region_ids {
+            let regions = Arc::make_mut(regions);
+            regions.sort_unstable();
+            if regions.first().is_none_or(|&region| region == 0)
+                || regions.windows(2).any(|pair| pair[0] == pair[1])
+                || state.custody.containers.par_iter().any(|row| {
+                    matches!(row.place, Place::Stock { region, .. } if regions.binary_search(&region).is_err())
+                })
+            {
+                return Err("invalid physical region registry".into());
+            }
+        }
+        let complete_stock = state.region_ids.as_ref().is_none_or(|regions| {
+            regions.len().checked_mul(state.goods.len()) == Some(
+                state.custody.containers.par_iter().filter(|row| matches!(row.place, Place::Stock { .. })).count()
+            )
+        });
+        state.recipes.par_sort_unstable_by_key(|recipe| recipe.id);
         let catalog = if state.custody.expiry_millis.is_some() {
             Catalog::from_elapsed_millis(&state.goods)?
         } else {
@@ -112,6 +133,8 @@ impl Runtime {
             return Err("invalid physical production state".into());
         }
         Ok(Self {
+            region_ids: state.region_ids,
+            complete_stock,
             store,
             catalog,
             goods: state.goods,
@@ -211,6 +234,7 @@ impl Runtime {
     pub fn snapshot(&self) -> Snapshot {
         Snapshot {
             custody: self.store.export(),
+            region_ids: self.region_ids.clone(),
             goods: self.goods.clone(),
             recipes: self.recipes.clone(),
             tick_millis: self.tick_millis,
@@ -231,13 +255,42 @@ impl Runtime {
         self.store.add_empty(containers)
     }
     pub fn view(&self, boundary: u64) -> Result<game_lots::View, String> {
-        self.store.view(boundary)
+        let mut view = self.store.view(boundary)?;
+        view.region_ids = self.region_ids.clone();
+        Ok(view)
     }
     pub fn stock_view(&self, boundary: u64) -> Result<game_lots::View, String> {
-        self.store.stock_view(boundary)
+        let mut view = self.store.stock_view(boundary)?;
+        view.region_ids = self.region_ids.clone();
+        Ok(view)
     }
     pub fn custody(&self, place: Place) -> Option<&game_lots::Container> {
         self.store.container(place)
+    }
+
+    fn starts_with_storage(&self, starts: &[Start]) -> Option<Vec<Start>> {
+        if self.complete_stock {
+            return None;
+        }
+        let available = |start: &Start| {
+            self.recipes.binary_search_by_key(&start.recipe, |recipe| recipe.id).ok()
+                .is_none_or(|index| self.recipes[index].inputs.iter().all(|input| {
+                    self.store.container(Place::Stock { region: start.region, good: input.good }).is_some()
+                }))
+        };
+        (!starts.par_iter().all(available))
+            .then(|| starts.par_iter().copied().filter(available).collect())
+    }
+
+    fn include_unavailable_starts(results: &mut Vec<(u64, bool)>, requests: &[Start]) {
+        let missing: Vec<_> = requests.par_iter().filter_map(|request| {
+            results.binary_search_by_key(&request.id, |receipt| receipt.0).is_err()
+                .then_some((request.id, false))
+        }).collect();
+        if !missing.is_empty() {
+            results.extend(missing);
+            results.par_sort_unstable_by_key(|row| row.0);
+        }
     }
     /// Possessions remain in custody until physically removed.
     pub fn retire_person(&mut self, person: u64) -> Result<(), String> {
@@ -627,15 +680,25 @@ impl Runtime {
     pub fn start(&mut self, requests: &[Start], seed: u64) -> Result<Vec<(u64, bool)>, String> {
         self.ensure_no_work_interval()?;
         game_lot_work::validate_starts(&self.work, requests)?;
-        let plan = game_lot_work::start(requests, &self.recipes)?;
+        let admitted = self.starts_with_storage(requests);
+        let starts = admitted.as_deref().unwrap_or(requests);
+        if starts.is_empty() {
+            let mut results = Vec::new();
+            Self::include_unavailable_starts(&mut results, requests);
+            return Ok(results);
+        }
+        let plan = game_lot_work::start(starts, &self.recipes)?;
         let mut draft =
             self.store
                 .prepare_with_empty(seed, &plan.transactions, plan.containers, false)?;
-        let result: Vec<_> = draft
+        let mut result: Vec<_> = draft
             .transactions()
             .iter()
             .map(|row| (row.id, row.accepted))
             .collect();
+        if admitted.is_some() {
+            Self::include_unavailable_starts(&mut result, requests);
+        }
         let retire: Vec<_> = plan
             .jobs
             .par_iter()

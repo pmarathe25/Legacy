@@ -1,7 +1,7 @@
 //! Individuals travel on directed, data-defined routes while retaining their custody.
 use crate::Person;
 use game_lot_runtime::{Phase, Work};
-use game_lots::{Place, View};
+use game_lots::View;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::cmp::Reverse;
@@ -383,13 +383,7 @@ pub fn validate_world(
         return Err("invalid journey progress".into());
     }
     let regions = view
-        .containers
-        .par_iter()
-        .filter_map(|row| match row.place {
-            Place::Stock { region, .. } => Some(region),
-            _ => None,
-        })
-        .collect();
+        .regions().iter().copied().collect();
     travel.validate(people, &regions, &working(work), tick)
 }
 

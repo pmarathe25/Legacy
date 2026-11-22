@@ -151,13 +151,7 @@ impl LocalTransport {
         tick: u64,
     ) -> Result<(), String> {
         let regions: HashSet<_> = view
-            .containers
-            .par_iter()
-            .filter_map(|row| match row.place {
-                Place::Stock { region, .. } => Some(region),
-                _ => None,
-            })
-            .collect();
+            .regions().iter().copied().collect();
         let endpoint = |end: Endpoint, region, good, person| match end {
             Endpoint::Stock => view.container(end.place(region, good, person)).is_some(),
             Endpoint::Person => view.container(Place::Person(person)).is_some(),

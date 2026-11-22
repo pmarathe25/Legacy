@@ -14,13 +14,7 @@ use rayon::prelude::*;
 use std::collections::HashSet;
 
 fn regions(view: &View) -> HashSet<u64> {
-    view.containers
-        .par_iter()
-        .filter_map(|c| match c.place {
-            Place::Stock { region, .. } => Some(region),
-            _ => None,
-        })
-        .collect()
+    view.regions().iter().copied().collect()
 }
 pub fn validate(
     owner: Option<&Knowledge>,
@@ -63,6 +57,7 @@ pub fn advance(
         .filter(|g| g.food.is_some())
         .map(|g| g.id)
         .collect();
+    let known_regions = regions(view);
     let stocks: Vec<_> = view
         .containers
         .par_iter()
@@ -92,10 +87,12 @@ pub fn advance(
                 .region
                 .filter(|_| access.not_at_stock.binary_search(&p.id).is_err())
                 .map(|region| {
-                    food.binary_search_by_key(&region, |r| r.0)
-                        .ok()
-                        .map(|i| (region, food[i].1))
-                        .ok_or("unknown observation region")
+                    if !known_regions.contains(&region) {
+                        return Err("unknown observation region");
+                    }
+                    let quantity = food.binary_search_by_key(&region, |r| r.0)
+                        .map_or(0, |index| food[index].1);
+                    Ok((region, quantity))
                 })
                 .transpose()?;
             Ok(Observation {
@@ -123,7 +120,7 @@ pub fn advance(
     owner
         .prepare_validated_with_pressure(
             &observations,
-            &regions(view),
+            &known_regions,
             events,
             access.now,
             |receiver, sender| {

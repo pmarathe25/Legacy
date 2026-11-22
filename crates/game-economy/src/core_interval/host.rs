@@ -701,13 +701,7 @@ impl CoreHost {
             let regions = core
                 .physical
                 .stock_view(core.physical.tick())?
-                .containers
-                .into_par_iter()
-                .filter_map(|row| match row.place {
-                    game_lots::Place::Stock { region, .. } => Some(region),
-                    _ => None,
-                })
-                .collect();
+                .regions().iter().copied().collect();
             owner.validate(&people, &regions, &goods, core.simulated_millis())?;
         }
         if let Some(owner) = &autowork {
@@ -1249,13 +1243,7 @@ impl CoreHost {
                 .collect();
             let view = core.physical.view(core.physical.tick())?;
             let regions: HashSet<_> = view
-                .containers
-                .par_iter()
-                .filter_map(|row| match row.place {
-                    game_lots::Place::Stock { region, .. } => Some(region),
-                    _ => None,
-                })
-                .collect();
+                .regions().iter().copied().collect();
             owner
                 .validate(
                     &regions,
@@ -1434,13 +1422,7 @@ impl CoreHost {
                     return Err("local walking requires an elapsed walking unit".into());
                 }
                 let regions: HashSet<_> = view
-                    .containers
-                    .par_iter()
-                    .filter_map(|container| match container.place {
-                        game_lots::Place::Stock { region, .. } => Some(region),
-                        _ => None,
-                    })
-                    .collect();
+                    .regions().iter().copied().collect();
                 walking.validate(&core.people, &owner.stores, &regions, core.physical.tick())?;
             }
         }
@@ -1466,13 +1448,7 @@ impl CoreHost {
             let goods: HashSet<_> = core.physical.goods().par_iter().map(|g| g.id).collect();
             let view = core.physical.view(core.physical.tick())?;
             let regions: HashSet<_> = view
-                .containers
-                .par_iter()
-                .filter_map(|row| match row.place {
-                    game_lots::Place::Stock { region, .. } => Some(region),
-                    _ => None,
-                })
-                .collect();
+                .regions().iter().copied().collect();
             owner.normalize_and_validate(&people, &goods, &regions, &core.physical.snapshot())?;
         }
         if let Some(owner) = &market {
@@ -1524,11 +1500,7 @@ impl CoreHost {
         if let Some(owner) = &pastimes {
             let people = core.people.par_iter().map(|row| row.id).collect();
             let goods = core.physical.goods().par_iter().map(|row| row.id).collect();
-            let regions = core.physical.stock_view(core.physical.tick())?.containers
-                .into_par_iter().filter_map(|row| match row.place {
-                    game_lots::Place::Stock { region, .. } => Some(region),
-                    _ => None,
-                }).collect();
+            let regions = core.physical.stock_view(core.physical.tick())?.regions().iter().copied().collect();
             owner.validate(&people, &regions, &goods, core.simulated_millis())?;
         }
         if let Some(owner) = &mut purpose {

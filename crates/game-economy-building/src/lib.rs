@@ -142,13 +142,7 @@ impl Construction {
         let regions: HashSet<_> = if self.materials.is_empty() {
             HashSet::new()
         } else {
-            view.containers
-                .par_iter()
-                .filter_map(|c| match c.place {
-                    Place::Stock { region, .. } => Some(region),
-                    _ => None,
-                })
-                .collect()
+            view.regions().iter().copied().collect()
         };
         if self
             .maintenance

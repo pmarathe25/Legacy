@@ -2,6 +2,7 @@
 use game_lot_model::State;
 use game_production_model::{Good, Job, Recipe};
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Phase {
@@ -103,6 +104,9 @@ pub struct WorkInterval {
 #[serde(deny_unknown_fields)]
 pub struct Snapshot {
     pub custody: State,
+    /// Geographical regions exist independently of their stock endpoints.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub region_ids: Option<Arc<[u64]>>,
     pub goods: Vec<Good>,
     pub recipes: Vec<Recipe>,
     pub tick_millis: u64,

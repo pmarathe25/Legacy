@@ -8,7 +8,7 @@ use game_economy_person::{
     travel::{Departure, Travel},
 };
 use game_lot_runtime::Work;
-use game_lots::{Place, View};
+use game_lots::View;
 pub use game_missions::{
     DeliveryAcquisition, DeliveryPreference, Mission, Missions, Objective, Phase as MissionPhase,
     Start,
@@ -52,13 +52,7 @@ pub fn validate(
     let travel = travel.ok_or("expeditions require travel")?;
     let routes = routes(travel)?;
     let regions = view
-        .containers
-        .par_iter()
-        .filter_map(|row| match row.place {
-            Place::Stock { region, .. } => Some(region),
-            _ => None,
-        })
-        .collect();
+        .regions().iter().copied().collect();
     owner
         .validate(people, &regions, &routes, tick)
         .map_err(str::to_owned)?;

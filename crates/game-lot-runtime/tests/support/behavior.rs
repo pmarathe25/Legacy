@@ -54,10 +54,51 @@ fn runtime() -> Runtime {
         tick_millis: 86_400_000,
         work_rate_period_millis: None,
         work: vec![],
+        region_ids: None,
         work_interval: None,
     })
     .unwrap()
 }
+
+#[test]
+fn unavailable_storage_does_not_reject_other_workers_in_the_same_batch() {
+    let run = |workers, interval, reversed| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut saved = runtime().snapshot();
+                saved.region_ids = Some(Arc::from([1, 2]));
+                let mut runtime = Runtime::compile(saved).unwrap();
+                let mut starts = [1, 2].map(|region| Start {
+                    id: region,
+                    worker: region,
+                    region,
+                    recipe: 1,
+                    units: 1,
+                });
+                if reversed {
+                    starts.reverse();
+                }
+                let outcome = if interval {
+                    runtime.begin_work_interval(&[]).unwrap();
+                    runtime.start_interval_work(&starts.map(|start| (start, 1)), 7)
+                } else {
+                    runtime.start(&starts, 7)
+                }.unwrap();
+                assert_eq!(outcome, [(1, true), (2, false)]);
+                assert!(runtime.custody(Place::JobInput(2)).is_none());
+                assert!(runtime.custody(Place::JobOutput(2)).is_none());
+                assert_eq!(runtime.custody(Place::JobInput(1)).unwrap().lots[0].quantity, 2);
+                runtime.snapshot()
+            })
+    };
+    for interval in [false, true] {
+        assert_eq!(run(1, interval, false), run(6, interval, true));
+    }
+}
+
 #[test]
 fn environmental_outputs_compete_for_real_capacity_and_must_be_fresh() {
     let mut world = runtime();
@@ -2072,6 +2113,7 @@ fn authored_recipe_produces_real_dated_food_and_it_expires_after_transport_and_r
         tick_millis: 86_400_000,
         work_rate_period_millis: None,
         work: vec![],
+        region_ids: None,
         work_interval: None,
     })
     .unwrap();

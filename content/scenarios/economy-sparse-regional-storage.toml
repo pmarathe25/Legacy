@@ -1,0 +1,83 @@
+# Region identity, storage, and physical work are independent.
+seed = 43
+tick_millis = 3600000
+work_rate_period_millis = 3600000
+decision_period_millis = 3600000
+social_period_millis = 1200000
+travel_unit_millis = 20
+stock_capacity = 100
+food_relief_divisor = 20
+
+[rules]
+hunger_rate = { units = 0, per_millis = 3600000 }
+meal_threshold = 10
+starvation_threshold = 50
+max_health = 100
+carrying_capacity = 20
+max_work_hunger = 40
+
+[[regions]]
+id = 1
+storage = { timber = 5 }
+stock = { timber = 5 }
+
+[[regions]]
+id = 2
+storage = {}
+
+[[regions]]
+id = 3
+storage = { bread = 2 }
+
+[[routes]]
+source = 1
+destination = 2
+ticks = 1
+
+[[routes]]
+source = 2
+destination = 1
+ticks = 1
+
+[[people]]
+id = 1
+region = 1
+health = 100
+hunger = 0
+willing_to_work = false
+seek_meals = false
+controlled = true
+
+[[people]]
+id = 2
+region = 2
+health = 100
+hunger = 0
+willing_to_work = false
+seek_meals = false
+
+[[people]]
+id = 3
+region = 2
+health = 100
+hunger = 0
+willing_to_work = false
+seek_meals = false
+
+[dynamics.social]
+participants = [{ person = 2, willing = true }, { person = 3, willing = true }]
+
+[dynamics.social.rules]
+min_health = 1
+max_hunger = 100
+familiarity_gain = 1
+familiarity_max = 10
+
+[knowledge]
+max_records = 4
+
+[[knowledge.minds]]
+person = 2
+
+[[knowledge.minds]]
+person = 3

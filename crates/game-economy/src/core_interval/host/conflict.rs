@@ -143,13 +143,7 @@ impl CorePersonalConflict {
             let regions = core
                 .physical
                 .stock_view(core.physical.tick())?
-                .containers
-                .into_par_iter()
-                .filter_map(|row| match row.place {
-                    game_lots::Place::Stock { region, .. } => Some(region),
-                    _ => None,
-                })
-                .collect();
+                .regions().iter().copied().collect();
             tactical.validate(core.simulated_millis(), &people, &regions, &goods)?;
         }
         if self
