@@ -46,6 +46,10 @@ to track rates, deadlines, and behavior under different advance sizes. The
   adult capacity, and local habitat selection without human activity.
   Competing local variants and physical seed withdrawals are tested
   across worker counts, elapsed partitions, and save/reload.
+- Directed pollen corridors let ripe crops contribute actual parent
+  lineages across regions. Candidate fields reuse regional pollen pools.
+  The elapsed growth test records offspring with an allele from the
+  linked region and compares save/reload, partitions, and worker counts.
 - Conditional aid and work practices arise through individual proposals and
   responses. History preserves attributed proposals, claimed readiness,
   beliefs, and outward adoption with or without approval. More types of
@@ -55,6 +59,11 @@ to track rates, deadlines, and behavior under different advance sizes. The
   owner arbitrates competing requests and charges only accepted transfers.
   A composed test covers renewal, competing gatherers, exact receipts, and
   save/resume across worker counts and physical settlement intervals.
+- Authored regions can register only the stock endpoints they support.
+  The sparse demonstration loads 334 goods across three regions with two
+  stock containers. A stockless region still supports travel and local
+  observations. A missing input holder rejects only the affected start.
+  Finished output remains in job custody when its destination is absent.
 - People with a cultivation choice profile can plant or harvest on their
   decision clock when the crop owner uses elapsed growth. Shared-field
   competition, actual seed-batch withdrawal, offspring custody, and the
@@ -237,7 +246,7 @@ reports.
 | Area | Follow-up and acceptance example |
 | --- | --- |
 | Content identity and compatibility | Namespaced objects and recipes accept stable runtime IDs. The loader validates pack versions and dependencies and rejects duplicate identities. Persist a catalog manifest with versioned saves and define how a resumed world accepts compatible catalog additions. |
-| Import and storage | The [catalog importer](../../crates/game-content-import/src/lib.rs) preserves authored capacities independently of recipe batch size. Default region tables still create an empty stock endpoint for every catalog good. Add explicit sparse storage and verify that unused content no longer increases custody allocation in those regions. |
+| Import and storage | The [catalog importer](../../crates/game-content-import/src/lib.rs) preserves authored capacities independently of recipe size. Explicit regional storage stays sparse as catalog goods are added. Older regions without explicit storage still use the scenario capacity for each good. Migrate more representative worlds and exercise additional transfer and production paths with sparse storage. |
 | Quantities and lot identity | Represent the physical capacity being consumed, such as volume, mass, or slots, where counting unlike raw quantities gives wrong results. Keep stable batch provenance and expiry for goods that also need individual identity. The [current lot model](../../crates/game-lot-model/src/lib.rs) rejects both combinations for identified items. Cover perishability, splitting, merges, transfer, rollback, and conservation. |
 | Production, knowledge, and work | Workshop recipes support several outputs or byproducts. Multiple recipes per character, specific recipe teaching, and practice across creative activities have interval slices. Extend choice and practice across work, and keep exact recipe knowledge distinct from skill and personal preferences. |
 | Reach and apparatus | Regional colocation is a coarse default and mechanically usable parts currently often have to be in one actor's custody. Use shared physical reach and access semantics for installed, carried, and jointly used equipment. Broaden bounded design generation beyond the first compatible component mapping. Preserve identity, wear, breakage, loads, and separate judgments about claims, permission, and cooperation. |

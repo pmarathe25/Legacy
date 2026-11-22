@@ -121,7 +121,7 @@ stock = { timber = 3000, barley = 3000, bread = 800, grain-seed = 200, fresh-wat
 
 [[regions]]
 id = 2
-stock = { barley = 200, timber = 100 }
+stock = { barley = 200, timber = 100, grain-seed = 30, fresh-water = 100 }
 
 [[routes]]
 source = 1
@@ -2112,6 +2112,11 @@ person = 35
 capacity = 8
 attention = [{ kind = "creative_practice", value = 8, retention_millis = 259200000 }]
 
+[[stock_surveys]]
+person = 18
+goods = ["bread", "barley", "grain"]
+count_step = 10
+
 [environment]
 season_unit_millis = 3600000
 exposure_period_millis = 3600000
@@ -2157,10 +2162,15 @@ action_clock = { period_millis = 3600000, request_unit_millis = 3600000 }
 max_hunger = 120
 inherit_births = true
 track_seed_batches = true
-policies = [{ person = 6, willing = true }]
+policies = [{ person = 6, willing = true }, { person = 49, willing = true }]
 [[cultivation.fields]]
 id = 1
 region = 1
+crop = "grain"
+
+[[cultivation.fields]]
+id = 2
+region = 2
 crop = "grain"
 
 [[cultivation.seed_batches]]
@@ -2175,12 +2185,18 @@ good = "grain-seed"
 batch = 12
 quantity = 100
 
+[[cultivation.seed_batches]]
+region = 2
+good = "grain-seed"
+batch = 21
+quantity = 30
+
 [cultivation.soil]
 capacity = 100
 loss_per_harvest = 10
 recovery_per_fallow = 10
 recovery_clock = { period_millis = 3600000 }
-fields = [{ field = 1, fertility = 90 }]
+fields = [{ field = 1, fertility = 90 }, { field = 2, fertility = 70 }]
 
 [soil_amendment]
 good = "bark"
@@ -2199,6 +2215,7 @@ growth_weight = 0
 min_factor = 500
 max_factor = 1500
 season_effects = [{ season = "cold season", weight = -600 }, { season = "growing season", weight = 600 }]
+pollen_corridors = [{ source = 1, destination = 2, strength = 800 }]
 
 [[cultivation.seed_genetics.strains]]
 batch = 11
@@ -2207,6 +2224,10 @@ alleles = [300, 400]
 [[cultivation.seed_genetics.strains]]
 batch = 12
 alleles = [600, 700]
+
+[[cultivation.seed_genetics.strains]]
+batch = 21
+alleles = [500, 500]
 
 [cultivation.seed_genetics.reproduction]
 seed_per_thousand = 1000
@@ -2221,8 +2242,11 @@ capacity = 2
 minimum_growth = 1
 evaporation = 1
 evaporation_period_millis = 3600000
-moisture = [{ field = 1, amount = 0 }]
-choices = [{ person = 7, field = 1, quantity = 1, willing = true }]
+moisture = [{ field = 1, amount = 0 }, { field = 2, amount = 1 }]
+choices = [
+    { person = 7, field = 1, quantity = 1, willing = true },
+    { person = 50, field = 2, quantity = 1, willing = true },
+]
 
 [hunting]
 inherit_births = true
