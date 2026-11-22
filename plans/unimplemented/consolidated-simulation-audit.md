@@ -79,10 +79,13 @@ to track rates, deadlines, and behavior under different advance sizes. The
   adopt or reinterpret the marker. A listener with a learned marker can
   understand its role independently of ordinary word order. Archived events
   distinguish a particle spoken from a mapping actually adopted.
-- Works can consist of several of a person's own marked forms on one
-  identified physical page. Readers interpret each form through their own
-  sound and meaning associations. Characters can choose authorship over a
-  competing creative activity, and the archive records actual works.
+- Works can consist of several of a person's own marked forms on an
+  identified object. A person can choose among authored surfaces, including
+  paper, incised clay, and charcoal on bark. Creation consumes only the
+  chosen materials and can fail atomically. Readers keep the work's material
+  identity and interpret the marks through their own sound and meaning
+  associations. Characters can choose authorship over a competing creative
+  activity, and the archive records completed works and surface IDs.
 - Authored pastime catalogs provide song composition, instrument practice,
   and material-based painting. Characters can take up or stop an activity.
   Completion is dated by elapsed time and people can assign it different

@@ -61,7 +61,11 @@ remember_capacity = 4
 
 [[language.minds]]
 person = 1
-syntax = { initiative = 700, demonstrate = true }
+syntax = { initiative = 700, demonstrate = true, role_marking = { initiative = 750, preferred_role = "holder" } }
+
+[[language.minds]]
+person = 44
+syntax = { inference = 600, role_marking = { inference = 850, revision = 200 } }
 
 [[language_topic_profiles]]
 person = 1
@@ -485,7 +489,7 @@ health = 100
 hunger = 0
 willing_to_work = false
 seek_meals = true
-goods = { paper = 1, ink = 1 }
+goods = { paper = 1, ink = 1, clay = 1 }
 
 [[people]]
 id = 44
@@ -2048,6 +2052,11 @@ page = "written-page"
 paper_quantity = 1
 ink_quantity = 1
 next_item = 1
+surfaces = [
+    { blank = { good = "clay", quantity = 1 }, page = "inscribed-clay-tablet" },
+    { blank = { good = "bark", quantity = 1 }, pigment = { good = "charcoal", quantity = 1 }, page = "marked-bark-sheet" },
+]
+surface_choices = [{ person = 43, page = "inscribed-clay-tablet" }]
 literacy = [{person=1,script=1,read=true,auto_read=true},{person=2,script=1,read=true,write=true}]
 compositions = [{ person = 43, topics = [{ kind = "place", id = 1 }, { kind = "person", id = 1 }], value = 9 }]
 [[writing.practice]]
