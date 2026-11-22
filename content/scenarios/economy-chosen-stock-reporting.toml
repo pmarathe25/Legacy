@@ -1,0 +1,59 @@
+# A real encounter can carry a chosen food statement or stay silent.
+seed = 17
+tick_millis = 1000
+decision_period_millis = 300
+social_period_millis = 41
+stock_capacity = 100
+food_relief_divisor = 20
+
+[rules]
+hunger_rate = { units = 0, per_millis = 1000 }
+meal_threshold = 10
+starvation_threshold = 50
+max_health = 100
+carrying_capacity = 20
+max_work_hunger = 40
+
+[[regions]]
+id = 1
+stock = {}
+[[regions]]
+id = 2
+stock = { bread = 7 }
+
+[[people]]
+id = 1
+region = 1
+health = 100
+hunger = 0
+willing_to_work = false
+seek_meals = false
+controlled = true
+
+[[people]]
+id = 2
+region = 1
+health = 100
+hunger = 0
+willing_to_work = false
+seek_meals = false
+
+[dynamics.social]
+participants = [{ person = 1, willing = true }, { person = 2, willing = true }]
+[dynamics.social.rules]
+interval = 1
+min_health = 1
+max_hunger = 100
+familiarity_gain = 1
+familiarity_max = 10
+
+[knowledge]
+max_records = 4
+
+[[knowledge.minds]]
+person = 1
+records = [{ region = 2, food = 7, observed_at = 0, witness = 1 }]
+
+[[knowledge.minds]]
+person = 2
+

@@ -21,6 +21,7 @@ mod expeditions;
 mod family;
 mod fatigue;
 mod fauna;
+mod food_reports;
 mod food_search;
 mod gathering;
 mod giving;
