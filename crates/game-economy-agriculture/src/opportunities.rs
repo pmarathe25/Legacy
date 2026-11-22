@@ -182,6 +182,7 @@ mod tests {
                 seed_quantity: 3,
                 output: 4,
                 output_quantity: 5,
+                byproducts: vec![],
                 growth_ticks: 2,
             }],
             fields: (1..=8)
@@ -249,6 +250,7 @@ mod tests {
                 seed_quantity: 3,
                 output: 4,
                 output_quantity: 5,
+                byproducts: vec![],
                 growth_ticks: 2,
             }],
             fields: (1..=count)

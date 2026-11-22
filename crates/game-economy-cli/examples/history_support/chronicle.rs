@@ -688,6 +688,7 @@ fn classify(kind: &str, row: &Value) -> Option<Receipt> {
             "broke" => "mechanical tests that broke a part",
             _ => return None,
         },
+        ("harvest_products", _) => "harvests with several physical products",
         ("soil_amendments", _) if row["accepted"].as_bool() == Some(true) => {
             "soil amendments completed"
         }

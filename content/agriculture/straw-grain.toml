@@ -1,0 +1,12 @@
+id = "agriculture/straw-grain"
+version = 1
+
+[data.crops.straw-grain]
+runtime_id = 210101
+name = "Long-straw grain"
+seed_object = "grain-seed"
+seed_input = 10
+output_object = "grain"
+yield_units = 100
+byproducts = { "crop-residues:straw" = 8 }
+growth = 86400000

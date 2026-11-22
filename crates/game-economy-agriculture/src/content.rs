@@ -1,7 +1,7 @@
 //! Compile authored crop files into stable physical cultivation definitions.
 use crate::Crop;
-use game_production_model::Good;
-use std::collections::BTreeMap;
+use game_production_model::{Amount, Good};
+use std::collections::{BTreeMap, HashSet};
 use std::path::Path;
 use toml::Value;
 
@@ -48,10 +48,11 @@ pub fn load(
             }
         }
     }
+    let mut ids = HashSet::new();
+    let mut implicit_id = 0u32;
     definitions
         .into_iter()
-        .enumerate()
-        .map(|(index, (name, row))| {
+        .map(|(name, row)| {
             let positive = |key: &str| {
                 row.get(key)
                     .and_then(Value::as_integer)
@@ -65,15 +66,46 @@ pub fn load(
                     .and_then(|value| names.get(value).copied())
                     .ok_or_else(|| format!("crop {name}: unknown {key}"))
             };
-            let id = u32::try_from(index + 1).map_err(|_| "crop count overflow")?;
+            let id = if row.get("runtime_id").is_some() {
+                u32::try_from(positive("runtime_id")?).map_err(|_| "crop identity overflow")?
+            } else {
+                implicit_id = implicit_id.checked_add(1).ok_or("crop count overflow")?;
+                implicit_id
+            };
+            if !ids.insert(id) {
+                return Err(format!("duplicate crop identity {id}"));
+            }
+            let seed = object("seed_object")?;
+            let output = object("output_object")?;
+            let mut byproducts = Vec::new();
+            if let Some(byproduct_map) = row.get("byproducts") {
+                for (good_name, quantity) in byproduct_map
+                    .as_table()
+                    .ok_or_else(|| format!("crop {name}: invalid byproducts"))?
+                {
+                    let good = names
+                        .get(good_name.as_str())
+                        .copied()
+                        .filter(|id| *id != seed && *id != output)
+                        .ok_or_else(|| format!("crop {name}: invalid byproduct {good_name}"))?;
+                    let quantity = quantity
+                        .as_integer()
+                        .and_then(|value| u64::try_from(value).ok())
+                        .filter(|&value| value > 0)
+                        .ok_or_else(|| format!("crop {name}: invalid byproduct quantity"))?;
+                    byproducts.push(Amount { good, quantity });
+                }
+                byproducts.sort_unstable_by_key(|amount| amount.good);
+            }
             let growth_ticks = u32::try_from(positive("growth")?.div_ceil(tick_millis))
                 .map_err(|_| "crop duration overflow")?;
             let crop = Crop {
                 id,
-                seed: object("seed_object")?,
+                seed,
                 seed_quantity: positive("seed_input")?,
-                output: object("output_object")?,
+                output,
                 output_quantity: positive("yield_units")?,
+                byproducts,
                 growth_ticks,
             };
             Ok((name, crop))
