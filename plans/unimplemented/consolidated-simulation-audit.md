@@ -74,6 +74,11 @@ to track rates, deadlines, and behavior under different advance sizes. The
   who share exact spoken or written forms and show competing forms. A
   one-year integrated archive records adoption, adaptation, and explanations
   that did not result in an immediate adoption.
+- Speakers can coin a particle from their own phonemes to mark the holder or
+  object in a phrase. Two distinct demonstrations can lead a listener to
+  adopt or reinterpret the marker. A listener with a learned marker can
+  understand its role independently of ordinary word order. Archived events
+  distinguish a particle spoken from a mapping actually adopted.
 - Works can consist of several of a person's own marked forms on one
   identified physical page. Readers interpret each form through their own
   sound and meaning associations. Characters can choose authorship over a
