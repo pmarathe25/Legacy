@@ -480,11 +480,7 @@ impl CoreHost {
             self.core
                 .people
                 .par_iter()
-                .filter(|person| {
-                    person.controlled
-                        || person.health == 0
-                        || person.hunger > self.core.rules.max_work_hunger
-                })
+                .filter(|person| person.controlled || person.health == 0)
                 .map(|person| person.id),
         );
         busy.par_extend(
@@ -503,7 +499,15 @@ impl CoreHost {
             .par_iter()
             .map(|person| (person.id, person.region, person.health, person.hunger))
             .collect();
-        let offers = owner.offer_index(self.agreements.as_ref(), tick);
+        let offer_time = self.agreements.as_ref().map_or(Ok(tick), |agreements| {
+            agreements.instant(self.core.simulated_millis(), tick).map(|at| at.now)
+        }).map_err(str::to_owned)?;
+        let offers = owner.offer_index(self.agreements.as_ref(), offer_time);
+        let endpoint = |person, _| match self.local_partition(person) {
+            (0, _) => Some(None),
+            (1, store) => Some(Some(store)),
+            _ => None,
+        };
         let Some(draft) = game_work_asking::prepare_for_goal_clock(
             owner,
             self.goals.as_ref(),
@@ -511,7 +515,7 @@ impl CoreHost {
             &busy,
             offers.as_ref(),
             &practices,
-            (tick, Some(self.core.simulated_millis()), None),
+            (tick, Some(self.core.simulated_millis()), Some(&endpoint)),
         )
         .map_err(str::to_owned)?
         else {
@@ -646,21 +650,11 @@ impl CoreHost {
             return Ok(CoreRequestResults::default());
         };
         let mut busy = blocked.to_vec();
-        if let Some(family) = &self.family {
-            busy.par_extend(game_economy_work::underage_at(
-                family,
-                Some(self.core.simulated_millis()),
-            ));
-        }
         busy.par_extend(
             self.core
                 .people
                 .par_iter()
-                .filter(|person| {
-                    person.controlled
-                        || person.health == 0
-                        || person.hunger > self.core.rules.max_work_hunger
-                })
+                .filter(|person| person.controlled || person.health == 0)
                 .map(|person| person.id),
         );
         busy.par_extend(
@@ -679,7 +673,10 @@ impl CoreHost {
             .par_iter()
             .map(|person| (person.id, person.region, person.health, person.hunger))
             .collect();
-        let offers = requests.offer_index(self.agreements.as_ref(), tick);
+        let offer_time = self.agreements.as_ref().map_or(Ok(tick), |agreements| {
+            agreements.instant(self.core.simulated_millis(), tick).map(|at| at.now)
+        }).map_err(str::to_owned)?;
+        let offers = requests.offer_index(self.agreements.as_ref(), offer_time);
         let draft = requests.prepare_filtered(
             &people,
             self.opinions.as_ref(),
@@ -694,6 +691,7 @@ impl CoreHost {
                         request.worker,
                         request.region,
                     )
+                    && self.same_local_endpoint(request.requester, request.worker)
             },
         );
         let actors: Vec<_> = draft
@@ -733,6 +731,9 @@ impl CoreHost {
                 .filter(|decision| decision.help)
                 .collect()
         };
+        let helping: Vec<_> = helping.into_par_iter()
+            .filter(|decision| self.regional_stock_reachable(decision.worker, decision.region))
+            .collect();
         let (first, next) = if helping.is_empty() {
             (0, auto.next_id)
         } else {
@@ -789,7 +790,7 @@ impl CoreHost {
         let outcomes = if starts.is_empty() {
             Vec::new()
         } else {
-            self.start_with_sites(&starts)?
+            self.start_with_sites_hunger_limit(&starts, u32::MAX, true, None)?
         };
         if !uses.is_empty() {
             self.publish_claim_work(&uses, &outcomes, tick);

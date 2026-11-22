@@ -4362,6 +4362,7 @@ fn core_host_work_requests_benchmark() {
                 help_value: 0,
                 affinity_weight: 0,
                 trust_weight: 0,
+                hunger_weight: 0,
                 offer_value: use_offers.then_some(OfferValue {
                     good: 2,
                     value_per_unit: 1,
@@ -5958,6 +5959,7 @@ fn scheduled_requests_use_directed_fear_and_obligation_without_binding_work() {
                         help_value: 0,
                         affinity_weight: 0,
                         trust_weight: 0,
+                        hunger_weight: 0,
                         offer_value: None,
                         disregard_claims: false,
                     })
@@ -6151,6 +6153,7 @@ fn willing_request_response_with_missing_stock_remains_pending() {
             help_value: 1,
             affinity_weight: 0,
             trust_weight: 0,
+            hunger_weight: 0,
             offer_value: None,
             disregard_claims: false,
         }],
@@ -6293,6 +6296,7 @@ fn contested_request_reservations_do_not_turn_shortage_into_refusal() {
                             help_value: 1,
                             affinity_weight: 0,
                             trust_weight: 0,
+                            hunger_weight: 0,
                             offer_value: None,
                             disregard_claims: false,
                         })
@@ -6440,6 +6444,7 @@ fn future_request_does_not_hide_an_existing_local_request() {
             help_value: 1,
             affinity_weight: 0,
             trust_weight: 0,
+            hunger_weight: 0,
             offer_value: None,
             disregard_claims: false,
         }],
@@ -6569,6 +6574,7 @@ fn requested_work_follows_the_workers_own_claim_preference() {
                         help_value: 1,
                         affinity_weight: 0,
                         trust_weight: 0,
+                        hunger_weight: 0,
                         offer_value: None,
                         disregard_claims: false,
                     }],
@@ -9962,6 +9968,7 @@ fn core_host_clears_old_request_events_at_the_boundary() {
             help_value: 0,
             affinity_weight: 0,
             trust_weight: 0,
+            hunger_weight: 0,
             offer_value: None,
             disregard_claims: false,
         }],
@@ -10081,7 +10088,7 @@ fn scheduled_personal_goals_create_requests_and_count_only_witnessed_help() {
             let requests = Requests {
                 next_id: 1, inherit_births: false, memory_limit: 4,
                 work_links: vec![], memories: vec![],
-                preferences: vec![Preference { person: 1, effort: 0, help_value: 1, affinity_weight: 0, trust_weight: 0, offer_value: None, disregard_claims: false }],
+                preferences: vec![Preference { person: 1, effort: 0, help_value: 1, affinity_weight: 0, trust_weight: 0, hunger_weight: 0, offer_value: None, disregard_claims: false }],
                 askers: vec![Asker { person: 2, interval: 1, lifetime: 3, retry_after_offer: false }],
                 pending: vec![], events: vec![],
             };
@@ -10131,7 +10138,7 @@ fn work_practice_asks_then_freely_gives_for_witnessed_work() {
             let requests = Requests {
                 next_id: 1, inherit_births: false, memory_limit: 4,
                 work_links: vec![], memories: vec![],
-                preferences: vec![Preference { person: 1, effort: 0, help_value: 1, affinity_weight: 0, trust_weight: 0, offer_value: None, disregard_claims: false }],
+                preferences: vec![Preference { person: 1, effort: 0, help_value: 1, affinity_weight: 0, trust_weight: 0, hunger_weight: 0, offer_value: None, disregard_claims: false }],
                 askers: vec![],
                 pending: vec![], events: vec![],
             };
@@ -10192,7 +10199,7 @@ fn worker_subjectively_reacts_to_received_or_missing_work_gift() {
             let requests = Requests {
                 next_id: 1, inherit_births: false, memory_limit: 4,
                 work_links: vec![], memories: vec![],
-                preferences: vec![Preference { person: 1, effort: 0, help_value: 1, affinity_weight: 0, trust_weight: 0, offer_value: None, disregard_claims: false }],
+                preferences: vec![Preference { person: 1, effort: 0, help_value: 1, affinity_weight: 0, trust_weight: 0, hunger_weight: 0, offer_value: None, disregard_claims: false }],
                 askers: vec![],
                 pending: vec![], events: vec![],
             };
@@ -10262,7 +10269,7 @@ fn same_interval_delivery_respects_its_order_relative_to_work_start() {
             let requests = Requests {
                 next_id: 1, inherit_births: false, memory_limit: 4,
                 work_links: vec![], memories: vec![],
-                preferences: vec![Preference { person: 1, effort: 0, help_value: 1, affinity_weight: 0, trust_weight: 0, offer_value: None, disregard_claims: false }],
+                preferences: vec![Preference { person: 1, effort: 0, help_value: 1, affinity_weight: 0, trust_weight: 0, hunger_weight: 0, offer_value: None, disregard_claims: false }],
                 askers: vec![],
                 pending: vec![], events: vec![],
             };
@@ -10342,7 +10349,7 @@ fn worker_can_dislike_a_gift_and_enjoy_not_receiving_it() {
             let requests = Requests {
                 next_id: 1, inherit_births: false, memory_limit: 4,
                 work_links: vec![], memories: vec![],
-                preferences: vec![Preference { person: 1, effort: 0, help_value: 1, affinity_weight: 0, trust_weight: 0, offer_value: None, disregard_claims: false }],
+                preferences: vec![Preference { person: 1, effort: 0, help_value: 1, affinity_weight: 0, trust_weight: 0, hunger_weight: 0, offer_value: None, disregard_claims: false }],
                 askers: vec![],
                 pending: vec![], events: vec![],
             };
@@ -10413,7 +10420,7 @@ fn abandoned_requested_work_does_not_create_a_completed_expectation() {
             let requests = Requests {
                 next_id: 1, inherit_births: false, memory_limit: 4,
                 work_links: vec![], memories: vec![],
-                preferences: vec![Preference { person: 1, effort: 0, help_value: 1, affinity_weight: 0, trust_weight: 0, offer_value: None, disregard_claims: false }],
+                preferences: vec![Preference { person: 1, effort: 0, help_value: 1, affinity_weight: 0, trust_weight: 0, hunger_weight: 0, offer_value: None, disregard_claims: false }],
                 askers: vec![],
                 pending: vec![], events: vec![],
             };
@@ -10476,7 +10483,7 @@ fn work_expectation_observes_only_accepted_early_deliveries() {
             let requests = Requests {
                 next_id: 1, inherit_births: false, memory_limit: 4,
                 work_links: vec![], memories: vec![],
-                preferences: vec![Preference { person: 1, effort: 0, help_value: 1, affinity_weight: 0, trust_weight: 0, offer_value: None, disregard_claims: false }],
+                preferences: vec![Preference { person: 1, effort: 0, help_value: 1, affinity_weight: 0, trust_weight: 0, hunger_weight: 0, offer_value: None, disregard_claims: false }],
                 askers: vec![],
                 pending: vec![], events: vec![],
             };
@@ -10559,7 +10566,7 @@ fn work_expectation_survives_early_completion_and_save() {
             let requests = Requests {
                 next_id: 1, inherit_births: false, memory_limit: 4,
                 work_links: vec![], memories: vec![],
-                preferences: vec![Preference { person: 1, effort: 0, help_value: 1, affinity_weight: 0, trust_weight: 0, offer_value: None, disregard_claims: false }],
+                preferences: vec![Preference { person: 1, effort: 0, help_value: 1, affinity_weight: 0, trust_weight: 0, hunger_weight: 0, offer_value: None, disregard_claims: false }],
                 askers: vec![],
                 pending: vec![], events: vec![],
             };
@@ -10930,6 +10937,7 @@ fn an_unfunded_offer_can_motivate_work_without_forcing_delivery() {
             help_value: 0,
             affinity_weight: 0,
             trust_weight: 0,
+            hunger_weight: 0,
             offer_value: Some(OfferValue {
                 good: 2,
                 value_per_unit: 1,
@@ -11526,7 +11534,7 @@ fn completed_work_wears_a_site_and_real_repairs_reopen_it() {
                 };
                 let requests = game_autowork::requests::Requests {
                     next_id: 2, inherit_births: false, memory_limit: 2, work_links: vec![], memories: vec![],
-                    preferences: vec![game_autowork::requests::Preference { person: 2, effort: 0, help_value: 1, affinity_weight: 0, trust_weight: 0, offer_value: None, disregard_claims: false }], askers: vec![],
+                    preferences: vec![game_autowork::requests::Preference { person: 2, effort: 0, help_value: 1, affinity_weight: 0, trust_weight: 0, hunger_weight: 0, offer_value: None, disregard_claims: false }], askers: vec![],
                     pending: vec![game_autowork::requests::Request { id: 1, requester: 1, worker: 2, region: 1, recipe: 1, created_at: 0, expires: 5 }], events: vec![],
                 };
                 let snapshot = CoreHostSnapshot { pastimes: None, work_capabilities: None, personal_conflict: None, expeditions: None, campaign: None, mechanics: None,

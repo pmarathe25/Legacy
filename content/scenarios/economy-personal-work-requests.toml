@@ -1,0 +1,68 @@
+# Two people with equal hunger can respond differently to the same inducement.
+seed = 59
+tick_millis = 37
+decision_period_millis = 83
+work_rate_period_millis = 1000
+stock_capacity = 40
+food_relief_divisor = 20
+
+[rules]
+hunger_rate = { units = 0, per_millis = 1000 }
+meal_threshold = 20
+starvation_threshold = 50
+max_health = 100
+max_work_hunger = 30
+carrying_capacity = 20
+
+[[regions]]
+id = 1
+stock = { timber = 5 }
+
+[[people]]
+id = 1
+region = 1
+health = 100
+hunger = 0
+willing_to_work = false
+seek_meals = false
+
+[[people]]
+id = 2
+region = 1
+health = 100
+hunger = 0
+willing_to_work = false
+seek_meals = false
+
+[[people]]
+id = 3
+region = 1
+health = 100
+hunger = 40
+willing_to_work = false
+seek_meals = false
+
+[[people]]
+id = 4
+region = 1
+health = 100
+hunger = 40
+willing_to_work = false
+seek_meals = false
+
+[work_requests]
+next_id = 1
+
+[[work_requests.preferences]]
+person = 3
+effort = 40
+hunger_weight = 1
+
+[[work_requests.preferences]]
+person = 4
+effort = 40
+hunger_weight = -1
+
+[agreements]
+next_id = 1
+time_unit_millis = 1

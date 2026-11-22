@@ -82,6 +82,10 @@ to track rates, deadlines, and behavior under different advance sizes. The
   responses. History preserves attributed proposals, claimed readiness,
   beliefs, and outward adoption with or without approval. More types of
   personal cooperation and a shared elapsed review cadence remain open.
+- A worker compares the requests they can respond to at their own location.
+  Hunger can increase or decrease the appeal of work for different people.
+  The same physical capability requirements apply to requested and
+  self-directed work. An unfulfilled offer can still motivate a worker.
 - Voluntary gathering can publish at the personal decision instant. The
   gathered yield enters physical custody before later decisions. The node
   owner arbitrates competing requests and charges only accepted transfers.

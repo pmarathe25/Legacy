@@ -7,6 +7,7 @@ use game_production::Production;
 use game_production_model::{PersonSnapshot, person_index};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
+use std::cmp::Reverse;
 use std::collections::HashSet;
 
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -60,6 +61,9 @@ pub struct Preference {
     /// Each individual decides how much their own trust affects willingness.
     #[serde(default)]
     pub trust_weight: i64,
+    /// This person's response to their own hunger when considering help.
+    #[serde(default)]
+    pub hunger_weight: i64,
     /// This person's valuation of an outstanding offer, if any.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub offer_value: Option<OfferValue>,
@@ -152,16 +156,30 @@ impl Preference {
         trust: i32,
         offered: u64,
     ) -> bool {
+        self.evaluate(fear, obligation, affinity, trust, offered, 0) >= 0
+    }
+
+    fn evaluate(
+        &self,
+        fear: u64,
+        obligation: u64,
+        affinity: i32,
+        trust: i32,
+        offered: u64,
+        hunger: u32,
+    ) -> i128 {
         let value = i128::from(self.help_value)
             + i128::from(fear)
             + i128::from(obligation)
             + i128::from(affinity) * i128::from(self.affinity_weight)
-            + i128::from(trust) * i128::from(self.trust_weight);
+            + i128::from(trust) * i128::from(self.trust_weight)
+            + i128::from(hunger) * i128::from(self.hunger_weight)
+            - i128::from(self.effort);
         let offer = self.offer_value.as_ref().map_or(0, |value| {
             i128::from(value.value_per_unit)
                 .saturating_mul(i128::from(offered.min(value.max_quantity)))
         });
-        value.saturating_add(offer) >= i128::from(self.effort)
+        value.saturating_add(offer)
     }
 }
 /// Periodically ask a local person to help with an active personal goal.
@@ -484,8 +502,7 @@ impl Requests {
     ) -> Draft {
         self.prepare_filtered(people, opinions, busy, offers, tick, |_| true)
     }
-    /// Apply host-owned contact constraints before selecting a person's first
-    /// eligible request. Expiration remains independent of contact.
+    /// Compare a person's reachable requests. Expiration is independent of contact.
     pub fn prepare_filtered<F>(
         &self,
         people: &[PersonSnapshot],
@@ -555,8 +572,9 @@ impl Requests {
         {
             eligible.par_sort_unstable_by_key(|row| (row.worker, row.id));
         }
-        let decide = |row: &Request| {
+        let evaluate = |row: &Request| {
             let preference = preference(row.worker).expect("eligible preference");
+            let worker = person_index(people, row.worker).expect("eligible worker");
             let (fear, obligation) = index
                 .as_ref()
                 .map_or((0, 0), |index| index.feelings(row.worker, row.requester));
@@ -574,33 +592,27 @@ impl Requests {
                     index.trust(row.worker, row.requester)
                 })
             };
-            Decision {
-                request: row.id,
-                worker: row.worker,
-                region: row.region,
-                recipe: row.recipe,
-                help: preference.motivated(
-                    fear,
-                    obligation,
-                    affinity,
-                    trust,
-                    preference
-                        .offer_value
-                        .as_ref()
-                        .and_then(|value| {
-                            offers.map(|index| {
-                                index.quantity_for(
-                                    row.worker,
-                                    row.requester,
-                                    row.recipe,
-                                    value.good,
-                                )
-                            })
-                        })
-                        .unwrap_or(0),
-                ),
-                disregard_claims: preference.disregard_claims,
-            }
+            let offered =
+                preference
+                    .offer_value
+                    .as_ref()
+                    .zip(offers)
+                    .map_or(0, |(value, index)| {
+                        index.quantity_for(row.worker, row.requester, row.recipe, value.good)
+                    });
+            let score =
+                preference.evaluate(fear, obligation, affinity, trust, offered, people[worker].3);
+            (
+                score,
+                Decision {
+                    request: row.id,
+                    worker: row.worker,
+                    region: row.region,
+                    recipe: row.recipe,
+                    help: score >= 0,
+                    disregard_claims: preference.disregard_claims,
+                },
+            )
         };
         let decisions = if eligible
             .par_windows(2)
@@ -608,10 +620,16 @@ impl Requests {
         {
             eligible
                 .par_chunk_by(|a, b| a.worker == b.worker)
-                .map(|rows| decide(rows[0]))
+                .map(|rows| {
+                    rows.iter()
+                        .map(|row| evaluate(row))
+                        .max_by_key(|(score, decision)| (*score, Reverse(decision.request)))
+                        .expect("nonempty inbox")
+                        .1
+                })
                 .collect()
         } else {
-            eligible.par_iter().map(|row| decide(row)).collect()
+            eligible.par_iter().map(|row| evaluate(row).1).collect()
         };
         let expired = self
             .pending
@@ -642,6 +660,7 @@ mod preference_tests {
             help_value: 0,
             affinity_weight: 3,
             trust_weight: 0,
+            hunger_weight: 0,
             offer_value: None,
             disregard_claims: false,
         };
@@ -663,6 +682,7 @@ mod preference_tests {
             help_value: 0,
             affinity_weight: 0,
             trust_weight: 0,
+            hunger_weight: 0,
             offer_value: Some(OfferValue {
                 good: 1,
                 value_per_unit: 3,

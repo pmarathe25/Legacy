@@ -93,6 +93,8 @@ struct WorkSupport {
     #[serde(default)]
     trust_weight: i64,
     #[serde(default)]
+    hunger_weight: i64,
+    #[serde(default)]
     disregard_percent: u8,
 }
 
@@ -149,6 +151,7 @@ pub fn work_support(seed: u64, profiles: &[Profile]) -> Result<WorkRows, String>
                         + random(1) % (rule.max_help_value - rule.min_help_value + 1),
                     affinity_weight: rule.affinity_weight,
                     trust_weight: rule.trust_weight,
+                    hunger_weight: rule.hunger_weight,
                     offer_value: None,
                     disregard_claims: random(2) % 100 < u64::from(rule.disregard_percent),
                 };
@@ -870,6 +873,7 @@ mod tests {
             max_help_value: 10,
             affinity_weight: 0,
             trust_weight: 0,
+            hunger_weight: 0,
             disregard_percent: 0,
         });
         assert!(work_support(1, &[people]).is_err());
