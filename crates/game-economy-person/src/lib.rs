@@ -406,9 +406,13 @@ fn prepare_inner(
                     .and_then(|rows| {
                         rows.binary_search_by_key(&person.id, |row| row.person)
                             .ok()
-                            .map(|index| rows[index].reserves)
+                            .map(|index| rows[index].clone())
                     })
-                    .unwrap_or(rules.initial)
+                    .unwrap_or_else(|| NutritionPerson {
+                        person: person.id,
+                        reserves: rules.initial,
+                        named: Vec::new(),
+                    })
             });
             if person.health > 0 {
                 if add_boundary_hunger && person.immortal.is_none() {
@@ -431,7 +435,7 @@ fn prepare_inner(
                     }
                     apply_food_health(&mut person, effect.health, rules.max_health);
                     if let (Some(values), Some(nutrition_rules)) = (&mut values, nutrition_rules) {
-                        for (index, value) in values.iter_mut().enumerate() {
+                        for (index, value) in values.reserves.iter_mut().enumerate() {
                             *value = value
                                 .saturating_add(effect.nutrients[index])
                                 .min(nutrition_rules.capacity[index]);
@@ -449,10 +453,10 @@ fn prepare_inner(
                     && nutrition_rules.interval_millis.is_none()
                     && tick.is_multiple_of(nutrition_rules.interval)
                 {
-                    for (index, value) in values.iter_mut().enumerate() {
+                    for (index, value) in values.reserves.iter_mut().enumerate() {
                         *value = value.saturating_sub(nutrition_rules.metabolism[index]);
                     }
-                    if values
+                    if values.reserves
                         .iter()
                         .zip(nutrition_rules.minimum)
                         .any(|(&value, minimum)| value < minimum)
@@ -471,10 +475,7 @@ fn prepare_inner(
         rules: owner.rules.clone(),
         people: rows
             .into_par_iter()
-            .map(|(person, values)| NutritionPerson {
-                person: person.id,
-                reserves: values.expect("enabled nutrition"),
-            })
+            .map(|(_, values)| values.expect("enabled nutrition"))
             .collect(),
     });
     let mut pending: Vec<_> = pending

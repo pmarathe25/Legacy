@@ -210,6 +210,12 @@ successful consumption in this mode. An explicit
 `nutrition.rules.health_effect_delay_millis` schedules food health effects
 relative to the actual consumption time. They survive settlement and
 save/reload. The integrated history scenario uses both elapsed modes.
+Author additional nutrients under `nutrition.rules.named` using names such
+as `leafy-produce:folate`. Each entry supplies an ID and its capacity,
+initial reserve, amount metabolized per interval, and minimum reserve.
+Food catalogs use the same qualified name in the portion's nutrient table.
+A successful meal credits the matching reserve at the time of consumption.
+The ordinary elapsed metabolism deadline applies depletion and deficiency.
 `family.elapsed_lifetimes.unit_millis` schedules natural mortality from a
 person's inherited lifespan and starting age, or from their actual birth
 instant. The saved calendar stops work and travel at the fatal instant.

@@ -371,6 +371,13 @@ impl CoreInterval {
             return Err("route report is dated after the current simulated time".into());
         }
         game_lot_diet::validate_pending_at(&pending_food, &ids, physical.tick(), Some(now))?;
+        if pending_food.par_iter().any(|row| row.nutrient_source.is_some_and(|good| {
+            physical.goods().binary_search_by_key(&good, |row| row.id).ok()
+                .and_then(|index| physical.goods()[index].food.as_ref())
+                .is_none_or(|food| !food.supplies_named_nutrients())
+        })) {
+            return Err("pending named nutrients require a consumed food profile".into());
+        }
         Ok(Self {
             generation: 0,
             seed,
@@ -1003,15 +1010,18 @@ impl CoreInterval {
                 effects
                     .pending
                     .par_iter()
-                    .any(|row| row.nutrients != [0; 6])
+                    .any(FoodEffect::has_nutrients)
             })
             .map(|owner| {
-                let next = owner.ingest(&effects.pending);
+                let next = owner.ingest(&effects.pending, self.physical.goods());
                 effects.pending.retain(|row| row.health != 0);
                 effects
                     .pending
                     .par_iter_mut()
-                    .for_each(|row| row.nutrients = [0; 6]);
+                    .for_each(|row| {
+                        row.nutrients = [0; 6];
+                        row.nutrient_source = None;
+                    });
                 next
             });
         if let Some(delay) = self

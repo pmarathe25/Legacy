@@ -30,7 +30,7 @@ fn food_profile(object: &Value, divisor: u32) -> Result<Option<FoodProfile>, Str
         .ok_or("invalid nutrients")?
         .iter()
         .map(|(key, value)| {
-            if !NUTRIENT_NAMES.contains(&key.as_str()) {
+            if !NUTRIENT_NAMES.contains(&key.as_str()) && !game_production::is_named_nutrient(key) {
                 return Err(format!("unknown nutrient: {key}"));
             }
             let value = value

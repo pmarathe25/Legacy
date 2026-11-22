@@ -278,6 +278,7 @@ fn pending_food_validation_matches_the_reference_across_workers() {
             at: 2,
             health: 0,
             nutrients: [1; 6],
+            nutrient_source: None,
         })
         .collect();
     let run = |rows: &[FoodEffect], workers| {
@@ -325,6 +326,7 @@ fn pending_food_validation_benchmark() {
             at: 2,
             health: 1,
             nutrients: [0; 6],
+            nutrient_source: None,
         })
         .collect();
     rayon::ThreadPoolBuilder::new()

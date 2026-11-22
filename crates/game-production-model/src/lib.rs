@@ -7,6 +7,19 @@ use std::collections::BTreeMap;
 /// Canonical ordering of the nutrient quantities carried by a food receipt.
 pub const NUTRIENT_NAMES: [&str; 6] = ["energy", "protein", "fat", "fibre", "vitamins", "minerals"];
 
+pub fn is_named_nutrient(name: &str) -> bool {
+    fn valid_part(part: &str) -> bool {
+        !part.is_empty()
+            && part.bytes().all(|byte| {
+                byte.is_ascii_lowercase()
+                    || byte.is_ascii_digit()
+                    || matches!(byte, b'-' | b'_' | b'.')
+            })
+    }
+    name.split_once(':')
+        .is_some_and(|(namespace, name)| valid_part(namespace) && valid_part(name))
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Good {
@@ -40,6 +53,13 @@ pub struct FoodProfile {
     #[serde(default)]
     pub shelf_days: Option<u32>,
 }
+impl FoodProfile {
+    pub fn supplies_named_nutrients(&self) -> bool {
+        self.nutrients
+            .iter()
+            .any(|(name, &amount)| amount > 0 && is_named_nutrient(name))
+    }
+}
 /// Delayed physiological effects of food already consumed.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -58,6 +78,14 @@ pub struct FoodEffect {
     pub health: i32,
     #[serde(default)]
     pub nutrients: [u32; 6],
+    /// Catalog identity of the consumed portion when it contains named nutrients.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub nutrient_source: Option<u32>,
+}
+impl FoodEffect {
+    pub fn has_nutrients(&self) -> bool {
+        self.nutrients != [0; 6] || self.nutrient_source.is_some()
+    }
 }
 impl FoodEffects {
     pub fn validate(
@@ -68,7 +96,8 @@ impl FoodEffects {
         if self.pending.iter().any(|row| {
             row.at_millis.is_some()
                 || row.at <= now
-                || (row.health == 0 && row.nutrients == [0; 6])
+                || (row.health == 0 && !row.has_nutrients())
+                || row.nutrient_source == Some(0)
                 || !people.contains(&row.person)
         }) {
             return Err("invalid pending food effect");
