@@ -357,6 +357,7 @@ fn promises_do_not_compel_delivery_but_fear_can_change_a_personal_choice() {
             fear_honor_threshold: None,
             obligation_honor_threshold: None,
             accept_pressure_threshold: None,
+            negotiation: None,
         }],
         bulk_debtors: vec![],
         contracts: vec![Contract {
@@ -519,6 +520,7 @@ fn many_individual_promises_can_deliver_to_one_busy_recipient() {
                 fear_honor_threshold: None,
                 obligation_honor_threshold: None,
                 accept_pressure_threshold: None,
+                negotiation: None,
             })
             .collect(),
         bulk_debtors: vec![],
@@ -647,6 +649,7 @@ fn concentrated_promise_delivery_benchmark() {
                 fear_honor_threshold: None,
                 obligation_honor_threshold: None,
                 accept_pressure_threshold: None,
+                negotiation: None,
             })
             .collect(),
         bulk_debtors: vec![],

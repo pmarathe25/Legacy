@@ -746,6 +746,10 @@ pub enum CoreRunEvent {
     },
     Offers(Vec<u64>),
     Acceptances(Vec<u64>),
+    PromiseDeclines {
+        at_millis: u128,
+        events: Vec<game_agreements::Event>,
+    },
     Asks(Vec<u64>),
     Requests(Vec<game_autowork::requests::Event>),
     Starts(Vec<(u64, bool)>),
@@ -1819,6 +1823,12 @@ impl CoreHost {
                         if !result.agreements.is_empty() {
                             run.events
                                 .push(CoreRunEvent::Acceptances(result.agreements));
+                        }
+                        if !result.declined.is_empty() {
+                            run.events.push(CoreRunEvent::PromiseDeclines {
+                                at_millis: self.core.simulated_millis(),
+                                events: result.declined,
+                            });
                         }
                         self.schedule.as_mut().expect("active schedule").phase = if self
                             .autowork

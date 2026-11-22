@@ -170,7 +170,7 @@ pub fn automatic_with_runtime(
     let mut policies: Vec<_> = owner
         .policies
         .par_iter()
-        .filter(|p| p.accept || p.accept_pressure_threshold.is_some())
+        .filter(|p| p.considers_offers())
         .collect();
     policies.par_sort_unstable_by_key(|p| p.person);
     let opinions = opinions.map(Opinions::index);
@@ -193,11 +193,18 @@ pub fn automatic_with_runtime(
             let feelings = opinions
                 .as_ref()
                 .map(|index| index.feelings(contract.creditor, contract.debtor));
-            if !policy.accepts(trust, feelings.map(|f| f.0), feelings.map(|f| f.1)) {
-                return None;
-            }
             let a = person_index(people, contract.debtor).map(|i| people[i])?;
             let b = person_index(people, contract.creditor).map(|i| people[i])?;
+            let accepts = policy.accepts_in_circumstances(
+                trust,
+                feelings.map(|f| f.0),
+                feelings.map(|f| f.1),
+                Some(b.3),
+            );
+            let preference = policy.negotiation.unwrap_or_default();
+            if !accepts && !preference.decline_unwanted {
+                return None;
+            }
             let affinity = opinions.as_ref().map_or(0, |index| {
                 index.affinity(contract.creditor, contract.debtor)
             });
@@ -205,7 +212,12 @@ pub fn automatic_with_runtime(
                 && b.2 > 0
                 && locations.region((a.0, a.1), (b.0, b.1)).is_some()
                 && endpoint_together.is_none_or(|check| check(a.0, b.0)))
-            .then_some((contract.creditor, std::cmp::Reverse(affinity), contract.id))
+            .then_some((
+                contract.creditor,
+                std::cmp::Reverse(accepts),
+                std::cmp::Reverse(preference.value(affinity, contract.quantity)),
+                contract.id,
+            ))
         })
         .collect();
     candidates.par_sort_unstable();
@@ -216,10 +228,10 @@ pub fn automatic_with_runtime(
     AutomaticDecisions {
         decisions: chosen
             .par_iter()
-            .map(|&(actor, _, contract)| Decision {
+            .map(|&(actor, accept, _, contract)| Decision {
                 contract,
                 actor,
-                accept: true,
+                accept: accept.0,
             })
             .collect(),
         actors: chosen.par_iter().map(|row| row.0).collect(),
@@ -336,6 +348,7 @@ pub fn set_honor(
             fear_honor_threshold: None,
             obligation_honor_threshold: None,
             accept_pressure_threshold: None,
+            negotiation: None,
         });
     }
     if !honor {

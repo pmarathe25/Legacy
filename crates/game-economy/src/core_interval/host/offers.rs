@@ -6,6 +6,7 @@ pub struct CoreSocialResults {
     /// Sorted people whose personal choices used this decision instant.
     pub actors: Vec<u64>,
     pub agreements: Vec<u64>,
+    pub declined: Vec<game_agreements::Event>,
 }
 
 impl CoreHost {
@@ -97,11 +98,7 @@ impl CoreHost {
             self.core
                 .people
                 .par_iter()
-                .filter(|person| {
-                    person.controlled
-                        || person.health == 0
-                        || person.hunger > self.core.rules.max_work_hunger
-                })
+                .filter(|person| person.controlled || person.health == 0)
                 .map(|person| person.id),
         );
         busy.par_extend(
@@ -138,16 +135,7 @@ impl CoreHost {
             .instant(self.core.simulated_millis(), self.core.physical.tick())
             .map_err(str::to_owned)?;
         let locations = game_economy_person::travel::Colocation::new(None);
-        let together = |a, b| {
-            let find = |id| {
-                self.core
-                    .people
-                    .binary_search_by_key(&id, |person| person.id)
-                    .ok()
-                    .and_then(|index| self.core.people[index].region)
-            };
-            find(a).is_some_and(|region| find(b) == Some(region))
-        };
+        let together = |a, b| self.same_local_endpoint(a, b);
         let plan =
             game_economy_promises::offers::prepare(game_economy_promises::offers::Context {
                 owner: Some(owner),
@@ -162,7 +150,6 @@ impl CoreHost {
                 locations: &locations,
                 together: &together,
                 busy: &busy,
-                max_hunger: self.core.rules.max_work_hunger,
                 instant,
                 deadlines: self.agreement_deadlines.as_ref(),
             })?;
@@ -190,7 +177,7 @@ impl CoreHost {
         if let Some(opinions) = opinions {
             self.opinions = Some(opinions);
         }
-        Ok(CoreSocialResults { actors, agreements })
+        Ok(CoreSocialResults { actors, agreements, declined: Vec::new() })
     }
 
     /// Each recipient independently chooses whether to accept an addressed offer.
@@ -208,7 +195,7 @@ impl CoreHost {
             ) && owner
                 .policies
                 .par_iter()
-                .any(|policy| policy.accept || policy.accept_pressure_threshold.is_some())
+                .any(game_agreements::Policy::considers_offers)
         }) else {
             return Ok(CoreSocialResults::default());
         };
@@ -230,7 +217,7 @@ impl CoreHost {
             &locations,
             &busy,
             instant.now,
-            None,
+            Some(&|a, b| self.same_local_endpoint(a, b)),
         );
         if plan.decisions.is_empty() {
             return Ok(CoreSocialResults::default());
@@ -238,15 +225,20 @@ impl CoreHost {
         let agreements = plan
             .decisions
             .par_iter()
-            .map(|decision| decision.contract)
+            .filter_map(|decision| decision.accept.then_some(decision.contract))
             .collect();
         let next = owner
             .decide_at(&plan.decisions, instant)
             .map_err(str::to_owned)?;
+        let declined = next.events.par_iter()
+            .filter(|event| event.kind == game_agreements::EventKind::Declined)
+            .cloned()
+            .collect();
         self.publish_agreements(next);
         Ok(CoreSocialResults {
             actors: plan.actors,
             agreements,
+            declined,
         })
     }
 }

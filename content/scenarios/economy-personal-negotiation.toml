@@ -1,0 +1,188 @@
+# Hunger influences whether each person considers a promise according to personal circumstances.
+seed = 117
+tick_millis = 1000
+decision_period_millis = 41
+stock_capacity = 10
+food_relief_divisor = 20
+
+[rules]
+hunger_rate = { units = 0, per_millis = 60000 }
+meal_threshold = 50
+starvation_threshold = 100
+max_health = 100
+max_work_hunger = 5
+carrying_capacity = 10
+
+[[regions]]
+id = 1
+storage = {}
+
+[[people]]
+id = 1
+region = 1
+health = 100
+hunger = 20
+seek_meals = false
+willing_to_work = false
+
+[[people]]
+id = 2
+region = 1
+health = 100
+hunger = 20
+seek_meals = false
+willing_to_work = false
+
+[[people]]
+id = 3
+region = 1
+health = 100
+hunger = 20
+seek_meals = false
+willing_to_work = false
+
+[[people]]
+id = 4
+region = 1
+health = 100
+hunger = 20
+seek_meals = false
+willing_to_work = false
+
+[[people]]
+id = 5
+region = 1
+health = 100
+hunger = 20
+seek_meals = false
+willing_to_work = false
+
+[[people]]
+id = 6
+region = 1
+health = 100
+hunger = 20
+seek_meals = false
+willing_to_work = false
+
+[[people]]
+id = 7
+region = 1
+health = 100
+hunger = 20
+seek_meals = false
+willing_to_work = false
+
+[[people]]
+id = 8
+region = 1
+health = 100
+hunger = 20
+seek_meals = false
+willing_to_work = false
+
+[[people]]
+id = 9
+region = 1
+health = 100
+hunger = 20
+seek_meals = false
+willing_to_work = false
+
+[[people]]
+id = 10
+region = 1
+health = 100
+hunger = 20
+seek_meals = false
+willing_to_work = false
+
+[[people]]
+id = 11
+region = 1
+health = 100
+hunger = 0
+seek_meals = false
+willing_to_work = false
+controlled = true
+
+[agreements]
+time_unit_millis = 1
+next_id = 1
+policies = [
+    { person = 2, accept = true },
+    { person = 4, accept = true, negotiation = { maximum_voluntary_hunger = 5, decline_unwanted = true } },
+    { person = 5, negotiation = { maximum_voluntary_hunger = 5 } },
+    { person = 6, accept_pressure_threshold = 2, negotiation = { maximum_voluntary_hunger = 5 } },
+    { person = 8, accept = true, negotiation = { quantity_weight = 4 } },
+    { person = 10, negotiation = { maximum_voluntary_hunger = 5 } },
+]
+
+[[promise_offering]]
+person = 1
+recipient = 2
+good = "bread"
+quantity = 2
+due_after = 1000
+retry_ticks = 1000
+willing = true
+
+[[promise_offering]]
+person = 3
+recipient = 4
+good = "bread"
+quantity = 3
+due_after = 1000
+retry_ticks = 1000
+willing = true
+
+[[promise_offering]]
+person = 5
+recipient = 6
+good = "bread"
+quantity = 4
+due_after = 1000
+retry_ticks = 1000
+willing = true
+pressure_threshold = 2
+[[promise_offering]]
+person = 7
+recipient = 8
+good = "bread"
+quantity = 2
+due_after = 1000
+retry_ticks = 1000
+willing = true
+
+[[promise_offering]]
+person = 9
+recipient = 8
+good = "bread"
+quantity = 8
+due_after = 1000
+retry_ticks = 1000
+willing = true
+
+[[promise_offering]]
+person = 10
+recipient = 2
+good = "bread"
+quantity = 1
+due_after = 1000
+retry_ticks = 1000
+willing = true
+
+
+[opinions]
+records = [
+    { observer = 5, target = 6, trust = 0, fear = 3 },
+    { observer = 6, target = 5, trust = 0, fear = 3 },
+    { observer = 8, target = 7, trust = 0, affinity = 5 },
+    { observer = 8, target = 9, trust = 0, affinity = -5 },
+]
+[opinions.rules]
+minimum = -10
+maximum = 10
+initial = 0
+fulfilled_gain = 1
+default_loss = 1

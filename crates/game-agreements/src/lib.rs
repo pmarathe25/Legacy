@@ -120,7 +120,41 @@ pub struct Policy {
     /// Fear or felt obligation can motivate outward acceptance without private approval.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub accept_pressure_threshold: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub negotiation: Option<Negotiation>,
 }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Negotiation {
+    pub maximum_voluntary_hunger: Option<u32>,
+    pub affinity_weight: i32,
+    pub quantity_weight: i32,
+    pub decline_unwanted: bool,
+}
+
+impl Default for Negotiation {
+    fn default() -> Self {
+        Self {
+            maximum_voluntary_hunger: None,
+            affinity_weight: 1,
+            quantity_weight: 0,
+            decline_unwanted: false,
+        }
+    }
+}
+
+impl Negotiation {
+    pub fn available(self, hunger: u32) -> bool {
+        self.maximum_voluntary_hunger.is_none_or(|limit| hunger <= limit)
+    }
+
+    pub fn value(self, affinity: i32, quantity: u64) -> i128 {
+        i128::from(self.affinity_weight) * i128::from(affinity)
+            + i128::from(self.quantity_weight) * i128::from(quantity)
+    }
+}
+
 impl Policy {
     /// The person chooses whether to deliver; the agreement itself does not compel it.
     pub fn honors(&self, trust: Option<i32>, fear: Option<u64>) -> bool {
@@ -155,7 +189,19 @@ impl Policy {
                 .is_some_and(|limit| obligation.is_some_and(|value| value >= limit))
     }
     pub fn accepts(&self, trust: Option<i32>, fear: Option<u64>, obligation: Option<u64>) -> bool {
+        self.accepts_in_circumstances(trust, fear, obligation, None)
+    }
+    pub fn accepts_in_circumstances(
+        &self,
+        trust: Option<i32>,
+        fear: Option<u64>,
+        obligation: Option<u64>,
+        hunger: Option<u32>,
+    ) -> bool {
         (self.accept
+            && self.negotiation
+                .and_then(|choice| choice.maximum_voluntary_hunger)
+                .is_none_or(|limit| hunger.is_some_and(|value| value <= limit))
             && self
                 .minimum_trust
                 .is_none_or(|limit| trust.is_some_and(|value| value >= limit)))
@@ -163,12 +209,16 @@ impl Policy {
                 fear.unwrap_or(0).saturating_add(obligation.unwrap_or(0)) >= limit
             })
     }
+    pub fn considers_offers(&self) -> bool {
+        self.accept
+            || self.accept_pressure_threshold.is_some()
+            || self.negotiation.is_some_and(|choice| choice.decline_unwanted)
+    }
     pub fn automatic(&self) -> bool {
         self.honor
-            || self.accept
+            || self.considers_offers()
             || self.fear_honor_threshold.is_some()
             || self.obligation_honor_threshold.is_some()
-            || self.accept_pressure_threshold.is_some()
     }
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

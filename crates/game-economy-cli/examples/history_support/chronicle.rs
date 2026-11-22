@@ -300,6 +300,7 @@ impl Chronicle {
                 | "personal_practices"
                 | "agreement_expiry"
                 | "promise_transfers"
+                | "promise_declines"
         ) {
             return;
         }
@@ -499,6 +500,13 @@ fn classify(kind: &str, row: &Value) -> Option<Receipt> {
             label: "delivered promises",
             actor: Some(row["debtor"].as_u64()?),
             other: Some(row["creditor"].as_u64()?),
+        });
+    }
+    if kind == "promise_declines" {
+        return Some(Receipt {
+            label: "promises declined",
+            actor: Some(row["actor"].as_u64()?),
+            other: None,
         });
     }
     if kind == "written_works" {

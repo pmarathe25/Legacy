@@ -13,3 +13,9 @@ Explicit, mutually accepted promises for future delivery of physically carried g
 `content/scenarios/agreement_pressure.toml` demonstrates a person delivering a carried good because of their directed fear while ordinary honoring is disabled.
 
 An eligible recipient may opt in to automatically accepting proposals by setting `accept = true` in their policy. The proposal must still be current, both people must be available together, and fulfillment uses a later committed tick. `content/scenarios/agreements_negotiation.toml` shows acceptance followed by delivery.
+
+The current elapsed runner lets each person set their own
+`negotiation.maximum_voluntary_hunger` for offering or accepting. Pressure
+can still motivate them to act. A recipient can rank addressed offers using
+signed affinity and quantity weights and choose to decline unwanted offers
+explicitly. Proposing or accepting a promise leaves physical custody intact.

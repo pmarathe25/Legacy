@@ -12891,6 +12891,7 @@ fn core_host_offer_choices_benchmark() {
             fear_honor_threshold: None,
             obligation_honor_threshold: None,
             accept_pressure_threshold: None,
+            negotiation: None,
         })
         .collect();
     let agreements = game_agreements::Agreements {
@@ -13052,6 +13053,7 @@ fn core_host_agreement_delivery_benchmark() {
                     fear_honor_threshold: None,
                     obligation_honor_threshold: None,
                     accept_pressure_threshold: None,
+                    negotiation: None,
                 })
                 .collect()
         } else {

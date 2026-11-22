@@ -111,6 +111,7 @@ fn observation(event: &CoreRunEvent, current_tick: &mut u64) -> Option<Value> {
         CoreRunEvent::Exchanges(rows) if !rows.is_empty() => Some(json!({"kind":"exchanges","people":rows})),
         CoreRunEvent::Offers(rows) if !rows.is_empty() => Some(json!({"kind":"offers","people":rows})),
         CoreRunEvent::Acceptances(rows) if !rows.is_empty() => Some(json!({"kind":"acceptances","people":rows})),
+        CoreRunEvent::PromiseDeclines { at_millis, events } => Some(json!({"kind":"promise_declines","at_millis":at_millis,"events":events})),
         CoreRunEvent::Requests(rows) if !rows.is_empty() => Some(json!({"kind":"work_requests","events":rows})),
         CoreRunEvent::Starts(rows) if !rows.is_empty() => Some(json!({"kind":"work_starts","outcomes":rows})),
         CoreRunEvent::Spoilage { at_millis, lots } => Some(json!({"kind":"spoilage","at_millis":at_millis,"lots":lots})),

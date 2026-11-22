@@ -4,7 +4,7 @@ use game_economy_person::{Person, travel::Colocation};
 use game_opinions::Opinions;
 use game_work_requests::Requests;
 use rayon::prelude::*;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 #[derive(Default)]
 pub struct Plan {
@@ -33,7 +33,6 @@ pub struct Context<'a> {
     pub locations: &'a Colocation,
     pub together: &'a (dyn Fn(u64, u64) -> bool + Sync),
     pub busy: &'a [u64],
-    pub max_hunger: u32,
     pub instant: Instant,
     pub deadlines: Option<&'a game_agreements::runtime::Runtime>,
 }
@@ -61,7 +60,6 @@ pub fn prepare(context: Context<'_>) -> Result<Plan, String> {
         locations,
         together,
         busy,
-        max_hunger,
         instant,
         deadlines,
     } = context;
@@ -74,6 +72,13 @@ pub fn prepare(context: Context<'_>) -> Result<Plan, String> {
             })
     }) else {
         return Ok(Plan::default());
+    };
+    let hunger_limits: HashMap<_, _> = owner.policies.par_iter().filter_map(|policy| {
+        let maximum = policy.negotiation?.maximum_voluntary_hunger?;
+        Some((policy.person, maximum))
+    }).collect();
+    let voluntary = |actor: &Person| {
+        hunger_limits.get(&actor.id).is_none_or(|&limit| actor.hunger <= limit)
     };
     let pending: Option<HashSet<_>> = deadlines.is_none().then(|| {
         owner
@@ -208,14 +213,13 @@ pub fn prepare(context: Context<'_>) -> Result<Plan, String> {
                 && !actor.controlled
                 && actor.health > 0
                 && recipient.health > 0
-                && actor.hunger <= max_hunger
                 && recipient.hunger >= policy.recipient_hunger_at_least
                 && locations
                     .region((actor.id, actor.region), (recipient.id, recipient.region))
                     .is_some()
                 && together(actor.id, recipient.id)
                 && busy.binary_search(&actor.id).is_err()
-                && (pressured || (policy.willing && trusts))
+                && (pressured || (policy.willing && trusts && voluntary(actor)))
                 && !has_pending((actor.id, recipient.id, policy.good)))
             .then_some((policy, observed_work, observed_help))
         })
@@ -275,7 +279,7 @@ pub fn prepare(context: Context<'_>) -> Result<Plan, String> {
                 return None;
             }
             let actor = find_person(policy.person)?;
-            if actor.controlled || actor.health == 0 || actor.hunger > max_hunger {
+            if actor.controlled || actor.health == 0 {
                 return None;
             }
             let start = work_memories.partition_point(|m| m.observer < policy.person);
@@ -315,7 +319,7 @@ pub fn prepare(context: Context<'_>) -> Result<Plan, String> {
                             .as_ref()
                             .is_some_and(|index| index.trust(actor.id, recipient.id) >= threshold)
                     });
-                    (pressured || (policy.willing && trusts)).then_some((
+                    (pressured || (policy.willing && trusts && voluntary(actor))).then_some((
                         completed,
                         recipient.id,
                         memory.recipe,
@@ -361,7 +365,7 @@ pub fn prepare(context: Context<'_>) -> Result<Plan, String> {
                             .as_ref()
                             .is_some_and(|index| index.trust(actor.id, recipient.id) >= threshold)
                     });
-                    (pressured || (policy.willing && trusts)).then_some((
+                    (pressured || (policy.willing && trusts && voluntary(actor))).then_some((
                         memory.tick,
                         recipient.id,
                         0,
