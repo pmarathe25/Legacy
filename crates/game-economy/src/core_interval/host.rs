@@ -1822,7 +1822,7 @@ impl CoreHost {
         {
             self.sync_work_rates(&[])?;
         }
-        Ok(self.progress_with_activity(millis, &[], None, None)?.millis)
+        Ok(self.progress_with_activity(millis, &[], None, None, false)?.millis)
     }
     pub fn next_deadline(&mut self, hunger: Option<u32>) -> Result<CoreDeadline, String> {
         if self

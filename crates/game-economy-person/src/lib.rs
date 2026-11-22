@@ -143,6 +143,67 @@ pub fn next_physiology(
         })
 }
 
+/// Earliest change to a stored whole hunger or health value. Strictly before
+/// this time, a caller that only observes those values can keep fractional
+/// elapsed credit in one place until it needs an exact body.
+pub fn next_whole_vital_change(
+    people: &[Person],
+    rules: &Rules,
+    boundary_millis: u64,
+) -> Result<Option<u128>, &'static str> {
+    let units = rules
+        .hunger_rate
+        .map_or(rules.hunger_per_tick, |rate| rate.units);
+    let period = rules
+        .hunger_rate
+        .map_or(boundary_millis, |rate| rate.per_millis);
+    people
+        .par_iter()
+        .map(|person| {
+            let first_hunger = match person.hunger.checked_add(1) {
+                Some(threshold) => person.hunger_threshold_after(threshold, units, period)?,
+                None => None,
+            };
+            let first_damage = match rules.starvation_rate {
+                Some(rate) if rate.units > 0 => {
+                    let credit = rate
+                        .per_millis
+                        .checked_sub(person.starvation_remainder)
+                        .filter(|&credit| credit > 0)
+                        .ok_or("invalid fractional starvation damage")?;
+                    person
+                        .hunger_threshold_after(rules.starvation_threshold, units, period)?
+                        .map(|crossing| {
+                            crossing + u128::from(credit).div_ceil(u128::from(rate.units))
+                        })
+                }
+                _ => None,
+            };
+            let first_healing = if let Some(immortal) = &person.immortal
+                && let Some(rate) = immortal.recovery_rate
+                && rate.units > 0
+                && person.health < rules.max_health
+            {
+                let credit = rate
+                    .per_millis
+                    .checked_sub(immortal.recovery_remainder)
+                    .filter(|&credit| credit > 0)
+                    .ok_or("invalid fractional recovery")?;
+                Some(u128::from(credit).div_ceil(u128::from(rate.units)))
+            } else {
+                None
+            };
+            Ok([first_hunger, first_damage, first_healing]
+                .into_iter()
+                .flatten()
+                .min())
+        })
+        .try_reduce(
+            || None,
+            |left, right| Ok(left.into_iter().chain(right).min()),
+        )
+}
+
 /// Stage hunger and starvation from the same opening state.
 pub fn progress_vitals(
     people: &mut [Person],
@@ -165,33 +226,41 @@ pub fn stage_vitals(
     elapsed_millis: u64,
     boundary_millis: u64,
 ) -> Result<Vec<Person>, &'static str> {
+    people
+        .par_iter()
+        .map(|person| project_vitals(person, rules, elapsed_millis, boundary_millis))
+        .collect()
+}
+
+/// Project one body through a continuous span with no intervening actions.
+pub fn project_vitals(
+    person: &Person,
+    rules: &Rules,
+    elapsed_millis: u64,
+    boundary_millis: u64,
+) -> Result<Person, &'static str> {
     let hunger_units = rules
         .hunger_rate
         .map_or(rules.hunger_per_tick, |rate| rate.units);
     let hunger_period = rules
         .hunger_rate
         .map_or(boundary_millis, |rate| rate.per_millis);
-    people
-        .par_iter()
-        .map(|person| {
-            let hunger = person.hunger_at(hunger_units, elapsed_millis, hunger_period)?;
-            let mut result = person.clone();
-            if let Some(damage) = rules.starvation_rate {
-                result.advance_starvation(
-                    rules.starvation_threshold,
-                    hunger_units,
-                    hunger_period,
-                    damage,
-                    elapsed_millis,
-                )?;
-            } else if result.starvation_remainder != 0 {
-                return Err("starvation remainder has no rate");
-            }
-            result.advance_recovery(elapsed_millis, rules.max_health)?;
-            (result.hunger, result.hunger_remainder) = hunger;
-            Ok(result)
-        })
-        .collect()
+    let hunger = person.hunger_at(hunger_units, elapsed_millis, hunger_period)?;
+    let mut result = person.clone();
+    if let Some(damage) = rules.starvation_rate {
+        result.advance_starvation(
+            rules.starvation_threshold,
+            hunger_units,
+            hunger_period,
+            damage,
+            elapsed_millis,
+        )?;
+    } else if result.starvation_remainder != 0 {
+        return Err("starvation remainder has no rate");
+    }
+    result.advance_recovery(elapsed_millis, rules.max_health)?;
+    (result.hunger, result.hunger_remainder) = hunger;
+    Ok(result)
 }
 
 /// People whose fatal starvation deadline falls within the given duration.
