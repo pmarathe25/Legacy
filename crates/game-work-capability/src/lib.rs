@@ -22,6 +22,9 @@ pub struct Requirement {
 pub struct Capabilities {
     /// Piecewise-linear age-to-strength curve, starting at age zero.
     pub growth: Vec<GrowthPoint>,
+    /// A family catalog locus whose expression supplies this physical multiplier.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vigor_locus: Option<u32>,
     /// Strength multiplier per thousand when genetic vigor is zero.
     pub vigor_base: u32,
     /// Additional per-thousand multiplier when genetic vigor is 1000.

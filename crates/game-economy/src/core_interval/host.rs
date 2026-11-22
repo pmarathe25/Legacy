@@ -1343,6 +1343,12 @@ impl CoreHost {
             return Err("pending family deaths require a family owner".into());
         }
         if let Some(capabilities) = &work_capabilities {
+            if capabilities.vigor_locus.is_some_and(|id| {
+                family.as_ref().and_then(|family| family.traits.as_ref())
+                    .is_none_or(|traits| traits.loci.binary_search_by_key(&id, |row| row.id).is_err())
+            }) {
+                return Err("work vigor requires a known family locus".into());
+            }
             let recipes: Vec<_> = core
                 .physical
                 .recipes()
@@ -2502,6 +2508,9 @@ impl CoreHost {
         };
         let family = self.family.as_ref();
         let now = self.core.simulated_millis();
+        let vigor = family
+            .and_then(|family| family.traits.as_deref())
+            .zip(capabilities.vigor_locus);
         let members = family.map(|family| {
             game_family_index::MemberIndex::new(&family.members).expect("validated family")
         });
@@ -2520,7 +2529,9 @@ impl CoreHost {
                         age: family
                             .expect("member index has a family")
                             .age_at(member, now),
-                        vigor: member.genome.expressed(1),
+                        vigor: vigor
+                            .and_then(|(traits, locus)| traits.expression(&member.genome, locus))
+                            .unwrap_or_else(|| member.genome.expressed(1)),
                     });
                 let loss = wounds.map_or(0, |wounds| wounds.work_strength_loss(person));
                 capabilities.permits_with_loss(body, recipe, loss)

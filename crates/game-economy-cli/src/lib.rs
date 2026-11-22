@@ -1166,6 +1166,7 @@ struct SignalLearning {
 #[serde(deny_unknown_fields)]
 struct WorkCapabilitiesConfig {
     growth: Vec<game_work_capability::GrowthPoint>,
+    vigor_locus: Option<String>,
     vigor_base: u32,
     vigor_weight: u32,
     default_strength: u32,
@@ -1367,6 +1368,12 @@ pub fn core_scenario_with_options(
         }
     }
     if let Some(config) = work_capabilities {
+        let vigor_locus = config.vigor_locus.as_ref().map(|name| {
+            snapshot.family.as_ref().and_then(|family| family.traits.as_ref())
+                .and_then(|traits| traits.loci.iter().find(|row| row.name == *name))
+                .map(|row| row.id)
+                .ok_or_else(|| format!("unknown work vigor locus {name}"))
+        }).transpose()?;
         let mut requirements = config
             .requirements
             .into_iter()
@@ -1388,6 +1395,7 @@ pub fn core_scenario_with_options(
         requirements.sort_unstable_by_key(|row| row.recipe);
         snapshot.work_capabilities = Some(game_work_capability::Capabilities {
             growth: config.growth,
+            vigor_locus,
             vigor_base: config.vigor_base,
             vigor_weight: config.vigor_weight,
             default_strength: config.default_strength,

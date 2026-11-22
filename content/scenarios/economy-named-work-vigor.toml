@@ -1,0 +1,75 @@
+# Two people with equal age, training and supplies express different inherited work vigor.
+seed = 83
+tick_millis = 3600000
+work_rate_period_millis = 3600000
+decision_period_millis = 3600000
+stock_capacity = 50
+food_relief_divisor = 20
+
+[rules]
+hunger_rate = { units = 0, per_millis = 60000 }
+meal_threshold = 20
+starvation_threshold = 50
+max_health = 100
+max_work_hunger = 30
+carrying_capacity = 20
+
+[[regions]]
+id = 1
+storage = { timber = 10 }
+stock = { timber = 10 }
+
+[[people]]
+id = 1
+region = 1
+health = 100
+hunger = 0
+willing_to_work = true
+seek_meals = false
+controlled = true
+
+[[people]]
+id = 2
+region = 1
+health = 100
+hunger = 0
+willing_to_work = true
+seek_meals = false
+controlled = true
+
+[family]
+next_id = 3
+
+[family.rules]
+adult_age = 12
+fertile_until = 40
+gestation = 3
+birth_spacing = 8
+lifespan_min = 50
+lifespan_max = 70
+conception_one_in = 10
+minimum_health = 50
+maximum_hunger = 20
+newborn_health = 100
+mutation_per_million = 0
+mutation_step = 0
+
+[family.traits]
+loci = [{ id = 27, name = "work-vigor", default_alleles = [500, 500] }]
+
+[[family.members]]
+id = 1
+age = 18
+genome = { sex = "Female", alleles = [[500, 500], [500, 500], [500, 500], [500, 500]], named_loci = [{ locus = 27, alleles = [0, 0] }] }
+
+[[family.members]]
+id = 2
+age = 18
+genome = { sex = "Male", alleles = [[500, 500], [500, 500], [500, 500], [500, 500]], named_loci = [{ locus = 27, alleles = [1000, 1000] }] }
+
+[work_capabilities]
+growth = [{ age = 0, strength = 0 }, { age = 18, strength = 20 }]
+vigor_locus = "work-vigor"
+vigor_base = 0
+vigor_weight = 1000
+default_strength = 15

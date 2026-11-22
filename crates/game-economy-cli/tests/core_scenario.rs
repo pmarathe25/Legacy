@@ -10978,6 +10978,7 @@ fn actual_newborns_receive_personal_genetic_inclinations() {
                     work_state.schedule.as_mut().unwrap().next_decision_millis = Some(0);
                     work_state.work_capabilities = Some(game_work_capability::Capabilities {
                         growth: vec![game_work_capability::GrowthPoint { age: 0, strength: 0 }],
+                        vigor_locus: None,
                         vigor_base: 1000, vigor_weight: 0, default_strength: 0, missing_strength: None, requirements: vec![],
                     });
                     let grain = work_state.core.physical.goods.iter().find(|good| good.name == "grain").unwrap().id;

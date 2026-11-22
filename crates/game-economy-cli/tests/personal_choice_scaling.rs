@@ -127,6 +127,7 @@ capacity = 10000
                     strength: 100,
                 },
             ],
+            vigor_locus: None,
             vigor_base: 0,
             vigor_weight: 1000,
             default_strength: 30,

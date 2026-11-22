@@ -12,6 +12,7 @@ fn model() -> Capabilities {
                 strength: 100,
             },
         ],
+        vigor_locus: None,
         vigor_base: 500,
         vigor_weight: 1000,
         default_strength: 80,
