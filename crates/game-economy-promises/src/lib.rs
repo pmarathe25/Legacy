@@ -332,6 +332,7 @@ pub fn set_honor(
             accept: false,
             minimum_trust: None,
             minimum_honor_trust: None,
+            maximum_honor_hunger: None,
             fear_honor_threshold: None,
             obligation_honor_threshold: None,
             accept_pressure_threshold: None,

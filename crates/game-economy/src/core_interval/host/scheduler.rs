@@ -740,6 +740,10 @@ pub enum CoreRunEvent {
     Repairs(Vec<game_economy_building::maintenance::Event>),
     ToolRepairs(Vec<game_economy_work::tool_wear::RepairEvent>),
     Deliveries(Vec<game_lots::TransactionOutcome>),
+    PromiseTransfers {
+        at_millis: u128,
+        transfers: Vec<CorePromiseTransfer>,
+    },
     Offers(Vec<u64>),
     Acceptances(Vec<u64>),
     Asks(Vec<u64>),
@@ -1775,6 +1779,12 @@ impl CoreHost {
                         meal_people.dedup();
                         if !result.outcomes.is_empty() {
                             run.events.push(CoreRunEvent::Deliveries(result.outcomes));
+                        }
+                        if !result.transfers.is_empty() {
+                            run.events.push(CoreRunEvent::PromiseTransfers {
+                                at_millis: self.core.simulated_millis(),
+                                transfers: result.transfers,
+                            });
                         }
                         self.schedule.as_mut().expect("active schedule").phase =
                             DecisionPhase::Offers { meal_people };

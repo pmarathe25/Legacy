@@ -298,14 +298,15 @@ impl Context<'_> {
                 let obligation = opinions
                     .as_ref()
                     .map(|index| index.obligation(contract.debtor, contract.creditor));
-                if !policy.honors_with_feelings(
+                let a = person_index(self.people, contract.debtor).map(|index| self.people[index]);
+                if !policy.honors_in_circumstances(
                     assessment.map(|row| row.0),
                     assessment.map(|row| row.1),
                     obligation,
+                    a.map(|person| person.3),
                 ) {
                     return false;
                 }
-                let a = person_index(self.people, contract.debtor).map(|index| self.people[index]);
                 let b =
                     person_index(self.people, contract.creditor).map(|index| self.people[index]);
                 a.zip(b)

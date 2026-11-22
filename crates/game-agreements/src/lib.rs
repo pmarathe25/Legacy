@@ -108,6 +108,9 @@ pub struct Policy {
     /// A debtor may condition honoring a promise on their trust in its creditor.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub minimum_honor_trust: Option<i32>,
+    /// Hunger at which this person stops ordinary voluntary delivery.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub maximum_honor_hunger: Option<u32>,
     /// Enough directed fear can motivate delivery even without ordinary willingness.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fear_honor_threshold: Option<u64>,
@@ -129,7 +132,18 @@ impl Policy {
         fear: Option<u64>,
         obligation: Option<u64>,
     ) -> bool {
+        self.honors_in_circumstances(trust, fear, obligation, None)
+    }
+
+    pub fn honors_in_circumstances(
+        &self,
+        trust: Option<i32>,
+        fear: Option<u64>,
+        obligation: Option<u64>,
+        hunger: Option<u32>,
+    ) -> bool {
         (self.honor
+            && self.maximum_honor_hunger.is_none_or(|limit| hunger.is_some_and(|value| value <= limit))
             && self
                 .minimum_honor_trust
                 .is_none_or(|limit| trust.is_some_and(|value| value >= limit)))

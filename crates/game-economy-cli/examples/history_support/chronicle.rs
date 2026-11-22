@@ -292,6 +292,7 @@ impl Chronicle {
                 | "farm_review"
                 | "personal_practices"
                 | "agreement_expiry"
+                | "promise_transfers"
         ) {
             return;
         }
@@ -474,6 +475,13 @@ fn classify(kind: &str, row: &Value) -> Option<Receipt> {
             label: if moved < stalled { "conditional load estimates recorded" } else { "contradictory mechanical comparisons recorded" },
             actor: Some(row["person"].as_u64()?),
             other: None,
+        });
+    }
+    if kind == "promise_transfers" {
+        return Some(Receipt {
+            label: "delivered promises",
+            actor: Some(row["debtor"].as_u64()?),
+            other: Some(row["creditor"].as_u64()?),
         });
     }
     if kind == "written_works" {
