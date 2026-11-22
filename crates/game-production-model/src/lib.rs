@@ -1,4 +1,5 @@
 //! Serializable contracts for production state.
+pub mod catalog;
 use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
 use std::collections::BTreeMap;

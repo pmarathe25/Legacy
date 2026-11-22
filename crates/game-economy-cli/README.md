@@ -43,6 +43,13 @@ duration in milliseconds to request a different elapsed step. Use
 inspect the world. `help` lists the other available observations. Both
 modes use the same elapsed checkpoints for `save PATH` and `load PATH`.
 
+Use `catalog-additions CONTENT_ROOT` after loading a checkpoint to import
+additional object and workshop packs from that root. The root must also
+contain the original packs with unchanged definitions. Existing jobs,
+knowledge, custody, and personal choices survive the update. Added goods
+require actual storage or carriers before anyone can hold them. Saves made
+before catalog manifests were introduced can still be loaded.
+
 ### Choosing to read
 
 A personal choice profile can declare domain 25 to compare reading with

@@ -44,6 +44,7 @@ pub struct ElapsedExpiryEvents {
 pub struct Runtime {
     store: Store,
     region_ids: Option<Arc<[u64]>>,
+    catalog_manifest: Option<Arc<game_production_model::catalog::CatalogManifest>>,
     complete_stock: bool,
     catalog: Catalog,
     goods: Vec<Good>,
@@ -71,6 +72,9 @@ impl Runtime {
     }
 
     pub fn compile(mut state: Snapshot) -> Result<Self, String> {
+        if let Some(catalog) = &state.catalog_manifest {
+            catalog.validate().map_err(str::to_owned)?;
+        }
         if let Some(regions) = &mut state.region_ids {
             let regions = Arc::make_mut(regions);
             regions.sort_unstable();
@@ -134,6 +138,7 @@ impl Runtime {
         }
         Ok(Self {
             region_ids: state.region_ids,
+            catalog_manifest: state.catalog_manifest,
             complete_stock,
             store,
             catalog,
@@ -235,6 +240,7 @@ impl Runtime {
         Snapshot {
             custody: self.store.export(),
             region_ids: self.region_ids.clone(),
+            catalog_manifest: self.catalog_manifest.clone(),
             goods: self.goods.clone(),
             recipes: self.recipes.clone(),
             tick_millis: self.tick_millis,

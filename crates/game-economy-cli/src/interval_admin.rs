@@ -27,7 +27,7 @@ fn command(host: &mut CoreHost, words: &[&str]) -> Result<bool, String> {
     match words {
         [] => {}
         ["help"] => println!(
-            "status | people | catalog | goods PERSON | stock REGION | fields | irrigation | tool-condition | claims | promises | expeditions | health | step [MILLISECONDS] | save PATH | load PATH | quit"
+            "status | people | catalog | goods PERSON | stock REGION | fields | irrigation | tool-condition | claims | promises | expeditions | health | step [MILLISECONDS] | save PATH | load PATH | catalog-additions CONTENT_ROOT | quit"
         ),
         ["quit"] | ["exit"] => return Ok(false),
         ["step"] => advance(host, 60_000)?,
@@ -38,6 +38,9 @@ fn command(host: &mut CoreHost, words: &[&str]) -> Result<bool, String> {
                 .map_err(|_| "invalid duration in milliseconds")?,
         )?,
         ["save", path @ ..] if !path.is_empty() => crate::interval_player::save(host, path)?,
+        ["catalog-additions", path @ ..] if !path.is_empty() => {
+            crate::interval_player::extend(host, path)?;
+        }
         ["load", path @ ..] if !path.is_empty() => {
             let mut loaded = crate::interval_player::load(path)?;
             loaded.detach_player_control()?;

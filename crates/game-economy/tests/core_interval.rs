@@ -950,6 +950,7 @@ fn fixture() -> CoreSnapshot {
         work_rate_period_millis: None,
         work: vec![],
         region_ids: None,
+        catalog_manifest: None,
         work_interval: None,
     })
     .unwrap();
