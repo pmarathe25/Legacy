@@ -54,6 +54,8 @@ pub struct Genetics {
     pub descendants: Arc<Vec<Arc<Vec<Descendant>>>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reproduction: Option<crate::reproduction::Reproduction>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pollen_corridors: Vec<crate::reproduction::PollenCorridor>,
 }
 
 impl Genetics {
@@ -70,6 +72,15 @@ impl Genetics {
         }
         if self.min_factor == 0
             || self.min_factor > self.max_factor
+            || (!self.pollen_corridors.is_empty()
+                && self.reproduction.is_none_or(|rules| !rules.cross_field_pollen))
+            || self.pollen_corridors.iter().any(|path| {
+                path.source == 0 || path.destination == 0 || path.source == path.destination
+                    || path.strength == 0 || path.strength > 1000
+            })
+            || self.pollen_corridors.windows(2).any(|rows| {
+                (rows[0].destination, rows[0].source) >= (rows[1].destination, rows[1].source)
+            })
             || self
                 .season_effects
                 .iter()
@@ -266,6 +277,7 @@ mod tests {
             ]),
             descendants: Arc::default(),
             reproduction: None,
+            pollen_corridors: Vec::new(),
         };
         assert!(model.validate().is_ok());
         assert_eq!(model.duration(96, &[lot(Some(11), 10)]), 48);
@@ -315,6 +327,7 @@ mod tests {
             strains: Arc::new(vec![]),
             descendants: Arc::default(),
             reproduction: None,
+            pollen_corridors: Vec::new(),
         };
         let records: Vec<_> = (1..=2050)
             .map(|batch| Descendant {

@@ -181,6 +181,16 @@ impl Agriculture {
         Ok(next)
     }
     pub fn validate(&self, people: &[Person], goods: &[Good], view: &View) -> Result<(), String> {
+        if let Some(genetics) = self.provenance.as_ref().and_then(|owner| owner.genetics.as_ref())
+            && !genetics.pollen_corridors.is_empty()
+        {
+            let regions: HashSet<_> = self.fields.iter().map(|field| field.region).collect();
+            if genetics.pollen_corridors.iter().any(|path| {
+                !regions.contains(&path.source) || !regions.contains(&path.destination)
+            }) {
+                return Err("pollen corridor requires cultivated regions at both ends".into());
+            }
+        }
         if let Some(clock) = self.action_clock {
             clock.validate()?;
             if self.growth_clock.is_none() {

@@ -36,6 +36,15 @@ impl Reproduction {
     }
 }
 
+/// A directed path with a locally authored degree of pollen exposure.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PollenCorridor {
+    pub source: u64,
+    pub destination: u64,
+    pub strength: u32,
+}
+
 /// Mature physical seed output; the batch identity is reserved in its boundary.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -80,18 +89,92 @@ struct PollenPool {
     offsets: Vec<u128>,
 }
 
+impl PollenPool {
+    fn total(&self) -> u128 {
+        self.offsets.last().zip(self.seeds.last()).map_or(0, |(offset, lot)| {
+            *offset + u128::from(lot.quantity)
+        })
+    }
+
+    fn at(&self, ticket: u128) -> &Lot {
+        let index = self.offsets.partition_point(|offset| *offset <= ticket).saturating_sub(1);
+        &self.seeds[index]
+    }
+}
+
+struct PollenSources<'a> {
+    sources: Vec<(u128, &'a PollenPool, u32)>,
+    total: u128,
+}
+
+impl<'a> PollenSources<'a> {
+    fn from_corridors(
+        local: &'a PollenPool,
+        all: &'a [PollenPool],
+        corridors: &[PollenCorridor],
+    ) -> Result<Option<Self>, String> {
+        let (region, crop) = local.key;
+        let start = corridors.partition_point(|row| row.destination < region);
+        let end = corridors.partition_point(|row| row.destination <= region);
+        if start == end {
+            return Ok(None);
+        }
+        let sources = corridors[start..end].iter()
+            .filter_map(|row| {
+                let index = all.binary_search_by_key(&(row.source, crop), |pool| pool.key).ok()?;
+                Some((&all[index], row.strength))
+            });
+        let mut mixture = Self { sources: Vec::new(), total: 0 };
+        for (pool, strength) in std::iter::once((local, 1000)).chain(sources) {
+            let amount = pool.total().checked_mul(u128::from(strength)).ok_or("pollen weight overflow")?;
+            if amount > 0 {
+                mixture.sources.push((mixture.total, pool, strength));
+                mixture.total = mixture.total.checked_add(amount).ok_or("pollen weight overflow")?;
+            }
+        }
+        Ok((mixture.sources.len() > 1).then_some(mixture))
+    }
+
+    fn at(&self, ticket: u128) -> &Lot {
+        let index = self.sources.partition_point(|(offset, _, _)| *offset <= ticket) - 1;
+        let (offset, pool, strength) = self.sources[index];
+        pool.at((ticket - offset) / u128::from(strength))
+    }
+}
+
+#[derive(Clone, Copy)]
+enum Pollen<'a> {
+    Shared(&'a PollenPool),
+    Routed(&'a PollenSources<'a>),
+}
+
+impl<'a> Pollen<'a> {
+    fn total(self) -> u128 {
+        match self {
+            Self::Shared(pool) => pool.total(),
+            Self::Routed(sources) => sources.total,
+        }
+    }
+
+    fn at(self, ticket: u128) -> &'a Lot {
+        match self {
+            Self::Shared(pool) => pool.at(ticket),
+            Self::Routed(sources) => sources.at(ticket),
+        }
+    }
+}
+
 fn candidates_with_pollen(
     rules: Reproduction,
     genetics: &crate::genetics::Genetics,
     seeds: &[Lot],
-    pool: Option<&PollenPool>,
+    pollen: Option<Pollen<'_>>,
     world_seed: u64,
     field: u64,
     planted_at: u64,
 ) -> Result<Vec<Candidate>, String> {
     rules.validate().map_err(str::to_owned)?;
-    let pollen_seeds = pool.map_or(seeds, |pool| pool.seeds.as_slice());
-    let local_offsets = if pool.is_none() && rules.recombine && pollen_seeds.len() > 1 {
+    let local_offsets = if pollen.is_none() && rules.recombine && seeds.len() > 1 {
         let quantities: Vec<_> = if seeds.len() < 256 {
             seeds.iter().map(|lot| lot.quantity).collect()
         } else {
@@ -101,16 +184,15 @@ fn candidates_with_pollen(
     } else {
         Vec::new()
     };
-    let offsets = pool.map_or(local_offsets.as_slice(), |pool| pool.offsets.as_slice());
-    let total = offsets
-        .last()
-        .zip(pollen_seeds.last())
-        .map_or(0, |(offset, lot)| *offset + u128::from(lot.quantity));
+    let total = pollen.map_or_else(
+        || local_offsets.last().zip(seeds.last()).map_or(0, |(offset, lot)| *offset + u128::from(lot.quantity)),
+        Pollen::total,
+    );
     let derive = |(index, lot, quantity): (usize, &Lot, u128)| {
         let quantity = u64::try_from(quantity).map_err(|_| "offspring seed quantity overflow")?;
         let maternal = lot.batch.and_then(|batch| genetics.alleles(batch));
-        let pollen = if rules.recombine && pollen_seeds.len() == 1 && pollen_seeds[0].quantity > 0 {
-            Some(&pollen_seeds[0])
+        let pollen = if rules.recombine && pollen.is_none() && seeds.len() == 1 && seeds[0].quantity > 0 {
+            Some(&seeds[0])
         } else if rules.recombine && total > 0 {
             let a = game_genetics::random(
                 world_seed ^ 0x706f_6c6c_656e_0001 ^ index as u64,
@@ -123,10 +205,10 @@ fn candidates_with_pollen(
                 planted_at,
             );
             let ticket = ((u128::from(a) << 64) | u128::from(b)) % total;
-            let index = offsets
-                .partition_point(|offset| *offset <= ticket)
-                .saturating_sub(1);
-            Some(&pollen_seeds[index])
+            Some(pollen.map_or_else(
+                || &seeds[local_offsets.partition_point(|offset| *offset <= ticket).saturating_sub(1)],
+                |pool| pool.at(ticket),
+            ))
         } else {
             None
         };
@@ -277,6 +359,13 @@ pub(crate) fn prepare_maturation(
     } else {
         Vec::new()
     };
+    let routed: Vec<_> = if genetics.pollen_corridors.is_empty() {
+        Vec::new()
+    } else {
+        pools.par_iter()
+            .map(|pool| PollenSources::from_corridors(pool, &pools, &genetics.pollen_corridors))
+            .collect::<Result<_, _>>()?
+    };
     let mut locations: Vec<_> = if rules.cross_field_pollen {
         fields
             .par_iter()
@@ -305,7 +394,10 @@ pub(crate) fn prepare_maturation(
                         .binary_search_by_key(&locations[index].1, |row| row.key)
                         .ok()
                 })
-                .map(|index| &pools[index]);
+                .map(|index| {
+                    routed.get(index).and_then(Option::as_ref)
+                        .map_or(Pollen::Shared(&pools[index]), Pollen::Routed)
+                });
             if let Some(pool) = pool {
                 candidates_with_pollen(
                     rules,
@@ -417,6 +509,7 @@ mod tests {
             }]),
             descendants: Arc::default(),
             reproduction: None,
+            pollen_corridors: Vec::new(),
         };
         let rules = Reproduction {
             seed_per_thousand: 1000,
@@ -477,6 +570,7 @@ mod tests {
             ]),
             descendants: Arc::default(),
             reproduction: None,
+            pollen_corridors: Vec::new(),
         };
         let rules = Reproduction {
             seed_per_thousand: 1000,
@@ -563,6 +657,7 @@ mod tests {
             ),
             descendants: Arc::default(),
             reproduction: Some(rules),
+            pollen_corridors: Vec::new(),
         };
         let fields: Vec<_> = [
             (1, 1, 1, Phase::Ripe),
@@ -602,22 +697,27 @@ mod tests {
             profiles: Arc::default(),
             genetics: Some(Arc::new(genetics)),
         };
+        let mut routed = provenance.clone();
+        let genetics = Arc::make_mut(routed.genetics.as_mut().unwrap());
+        genetics.pollen_corridors = vec![PollenCorridor { source: 1, destination: 2, strength: 1000 }];
+        genetics.validate().unwrap();
         let mut crossed = false;
+        let mut crossed_region = false;
         for seed in 0..64 {
-            let result = |workers| {
+            let result = |workers, provenance| {
                 rayon::ThreadPoolBuilder::new()
                     .num_threads(workers)
                     .build()
                     .unwrap()
                     .install(|| {
-                        prepare_maturation(&fields, &provenance, seed)
+                        prepare_maturation(&fields, provenance, seed)
                             .unwrap()
                             .unwrap()
                             .entries
                     })
             };
-            let entries = result(1);
-            assert_eq!(entries, result(4));
+            let entries = result(1, &provenance);
+            assert_eq!(entries, result(4, &provenance));
             for (field, rows) in entries {
                 let parent = rows[0].pollen_parent.unwrap();
                 match field {
@@ -629,8 +729,24 @@ mod tests {
                     _ => panic!("only ripe fields mature"),
                 }
             }
+            let entries = result(1, &routed);
+            assert_eq!(entries, result(4, &routed));
+            for (field, rows) in entries {
+                let parent = rows[0].pollen_parent.unwrap();
+                match field {
+                    1 | 2 => assert!([11, 12].contains(&parent)),
+                    3 => {
+                        assert!([11, 12, 13].contains(&parent));
+                        crossed_region |= parent != 13;
+                        assert_eq!(rows[0].alleles, Some([130, parent as u16 * 10]));
+                    }
+                    4 => assert_eq!(parent, 14),
+                    _ => panic!("only ripe fields mature"),
+                }
+            }
         }
         assert!(crossed);
+        assert!(crossed_region);
         assert!(
             Reproduction {
                 recombine: false,
@@ -663,6 +779,7 @@ mod tests {
             ),
             descendants: Arc::default(),
             reproduction: None,
+            pollen_corridors: Vec::new(),
         };
         let rules = Reproduction {
             seed_per_thousand: 1000,
