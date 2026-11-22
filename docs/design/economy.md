@@ -4,6 +4,11 @@
 
 ## Physical goods and social rights
 
+A crop's authored `byproducts` map gives quantities of additional goods that
+may be recovered with the main harvest. A ripe field remains available for a
+later decision when its full output cannot enter the local stocks. Optional
+explicit crop runtime IDs preserve identities independently of catalog order.
+
 Every physical good has one physical location at a time: an area store, a building's storage, a character's carried inventory, a vehicle, or a shipment. Travel moves its carrier and cargo together. A good cannot be in a warehouse and on a cart simultaneously.
 
 Track these independently:

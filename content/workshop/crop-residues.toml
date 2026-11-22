@@ -1,0 +1,11 @@
+id = "workshop/crop-residues"
+version = 1
+namespace = "crop-residues"
+
+[data.recipes.straw-mat]
+runtime_id = 210103
+inputs = { "crop-residues:straw" = 8 }
+output = "reed-mat"
+quantity = 1
+duration = 3600000
+skill = "craft"

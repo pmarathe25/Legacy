@@ -139,6 +139,13 @@ fn run_steps(
                     )?;
                     ("maturation_events", events.len())
                 }
+                CoreRunEvent::HarvestProducts { at_millis, events } => {
+                    write_line(
+                        &mut writer,
+                        &json!({"kind":"harvest_products","step":step,"at_millis":at_millis,"events":events}),
+                    )?;
+                    ("harvest_products", events.len())
+                }
                 CoreRunEvent::Work(row) => ("work_finished", row.finished.len()),
                 CoreRunEvent::Meetings(rows) => ("meetings", rows.len()),
                 CoreRunEvent::ElapsedEncounters {

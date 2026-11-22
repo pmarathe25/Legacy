@@ -812,6 +812,10 @@ pub enum CoreRunEvent {
         at_millis: u128,
         fields: Vec<game_economy_agriculture::opportunities::Opportunity>,
     },
+    HarvestProducts {
+        at_millis: u128,
+        events: Vec<game_economy_agriculture::Harvest>,
+    },
     SoilAmendment {
         at_millis: u128,
         events: Vec<game_economy_agriculture::amendment::Event>,
@@ -2201,6 +2205,12 @@ impl CoreHost {
                                 run.events.push(CoreRunEvent::ElapsedCultivation {
                                     at_millis: self.core.simulated_millis(),
                                     fields: cultivation.fields,
+                                });
+                            }
+                            if !cultivation.products.is_empty() {
+                                run.events.push(CoreRunEvent::HarvestProducts {
+                                    at_millis: self.core.simulated_millis(),
+                                    events: cultivation.products,
                                 });
                             }
                             if let Some(review) = cultivation.review

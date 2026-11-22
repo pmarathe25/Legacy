@@ -2186,7 +2186,7 @@ crop = "grain"
 [[cultivation.fields]]
 id = 2
 region = 2
-crop = "grain"
+crop = "straw-grain"
 
 [[cultivation.seed_batches]]
 region = 1

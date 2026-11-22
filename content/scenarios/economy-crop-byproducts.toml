@@ -1,0 +1,63 @@
+# Two farmers have the same crop, with space for the full harvest in only one region.
+seed = 42
+tick_millis = 3600000
+decision_period_millis = 3600000
+elapsed_spoilage = true
+stock_capacity = 200
+good_footprints = { "crop-residues:straw" = 2 }
+food_relief_divisor = 20
+
+[rules]
+hunger_rate = { units = 0, per_millis = 60000 }
+meal_threshold = 20
+starvation_threshold = 50
+max_health = 100
+max_work_hunger = 30
+carrying_capacity = 20
+
+[[regions]]
+id = 1
+storage = { grain = 150, grain-seed = 20, "crop-residues:straw" = 16, reed-mat = 10 }
+stock = { grain-seed = 10 }
+
+[[regions]]
+id = 2
+storage = { grain = 150, grain-seed = 20, "crop-residues:straw" = 15 }
+stock = { grain-seed = 10 }
+
+[[people]]
+id = 1
+region = 1
+health = 100
+hunger = 0
+willing_to_work = false
+seek_meals = false
+
+[[people]]
+id = 2
+region = 2
+health = 100
+hunger = 0
+willing_to_work = false
+seek_meals = false
+controlled = true
+
+[cultivation]
+max_hunger = 30
+growth_unit_millis = 60000
+policies = []
+
+[[cultivation.fields]]
+id = 1
+region = 1
+crop = "straw-grain"
+
+[[personal_choices]]
+id = 1
+idle = 0
+preferences = [{ domain = 11, enabled = true, bias = 10, weight = 0 }]
+
+[[cultivation.fields]]
+id = 2
+region = 2
+crop = "straw-grain"

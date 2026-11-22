@@ -1,0 +1,10 @@
+id = "objects/crop-residues"
+version = 1
+namespace = "crop-residues"
+
+[data.objects.straw]
+id = 210102
+runtime_id = 210102
+name = "Grain straw"
+mass = 1
+tags = ["plant", "fiber"]

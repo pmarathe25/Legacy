@@ -8,6 +8,7 @@ pub(super) struct CultivatedNow {
     pub actors: Vec<u64>,
     pub choices: Vec<CoreChoiceEvent>,
     pub fields: Vec<game_economy_agriculture::opportunities::Opportunity>,
+    pub products: Vec<game_economy_agriculture::Harvest>,
     pub review: Option<FarmReview>,
 }
 
@@ -15,6 +16,12 @@ pub(super) struct CultivatedNow {
 pub struct FarmReview {
     pub work: Vec<game_economy_agriculture::elapsed_actions::FieldWork>,
     pub requests: Vec<game_economy_agriculture::requests::Event>,
+}
+
+#[derive(Default)]
+struct CultivationCommit {
+    outcomes: Vec<(u64, bool)>,
+    products: Vec<game_economy_agriculture::Harvest>,
 }
 
 impl CoreHost {
@@ -48,7 +55,7 @@ impl CoreHost {
             .par_iter()
             .filter_map(|(choice, won)| won.then_some(*choice))
             .collect();
-        let mut outcomes = Vec::new();
+        let mut settled = CultivationCommit::default();
         let mut recorded_review = None;
         let tick = self.core.physical.tick();
         let offset_millis = self
@@ -114,11 +121,11 @@ impl CoreHost {
             } else {
                 Vec::new()
             };
-            outcomes = self.commit_elapsed_cultivation(plan)?;
+            settled = self.commit_elapsed_cultivation(plan)?;
             if review.is_some() {
                 let work = work.into_par_iter().filter(|row| {
-                    outcomes.binary_search_by_key(&row.person, |outcome| outcome.0)
-                        .is_ok_and(|slot| outcomes[slot].1)
+                    settled.outcomes.binary_search_by_key(&row.person, |outcome| outcome.0)
+                        .is_ok_and(|slot| settled.outcomes[slot].1)
                 }).collect();
                 let requests = self.agriculture.as_ref().and_then(|farm| farm.requests.as_ref())
                     .map_or_else(Vec::new, |owner| owner.events.clone());
@@ -136,10 +143,10 @@ impl CoreHost {
                     action: choice.field,
                 }),
                 outcome: if *won {
-                    outcomes
+                    settled.outcomes
                         .binary_search_by_key(&choice.person, |row| row.0)
                         .map_or(CoreChoiceOutcome::Stale, |index| {
-                            if outcomes[index].1 {
+                            if settled.outcomes[index].1 {
                                 CoreChoiceOutcome::Accepted
                             } else {
                                 CoreChoiceOutcome::Denied
@@ -161,6 +168,7 @@ impl CoreHost {
             actors,
             choices,
             fields,
+            products: settled.products,
             review: recorded_review,
         })
     }
@@ -213,17 +221,32 @@ impl CoreHost {
         }
         .prepare_controlled_elapsed(carried_batch)?;
         let phase = plan.changes.first().map(|change| change.2);
-        let outcomes = self.commit_elapsed_cultivation(plan)?;
-        Ok(phase.filter(|_| outcomes.first() == Some(&(person, true))))
+        let settled = self.commit_elapsed_cultivation(plan)?;
+        Ok(phase.filter(|_| settled.outcomes.first() == Some(&(person, true))))
     }
 
     fn commit_elapsed_cultivation(
         &mut self,
         mut plan: game_economy_agriculture::Plan,
-    ) -> Result<Vec<(u64, bool)>, String> {
+    ) -> Result<CultivationCommit, String> {
         if plan.changes.is_empty() && !plan.advances_review() {
-            return Ok(Vec::new());
+            return Ok(CultivationCommit::default());
         }
+        let harvest = plan.changes.par_iter().zip(&plan.actors).filter_map(|(&(field, action, phase, _), &person)| {
+            if phase != game_economy_agriculture::Phase::Fallow {
+                return None;
+            }
+            let index = plan.harvest.binary_search_by_key(&action, |row| row.id).ok()?;
+            let output = &plan.harvest[index].creations;
+            // A single product already has the ordinary field-history event.
+            (output.len() > 1).then(|| (action, game_economy_agriculture::Harvest {
+                person, field,
+                products: output.iter().map(|creation| game_production_model::Amount {
+                    good: creation.lot.good,
+                    quantity: creation.lot.quantity,
+                }).collect(),
+            }))
+        }).collect::<Vec<_>>();
         let mut actions = std::mem::take(&mut plan.plant);
         actions.append(&mut plan.harvest);
         let seed = self.core.seed ^ self.core.decision_time_key();
@@ -256,7 +279,11 @@ impl CoreHost {
                 self.opinions = opinions;
             }
         }
-        Ok(outcomes)
+        let products = harvest.into_par_iter().filter_map(|(id, row)| {
+            events.physical_actions.binary_search_by_key(&id, |receipt| receipt.id)
+                .is_ok_and(|index| events.physical_actions[index].accepted).then_some(row)
+        }).collect();
+        Ok(CultivationCommit { outcomes, products })
     }
 
     fn farm_agreement_evidence(

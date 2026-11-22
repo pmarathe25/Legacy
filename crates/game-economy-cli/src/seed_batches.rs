@@ -111,6 +111,7 @@ mod tests {
             seed_quantity: 1,
             output: 3,
             output_quantity: 1,
+            byproducts: vec![],
             growth_ticks: 1,
         };
         let lot = Lot {

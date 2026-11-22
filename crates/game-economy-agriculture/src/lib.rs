@@ -17,7 +17,7 @@ use game_lot_content::Catalog;
 use game_lot_runtime::Events;
 use game_lots::{Movement, Place, Transaction, View};
 use game_opinions::Opinions;
-use game_production_model::Good;
+use game_production_model::{Amount, Good};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
@@ -30,8 +30,19 @@ pub struct Crop {
     pub seed_quantity: u64,
     pub output: u32,
     pub output_quantity: u64,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub byproducts: Vec<Amount>,
     pub growth_ticks: u32,
 }
+impl Crop {
+    fn harvest_amounts(&self) -> impl Iterator<Item = Amount> + '_ {
+        std::iter::once(Amount {
+            good: self.output,
+            quantity: self.output_quantity,
+        }).chain(self.byproducts.iter().cloned())
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Phase {
@@ -221,6 +232,11 @@ impl Agriculture {
                     || c.seed_quantity == 0
                     || c.output_quantity == 0
                     || c.growth_ticks == 0
+                    || c.byproducts.windows(2).any(|pair| pair[0].good >= pair[1].good)
+                    || c.byproducts.iter().any(|amount| {
+                        amount.quantity == 0 || amount.good == c.seed || amount.good == c.output
+                            || !goods.contains(&amount.good)
+                    })
             })
             || self.policies.par_iter().any(|p| {
                 !ids.contains(&p.person)
@@ -240,12 +256,9 @@ impl Agriculture {
                         good: c.seed,
                     })
                     .is_none()
-                        || view
-                            .container(Place::Stock {
-                                region: f.region,
-                                good: c.output,
-                            })
-                            .is_none()
+                        || c.harvest_amounts().any(|amount| {
+                            view.container(Place::Stock { region: f.region, good: amount.good }).is_none()
+                        })
                         || match f.phase {
                             Phase::Growing => {
                                 f.remaining == 0
@@ -367,6 +380,14 @@ macro_rules! cultivation_methods {
     };
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Harvest {
+    pub person: u64,
+    pub field: u64,
+    pub products: Vec<Amount>,
+}
+
 pub struct Plan {
     boundary: bool,
     action_review: Option<elapsed_actions::Review>,
@@ -444,6 +465,10 @@ enum Preparation {
 }
 
 impl Context<'_> {
+    fn harvest_quantity(&self, field: u64, base: u64) -> u64 {
+        self.agriculture.soil.as_ref().map_or(base, |soil| soil.yield_quantity(field, base))
+    }
+
     pub fn prepare(&self, base: u64) -> Result<Plan, String> {
         self.prepare_choices(base, &[], &[], &[])
     }
@@ -657,22 +682,13 @@ impl Context<'_> {
                             good: crop.seed,
                         })
                         .is_some_and(|stock| stock.quantity(crop.seed) >= crop.seed_quantity),
-                    Phase::Ripe => self
-                        .view
-                        .container(Place::Stock {
-                            region: field.region,
-                            good: crop.output,
-                        })
-                        .is_some_and(|stock| {
-                            self.view.remaining_quantity(stock, crop.output)
-                                >= self
-                                    .agriculture
-                                    .soil
-                                    .as_ref()
-                                    .map_or(crop.output_quantity, |soil| {
-                                        soil.yield_quantity(field.id, crop.output_quantity)
-                                    })
-                        }),
+                    Phase::Ripe => crop.harvest_amounts().all(|amount| {
+                        self.view.container(Place::Stock { region: field.region, good: amount.good })
+                            .is_some_and(|stock| {
+                                let quantity = self.harvest_quantity(field.id, amount.quantity);
+                                self.view.remaining_quantity(stock, amount.good) >= quantity
+                            })
+                    }),
                 })
             })
             .collect();
@@ -873,23 +889,15 @@ impl Context<'_> {
                         crop.growth_ticks,
                     ),
                     Phase::Ripe => {
-                        let mut creations = vec![
+                        let mut creations = crop.harvest_amounts().map(|amount| {
                             self.catalog.creation(
                                 action,
-                                Place::Stock {
-                                    region: field.region,
-                                    good: crop.output,
-                                },
-                                crop.output,
-                                self.agriculture
-                                    .soil
-                                    .as_ref()
-                                    .map_or(crop.output_quantity, |soil| {
-                                        soil.yield_quantity(field.id, crop.output_quantity)
-                                    }),
+                                Place::Stock { region: field.region, good: amount.good },
+                                amount.good,
+                                self.harvest_quantity(field.id, amount.quantity),
                                 self.lot_instant,
-                            )?,
-                        ];
+                            )
+                        }).collect::<Result<Vec<_>, _>>()?;
                         if let Some(owner) = &self.agriculture.provenance
                             && owner
                                 .genetics
