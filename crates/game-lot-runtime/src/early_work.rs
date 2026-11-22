@@ -904,7 +904,11 @@ impl Runtime {
             drop(phase);
             phase = game_diagnostics::span("physical.interval_start.plan");
         }
-        let flat = game_lot_work::start_flat(physical_starts, &self.recipes)?;
+        let flat = game_lot_work::start_flat_with_capacity(
+            physical_starts,
+            &self.recipes,
+            self.store.footprints(),
+        )?;
         #[cfg(feature = "profile")]
         {
             drop(phase);
@@ -920,7 +924,11 @@ impl Runtime {
         let (jobs, mut custody) = if let Some(fast) = fast {
             fast
         } else {
-            let plan = game_lot_work::start(physical_starts, &self.recipes)?;
+            let plan = game_lot_work::start_with_capacity(
+                physical_starts,
+                &self.recipes,
+                self.store.footprints(),
+            )?;
             let custody =
                 self.store
                     .prepare_with_empty(seed, &plan.transactions, plan.containers, false)?;
@@ -1050,8 +1058,12 @@ impl Runtime {
             drop(phase);
             phase = game_diagnostics::span("physical.early.plan");
         }
-        let mut finished =
-            game_lot_work::finish(&rows, &self.catalog, self.lot_instant(self.tick()))?;
+        let mut finished = game_lot_work::finish_with_capacity(
+            &rows,
+            &self.catalog,
+            self.lot_instant(self.tick()),
+            self.store.footprints(),
+        )?;
         if self.elapsed_expiry_time().is_none()
             && finished.transactions.par_iter().any(|transaction| {
                 transaction

@@ -230,7 +230,11 @@ impl ExpiryIndex {
                 let updated = Container {
                     place,
                     capacity: old.capacity,
-                    used: old.used - receipts.iter().map(|row| row.quantity).sum::<u64>(),
+                    used: old.used
+                        - receipts
+                            .iter()
+                            .map(|row| state.footprints.admitted(row.good, row.quantity))
+                            .sum::<u64>(),
                     next_expiry: lots.iter().filter_map(|row| row.expires_at).min(),
                     lots,
                 };

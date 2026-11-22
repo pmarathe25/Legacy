@@ -99,7 +99,10 @@ pub fn goal_search(context: GoalSearchContext<'_>) -> Result<Vec<SearchProposal>
                     .iter()
                     .find(|recipe| recipe.id == recipe_id)?;
                 let holder = context.view.container(Place::Person(person.id))?;
-                if holder.used >= holder.capacity
+                if recipe
+                    .inputs
+                    .iter()
+                    .all(|input| context.view.remaining_quantity(holder, input.good) == 0)
                     || recipe
                         .inputs
                         .iter()
@@ -124,11 +127,10 @@ pub fn goal_search(context: GoalSearchContext<'_>) -> Result<Vec<SearchProposal>
                     let source = context
                         .view
                         .container(Place::Inventory(search.target.unwrap_or(search.store)))?;
-                    if recipe
-                        .inputs
-                        .iter()
-                        .any(|input| source.quantity(input.good) > 0)
-                    {
+                    if recipe.inputs.iter().any(|input| {
+                        source.quantity(input.good) > 0
+                            && context.view.remaining_quantity(holder, input.good) > 0
+                    }) {
                         return None;
                     }
                     search.examined = search.examined.saturating_add(1);
@@ -225,11 +227,9 @@ pub fn goal_search(context: GoalSearchContext<'_>) -> Result<Vec<SearchProposal>
                 .iter()
                 .find(|recipe| recipe.id == recipe_id)?;
             let holder = context.view.container(Place::Person(person.id))?;
-            if holder.used >= holder.capacity {
-                return None;
-            }
             let shortage = recipe.inputs.iter().any(|input| {
                 holder.quantity(input.good) == 0
+                    && context.view.remaining_quantity(holder, input.good) > 0
                     && context
                         .view
                         .container(Place::Stock {

@@ -180,7 +180,9 @@ impl AcquisitionContext<'_> {
                         let amount = requirement
                             .quantity
                             .saturating_sub(holder.quantity(requirement.good));
-                        if amount == 0 || amount > holder.capacity.saturating_sub(holder.used) {
+                        if amount == 0
+                            || amount > self.view.remaining_quantity(holder, requirement.good)
+                        {
                             return None;
                         }
                         if !disregard

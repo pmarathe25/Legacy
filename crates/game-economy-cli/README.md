@@ -107,7 +107,13 @@ can use namespaced packs with stable identifiers. The normal CLI and history
 examples compile authored data directly into the elapsed host. Game state
 and validation live with the feature owners.
 
-See the [feature restoration audit](../../docs/research/legacy-feature-audit.md)
+A scenario can assign capacity units per good with
+`good_footprints = { timber = 3, tool = 2 }`. Unlisted goods occupy one unit
+each. Storage and carrying capacities use these units. Recipes and commands
+such as `deposit` count goods. Footprints are saved with the world, and initial
+stock and holdings must fit their authored capacities.
+
+See the [feature restoration audit](../../plans/unimplemented/consolidated-simulation-audit.md)
 for current coverage and the [elapsed-time notes](../../docs/research/elapsed-time-migration.md)
 for owner clocks.
 

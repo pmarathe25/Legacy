@@ -140,6 +140,7 @@ pub fn prepare_at(
         return Err("invalid lot generation".into());
     }
     let instant = time.at;
+    let footprints = &state.footprints;
     state
         .revision
         .checked_add(1)
@@ -534,7 +535,7 @@ pub fn prepare_at(
                 (
                     batch.move_owners[row.original],
                     row.source,
-                    u128::from(row.movement.quantity),
+                    footprints.occupied(row.movement.good, row.movement.quantity),
                 )
             })
             .collect();
@@ -573,7 +574,7 @@ pub fn prepare_at(
                     .as_ref()
                     .map_or(claim.movement.id, |batch| batch.move_owners[claim.original]),
                 id: claim.movement.id,
-                quantity: claim.movement.quantity,
+                capacity_units: footprints.occupied(claim.movement.good, claim.movement.quantity),
             })
         })
         .collect();
@@ -589,25 +590,25 @@ pub fn prepare_at(
                 .as_ref()
                 .map_or(creation.id, |batch| batch.creation_owners[index]),
             id: creation.id,
-            quantity: creation.lot.quantity,
+            capacity_units: footprints.occupied(creation.lot.good, creation.lot.quantity),
         }
     }));
     allocation::grant_destinations(
         destinations,
         &outgoing,
-        &containers,
         |index| {
             let container = containers[index];
-            if container.next_expiry.is_some_and(|at| at <= instant) {
+            let used: u64 = if container.next_expiry.is_some_and(|at| at <= instant) {
                 container
                     .lots
                     .par_iter()
                     .filter(|lot| live(lot, instant))
-                    .map(|lot| lot.quantity)
+                    .map(|lot| footprints.admitted(lot.good, lot.quantity))
                     .sum()
             } else {
                 container.used
-            }
+            };
+            container.capacity - used
         },
         &accepted,
     );
@@ -1103,7 +1104,10 @@ pub fn prepare_at(
                         merged.push(lot);
                     }
                 }
-                let used = merged.iter().map(|lot| lot.quantity).sum();
+                let used = merged
+                    .iter()
+                    .map(|lot| footprints.admitted(lot.good, lot.quantity))
+                    .sum();
                 let next_expiry = merged.iter().filter_map(|lot| lot.expires_at).min();
                 return (
                     index,
@@ -1151,7 +1155,7 @@ pub fn prepare_at(
                         place: container.place,
                         capacity: container.capacity,
                         lots,
-                        used: quantity,
+                        used: footprints.admitted(lot.good, quantity),
                         next_expiry: (quantity > 0).then_some(lot.expires_at).flatten(),
                     },
                 );
@@ -1197,8 +1201,8 @@ pub fn prepare_at(
                 }
                 let used = merged
                     .iter()
-                    .map(|lot| u128::from(lot.quantity))
-                    .sum::<u128>() as u64;
+                    .map(|lot| footprints.admitted(lot.good, lot.quantity))
+                    .sum();
                 let next_expiry = merged.iter().filter_map(|lot| lot.expires_at).min();
                 return (
                     index,
@@ -1263,8 +1267,8 @@ pub fn prepare_at(
                 .collect();
             let used = merged
                 .par_iter()
-                .map(|lot| u128::from(lot.quantity))
-                .sum::<u128>() as u64;
+                .map(|lot| footprints.admitted(lot.good, lot.quantity))
+                .sum();
             let next_expiry = merged.par_iter().filter_map(|lot| lot.expires_at).min();
             (
                 index,
@@ -1306,6 +1310,7 @@ mod time_tests {
             revision: 12,
             next_batch: Some(8),
             expiry_millis: None,
+            footprints: Default::default(),
             storage_climate: None,
             containers: vec![
                 Container::new(

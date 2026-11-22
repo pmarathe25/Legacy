@@ -707,7 +707,12 @@ impl Context<'_> {
                     (c.blueprint.salvage > 0).then(|| {
                         Container::new(
                             Place::Site(self.sites.next_id + i as u64),
-                            c.blueprint.salvage,
+                            u64::try_from(
+                                self.view
+                                    .footprints
+                                    .occupied(c.blueprint.kit, c.blueprint.salvage),
+                            )
+                            .map_err(|_| "site material capacity overflow")?,
                             vec![],
                         )
                         .map(|container| (base + i as u64, container))

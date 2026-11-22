@@ -604,7 +604,8 @@ impl Runtime {
         game_lot_work::validate_starts(&self.work, starts)?;
         let admitted = self.starts_with_storage(starts);
         let starts = admitted.as_deref().unwrap_or(starts);
-        let start_plan = game_lot_work::start(starts, &self.recipes)?;
+        let start_plan =
+            game_lot_work::start_with_capacity(starts, &self.recipes, self.store.footprints())?;
         let mut rates = rates.to_vec();
         rates.par_sort_unstable_by_key(|row| row.0);
         if rates.par_windows(2).any(|rows| rows[0].0 == rows[1].0)
@@ -739,7 +740,12 @@ impl Runtime {
             .filter(|row| row.phase == Phase::Working && row.job.remaining == 0)
             .map(|row| (&row.job, work_custody(Place::JobInput(row.job.id))))
             .collect();
-        let mut finished = game_lot_work::finish(&finishing, &self.catalog, lot_instant)?;
+        let mut finished = game_lot_work::finish_with_capacity(
+            &finishing,
+            &self.catalog,
+            lot_instant,
+            self.store.footprints(),
+        )?;
         let identified_plan = identified
             .map(|config| {
                 crate::identified_output::prepare(
@@ -761,13 +767,15 @@ impl Runtime {
             .filter(|row| row.phase == Phase::Returning)
             .map(|row| (&row.job, work_custody(Place::JobInput(row.job.id))))
             .collect();
-        let mut returned = game_lot_work::cancel(&returning, lot_instant)?;
+        let mut returned =
+            game_lot_work::cancel_with_capacity(&returning, lot_instant, self.store.footprints())?;
         let waiting: Vec<_> = next
             .par_iter()
             .filter(|row| row.phase == Phase::Waiting)
             .map(|row| (&row.job, work_custody(Place::JobOutput(row.job.id))))
             .collect();
-        let mut delivered = game_lot_work::deliver(&waiting, lot_instant)?;
+        let mut delivered =
+            game_lot_work::deliver_with_capacity(&waiting, lot_instant, self.store.footprints())?;
         if !self.complete_stock {
             let has_destinations = |row: &game_lots::Transaction| {
                 row.movements.iter().all(|movement| {

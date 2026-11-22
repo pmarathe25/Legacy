@@ -1,5 +1,4 @@
 //! Capacity claims grouped by physical action, crediting only its own outflow.
-use game_lot_model::Container;
 use rayon::prelude::*;
 use std::sync::atomic::{AtomicBool, Ordering};
 const CHUNK: usize = 2048;
@@ -10,13 +9,13 @@ pub struct Destination {
     pub rank: u64,
     pub transaction: u64,
     pub id: u64,
-    pub quantity: u64,
+    pub capacity_units: u128,
 }
 fn incoming(group: &[Destination]) -> u128 {
     if group.len() >= CHUNK {
-        group.par_iter().map(|row| u128::from(row.quantity)).sum()
+        group.par_iter().map(|row| row.capacity_units).sum()
     } else {
-        group.iter().map(|row| u128::from(row.quantity)).sum()
+        group.iter().map(|row| row.capacity_units).sum()
     }
 }
 fn grant(group: &[Destination], accepted: &[AtomicBool]) {
@@ -30,7 +29,7 @@ fn grant(group: &[Destination], accepted: &[AtomicBool]) {
         }
     }
 }
-fn prefixes(values: &[u128]) -> Vec<u128> {
+pub fn capacity_prefixes(values: &[u128]) -> Vec<u128> {
     let totals: Vec<u128> = values
         .par_chunks(CHUNK)
         .map(|chunk| chunk.iter().sum())
@@ -62,8 +61,7 @@ fn prefixes(values: &[u128]) -> Vec<u128> {
 pub fn grant_destinations(
     mut rows: Vec<Destination>,
     outgoing: &[(u64, usize, u128)],
-    containers: &[&Container],
-    used: impl Fn(usize) -> u64 + Sync,
+    free: impl Fn(usize) -> u64 + Sync,
     accepted: &[AtomicBool],
 ) {
     rows.par_sort_unstable_by_key(|row| (row.place, row.rank, row.transaction, row.id));
@@ -74,7 +72,7 @@ pub fn grant_destinations(
         .par_chunk_by(|a, b| a[0].place == b[0].place)
         .for_each(|groups| {
             let place = groups[0][0].place;
-            let available = u128::from(containers[place].capacity - used(place));
+            let available = u128::from(free(place));
             // A destination used by only one action needs neither a prefix scan nor
             // temporary vectors. Most job-input containers are private in this way.
             if groups.len() == 1 {
@@ -103,7 +101,7 @@ pub fn grant_destinations(
                     incoming.saturating_sub(own)
                 })
                 .collect();
-            let offsets = prefixes(&needs);
+            let offsets = capacity_prefixes(&needs);
             groups
                 .par_iter()
                 .zip(needs.par_iter())

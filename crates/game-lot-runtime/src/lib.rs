@@ -99,6 +99,23 @@ impl Runtime {
             Catalog::from_tick_millis(&state.goods, state.tick_millis)?
         };
         state.work.par_sort_unstable_by_key(|row| row.job.id);
+        if state
+            .custody
+            .footprints
+            .entries()
+            .iter()
+            .any(|row| !catalog.contains(row.good))
+            || state.goods.iter().any(|good| {
+                good.maturation.is_some_and(|profile| {
+                    state.custody.footprints.units(profile.product)
+                        > state.custody.footprints.units(good.id)
+                })
+            })
+        {
+            return Err(
+                "unknown good footprint or maturation expands beyond its reserved space".into(),
+            );
+        }
         game_lot_work::validate(&state, &catalog)?;
         let store = Store::compile(state.custody)?;
         let mut workers: Vec<_> = state
@@ -278,6 +295,10 @@ impl Runtime {
         view.region_ids = self.region_ids.clone();
         Ok(view)
     }
+    pub fn footprints(&self) -> &game_lots::Footprints {
+        self.store.footprints()
+    }
+
     pub fn custody(&self, place: Place) -> Option<&game_lots::Container> {
         self.store.container(place)
     }
@@ -701,7 +722,8 @@ impl Runtime {
             Self::include_unavailable_starts(&mut results, requests);
             return Ok(results);
         }
-        let plan = game_lot_work::start(starts, &self.recipes)?;
+        let plan =
+            game_lot_work::start_with_capacity(starts, &self.recipes, self.store.footprints())?;
         let mut draft =
             self.store
                 .prepare_with_empty(seed, &plan.transactions, plan.containers, false)?;

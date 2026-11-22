@@ -1,0 +1,54 @@
+# Goods occupy different amounts of real carrying and storage space.
+seed = 27
+tick_millis = 3600000
+decision_period_millis = 3600000
+stock_capacity = 40
+food_relief_divisor = 20
+good_footprints = { bread = 2, timber = 3, tool = 5 }
+
+[rules]
+hunger_rate = { units = 0, per_millis = 60000 }
+meal_threshold = 20
+starvation_threshold = 50
+max_health = 100
+max_work_hunger = 30
+carrying_capacity = 7
+
+[[regions]]
+id = 1
+stock = { timber = 10 }
+
+[[people]]
+id = 1
+region = 1
+health = 100
+hunger = 0
+willing_to_work = false
+seek_meals = false
+controlled = true
+goods = { bread = 1, timber = 1 }
+
+[[people]]
+id = 2
+region = 1
+health = 100
+hunger = 0
+willing_to_work = true
+seek_meals = false
+goods = { bread = 1 }
+
+[[local_transport.stores]]
+id = 1
+region = 1
+name = "Finite shelf"
+capacity = 7
+goods = { bread = 2 }
+
+[[local_transport.policies]]
+person = 2
+region = 1
+source = { kind = "stock" }
+destination = { kind = "person" }
+good = "timber"
+quantity = 5
+willing = true

@@ -2,7 +2,7 @@
 mod state;
 mod validation;
 use game_lot_content::Catalog;
-use game_lot_model::{Container, Movement, Place, SimpleTransfer, Transaction};
+use game_lot_model::{Container, Footprints, Movement, Place, SimpleTransfer, Transaction};
 use game_production_model::{Amount, Job, JobPhase, Recipe, Start};
 use rayon::prelude::*;
 pub use state::{Phase, Snapshot, Work, WorkInterval, WorkProgress};
@@ -58,10 +58,12 @@ fn offsets(counts: &[u64]) -> Result<Vec<u64>, String> {
         .map(|value| u64::try_from(value).map_err(|_| "operation identity overflow".into()))
         .collect()
 }
-fn capacity(items: &[Amount]) -> Result<u64, String> {
+fn capacity(items: &[Amount], footprints: &Footprints) -> Result<u64, String> {
     items
         .iter()
-        .try_fold(0u64, |sum, item| sum.checked_add(item.quantity))
+        .try_fold(0u64, |sum, item| {
+            sum.checked_add(u64::try_from(footprints.occupied(item.good, item.quantity)).ok()?)
+        })
         .filter(|sum| *sum > 0)
         .ok_or("invalid bundle capacity".into())
 }
@@ -138,6 +140,14 @@ fn start_jobs(requests: &[Start], recipes: &[Recipe]) -> Result<Vec<Job>, String
 
 /// Construct custody and input reservations; the caller decides who attempts work.
 pub fn start(requests: &[Start], recipes: &[Recipe]) -> Result<Starts, String> {
+    start_with_capacity(requests, recipes, &Footprints::default())
+}
+
+pub fn start_with_capacity(
+    requests: &[Start],
+    recipes: &[Recipe],
+    footprints: &Footprints,
+) -> Result<Starts, String> {
     let jobs = start_jobs(requests, recipes)?;
     #[cfg(feature = "profile")]
     let phase = game_diagnostics::span("work.start.transactions");
@@ -150,8 +160,16 @@ pub fn start(requests: &[Start], recipes: &[Recipe]) -> Result<Starts, String> {
         .par_iter()
         .enumerate()
         .map(|(index, job)| {
-            let input = Container::new(Place::JobInput(job.id), capacity(&job.reserved)?, vec![])?;
-            let output = Container::new(Place::JobOutput(job.id), capacity(&job.outputs)?, vec![])?;
+            let input = Container::new(
+                Place::JobInput(job.id),
+                capacity(&job.reserved, footprints)?,
+                vec![],
+            )?;
+            let output = Container::new(
+                Place::JobOutput(job.id),
+                capacity(&job.outputs, footprints)?,
+                vec![],
+            )?;
             let movements = job
                 .reserved
                 .iter()
@@ -211,6 +229,14 @@ pub struct FlatStarts {
 }
 
 pub fn start_flat(requests: &[Start], recipes: &[Recipe]) -> Result<Option<FlatStarts>, String> {
+    start_flat_with_capacity(requests, recipes, &Footprints::default())
+}
+
+pub fn start_flat_with_capacity(
+    requests: &[Start],
+    recipes: &[Recipe],
+    footprints: &Footprints,
+) -> Result<Option<FlatStarts>, String> {
     if requests.len() < 128 {
         return Ok(None);
     }
@@ -237,10 +263,16 @@ pub fn start_flat(requests: &[Start], recipes: &[Recipe]) -> Result<Option<FlatS
             let mut transfers = Vec::with_capacity(chunk.len());
             for (offset, job) in chunk.iter().enumerate() {
                 let index = chunk_index * chunk_size + offset;
-                let input =
-                    Container::new(Place::JobInput(job.id), capacity(&job.reserved)?, vec![])?;
-                let output =
-                    Container::new(Place::JobOutput(job.id), capacity(&job.outputs)?, vec![])?;
+                let input = Container::new(
+                    Place::JobInput(job.id),
+                    capacity(&job.reserved, footprints)?,
+                    vec![],
+                )?;
+                let output = Container::new(
+                    Place::JobOutput(job.id),
+                    capacity(&job.outputs, footprints)?,
+                    vec![],
+                )?;
                 let amount = &job.reserved[0];
                 let movement = Movement {
                     batch: None,
@@ -290,6 +322,15 @@ pub fn finish(
     catalog: &Catalog,
     boundary: u64,
 ) -> Result<Finishes, String> {
+    finish_with_capacity(rows, catalog, boundary, &Footprints::default())
+}
+
+pub fn finish_with_capacity(
+    rows: &[(&Job, &Container)],
+    catalog: &Catalog,
+    boundary: u64,
+    footprints: &Footprints,
+) -> Result<Finishes, String> {
     let mut ids: Vec<_> = rows.par_iter().map(|(job, _)| job.id).collect();
     ids.par_sort_unstable();
     if ids.par_windows(2).any(|pair| pair[0] == pair[1]) {
@@ -304,7 +345,7 @@ pub fn finish(
                 || job.reserved.is_empty()
                 || job.outputs.is_empty()
                 || input.place != Place::JobInput(job.id)
-                || input.validate().is_err()
+                || input.validate_with(footprints).is_err()
             {
                 return Err("invalid finishing job custody".to_string());
             }
@@ -410,7 +451,15 @@ fn finish_ready(
 
 /// Deliver only surviving output without creating or refreshing any goods.
 pub fn deliver(rows: &[(&Job, &Container)], boundary: u64) -> Result<Cancellations, String> {
-    return_custody(rows, boundary, true)
+    deliver_with_capacity(rows, boundary, &Footprints::default())
+}
+
+pub fn deliver_with_capacity(
+    rows: &[(&Job, &Container)],
+    boundary: u64,
+    footprints: &Footprints,
+) -> Result<Cancellations, String> {
+    return_custody(rows, boundary, true, footprints)
 }
 
 /// An interruption can leave no usable materials even before return is attempted.
@@ -420,12 +469,21 @@ pub struct Cancellations {
 }
 /// Return only physically surviving reserved cohorts; expiry is still resolved by custody.
 pub fn cancel(rows: &[(&Job, &Container)], boundary: u64) -> Result<Cancellations, String> {
-    return_custody(rows, boundary, false)
+    cancel_with_capacity(rows, boundary, &Footprints::default())
+}
+
+pub fn cancel_with_capacity(
+    rows: &[(&Job, &Container)],
+    boundary: u64,
+    footprints: &Footprints,
+) -> Result<Cancellations, String> {
+    return_custody(rows, boundary, false, footprints)
 }
 fn return_custody(
     rows: &[(&Job, &Container)],
     boundary: u64,
     output: bool,
+    footprints: &Footprints,
 ) -> Result<Cancellations, String> {
     let mut ids: Vec<_> = rows.par_iter().map(|(job, _)| job.id).collect();
     ids.par_sort_unstable();
@@ -449,7 +507,7 @@ fn return_custody(
                     } else {
                         Place::JobInput(job.id)
                     }
-                || input.validate().is_err()
+                || input.validate_with(footprints).is_err()
             {
                 return Err("invalid cancelled job custody".to_string());
             }

@@ -1,5 +1,5 @@
 //! Resolve single-leg transfers with exclusive sources and shared destinations.
-use crate::independent_transfer::after;
+use crate::independent_transfer::after_with_footprints;
 use game_lot_model::{
     Container, Lot, Movement, OutcomeBatch, OutcomeChunk, Place, SimpleTransfer, Spoilage, State,
     Transaction, TransactionOutcome, key,
@@ -14,6 +14,7 @@ struct Row {
     destination: usize,
     transaction: u64,
     movement: Movement,
+    capacity_units: u128,
 }
 
 pub fn prepare(
@@ -89,6 +90,7 @@ fn prepare_rows(
         state.tick
     };
     let instant = state.expiry_millis.unwrap_or(next);
+    let footprints = &state.footprints;
     state
         .revision
         .checked_add(1)
@@ -123,6 +125,7 @@ fn prepare_rows(
                 destination: find(movement.to?)?,
                 transaction,
                 movement,
+                capacity_units: footprints.occupied(movement.good, movement.quantity),
             })
         })
         .collect();
@@ -191,44 +194,30 @@ fn prepare_rows(
     let mut amounts: Vec<_> = rows
         .par_iter()
         .zip(source_valid.par_iter())
-        .filter_map(|(row, &valid)| valid.then_some((row.destination, row.movement.quantity)))
+        .filter_map(|(row, &valid)| valid.then_some((row.destination, row.capacity_units)))
         .collect();
     if amounts.par_windows(2).any(|pair| pair[0].0 > pair[1].0) {
         amounts.par_sort_unstable_by_key(|row| row.0);
     }
-    let contested = amounts.par_chunk_by(|a, b| a.0 == b.0).any(|group| {
-        let container = &state.containers[group[0].0];
-        let used: u128 = if container.next_expiry.is_none_or(|at| at > instant) {
-            u128::from(container.used)
+    let free = |index: usize| {
+        let container = &state.containers[index];
+        let used: u64 = if container.next_expiry.is_none_or(|at| at > instant) {
+            container.used
         } else {
             container
                 .lots
                 .par_iter()
                 .filter(|lot| lot.expires_at.is_none_or(|at| at > instant))
-                .map(|lot| u128::from(lot.quantity))
+                .map(|lot| footprints.admitted(lot.good, lot.quantity))
                 .sum()
         };
-        let incoming: u128 = group.par_iter().map(|row| u128::from(row.1)).sum();
-        used + incoming > u128::from(container.capacity)
+        container.capacity - used
+    };
+    let contested = amounts.par_chunk_by(|a, b| a.0 == b.0).any(|group| {
+        let incoming: u128 = group.par_iter().map(|row| row.1).sum();
+        incoming > u128::from(free(group[0].0))
     });
     let accepted: Vec<bool> = if contested {
-        let containers: Vec<_> = state.containers.par_iter().collect();
-        let used: Vec<_> = state
-            .containers
-            .par_iter()
-            .map(|container| {
-                if container.next_expiry.is_none_or(|at| at > instant) {
-                    container.used
-                } else {
-                    container
-                        .lots
-                        .par_iter()
-                        .filter(|lot| lot.expires_at.is_none_or(|at| at > instant))
-                        .map(|lot| lot.quantity)
-                        .sum()
-                }
-            })
-            .collect();
         let flags: Vec<_> = (0..rows.len())
             .into_par_iter()
             .map(|_| AtomicBool::new(false))
@@ -244,13 +233,13 @@ fn prepare_rows(
                     rank: game_genetics::random(seed, row.transaction, next),
                     transaction: row.transaction,
                     id: row.movement.id,
-                    quantity: row.movement.quantity,
+                    capacity_units: row.capacity_units,
                 })
             })
             .collect();
         // Sources never overlap destinations in this path, so no action has an
         // outgoing credit at a contested destination.
-        game_lot_allocation::grant_destinations(candidates, &[], &containers, |i| used[i], &flags);
+        game_lot_allocation::grant_destinations(candidates, &[], free, &flags);
         flags
             .into_par_iter()
             .map(|flag| flag.load(Ordering::Relaxed))
@@ -325,12 +314,13 @@ fn prepare_rows(
                 if accepted || source.next_expiry.is_some_and(|at| at <= instant) {
                     changes.push((
                         row.source,
-                        after(
+                        after_with_footprints(
                             source,
                             instant,
                             row.movement.good,
                             if accepted { row.movement.quantity } else { 0 },
                             &[],
+                            footprints,
                         ),
                     ));
                 }
@@ -398,7 +388,10 @@ fn prepare_rows(
                     })
                     .collect();
             }
-            let used = lots.par_iter().map(|lot| lot.quantity).sum();
+            let used = lots
+                .par_iter()
+                .map(|lot| footprints.admitted(lot.good, lot.quantity))
+                .sum();
             let next_expiry = lots.par_iter().filter_map(|lot| lot.expires_at).min();
             (
                 index,
@@ -424,7 +417,12 @@ fn prepare_rows(
                 (container.next_expiry.is_some_and(|at| at <= instant)
                     && sources.binary_search(&index).is_err()
                     && changed_destinations.binary_search(&index).is_err())
-                .then(|| (index, after(container, instant, 0, 0, &[])))
+                .then(|| {
+                    (
+                        index,
+                        after_with_footprints(container, instant, 0, 0, &[], footprints),
+                    )
+                })
             },
         ));
     }

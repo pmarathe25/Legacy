@@ -407,7 +407,7 @@ impl Context<'_> {
                         let amount = p
                             .quantity
                             .min(stock.quantity(p.good))
-                            .min(holder.capacity.saturating_sub(holder.used));
+                            .min(self.view.remaining_quantity(holder, p.good));
                         (amount > 0).then_some((
                             actor.id,
                             Some((
@@ -429,7 +429,7 @@ impl Context<'_> {
                         let amount = p
                             .quantity
                             .min(carried)
-                            .min(stock.capacity.saturating_sub(stock.used));
+                            .min(self.view.remaining_quantity(stock, p.good));
                         (amount > 0).then_some((
                             actor.id,
                             Some((

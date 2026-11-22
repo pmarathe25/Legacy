@@ -20,11 +20,13 @@ pub fn prepare_disjoint_transformations(
     instance: u64,
     transactions: &[Transaction],
 ) -> Result<Option<Draft>, String> {
-    if transactions.par_iter().any(|row| {
-        row.movements
-            .iter()
-            .any(|movement| movement.batch.is_some())
-    }) {
+    if !state.footprints.is_empty()
+        || transactions.par_iter().any(|row| {
+            row.movements
+                .iter()
+                .any(|movement| movement.batch.is_some())
+        })
+    {
         return Ok(None);
     }
     disjoint_transform::prepare(state, instance, transactions)
@@ -38,11 +40,13 @@ pub fn prepare_local_creations(
     transactions: &[Transaction],
     advance: bool,
 ) -> Result<Option<Draft>, String> {
-    if transactions.par_iter().any(|row| {
-        row.movements
-            .iter()
-            .any(|movement| movement.batch.is_some())
-    }) {
+    if !state.footprints.is_empty()
+        || transactions.par_iter().any(|row| {
+            row.movements
+                .iter()
+                .any(|movement| movement.batch.is_some())
+        })
+    {
         return Ok(None);
     }
     local_creation::prepare(state, instance, transactions, advance)
@@ -132,7 +136,8 @@ pub fn prepare_partitioned_flat_fungible(
     transfers: &[SimpleTransfer],
     advance: bool,
 ) -> Result<Option<Draft>, String> {
-    if transfers.par_iter().any(|row| row.movement.batch.is_some()) {
+    if !state.footprints.is_empty() || transfers.par_iter().any(|row| row.movement.batch.is_some())
+    {
         return Ok(None);
     }
     partitioned::prepare(state, instance, seed, transfers, advance)
@@ -312,7 +317,8 @@ fn prepare_impl(
         && transactions
             .par_iter()
             .any(|action| state.thermal_transaction(action));
-    let partition = partition && !targeted_batch && !thermal;
+    let grouped_transfers = partition && !targeted_batch && !thermal;
+    let partition = grouped_transfers && state.footprints.is_empty();
     #[cfg(feature = "profile")]
     let mut phase = game_diagnostics::span("physical.batches.validate");
     additions.par_sort_unstable_by_key(|row| row.place);
@@ -392,14 +398,14 @@ fn prepare_impl(
     {
         return Ok((draft, additions));
     }
-    if partition
+    if grouped_transfers
         && additions.is_empty()
         && compact.is_empty()
         && let Some(draft) = independent_transfer::prepare(state, instance, transactions, advance)?
     {
         return Ok((draft, additions));
     }
-    if partition
+    if grouped_transfers
         && compact.is_empty()
         && let Some(draft) = fan_out::prepare_with_additions(
             state,
@@ -412,7 +418,7 @@ fn prepare_impl(
     {
         return Ok((draft, additions));
     }
-    if partition
+    if grouped_transfers
         && additions.is_empty()
         && compact.is_empty()
         && let Some(draft) = fan_in::prepare(state, instance, seed, transactions, advance)?

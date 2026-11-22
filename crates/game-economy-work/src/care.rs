@@ -199,7 +199,7 @@ impl Context<'_> {
                     return None;
                 }
                 let holder = self.view.container(Place::Person(child.0))?;
-                let fits = |quantity| quantity <= holder.capacity - holder.used;
+                let fits = |good, quantity| quantity <= self.view.remaining_quantity(holder, good);
                 let carried = self
                     .care
                     .rules
@@ -210,7 +210,9 @@ impl Context<'_> {
                         holder.goods.iter().find_map(|item| {
                             edible
                                 .get(&item.good)
-                                .filter(|&&portion| item.quantity >= portion && fits(portion))
+                                .filter(|&&portion| {
+                                    item.quantity >= portion && fits(item.good, portion)
+                                })
                                 .map(|&portion| (Place::Person(caregiver), item.good, portion))
                         })
                     });
@@ -224,7 +226,7 @@ impl Context<'_> {
                     stocks[first..last]
                         .iter()
                         .find(|row| {
-                            fits(row.2)
+                            fits(row.1, row.2)
                                 && (draft.disregards_claims(child.0)
                                     || self
                                         .claims

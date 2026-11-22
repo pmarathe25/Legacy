@@ -664,7 +664,7 @@ impl Context<'_> {
                             good: crop.output,
                         })
                         .is_some_and(|stock| {
-                            stock.capacity - stock.used
+                            self.view.remaining_quantity(stock, crop.output)
                                 >= self
                                     .agriculture
                                     .soil

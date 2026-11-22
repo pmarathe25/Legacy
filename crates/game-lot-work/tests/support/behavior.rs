@@ -132,6 +132,7 @@ fn physical_job_reserves_then_produces_and_delivers_without_refreshing_output() 
     let mut store = Store::compile(State {
         next_batch: None,
         expiry_millis: None,
+        footprints: Default::default(),
         storage_climate: None,
         tick: 0,
         revision: 0,
@@ -231,6 +232,7 @@ fn blocked_waiting_output_spoils_in_its_job_and_cannot_be_recreated_by_delivery(
     let mut store = Store::compile(State {
         next_batch: None,
         expiry_millis: None,
+        footprints: Default::default(),
         storage_climate: None,
         tick: 0,
         revision: 0,
@@ -343,6 +345,7 @@ fn interruption_returns_surviving_input_without_refreshing_it() {
     let mut store = Store::compile(State {
         next_batch: None,
         expiry_millis: None,
+        footprints: Default::default(),
         storage_climate: None,
         tick: 1,
         revision: 0,
@@ -418,6 +421,7 @@ fn delivery_moves_only_unexpired_output_and_reports_the_loss() {
     let mut store = Store::compile(State {
         next_batch: None,
         expiry_millis: None,
+        footprints: Default::default(),
         storage_climate: None,
         tick: 1,
         revision: 0,

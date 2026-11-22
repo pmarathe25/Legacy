@@ -1,7 +1,7 @@
 //! Disjoint single-leg transactions can resolve without shared arbitration.
 use game_lot_model::{
-    Container, Lot, Movement, OutcomeBatch, OutcomeChunk, Place, SimpleTransfer, Spoilage, State,
-    Transaction, TransactionOutcome, key,
+    Container, Footprints, Lot, Movement, OutcomeBatch, OutcomeChunk, Place, SimpleTransfer,
+    Spoilage, State, Transaction, TransactionOutcome, key,
 };
 use game_lot_planning::{Changes, Draft};
 use rayon::prelude::*;
@@ -21,7 +21,25 @@ pub(crate) fn after(
     debit: u64,
     incoming: &[Lot],
 ) -> Container {
-    after_selected(container, tick, good, debit, None, incoming)
+    after_with_footprints(
+        container,
+        tick,
+        good,
+        debit,
+        incoming,
+        &Footprints::default(),
+    )
+}
+
+pub(crate) fn after_with_footprints(
+    container: &Container,
+    tick: u64,
+    good: u32,
+    debit: u64,
+    incoming: &[Lot],
+    footprints: &Footprints,
+) -> Container {
+    after_selected(container, tick, good, debit, None, incoming, footprints)
 }
 
 fn after_selected(
@@ -31,6 +49,7 @@ fn after_selected(
     mut debit: u64,
     batch: Option<u64>,
     incoming: &[Lot],
+    footprints: &Footprints,
 ) -> Container {
     let surviving = container.lots.iter().filter_map(|lot| {
         if lot.expires_at.is_some_and(|at| at <= tick) {
@@ -89,7 +108,10 @@ fn after_selected(
     Container {
         place: container.place,
         capacity: container.capacity,
-        used: lots.iter().map(|lot| lot.quantity).sum(),
+        used: lots
+            .iter()
+            .map(|lot| footprints.admitted(lot.good, lot.quantity))
+            .sum(),
         next_expiry: lots.iter().filter_map(|lot| lot.expires_at).min(),
         lots,
     }
@@ -214,6 +236,7 @@ fn prepare_rows(
         state.tick
     };
     let instant = state.expiry_millis.unwrap_or(next);
+    let footprints = &state.footprints;
     state
         .revision
         .checked_add(1)
@@ -371,7 +394,7 @@ fn prepare_rows(
                         .lots
                         .iter()
                         .filter(|lot| lot.expires_at.is_none_or(|at| at > instant))
-                        .map(|lot| lot.quantity)
+                        .map(|lot| footprints.admitted(lot.good, lot.quantity))
                         .sum()
                 };
                 let available: u64 = source
@@ -385,7 +408,8 @@ fn prepare_rows(
                     .map(|lot| lot.quantity)
                     .sum();
                 let accepted = row.movement.quantity <= available
-                    && row.movement.quantity <= destination.capacity - live_used;
+                    && row.movement.quantity
+                        <= footprints.fit(destination.capacity - live_used, row.movement.good);
                 let mut remaining = if accepted { row.movement.quantity } else { 0 };
                 let begin = lots.len();
                 for lot in &source.lots {
@@ -420,13 +444,21 @@ fn prepare_rows(
                             if accepted { row.movement.quantity } else { 0 },
                             row.movement.batch,
                             &[],
+                            footprints,
                         ),
                     ));
                 }
                 if accepted || destination.next_expiry.is_some_and(|at| at <= instant) {
                     destinations.push((
                         row.destination,
-                        after(destination, instant, 0, 0, &lots[begin..end]),
+                        after_with_footprints(
+                            destination,
+                            instant,
+                            0,
+                            0,
+                            &lots[begin..end],
+                            footprints,
+                        ),
                     ));
                 }
                 headers.push((row.movement.id, accepted, begin..end));
@@ -486,7 +518,12 @@ fn prepare_rows(
                         },
                         |endpoints| endpoints.binary_search(&index).is_err(),
                     ))
-                .then(|| (index, after(container, instant, 0, 0, &[])))
+                .then(|| {
+                    (
+                        index,
+                        after_with_footprints(container, instant, 0, 0, &[], footprints),
+                    )
+                })
             })
             .collect()
     };

@@ -144,7 +144,7 @@ impl Context<'_> {
                 let quantity = policy
                     .quantity
                     .min(good.quantity)
-                    .min(holder.capacity.saturating_sub(holder.used));
+                    .min(self.view.remaining_quantity(holder, good.good));
                 (quantity > 0).then_some(Choice {
                     person: person.id,
                     site: material.site,
@@ -251,17 +251,17 @@ pub fn exhausted(materials: &[Material], view: &View, events: &[Event]) -> Vec<P
     let mut recovered: Vec<_> = events
         .par_iter()
         .filter(|event| event.recovered)
-        .map(|event| (event.site, event.quantity))
+        .map(|event| {
+            (
+                event.site,
+                view.footprints.occupied(event.good, event.quantity),
+            )
+        })
         .collect();
     recovered.par_sort_unstable_by_key(|row| row.0);
     let totals: Vec<_> = recovered
         .par_chunk_by(|a, b| a.0 == b.0)
-        .map(|group| {
-            (
-                group[0].0,
-                group.iter().map(|row| u128::from(row.1)).sum::<u128>(),
-            )
-        })
+        .map(|group| (group[0].0, group.iter().map(|row| row.1).sum::<u128>()))
         .collect();
     materials
         .par_iter()

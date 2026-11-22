@@ -39,6 +39,7 @@ fn personal_work_decisions_use_expiry_aware_projection_and_physical_admission() 
         custody: State {
             next_batch: None,
             expiry_millis: None,
+            footprints: Default::default(),
             storage_climate: None,
             tick: 0,
             revision: 0,
@@ -152,6 +153,7 @@ fn fear_can_motivate_cooperation_but_only_actual_transfer_resolves_the_offer() {
         custody: State {
             next_batch: None,
             expiry_millis: None,
+            footprints: Default::default(),
             storage_climate: None,
             tick: 0,
             revision: 0,
@@ -315,6 +317,7 @@ fn promises_do_not_compel_delivery_but_fear_can_change_a_personal_choice() {
         custody: State {
             next_batch: None,
             expiry_millis: None,
+            footprints: Default::default(),
             storage_climate: None,
             tick: 0,
             revision: 0,
@@ -494,6 +497,7 @@ fn many_individual_promises_can_deliver_to_one_busy_recipient() {
         custody: State {
             next_batch: None,
             expiry_millis: None,
+            footprints: Default::default(),
             storage_climate: None,
             tick: 0,
             revision: 0,
@@ -619,6 +623,7 @@ fn concentrated_promise_delivery_benchmark() {
         custody: State {
             next_batch: None,
             expiry_millis: None,
+            footprints: Default::default(),
             storage_climate: None,
             tick: 0,
             revision: 0,

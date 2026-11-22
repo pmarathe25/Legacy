@@ -17,6 +17,7 @@ fn store() -> Store {
     Store::compile(State {
         next_batch: None,
         expiry_millis: None,
+        footprints: Default::default(),
         storage_climate: None,
         tick: 0,
         revision: 0,
@@ -82,6 +83,7 @@ fn independent_consumption_preserves_identified_item_tracking() {
     let mut owner = Store::compile(State {
         next_batch: None,
         expiry_millis: None,
+        footprints: Default::default(),
         storage_climate: None,
         tick: 0,
         revision: 0,
@@ -118,6 +120,7 @@ fn a_rejected_exact_reservation_does_not_change_a_later_generic_allocation() {
     let mut owner = Store::compile(State {
         next_batch: None,
         expiry_millis: None,
+        footprints: Default::default(),
         storage_climate: None,
         tick: 0,
         revision: 0,
@@ -226,6 +229,7 @@ fn next_item_identity_skips_live_ids_and_detects_overflow() {
     let owner = Store::compile(State {
         next_batch: None,
         expiry_millis: None,
+        footprints: Default::default(),
         storage_climate: None,
         tick: 0,
         revision: 0,
@@ -241,6 +245,7 @@ fn item_lookup_falls_back_when_identifiers_have_gaps() {
     let owner = Store::compile(State {
         next_batch: None,
         expiry_millis: None,
+        footprints: Default::default(),
         storage_climate: None,
         tick: 0,
         revision: 0,
@@ -284,6 +289,7 @@ fn duplicate_identity_and_invalid_items_are_rejected() {
         Store::compile(State {
             next_batch: None,
             expiry_millis: None,
+            footprints: Default::default(),
             storage_climate: None,
             tick: 0,
             revision: 0,
@@ -361,6 +367,7 @@ fn full_custody_can_replace_a_consumed_item_atomically() {
     let mut owner = Store::compile(State {
         next_batch: None,
         expiry_millis: None,
+        footprints: Default::default(),
         storage_climate: None,
         tick: 0,
         revision: 0,
@@ -421,6 +428,7 @@ fn independent_items(count: u64) -> (State, Vec<Transaction>) {
         State {
             next_batch: None,
             expiry_millis: None,
+            footprints: Default::default(),
             storage_climate: None,
             tick: 0,
             revision: 0,
@@ -492,6 +500,7 @@ fn unrelated_fungible_transfers_keep_the_fast_path_in_a_world_with_items() {
     let mut owner = Store::compile(State {
         next_batch: None,
         expiry_millis: None,
+        footprints: Default::default(),
         storage_climate: None,
         tick: 0,
         revision: 0,

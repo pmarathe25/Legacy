@@ -126,7 +126,7 @@ impl Context<'_> {
                     .saturating_sub(delivered)
                     .saturating_add(preference.reserve)
                     .saturating_sub(holder.quantity(good));
-                let needed = needed.min(holder.capacity.saturating_sub(holder.used));
+                let needed = needed.min(self.view.remaining_quantity(holder, good));
                 if needed == 0 {
                     return None;
                 }

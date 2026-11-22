@@ -62,7 +62,12 @@ impl CoreHost {
                 let desired = need
                     .desired
                     .saturating_sub(self.available_supply(cargo, need.good, tick));
-                let amount = desired.min(cargo.capacity.saturating_sub(cargo.used));
+                let amount = desired.min(
+                    self.core
+                        .physical
+                        .footprints()
+                        .fit(cargo.capacity - cargo.used, need.good),
+                );
                 let motivated = need.choice.willing
                     || need
                         .choice

@@ -57,6 +57,8 @@ struct Scenario {
     elapsed_spoilage: bool,
     #[serde(default)]
     storage_climate: Option<game_lots::StorageClimate>,
+    #[serde(default)]
+    good_footprints: BTreeMap<String, u32>,
     /// Autonomous decision cadence, independent of the physical quantum.
     #[serde(default)]
     decision_period_millis: Option<u64>,
@@ -3131,6 +3133,27 @@ fn build_scenario(
         custody.next_batch = Some(highest.map_or(Ok(1), |id| {
             id.checked_add(1).ok_or("batch identity overflow")
         })?);
+    }
+    if !scenario.good_footprints.is_empty() {
+        let entries = scenario
+            .good_footprints
+            .into_iter()
+            .map(|(name, units)| {
+                let good = *goods
+                    .get(name.as_str())
+                    .ok_or_else(|| format!("unknown capacity good {name}"))?;
+                Ok(game_lots::Footprint { good, units })
+            })
+            .collect::<Result<_, String>>()?;
+        let footprints = game_lots::Footprints::new(entries)?;
+        let holders = std::mem::take(&mut custody.containers);
+        custody.containers = holders
+            .into_par_iter()
+            .map(|holder| {
+                Container::with_footprints(holder.place, holder.capacity, holder.lots, &footprints)
+            })
+            .collect::<Result<_, _>>()?;
+        custody.footprints = footprints;
     }
     game_lots::Store::date_authored_custody(&mut custody)?;
     Ok(State {
