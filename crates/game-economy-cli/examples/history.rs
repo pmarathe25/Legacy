@@ -188,8 +188,8 @@ fn run(
     }
     let year_duration = u128::from(YEAR_MILLIS);
     let start_time = host.core().simulated_millis();
-    let start_year = u64::try_from(start_time / year_duration)
-        .map_err(|_| "history year overflow")?;
+    let start_year =
+        u64::try_from(start_time / year_duration).map_err(|_| "history year overflow")?;
     let end_year = start_year
         .checked_add(years)
         .ok_or("history year overflow")?;
@@ -245,195 +245,197 @@ fn run(
     let mut previous_animals = animals(&host);
     let mut practice_log = practice_log::PracticeLog::default();
     practice_log.observe(host.history_view().practices);
-    let mut advancing = host.stepper(&[]);
-    for year in start_year + 1..=end_year {
-        // Bound in-memory history even for hourly or finer simulations.
-        let mut observation_batch = Vec::new();
-        let mut previous_step_animals = previous_animals.clone();
-        let end_time = u128::from(year) * year_duration;
-        let mut since_flush = 0;
-        while advancing.host().core().simulated_millis() < end_time {
-            let opening = advancing.host().core();
-            let to_calendar = (end_time - opening.simulated_millis()) as u64;
-            let to_physical = tick_millis - opening.elapsed_millis().unwrap_or(0);
-            let segment = to_calendar.min(to_physical);
-            let settles = segment == to_physical;
-            let mut remaining = segment;
-            // A resumed interval may already be at its physical deadline.
-            // A zero-duration call still publishes that settlement.
-            loop {
-                let elapsed = remaining.min(step_millis);
-                let result = advancing.advance(elapsed).and_then(|result| {
-                    if let Some(error) = result.failure {
-                        return Err(error);
+    host.observe_continuously(&[], |advancing| -> Result<(), String> {
+        for year in start_year + 1..=end_year {
+            // Bound in-memory history even for hourly or finer simulations.
+            let mut observation_batch = Vec::new();
+            let mut previous_step_animals = previous_animals.clone();
+            let end_time = u128::from(year) * year_duration;
+            let mut since_flush = 0;
+            while advancing.simulated_millis() < end_time {
+                let to_calendar = (end_time - advancing.simulated_millis()) as u64;
+                let to_physical = tick_millis - advancing.elapsed_millis().unwrap_or(0);
+                let segment = to_calendar.min(to_physical);
+                let settles = segment == to_physical;
+                let mut remaining = segment;
+                // A resumed interval may already be at its physical deadline.
+                // A zero-duration call still publishes that settlement.
+                loop {
+                    let elapsed = remaining.min(step_millis);
+                    let result = advancing.advance(elapsed).and_then(|result| {
+                        if let Some(error) = result.failure {
+                            return Err(error);
+                        }
+                        let expected_boundaries = u64::from(settles && elapsed == remaining);
+                        if result.elapsed_millis != elapsed || result.boundaries != expected_boundaries
+                        {
+                            return Err("unexpected elapsed time or boundary count".into());
+                        }
+                        Ok(result.events)
+                    });
+                    match result {
+                        Ok(events) => {
+                            observation_batch.extend(observations(&events, &mut observation_tick))
+                        }
+                        Err(error) => {
+                            line(
+                                &mut writer,
+                                &json!({"kind":"failure","year":year,"message":error}),
+                            )?;
+                            return Err(format!("year {year}: {error}"));
+                        }
                     }
-                    let expected_boundaries = u64::from(settles && elapsed == remaining);
-                    if result.elapsed_millis != elapsed || result.boundaries != expected_boundaries
-                    {
-                        return Err("unexpected elapsed time or boundary count".into());
-                    }
-                    Ok(result.events)
-                });
-                match result {
-                    Ok(events) => {
-                        observation_batch.extend(observations(&events, &mut observation_tick))
-                    }
-                    Err(error) => {
+                    remaining -= elapsed;
+                    if observation_batch.len() >= 4096 {
                         line(
                             &mut writer,
-                            &json!({"kind":"failure","year":year,"message":error}),
+                            &json!({"kind":"observation_batch","year":year,"observations":observation_batch}),
                         )?;
-                        return Err(format!("year {year}: {error}"));
+                        observation_batch.clear();
+                    }
+                    if remaining == 0 {
+                        break;
                     }
                 }
-                remaining -= elapsed;
-                if observation_batch.len() >= 4096 {
-                    line(
-                        &mut writer,
-                        &json!({"kind":"observation_batch","year":year,"observations":observation_batch}),
-                    )?;
-                    observation_batch.clear();
+                let opinion_events = advancing.take_opinion_events();
+                if !opinion_events.is_empty() {
+                    observation_batch.push(json!({"kind":"opinion_changes", "events":opinion_events}));
                 }
-                if remaining == 0 {
-                    break;
+                let now = advancing.simulated_millis();
+                let history = advancing.host().history_view();
+                let practice_events = practice_log.observe(history.practices);
+                if !practice_events.is_empty() {
+                    observation_batch.push(json!({
+                        "kind":"personal_practices",
+                        "at_millis":now,
+                        "events":practice_events
+                    }));
                 }
-            }
-            let opinion_events = advancing.take_opinion_events();
-            if !opinion_events.is_empty() {
-                observation_batch.push(json!({"kind":"opinion_changes", "events":opinion_events}));
-            }
-            let history = advancing.host().history_view();
-            let practice_events = practice_log.observe(history.practices);
-            if !practice_events.is_empty() {
-                observation_batch.push(json!({
-                    "kind":"personal_practices",
-                    "at_millis":advancing.host().core().simulated_millis(),
-                    "events":practice_events
-                }));
-            }
-            if settles && !history.animal_deaths.is_empty() {
-                observation_batch
-                    .push(json!({"kind":"animal_deaths","events":history.animal_deaths}));
-            }
-            if settles && !history.elapsed_social {
-                let recipe_learning: Vec<_> = history
-                    .recipe_learning
-                    .iter()
-                    .filter(|event| event.tick == history.tick)
-                    .collect();
-                if !recipe_learning.is_empty() {
+                if settles && !history.animal_deaths.is_empty() {
                     observation_batch
-                        .push(json!({"kind":"recipe_learning", "events":recipe_learning}));
+                        .push(json!({"kind":"animal_deaths","events":history.animal_deaths}));
                 }
-                if !history.language_events.is_empty() {
-                    observation_batch
-                        .push(json!({"kind":"language_events", "events":history.language_events}));
+                if settles && !history.elapsed_social {
+                    let recipe_learning: Vec<_> = history
+                        .recipe_learning
+                        .iter()
+                        .filter(|event| event.tick == history.tick)
+                        .collect();
+                    if !recipe_learning.is_empty() {
+                        observation_batch
+                            .push(json!({"kind":"recipe_learning", "events":recipe_learning}));
+                    }
+                    if !history.language_events.is_empty() {
+                        observation_batch
+                            .push(json!({"kind":"language_events", "events":history.language_events}));
+                    }
+                    if !history.signal_events.is_empty() {
+                        observation_batch
+                            .push(json!({"kind":"signal_events", "events":history.signal_events}));
+                    }
                 }
-                if !history.signal_events.is_empty() {
-                    observation_batch
-                        .push(json!({"kind":"signal_events", "events":history.signal_events}));
+                if settles {
+                    let learning: Vec<_> = history
+                        .signal_learning
+                        .iter()
+                        .filter(|event| event.tick == history.signal_learning_time)
+                        .collect();
+                    if !learning.is_empty() {
+                        observation_batch.push(json!({"kind":"signal_learning", "events":learning}));
+                    }
+                }
+                if tick_millis < YEAR_MILLIS {
+                    if settles && !history.family_events.is_empty() {
+                        observation_batch
+                            .push(json!({"kind":"family_events", "events":history.family_events}));
+                    }
+                    {
+                        let current: BTreeSet<_> = history
+                            .animals
+                            .iter()
+                            .filter(|animal| animal.health > 0)
+                            .map(|animal| animal.id)
+                            .collect();
+                        let appeared: Vec<_> = current
+                            .difference(&previous_step_animals)
+                            .copied()
+                            .collect();
+                        let inactive: Vec<_> = previous_step_animals
+                            .difference(&current)
+                            .copied()
+                            .collect();
+                        if !appeared.is_empty() || !inactive.is_empty() {
+                            let newborns: Vec<_> = history
+                                .animals
+                                .iter()
+                                .filter(|animal| appeared.binary_search(&animal.id).is_ok())
+                                .collect();
+                            observation_batch.push(json!({"kind":"animal_population","tick":history.tick,"appeared":newborns,"inactive":inactive}));
+                        }
+                        previous_step_animals = current;
+                    }
+                }
+                since_flush += 1;
+                if since_flush == 24 || now == end_time {
+                    if !observation_batch.is_empty() {
+                        line(
+                            &mut writer,
+                            &json!({"kind":"observation_batch","year":year,"observations":observation_batch}),
+                        )?;
+                        observation_batch.clear();
+                    }
+                    since_flush = 0;
                 }
             }
-            if settles {
-                let learning: Vec<_> = history
-                    .signal_learning
-                    .iter()
-                    .filter(|event| event.tick == history.signal_learning_time)
-                    .collect();
-                if !learning.is_empty() {
-                    observation_batch.push(json!({"kind":"signal_learning", "events":learning}));
-                }
-            }
-            if tick_millis < YEAR_MILLIS {
-                if settles && !history.family_events.is_empty() {
-                    observation_batch
-                        .push(json!({"kind":"family_events", "events":history.family_events}));
-                }
-                {
-                    let current: BTreeSet<_> = history
+            let snapshot = advancing.snapshot();
+            let current_animals: BTreeSet<_> =
+                snapshot.fauna.as_ref().map_or_else(BTreeSet::new, |fauna| {
+                    fauna
                         .animals
                         .iter()
                         .filter(|animal| animal.health > 0)
                         .map(|animal| animal.id)
-                        .collect();
-                    let appeared: Vec<_> = current
-                        .difference(&previous_step_animals)
-                        .copied()
-                        .collect();
-                    let inactive: Vec<_> = previous_step_animals
-                        .difference(&current)
-                        .copied()
-                        .collect();
-                    if !appeared.is_empty() || !inactive.is_empty() {
-                        let newborns: Vec<_> = history
-                            .animals
-                            .iter()
-                            .filter(|animal| appeared.binary_search(&animal.id).is_ok())
-                            .collect();
-                        observation_batch.push(json!({"kind":"animal_population","tick":history.tick,"appeared":newborns,"inactive":inactive}));
-                    }
-                    previous_step_animals = current;
-                }
-            }
-            since_flush += 1;
-            if since_flush == 24 || advancing.host().core().simulated_millis() == end_time {
-                if !observation_batch.is_empty() {
-                    line(
-                        &mut writer,
-                        &json!({"kind":"observation_batch","year":year,"observations":observation_batch}),
-                    )?;
-                    observation_batch.clear();
-                }
-                since_flush = 0;
+                        .collect()
+                });
+            let appeared: Vec<_> = current_animals
+                .difference(&previous_animals)
+                .copied()
+                .collect();
+            let inactive: Vec<_> = previous_animals
+                .difference(&current_animals)
+                .copied()
+                .collect();
+            let living = snapshot
+                .core
+                .people
+                .iter()
+                .filter(|person| person.health > 0)
+                .count();
+            let animal_count = current_animals.len();
+            line(
+                &mut writer,
+                &json!({"kind":"year","year":year,"at_millis":end_time,"living_people":living,"living_animals":animal_count,"animal_ids_appeared":appeared,"animal_ids_no_longer_alive":inactive,"observations":[],"snapshot":snapshot}),
+            )?;
+            previous_animals = current_animals;
+            if tick_millis <= YEAR_MILLIS / 8_760 || year % 50 == 0 || year == end_year {
+                let checkpoint = output.with_extension(format!("year-{year}.json"));
+                let file = OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(&checkpoint)
+                    .map_err(|e| e.to_string())?;
+                let mut checkpoint_writer = BufWriter::new(file);
+                serde_json::to_writer(&mut checkpoint_writer, &snapshot)
+                    .map_err(|e| e.to_string())?;
+                checkpoint_writer.flush().map_err(|e| e.to_string())?;
+                println!(
+                    "year {year}/{end_year}: {living} living people, {animal_count} living animals; checkpoint {}",
+                    checkpoint.display()
+                );
             }
         }
-        let snapshot = advancing.host().snapshot();
-        let current_animals: BTreeSet<_> =
-            snapshot.fauna.as_ref().map_or_else(BTreeSet::new, |fauna| {
-                fauna
-                    .animals
-                    .iter()
-                    .filter(|animal| animal.health > 0)
-                    .map(|animal| animal.id)
-                    .collect()
-            });
-        let appeared: Vec<_> = current_animals
-            .difference(&previous_animals)
-            .copied()
-            .collect();
-        let inactive: Vec<_> = previous_animals
-            .difference(&current_animals)
-            .copied()
-            .collect();
-        let living = snapshot
-            .core
-            .people
-            .iter()
-            .filter(|person| person.health > 0)
-            .count();
-        let animal_count = current_animals.len();
-        line(
-            &mut writer,
-            &json!({"kind":"year","year":year,"at_millis":end_time,"living_people":living,"living_animals":animal_count,"animal_ids_appeared":appeared,"animal_ids_no_longer_alive":inactive,"observations":[],"snapshot":snapshot}),
-        )?;
-        previous_animals = current_animals;
-        if tick_millis <= YEAR_MILLIS / 8_760 || year % 50 == 0 || year == end_year {
-            let checkpoint = output.with_extension(format!("year-{year}.json"));
-            let file = OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(&checkpoint)
-                .map_err(|e| e.to_string())?;
-            let mut checkpoint_writer = BufWriter::new(file);
-            serde_json::to_writer(&mut checkpoint_writer, &snapshot)
-                .map_err(|e| e.to_string())?;
-            checkpoint_writer.flush().map_err(|e| e.to_string())?;
-            println!(
-                "year {year}/{end_year}: {living} living people, {animal_count} living animals; checkpoint {}",
-                checkpoint.display()
-            );
-        }
-    }
+        Ok(())
+    })?;
     line(
         &mut writer,
         &json!({"kind":"complete","years":years,"last_year":end_year}),
@@ -980,9 +982,13 @@ mod tests {
     fn history_resume_preserves_the_midyear_checkpoint_and_completes_the_opening_year() {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
         let scenario = root.join("content/scenarios/economy-history-pilot.toml");
-        let mut original = game_economy_cli::core_scenario(&scenario, &root.join("content")).unwrap();
+        let mut original =
+            game_economy_cli::core_scenario(&scenario, &root.join("content")).unwrap();
         let elapsed = YEAR_MILLIS / 3;
-        assert_eq!(original.advance_continuous(elapsed, &[]).unwrap().failure, None);
+        assert_eq!(
+            original.advance_continuous(elapsed, &[]).unwrap().failure,
+            None
+        );
         let name = format!("legacy-history-midyear-{}", std::process::id());
         let save = std::env::temp_dir().join(format!("{name}.json"));
         let archive = std::env::temp_dir().join(format!("{name}.ndjson"));
@@ -991,10 +997,13 @@ mod tests {
         let rows = records(&archive);
         assert_eq!(rows[0]["starting_at_millis"], elapsed);
         assert_eq!(rows[1]["at_millis"], elapsed);
-        let expected = original.advance_continuous(YEAR_MILLIS - elapsed, &[]).unwrap();
+        let expected = original
+            .advance_continuous(YEAR_MILLIS - elapsed, &[])
+            .unwrap();
         assert_eq!(expected.failure, None);
         let year_path = archive.with_extension("year-1.json");
-        let year: CoreHostSnapshot = serde_json::from_reader(File::open(&year_path).unwrap()).unwrap();
+        let year: CoreHostSnapshot =
+            serde_json::from_reader(File::open(&year_path).unwrap()).unwrap();
         assert_eq!(year, original.snapshot());
         for path in [save, archive, year_path] {
             fs::remove_file(path).unwrap();
@@ -1119,9 +1128,17 @@ mod tests {
         let checkpoint = first.with_extension("year-1.json");
         let checkpoint_state: CoreHostSnapshot =
             serde_json::from_reader(File::open(&checkpoint).unwrap()).unwrap();
-        assert_eq!(checkpoint_state.core.boundary_millis, Some(u128::from(quantum)));
         assert_eq!(
-            checkpoint_state.core.physical.work_interval.unwrap().elapsed_millis,
+            checkpoint_state.core.boundary_millis,
+            Some(u128::from(quantum))
+        );
+        assert_eq!(
+            checkpoint_state
+                .core
+                .physical
+                .work_interval
+                .unwrap()
+                .elapsed_millis,
             YEAR_MILLIS - quantum
         );
         run_with_workers(
@@ -1147,8 +1164,13 @@ mod tests {
         assert_eq!(finished["at_millis"], YEAR_MILLIS * 2);
         assert_eq!(finished, last_year(resumed_rows));
         for path in [
-            scenario, checkpoint, full.with_extension("year-2.json"),
-            continued.with_extension("year-2.json"), first, full, continued,
+            scenario,
+            checkpoint,
+            full.with_extension("year-2.json"),
+            continued.with_extension("year-2.json"),
+            first,
+            full,
+            continued,
         ] {
             fs::remove_file(path).unwrap();
         }

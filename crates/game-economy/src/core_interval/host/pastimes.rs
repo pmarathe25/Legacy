@@ -205,7 +205,7 @@ impl CoreHost {
             return SettledPastimes::default();
         };
         let events = owner.settle(self.core.simulated_millis(), |session, activity| {
-            self.core.person(session.person).is_some_and(|person| {
+            self.core.projected_person(session.person).is_some_and(|person| {
                 person.health > 0
                     && person.region == Some(session.region)
                     && self.pastime_ready(person.id, activity, false)

@@ -43,11 +43,20 @@ fn sample(
     let mut host = CoreHost::resume(opening.clone())?;
     let person = opening.core.people.first().map(|person| person.id);
     let (elapsed, observations) = if retain_preparation {
-        let mut stepper = host.stepper(&[]);
-        observe(duration, step_millis, |duration| {
-            let result = stepper.advance(duration)?;
-            read.observe(stepper.host(), person);
-            Ok(result)
+        host.observe_continuously(&[], |stepper| {
+            observe(duration, step_millis, |duration| {
+                let result = stepper.advance(duration)?;
+                match read {
+                    Read::None => (),
+                    Read::Person => {
+                        std::hint::black_box(person.and_then(|id| stepper.person(id)));
+                    }
+                    Read::Snapshot => {
+                        std::hint::black_box(stepper.snapshot());
+                    }
+                }
+                Ok(result)
+            })
         })?
     } else {
         observe(duration, step_millis, |duration| {

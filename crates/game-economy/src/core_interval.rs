@@ -19,6 +19,8 @@ use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 mod host;
+mod vitals;
+use vitals::DeferredVitals;
 pub use game_economy_agriculture::{
     Phase as CoreCropPhase, irrigation::Event as CoreWateringEvent,
 };
@@ -92,6 +94,7 @@ pub struct CoreInterval {
     physical: Runtime,
     boundary_millis: u128,
     people: Vec<Person>,
+    deferred_vitals: Option<DeferredVitals>,
     rules: Rules,
     travel: Option<Travel>,
     nutrition: Option<Nutrition>,
@@ -376,6 +379,7 @@ impl CoreInterval {
             physical,
             boundary_millis,
             people,
+            deferred_vitals: None,
             rules,
             travel,
             nutrition,
@@ -387,7 +391,7 @@ impl CoreInterval {
             seed: self.seed,
             physical: self.physical.snapshot(),
             boundary_millis: Some(self.boundary_millis),
-            people: self.people.par_iter().cloned().collect(),
+            people: self.projected_people(),
             rules: self.rules.clone(),
             travel: self.travel.clone(),
             nutrition: self.nutrition.clone(),
@@ -396,6 +400,7 @@ impl CoreInterval {
     }
     /// Inspect one committed person without materializing a world snapshot.
     pub fn person(&self, id: u64) -> Option<&game_economy_person::Person> {
+        debug_assert!(self.deferred_vitals.is_none());
         self.people
             .binary_search_by_key(&id, |person| person.id)
             .ok()
@@ -419,6 +424,7 @@ impl CoreInterval {
     /// Inspect the earliest work, travel, or optional hunger threshold. Early
     /// Work and travel can be published early under the restrictions below.
     pub fn next_deadline(&self, hunger_threshold: Option<u32>) -> Result<CoreDeadline, String> {
+        debug_assert!(self.deferred_vitals.is_none());
         let interval = self
             .physical
             .work_interval()
@@ -1109,6 +1115,7 @@ impl CoreInterval {
 
     /// Limit progress to the physical boundary or the next elapsed physiology event.
     pub fn progress_limit(&self, requested_millis: u64) -> Result<u64, String> {
+        debug_assert!(self.deferred_vitals.is_none());
         let elapsed = self.elapsed_millis().ok_or("no physical interval")?;
         let quantum = self.physical.tick_millis();
         let remaining = quantum
@@ -1135,7 +1142,7 @@ impl CoreInterval {
     /// Failed validation leaves all owners unchanged.
     pub fn progress(&mut self, requested_millis: u64) -> Result<u64, String> {
         let consumed = self.progress_limit(requested_millis)?;
-        self.progress_checked_segment(consumed, &[], None, None, None)
+        self.progress_checked_segment(consumed, &[], None, None, None, false)
     }
 
     /// Execute a duration already capped at the relevant deadlines by the host.
@@ -1146,6 +1153,7 @@ impl CoreInterval {
         staged_vitals: Option<VitalsProgress>,
         batches: Option<game_lots::BatchAllocation>,
         births: Option<ElapsedBirths<'_>>,
+        quiet_observation: bool,
     ) -> Result<u64, String> {
         let quantum = self.physical.tick_millis();
         if consumed == 0 {
@@ -1162,13 +1170,20 @@ impl CoreInterval {
             .generation
             .checked_add(1)
             .ok_or("core revision overflow")?;
-        let VitalsProgress {
-            mut people,
-            nutrition,
-            pending_food,
-        } = match staged_vitals {
-            Some(vitals) => vitals,
-            None => self.preview_people_progress(consumed, &[])?,
+        let deferred = if quiet_observation && staged_vitals.is_none() && births.is_none() {
+            self.defer_quiet_vitals(consumed)?
+        } else {
+            None
+        };
+        let mut vitals = if deferred.is_some() {
+            None
+        } else {
+            debug_assert!(staged_vitals.is_none() || self.deferred_vitals.is_none());
+            self.materialize_vitals();
+            Some(match staged_vitals {
+                Some(vitals) => vitals,
+                None => self.preview_people_progress(consumed, &[])?,
+            })
         };
         #[cfg(feature = "profile")]
         let travel_phase = game_diagnostics::span("elapsed.progress.travel_and_placement");
@@ -1178,19 +1193,20 @@ impl CoreInterval {
                 .progress_elapsed(&self.people, consumed, quantum)
                 .map_err(str::to_owned)?;
         }
-        let dead: Vec<_> = self
-            .people
-            .par_iter()
-            .zip(people.par_iter())
-            .filter_map(|(before, after)| {
-                (before.health > 0 && after.health == 0).then_some(before.id)
-            })
-            .collect();
+        let dead: Vec<_> = vitals.as_ref().map_or_else(Vec::new, |vitals| {
+            self.people
+                .par_iter()
+                .zip(vitals.people.par_iter())
+                .filter_map(|(before, after)| {
+                    (before.health > 0 && after.health == 0).then_some(before.id)
+                })
+                .collect()
+        });
         let (placement, holders) =
             if let Some(births) = births.filter(|births| !births.children.is_empty()) {
                 let placement = game_economy_family::BirthPlacement::prepare(
                     births.children,
-                    &people,
+                    &vitals.as_ref().expect("births require exact physiology").people,
                     travel.as_ref(),
                     births.seek_meals,
                     births.work_preference,
@@ -1249,16 +1265,21 @@ impl CoreInterval {
         #[cfg(feature = "profile")]
         drop(physical_phase);
         debug_assert_eq!(advanced, consumed);
-        if let Some(placement) = placement {
-            placement.publish(&mut people, &mut travel);
+        if let Some(vitals) = &mut vitals
+            && let Some(placement) = placement
+        {
+            placement.publish(&mut vitals.people, &mut travel);
         }
-        self.people = people;
-        if let Some(nutrition) = nutrition {
-            self.nutrition = Some(nutrition);
+        if let Some(vitals) = vitals {
+            self.people = vitals.people;
+            if let Some(nutrition) = vitals.nutrition {
+                self.nutrition = Some(nutrition);
+            }
+            if let Some(pending_food) = vitals.pending_food {
+                self.pending_food = pending_food;
+            }
         }
-        if let Some(pending_food) = pending_food {
-            self.pending_food = pending_food;
-        }
+        self.deferred_vitals = deferred;
         self.travel = travel;
         self.generation = generation;
         Ok(consumed)
@@ -1279,22 +1300,8 @@ impl CoreInterval {
         {
             return Err("invalid elapsed injuries".into());
         }
-        let quantum = self.physical.tick_millis();
-        #[cfg(feature = "profile")]
-        let vital_phase = game_diagnostics::span("elapsed.progress.vitals");
-        #[cfg(feature = "profile")]
-        {
-            game_diagnostics::count("elapsed.rows.vitals", self.people.len() as u64);
-            game_diagnostics::count(
-                "elapsed.inline_bytes.vitals",
-                std::mem::size_of_val(self.people.as_slice()) as u64,
-            );
-        }
-        let mut people =
-            game_economy_person::stage_vitals(&self.people, &self.rules, consumed, quantum)
-                .map_err(str::to_owned)?;
-        #[cfg(feature = "profile")]
-        drop(vital_phase);
+        debug_assert!(self.deferred_vitals.is_none());
+        let mut people = self.stage_vital_rows(consumed)?;
         if !injuries.is_empty() {
             people.par_iter_mut().for_each(|person| {
                 if let Ok(index) = injuries.binary_search_by_key(&person.id, |injury| injury.id) {

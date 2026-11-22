@@ -862,26 +862,53 @@ struct PreparedSegment {
 }
 
 /// Advance an exclusively borrowed world through successive observation horizons.
-/// Numeric state is current at every observation. Derived preparation is dropped
-/// when the caller releases the borrow to issue a command or change blockers.
+/// Exact reads project or materialize any fractional physiology credit.
+/// Derived preparation is dropped when the caller releases the world borrow.
 pub struct CoreStepper<'world> {
     host: &'world mut CoreHost,
     blocked: &'world [u64],
     segment: Option<PreparedSegment>,
+    defer_observations: bool,
 }
 
 impl CoreStepper<'_> {
     pub fn advance(&mut self, requested_millis: u64) -> Result<CoreRun, String> {
-        self.host
-            .advance_continuous_prepared(requested_millis, self.blocked, &mut self.segment)
+        self.host.advance_continuous_prepared(
+            requested_millis, self.blocked, &mut self.segment, self.defer_observations,
+        )
     }
 
-    pub fn host(&self) -> &CoreHost {
+    pub fn simulated_millis(&self) -> u128 {
+        self.host.core.simulated_millis()
+    }
+
+    pub fn elapsed_millis(&self) -> Option<u64> {
+        self.host.core.elapsed_millis()
+    }
+
+    pub fn snapshot(&self) -> CoreHostSnapshot {
+        self.host.snapshot()
+    }
+
+    pub fn person(&self, id: u64) -> Option<Person> {
+        self.host.core.projected_person(id)
+    }
+
+    pub fn host(&mut self) -> &CoreHost {
+        self.host.core.materialize_vitals();
         self.host
     }
 
     pub fn take_opinion_events(&mut self) -> Vec<game_opinions::Event> {
         self.host.take_opinion_events()
+    }
+}
+
+struct MaterializeOnExit<'world>(&'world mut CoreHost);
+
+impl Drop for MaterializeOnExit<'_> {
+    fn drop(&mut self) {
+        self.0.core.materialize_vitals();
     }
 }
 
@@ -891,7 +918,22 @@ impl CoreHost {
             host: self,
             blocked,
             segment: None,
+            defer_observations: false,
         }
+    }
+
+    /// Retain elapsed preparation and fractional credit across observations.
+    /// The borrowed stepper cannot escape this scope. The host is exact again
+    /// on return or unwinding, before it accepts any new actions.
+    pub fn observe_continuously<T>(
+        &mut self,
+        blocked: &[u64],
+        observe: impl FnOnce(&mut CoreStepper<'_>) -> T,
+    ) -> T {
+        let guard = MaterializeOnExit(self);
+        let mut stepper = guard.0.stepper(blocked);
+        stepper.defer_observations = true;
+        observe(&mut stepper)
     }
 
     pub fn enable_on_site_meals(&mut self) -> Result<(), String> {
@@ -1155,7 +1197,7 @@ impl CoreHost {
             .as_ref()
             .ok_or("no core schedule")?
             .validate_clock(&self.core)?;
-        self.advance_validated_segment(requested_millis, blocked, &mut None)
+        self.advance_validated_segment(requested_millis, blocked, &mut None, false)
     }
 
     fn record_dynamics(&mut self, run: &mut CoreRun, dynamics: CoreDynamicsResults) {
@@ -1200,6 +1242,7 @@ impl CoreHost {
         requested_millis: u64,
         external_blocked: &[u64],
         prepared: &mut Option<PreparedSegment>,
+        defer_observations: bool,
     ) -> Result<CoreRun, String> {
         let start = self.core.elapsed_millis().ok_or("no physical interval")?;
         let quantum = self.core.physical.tick_millis();
@@ -1242,6 +1285,12 @@ impl CoreHost {
             let blocked = pending_busy.as_deref().unwrap_or(blocked);
             let previous = prepared.take();
             let offset = self.core.elapsed_millis().expect("active interval");
+            if previous.as_ref().is_none_or(|segment| {
+                segment.offset_millis != offset
+                    || segment.work_revision != self.core.physical.work_revision()
+            }) {
+                self.core.materialize_vitals();
+            }
             if offset == quantum {
                 if let Some(celsius) = attempt!('run, self.publish_storage_temperature()) {
                     run.events.push(CoreRunEvent::StorageTemperature {
@@ -1282,6 +1331,7 @@ impl CoreHost {
                 _ => {
                     #[cfg(feature = "profile")]
                     let _phase = game_diagnostics::span("elapsed.prepare.deadlines");
+                    self.core.materialize_vitals();
                     (attempt!('run, self.host_deadline(None)), None)
                 }
             };
@@ -3900,7 +3950,15 @@ impl CoreHost {
                 run.failure = Some("core schedule made no progress".into());
                 break;
             }
-            let elapsed = attempt!('run, self.progress_with_activity(step, external_blocked, Some(plan), activity));
+            let quiet_observation = defer_observations
+                && step < deadline.after_millis
+                && step < until_decision;
+            let elapsed = attempt!(
+                'run,
+                self.progress_with_activity(
+                    step, external_blocked, Some(plan), activity, quiet_observation,
+                )
+            );
             let expiry = self.core.physical.take_elapsed_expiry();
             if !elapsed.interrupted_preparation
                 && elapsed.millis < plan.deadline.after_millis
@@ -3993,7 +4051,7 @@ impl CoreHost {
         requested_millis: u64,
         blocked: &[u64],
     ) -> Result<CoreRun, String> {
-        self.advance_continuous_prepared(requested_millis, blocked, &mut None)
+        self.advance_continuous_prepared(requested_millis, blocked, &mut None, false)
     }
 
     fn advance_continuous_prepared(
@@ -4001,6 +4059,7 @@ impl CoreHost {
         requested_millis: u64,
         blocked: &[u64],
         prepared: &mut Option<PreparedSegment>,
+        defer_observations: bool,
     ) -> Result<CoreRun, String> {
         if blocked.par_windows(2).any(|rows| rows[0] >= rows[1]) {
             return Err("invalid occupied people".into());
@@ -4012,7 +4071,8 @@ impl CoreHost {
         let mut combined = CoreRun::default();
         loop {
             let remaining = requested_millis - combined.elapsed_millis;
-            let mut segment = self.advance_validated_segment(remaining, blocked, prepared)?;
+            let mut segment =
+                self.advance_validated_segment(remaining, blocked, prepared, defer_observations)?;
             combined.elapsed_millis += segment.elapsed_millis;
             combined.events.append(&mut segment.events);
             let Some(decisions) = combined.decisions.checked_add(segment.decisions) else {

@@ -366,6 +366,7 @@ impl CoreHost {
         externally_busy: &[u64],
         prepared: Option<PreparedDeadline>,
         mut activity: Option<ActivityFrame>,
+        quiet_observation: bool,
     ) -> Result<ElapsedProgress, String> {
         let quantum = self.core.physical.tick_millis();
         let scheduled = prepared.is_some();
@@ -411,6 +412,11 @@ impl CoreHost {
             .as_ref()
             .map_or(&[][..], |draft| draft.consequences.as_slice());
         let has_injuries = !injuries.is_empty();
+        let (growth, batches) = self.stage_crop_growth(crop_rates, consumed)?;
+        let quiet_observation = quiet_observation && consumed == requested && !has_injuries;
+        if !quiet_observation {
+            self.core.materialize_vitals();
+        }
         let exposure_due = limits.exposure == Some(consumed);
         let natural_death_due = limits.natural_death == Some(consumed);
         let purpose_due = limits.purpose == Some(consumed);
@@ -576,7 +582,6 @@ impl CoreHost {
             (None, None)
         };
         let local_progress = self.stage_local_progress(consumed);
-        let (growth, batches) = self.stage_crop_growth(crop_rates, consumed)?;
         let soil = self.agriculture.as_ref().and_then(|farm| {
             farm.soil.as_ref()?.prepare_recovery(&farm.fields, consumed)
         });
@@ -598,6 +603,7 @@ impl CoreHost {
                 vitals,
                 batches,
                 delivery.as_ref().map(|delivery| delivery.physical()),
+            quiet_observation,
             )?;
             let mut family_events = Vec::new();
             let mut local_arrivals = Vec::new();
@@ -808,6 +814,7 @@ impl CoreHost {
             vitals,
             batches,
             delivery.as_ref().map(|delivery| delivery.physical()),
+            quiet_observation,
         )?;
         self.publish_resources(renewal, ecological);
         let wild_plants = self.publish_wild_plants(wild);
