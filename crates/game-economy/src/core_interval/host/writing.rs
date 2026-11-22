@@ -424,7 +424,7 @@ impl CoreHost {
                 retention: owner.retention.par_iter().cloned().collect(),
                 episodes: owner.episodes.clone(),
             };
-            next.receive_reports_at(&reports, tick)
+            next.receive_reports_at_time(&reports, self.stock_time())
                 .map_err(str::to_owned)?;
             Some(next)
         };
@@ -613,6 +613,7 @@ impl CoreHost {
             .as_ref()
             .ok_or("written claims require personal knowledge")?;
         let recall = knowledge.recall_index();
+        let now = self.stock_time();
         let mut minds: Vec<_> = knowledge.minds.par_iter().collect();
         if minds
             .par_windows(2)
@@ -647,7 +648,7 @@ impl CoreHost {
                     .iter()
                     .find(|record| {
                         record.region == author.region
-                            && recall.remembers(author.person, record, tick)
+                            && recall.remembers(author.person, record, now)
                     })?
                     .clone();
                 claim.food = (i128::from(claim.food) + i128::from(author.food_delta))

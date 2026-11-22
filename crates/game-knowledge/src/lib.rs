@@ -23,7 +23,10 @@ pub struct Knowledge {
 #[serde(deny_unknown_fields)]
 pub struct Retention {
     pub person: u64,
+    #[serde(default, skip_serializing_if = "is_zero")]
     pub ticks: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration_millis: Option<u128>,
     #[serde(default)]
     pub traces: Vec<RecallTrace>,
 }
@@ -32,25 +35,89 @@ pub struct Retention {
 pub struct RecallTrace {
     pub region: u64,
     pub reinforced_at: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reinforced_at_millis: Option<u128>,
+}
+
+fn is_zero(value: &u64) -> bool {
+    *value == 0
+}
+
+/// Physical time at a stock observation, with the custody boundary retained
+/// to read older records and scenarios.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct StockTime {
+    pub tick: u64,
+    elapsed: Option<(u128, u64)>,
+}
+
+impl StockTime {
+    pub fn elapsed(tick: u64, now_millis: u128, tick_millis: u64) -> Self {
+        Self { tick, elapsed: Some((now_millis, tick_millis)) }
+    }
+
+    pub fn millis(self) -> Option<u128> {
+        self.elapsed.map(|(millis, _)| millis)
+    }
+
+    fn contains(self, tick: u64, instant: Option<u128>) -> bool {
+        tick <= self.tick && self.elapsed.is_none_or(|(millis, tick_millis)| {
+            instant.is_none_or(|instant| {
+                instant <= millis && instant.checked_div(u128::from(tick_millis)) == Some(u128::from(tick))
+            })
+        })
+    }
+}
+
+impl From<u64> for StockTime {
+    fn from(tick: u64) -> Self {
+        Self { tick, elapsed: None }
+    }
+}
+
+impl RecallTrace {
+    fn follows(self, record: &Record) -> bool {
+        self.region == record.region
+            && self.reinforced_at >= record.observed_at
+            && self.reinforced_at_millis.zip(record.observed_at_millis)
+                .is_none_or(|(reinforced, observed)| reinforced >= observed)
+    }
 }
 
 impl Retention {
-    pub fn remembers(&self, record: &Record, now: u64) -> bool {
-        let last = self
+    fn remembers(&self, record: &Record, now: StockTime) -> bool {
+        let trace = self
             .traces
             .iter()
-            .find(|trace| trace.region == record.region)
-            .map_or(record.observed_at, |trace| trace.reinforced_at);
-        now.saturating_sub(last) < self.ticks
-    }
-    fn reinforce(&mut self, region: u64, tick: u64) {
-        if let Some(trace) = self.traces.iter_mut().find(|trace| trace.region == region) {
-            trace.reinforced_at = trace.reinforced_at.max(tick);
-        } else {
-            self.traces.push(RecallTrace {
-                region,
-                reinforced_at: tick,
+            .find(|trace| trace.follows(record));
+        let last_tick = trace.map_or(record.observed_at, |trace| trace.reinforced_at);
+        if let Some(duration) = self.duration_millis {
+            return now.elapsed.is_some_and(|(millis, tick_millis)| {
+                let boundary = |tick| u128::from(tick) * u128::from(tick_millis);
+                let observed = record.observed_at_millis.unwrap_or_else(|| boundary(record.observed_at));
+                let last = trace.map_or(observed, |trace| {
+                    trace.reinforced_at_millis.unwrap_or_else(|| boundary(last_tick)).max(observed)
+                });
+                millis.saturating_sub(last) < duration
             });
+        }
+        now.tick.saturating_sub(last_tick) < self.ticks
+    }
+    fn reinforce(&mut self, region: u64, now: StockTime, social_round: bool) {
+        let elapsed = self.duration_millis.is_some();
+        let incoming = RecallTrace {
+            region,
+            reinforced_at: now.tick.saturating_add(u64::from(social_round && !elapsed)),
+            reinforced_at_millis: if elapsed { now.millis() } else { None },
+        };
+        if let Some(trace) = self.traces.iter_mut().find(|trace| trace.region == region) {
+            if (incoming.reinforced_at, incoming.reinforced_at_millis)
+                >= (trace.reinforced_at, trace.reinforced_at_millis)
+            {
+                *trace = incoming;
+            }
+        } else {
+            self.traces.push(incoming);
         }
     }
 }
@@ -65,7 +132,7 @@ impl RecallIndex<'_> {
             .binary_search_by_key(&person, |row| row.person)
             .is_ok()
     }
-    pub fn remembers(&self, person: u64, record: &Record, now: u64) -> bool {
+    pub fn remembers(&self, person: u64, record: &Record, now: StockTime) -> bool {
         self.rows
             .binary_search_by_key(&person, |row| row.person)
             .ok()
@@ -209,10 +276,28 @@ pub struct Record {
     pub region: u64,
     pub food: u32,
     pub observed_at: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub observed_at_millis: Option<u128>,
     pub witness: u64,
     pub learned_from: Option<u64>,
 }
 impl Record {
+    fn observed(&self) -> (u64, Option<u128>) {
+        (self.observed_at, self.observed_at_millis)
+    }
+
+    fn available_at(&self, now: StockTime) -> bool {
+        now.contains(self.observed_at, self.observed_at_millis)
+    }
+
+    pub fn age_millis(&self, now: StockTime) -> Option<u128> {
+        let (millis, tick_millis) = now.elapsed?;
+        let observed = self
+            .observed_at_millis
+            .unwrap_or_else(|| u128::from(self.observed_at) * u128::from(tick_millis));
+        millis.checked_sub(observed)
+    }
+
     /// Produce a statement for a listener without changing the speaker's memory.
     pub fn stated_to(&self, sender: u64, listener: u64, misreport: Option<Misreport>) -> Self {
         let mut statement = self.clone();
@@ -253,6 +338,10 @@ impl Knowledge {
     }
     /// Recall is a pure view: looking at a memory does not reinforce it.
     pub fn recall_at(&self, person: u64, now: u64) -> Option<Vec<Record>> {
+        self.recall_at_time(person, now.into())
+    }
+
+    pub fn recall_at_time(&self, person: u64, now: StockTime) -> Option<Vec<Record>> {
         let mind = self.minds.iter().find(|mind| mind.person == person)?;
         let index = self.recall_index();
         Some(
@@ -265,6 +354,14 @@ impl Knowledge {
     }
     /// Reinforce evidence actually used by an accepted action, without changing it.
     pub fn reinforce_uses(&mut self, uses: &[(u64, Record)], now: u64) -> Result<(), &'static str> {
+        self.reinforce_uses_at(uses, now.into())
+    }
+
+    pub fn reinforce_uses_at(
+        &mut self,
+        uses: &[(u64, Record)],
+        now: StockTime,
+    ) -> Result<(), &'static str> {
         if uses.par_windows(2).any(|pair| pair[0].0 >= pair[1].0) {
             return Err("memory uses must have unique ordered people");
         }
@@ -293,13 +390,13 @@ impl Knowledge {
             else {
                 return;
             };
-            if evidence.observed_at <= now
+            if evidence.available_at(now)
                 && mind
                     .records
                     .iter()
                     .any(|record| same_evidence(record, evidence))
             {
-                policy.reinforce(evidence.region, now);
+                policy.reinforce(evidence.region, now, false);
             }
         });
         Ok(())
@@ -310,8 +407,19 @@ impl Knowledge {
         reports: &[(u64, Record, Option<u64>)],
         now: u64,
     ) -> Result<(), &'static str> {
+        self.receive_reports_at_time(reports, now.into())
+    }
+
+    pub fn receive_reports_at_time(
+        &mut self,
+        reports: &[(u64, Record, Option<u64>)],
+        now: StockTime,
+    ) -> Result<(), &'static str> {
         if reports.par_windows(2).any(|pair| pair[0].0 >= pair[1].0) {
             return Err("received reports must have unique ordered recipients");
+        }
+        if reports.par_iter().any(|(_, report, _)| !report.available_at(now)) {
+            return Err("received report is dated in the future");
         }
         if !self.retention.is_empty() {
             let mut policies: Vec<_> = self.retention.par_iter().collect();
@@ -364,13 +472,13 @@ impl Knowledge {
                     .iter()
                     .any(|record| record.region == trace.region)
             });
-            if report.observed_at <= now
+            if report.available_at(now)
                 && mind
                     .records
                     .iter()
                     .any(|record| same_evidence(record, report))
             {
-                policy.reinforce(report.region, now);
+                policy.reinforce(report.region, now, false);
             }
         });
         Ok(())
@@ -382,6 +490,7 @@ impl Knowledge {
         local_region: Option<u64>,
         now: u64,
     ) -> bool {
+        let now = StockTime::from(now);
         if let (Some(policy), Some(mind)) = (
             self.retention.iter().find(|row| row.person == recipient),
             self.minds.iter_mut().find(|mind| mind.person == recipient),
@@ -400,13 +509,13 @@ impl Knowledge {
                     .iter()
                     .any(|record| record.region == trace.region)
             });
-            if report.observed_at <= now
+            if report.available_at(now)
                 && mind
                     .records
                     .iter()
                     .any(|record| same_evidence(record, &report))
             {
-                policy.reinforce(report.region, now);
+                policy.reinforce(report.region, now, false);
             }
         }
         changed
@@ -445,10 +554,7 @@ impl Knowledge {
             self.retention.par_iter_mut().for_each(|policy| {
                 if let Ok(index) = minds.binary_search_by_key(&policy.person, |mind| mind.person) {
                     policy.traces.retain(|trace| {
-                        minds[index].records.iter().any(|record| {
-                            record.region == trace.region
-                                && record.observed_at <= trace.reinforced_at
-                        })
+                        minds[index].records.iter().any(|record| trace.follows(record))
                     });
                 }
             });
@@ -482,9 +588,7 @@ impl Knowledge {
             .find(|row| row.person == recipient)
         {
             policy.traces.retain(|trace| {
-                mind.records.iter().any(|record| {
-                    record.region == trace.region && record.observed_at <= trace.reinforced_at
-                })
+                mind.records.iter().any(|record| trace.follows(record))
             });
         }
         changed
@@ -494,6 +598,15 @@ impl Knowledge {
         people: &HashSet<u64>,
         regions: &HashSet<u64>,
         now: u64,
+    ) -> Result<(), &'static str> {
+        self.validate_at(people, regions, now.into())
+    }
+
+    pub fn validate_at(
+        &self,
+        people: &HashSet<u64>,
+        regions: &HashSet<u64>,
+        now: StockTime,
     ) -> Result<(), &'static str> {
         if self.max_records == 0 {
             return Err("invalid knowledge capacity");
@@ -520,7 +633,7 @@ impl Knowledge {
                 seen.person == mind.person
                     || !people.contains(&seen.person)
                     || !regions.contains(&seen.region)
-                    || seen.observed_at > now
+                    || seen.observed_at > now.tick
                     || !seen_people.insert(seen.person)
             }) {
                 return Err("invalid personal encounter memory");
@@ -533,7 +646,7 @@ impl Knowledge {
                     || !people.contains(&report.person)
                     || !people.contains(&report.speaker)
                     || !regions.contains(&report.region)
-                    || report.observed_at > now
+                    || report.observed_at > now.tick
                     || !reported_people.insert(report.person)
             }) {
                 return Err("invalid personal encounter report");
@@ -542,7 +655,7 @@ impl Knowledge {
             for r in &mind.records {
                 if !regions.contains(&r.region)
                     || !people.contains(&r.witness)
-                    || r.observed_at > now
+                    || !r.available_at(now)
                     || r.learned_from
                         .is_some_and(|id| !people.contains(&id) || id == mind.person)
                     || !recorded.insert(r.region)
@@ -560,18 +673,19 @@ impl Knowledge {
                     return true;
                 };
                 let mut regions_seen = HashSet::new();
-                policy.ticks == 0
+                (policy.ticks == 0) == policy.duration_millis.is_none()
+                    || policy.duration_millis == Some(0)
                     || !policies.insert(policy.person)
                     || policy.traces.len() > self.max_records
                     || policy.traces.iter().any(|trace| {
                         !regions.contains(&trace.region)
-                            || trace.reinforced_at > now
+                            || !now.contains(trace.reinforced_at, trace.reinforced_at_millis)
                             || !regions_seen.insert(trace.region)
                             || mind
                                 .records
                                 .iter()
                                 .find(|record| record.region == trace.region)
-                                .is_none_or(|record| trace.reinforced_at < record.observed_at)
+                                .is_none_or(|record| !trace.follows(record))
                     })
             }) {
                 return Err("invalid food-memory retention");
@@ -592,7 +706,7 @@ impl Knowledge {
             observations,
             regions,
             encounters,
-            now,
+            now.into(),
             false,
             (|_, _| true, |_, _| 0),
         )
@@ -609,7 +723,7 @@ impl Knowledge {
             observations,
             regions,
             encounters,
-            now,
+            now.into(),
             true,
             (|_, _| true, |_, _| 0),
         )
@@ -627,7 +741,7 @@ impl Knowledge {
             observations,
             regions,
             encounters,
-            now,
+            now.into(),
             true,
             (accept, |_, _| 0),
         )
@@ -639,6 +753,18 @@ impl Knowledge {
         regions: &HashSet<u64>,
         encounters: &[Encounter],
         now: u64,
+        accept: impl Fn(u64, u64) -> bool + Sync,
+        pressure: impl Fn(u64, u64) -> u64 + Sync,
+    ) -> Result<Self, &'static str> {
+        self.prepare_at(observations, regions, encounters, now.into(), accept, pressure)
+    }
+
+    pub fn prepare_at(
+        &self,
+        observations: &[Observation],
+        regions: &HashSet<u64>,
+        encounters: &[Encounter],
+        now: StockTime,
         accept: impl Fn(u64, u64) -> bool + Sync,
         pressure: impl Fn(u64, u64) -> u64 + Sync,
     ) -> Result<Self, &'static str> {
@@ -656,7 +782,7 @@ impl Knowledge {
         observations: &[Observation],
         regions: &HashSet<u64>,
         encounters: &[Encounter],
-        now: u64,
+        now: StockTime,
         validated: bool,
         policies: (
             impl Fn(u64, u64) -> bool + Sync,
@@ -669,7 +795,7 @@ impl Knowledge {
         }
         if !validated && !self.retention.is_empty() {
             let people: HashSet<_> = observations.par_iter().map(|row| row.person).collect();
-            self.validate(&people, regions, now)?;
+            self.validate_at(&people, regions, now)?;
         }
         let ordered = if observations
             .par_windows(2)
@@ -720,7 +846,7 @@ impl Knowledge {
                 mind.people_seen.iter().enumerate().any(|(i, seen)| {
                     seen.person == mind.person
                         || !regions.contains(&seen.region)
-                        || seen.observed_at > now
+                        || seen.observed_at > now.tick
                         || observations
                             .binary_search_by_key(&seen.person, |o| o.person)
                             .is_err()
@@ -732,7 +858,7 @@ impl Knowledge {
                         || report.speaker == mind.person
                         || report.speaker == report.person
                         || !regions.contains(&report.region)
-                        || report.observed_at > now
+                        || report.observed_at > now.tick
                         || observations
                             .binary_search_by_key(&report.person, |o| o.person)
                             .is_err()
@@ -747,7 +873,7 @@ impl Knowledge {
                         || observations
                             .binary_search_by_key(&r.witness, |o| o.person)
                             .is_err()
-                        || r.observed_at > now
+                        || !r.available_at(now)
                         || r.learned_from.is_some_and(|id| {
                             id == mind.person
                                 || observations
@@ -822,7 +948,7 @@ impl Knowledge {
                     .binary_search_by_key(&e.b, |o| o.person)
                     .ok()
                     .map(|i| observations[i]);
-                e.tick != now.saturating_add(1)
+                e.tick != now.tick.saturating_add(1)
                     || e.a >= e.b
                     || a.is_none_or(|p| p.health == 0 || p.local.is_none_or(|(r, _)| r != e.region))
                     || b.is_none_or(|p| p.health == 0 || p.local.is_none_or(|(r, _)| r != e.region))
@@ -888,7 +1014,7 @@ impl Knowledge {
             if !encounters.is_empty() && minds.par_iter().any(|mind| mind.remember_people) {
                 encounters
                     .par_iter()
-                    .filter(|event| event.tick == now.saturating_add(1))
+                    .filter(|event| event.tick == now.tick.saturating_add(1))
                     .flat_map_iter(|event| {
                         [
                             (event.a, event.b, event.region, event.tick),
@@ -961,7 +1087,8 @@ impl Knowledge {
                     let record = Record {
                         region,
                         food,
-                        observed_at: now,
+                        observed_at: now.tick,
+                        observed_at_millis: now.millis(),
                         witness: mind.person,
                         learned_from: None,
                     };
@@ -997,7 +1124,7 @@ impl Knowledge {
                                 .iter()
                                 .find(|old| old.region == r.region)
                                 .is_none_or(|old| {
-                                    (r.observed_at, r.witness) > (old.observed_at, old.witness)
+                                    (r.observed(), r.witness) > (old.observed(), old.witness)
                                         || (!self.retention.is_empty()
                                             && same_evidence(
                                                 old,
@@ -1016,9 +1143,9 @@ impl Knowledge {
                                     .iter()
                                     .find(|old| old.region == r.region)
                                     .is_none_or(|old| {
-                                        (r.observed_at, r.witness) > (old.observed_at, old.witness)
+                                        (r.observed(), r.witness) > (old.observed(), old.witness)
                                     });
-                            (newer, r.observed_at, r.region, r.witness)
+                            (newer, r.observed(), r.region, r.witness)
                         });
                     if let Some(report) = report {
                         let received = report.stated_to(partner, mind.person, minds[j].misreport);
@@ -1150,9 +1277,9 @@ impl Knowledge {
                                 old != record || !recall.remembers(policy.person, old, now)
                             });
                         if locally_observed {
-                            policy.reinforce(record.region, now);
+                            policy.reinforce(record.region, now, false);
                         } else if changed {
-                            policy.reinforce(record.region, now.saturating_add(1));
+                            policy.reinforce(record.region, now, true);
                         }
                     }
                     let begin = reinforced.partition_point(|row| row.0 < policy.person);
@@ -1163,7 +1290,7 @@ impl Knowledge {
                             .iter()
                             .any(|record| record.region == region)
                         {
-                            policy.reinforce(region, now.saturating_add(1));
+                            policy.reinforce(region, now, true);
                         }
                     }
                     policy
@@ -1179,7 +1306,7 @@ impl Knowledge {
     }
 }
 fn same_evidence(a: &Record, b: &Record) -> bool {
-    (a.region, a.food, a.observed_at, a.witness) == (b.region, b.food, b.observed_at, b.witness)
+    (a.region, a.food, a.observed(), a.witness) == (b.region, b.food, b.observed(), b.witness)
 }
 fn remember(
     records: &mut Vec<Record>,
@@ -1189,7 +1316,7 @@ fn remember(
     force: bool,
 ) {
     if let Some(old) = records.iter_mut().find(|old| old.region == record.region) {
-        if force || (record.observed_at, record.witness) >= (old.observed_at, old.witness) {
+        if force || (record.observed(), record.witness) >= (old.observed(), old.witness) {
             *old = record;
         }
     } else {
@@ -1198,13 +1325,13 @@ fn remember(
                 .iter()
                 .enumerate()
                 .filter(|(_, r)| Some(r.region) != protected)
-                .min_by_key(|(_, r)| (r.observed_at, r.region, r.witness))
+                .min_by_key(|(_, r)| (r.observed(), r.region, r.witness))
             else {
                 return;
             };
             if !force
-                && (record.observed_at, record.region, record.witness)
-                    <= (oldest.observed_at, oldest.region, oldest.witness)
+                && (record.observed(), record.region, record.witness)
+                    <= (oldest.observed(), oldest.region, oldest.witness)
             {
                 return;
             }

@@ -4,6 +4,7 @@ fn record(region: u64, observed_at: u64) -> Record {
     Record {
         region,
         food: 10,
+        observed_at_millis: None,
         observed_at,
         witness: 1,
         learned_from: Some(3),

@@ -57,3 +57,7 @@ records = [{ region = 2, food = 7, observed_at = 0, witness = 1 }]
 [[knowledge.minds]]
 person = 2
 
+[[knowledge.retention]]
+person = 2
+duration_millis = 23
+

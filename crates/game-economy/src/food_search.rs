@@ -29,8 +29,14 @@ pub struct Preference {
 pub struct FoodSearch {
     pub min_hunger: u32,
     pub min_report_food: u32,
+    #[serde(default)]
     pub max_report_age: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_report_age_millis: Option<u128>,
+    #[serde(default)]
     pub retry_ticks: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retry_millis: Option<u128>,
     #[serde(default)]
     pub inherit_births: bool,
     pub people: Vec<Preference>,
@@ -41,7 +47,9 @@ impl Clone for FoodSearch {
             min_hunger: self.min_hunger,
             min_report_food: self.min_report_food,
             max_report_age: self.max_report_age,
+            max_report_age_millis: self.max_report_age_millis,
             retry_ticks: self.retry_ticks,
+            retry_millis: self.retry_millis,
             inherit_births: self.inherit_births,
             people: self.people.par_iter().cloned().collect(),
         }
@@ -84,6 +92,17 @@ pub fn enroll(
     owner.people.par_extend(newborns);
 }
 impl FoodSearch {
+    fn fresh(
+        &self,
+        record: &game_economy_knowledge::Record,
+        now: game_economy_knowledge::StockTime,
+    ) -> bool {
+        self.max_report_age_millis.map_or_else(
+            || now.tick.saturating_sub(record.observed_at) <= self.max_report_age,
+            |maximum| record.age_millis(now).is_some_and(|age| age <= maximum),
+        )
+    }
+
     pub fn validate(
         &self,
         people: &HashSet<u64>,
@@ -91,7 +110,9 @@ impl FoodSearch {
         travel: Option<&Travel>,
     ) -> Result<(), String> {
         if self.min_report_food == 0
-            || self.retry_ticks == 0
+            || (self.retry_ticks == 0) == self.retry_millis.is_none()
+            || self.retry_millis == Some(0)
+            || (self.max_report_age != 0 && self.max_report_age_millis.is_some())
             || knowledge.is_none()
             || travel.is_none()
         {
@@ -109,6 +130,7 @@ impl FoodSearch {
             || self.people.par_iter().any(|p| {
                 p.target.is_some_and(|id| !regions.contains(&id))
                     || (p.next_review_millis.is_some()
+                        && self.retry_millis.is_none()
                         && travel
                             .and_then(|travel| travel.travel_unit_millis)
                             .is_none())
@@ -155,7 +177,7 @@ impl FoodSearch {
         let next_millis = elapsed
             .map(|(now, unit)| {
                 let delay = if deferred {
-                    u128::from(unit) * u128::from(self.retry_ticks)
+                    self.retry_millis.unwrap_or_else(|| u128::from(unit) * u128::from(self.retry_ticks))
                 } else {
                     0
                 };
@@ -204,14 +226,13 @@ pub struct Context<'a> {
     pub view: &'a View,
     pub claims: Option<&'a Claims<'a>>,
     pub busy: &'a [u64],
-    pub now: u64,
-    pub now_millis: Option<u128>,
+    pub stock_time: game_economy_knowledge::StockTime,
 }
 impl Context<'_> {
     pub fn prepare(&self) -> Plan {
         let route_review = RouteReview {
-            tick: self.now,
-            elapsed: self.now_millis.zip(self.travel.travel_unit_millis),
+            tick: self.stock_time.tick,
+            elapsed: self.stock_time.millis().zip(self.travel.travel_unit_millis),
             delay: self.owner.retry_ticks,
         };
         let portions: HashMap<_, _> = self
@@ -248,10 +269,9 @@ impl Context<'_> {
                     mind.records
                         .iter()
                         .filter(|r| {
-                            recall.remembers(mind.person, r, self.now)
+                            recall.remembers(mind.person, r, self.stock_time)
                                 && r.food >= self.owner.min_report_food
-                                && self.now.saturating_sub(r.observed_at)
-                                    <= self.owner.max_report_age
+                                && self.owner.fresh(r, self.stock_time)
                         })
                         .map(|r| r.region)
                 })
@@ -312,9 +332,9 @@ impl Context<'_> {
                 if preference.target == Some(region) {
                     return Some((person.id, None));
                 }
-                let deferred = match self.now_millis.zip(preference.next_review_millis) {
+                let deferred = match self.stock_time.millis().zip(preference.next_review_millis) {
                     Some((now, next)) => now < next,
-                    None => self.now < preference.next_review,
+                    None => self.stock_time.tick < preference.next_review,
                 };
                 if self.busy.binary_search(&person.id).is_ok()
                     || (deferred
@@ -357,14 +377,13 @@ impl Context<'_> {
                         .iter()
                         .filter_map(|record| {
                             let (ticks, _) = path(record.region)?;
-                            (recall.remembers(mind.person, record, self.now)
+                            (recall.remembers(mind.person, record, self.stock_time)
                                 && record.region != region
                                 && record.food >= self.owner.min_report_food
-                                && self.now.saturating_sub(record.observed_at)
-                                    <= self.owner.max_report_age)
+                                && self.owner.fresh(record, self.stock_time))
                                 .then_some((
                                     record.food,
-                                    record.observed_at,
+                                    (record.observed_at, record.observed_at_millis),
                                     std::cmp::Reverse(ticks),
                                     std::cmp::Reverse(record.region),
                                 ))
@@ -420,7 +439,7 @@ impl Context<'_> {
                         .ok()
                         .map(|index| minds[index])?;
                     let record = mind.records.iter().find(|record| {
-                        record.region == region && recall.remembers(person, record, self.now)
+                        record.region == region && recall.remembers(person, record, self.stock_time)
                     })?;
                     Some((person, record.clone()))
                 })

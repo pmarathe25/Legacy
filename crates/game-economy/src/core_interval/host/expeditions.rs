@@ -340,7 +340,7 @@ impl CoreHost {
                 None,
                 self.opinions.as_ref(),
                 game_economy_knowledge::ObservationAccess {
-                    now: tick,
+                    now: self.stock_time(),
                     not_at_stock: &blocked,
                 },
             )?;

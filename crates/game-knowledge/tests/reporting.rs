@@ -26,6 +26,7 @@ fn speaker_can_withhold_or_report_under_their_own_pressure() {
                 records: vec![Record {
                     region: 2,
                     food: 10,
+                    observed_at_millis: None,
                     observed_at: 0,
                     witness: 1,
                     learned_from: None,

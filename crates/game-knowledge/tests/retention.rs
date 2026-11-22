@@ -21,6 +21,7 @@ fn record() -> Record {
     Record {
         region: 2,
         food: 17,
+        observed_at_millis: None,
         observed_at: 0,
         witness: 1,
         learned_from: None,
@@ -55,6 +56,7 @@ fn passive_recall_expires_and_accepted_reading_reinforces_without_refreshing_evi
         minds: vec![mind(1, vec![]), mind(2, vec![claim.clone()])],
         retention: vec![Retention {
             person: 2,
+            duration_millis: None,
             ticks: 2,
             traces: vec![],
         }],
@@ -85,6 +87,7 @@ fn an_old_page_can_restore_a_claim_after_a_newer_memory_has_faded() {
         minds: vec![mind(1, vec![]), mind(2, vec![newer])],
         retention: vec![Retention {
             person: 2,
+            duration_millis: None,
             ticks: 2,
             traces: vec![],
         }],
@@ -110,6 +113,7 @@ fn superseded_reports_do_not_reinforce_and_invalid_batches_are_atomic() {
         minds: vec![mind(1, vec![]), mind(2, vec![newer.clone()])],
         retention: vec![Retention {
             person: 2,
+            duration_millis: None,
             ticks: 3,
             traces: vec![],
         }],
@@ -136,6 +140,7 @@ fn only_matching_used_evidence_is_reinforced() {
         minds: vec![mind(1, vec![]), mind(2, vec![claim.clone()])],
         retention: vec![Retention {
             person: 2,
+            duration_millis: None,
             ticks: 2,
             traces: vec![],
         }],
@@ -165,6 +170,7 @@ fn hearing_a_forgotten_report_again_restores_its_recall() {
         minds: vec![mind(1, vec![record()]), mind(2, vec![earlier])],
         retention: vec![Retention {
             person: 2,
+            duration_millis: None,
             ticks: 1,
             traces: vec![],
         }],
@@ -197,11 +203,13 @@ fn retelling_equal_evidence_reinforces_both_people_without_changing_provenance()
         retention: vec![
             Retention {
                 person: 1,
+                duration_millis: None,
                 ticks: 2,
                 traces: vec![],
             },
             Retention {
                 person: 2,
+                duration_millis: None,
                 ticks: 2,
                 traces: vec![],
             },
@@ -269,6 +277,7 @@ fn a_new_report_takes_precedence_over_rehearsing_an_equal_one() {
         minds: vec![mind(1, vec![equal.clone(), unknown]), mind(2, vec![equal])],
         retention: vec![Retention {
             person: 2,
+            duration_millis: None,
             ticks: 5,
             traces: vec![],
         }],
@@ -295,11 +304,13 @@ fn sparse_person_ids_reinforce_independent_encounters() {
         retention: vec![
             Retention {
                 person: 3,
+                duration_millis: None,
                 ticks: 2,
                 traces: vec![],
             },
             Retention {
                 person: 1,
+                duration_millis: None,
                 ticks: 2,
                 traces: vec![],
             },
@@ -362,11 +373,13 @@ fn forgotten_speaker_cannot_relay_a_memory_but_an_accepted_report_has_its_own_re
         retention: vec![
             Retention {
                 person: 1,
+                duration_millis: None,
                 ticks: 1,
                 traces: vec![],
             },
             Retention {
                 person: 2,
+                duration_millis: None,
                 ticks: 2,
                 traces: vec![],
             },
@@ -427,9 +440,11 @@ fn malformed_retention_is_rejected() {
         minds: vec![mind(1, vec![record()])],
         retention: vec![Retention {
             person: 1,
+            duration_millis: None,
             ticks: 1,
             traces: vec![RecallTrace {
                 region: 2,
+                reinforced_at_millis: None,
                 reinforced_at: 2,
             }],
         }],
@@ -473,6 +488,7 @@ fn personal_memory_retention_benchmark() {
             .filter(|person| person % stride == 0)
             .map(|person| Retention {
                 person,
+                duration_millis: None,
                 ticks: 2,
                 traces: vec![],
             })
@@ -546,6 +562,7 @@ fn personal_memory_retelling_benchmark() {
             .filter(|person| person % stride == 0)
             .map(|person| Retention {
                 person,
+                duration_millis: None,
                 ticks: 2,
                 traces: vec![],
             })
