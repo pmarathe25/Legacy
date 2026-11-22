@@ -13,6 +13,17 @@ pub struct CoreDeliveryResults {
     /// People who chose to attempt a delivery, even if custody rejected it.
     pub actors: Vec<u64>,
     pub outcomes: Vec<game_lots::TransactionOutcome>,
+    pub transfers: Vec<CorePromiseTransfer>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct CorePromiseTransfer {
+    pub contract: u64,
+    pub debtor: u64,
+    pub creditor: u64,
+    pub region: u64,
+    pub good: u32,
+    pub quantity: u64,
 }
 
 fn together(people: &[Person], requester: u64, worker: u64, region: u64) -> bool {
@@ -159,11 +170,7 @@ impl CoreHost {
             self.core
                 .people
                 .par_iter()
-                .filter(|person| {
-                    person.controlled
-                        || person.health == 0
-                        || person.hunger > self.core.rules.max_work_hunger
-                })
+                .filter(|person| person.controlled || person.health == 0)
                 .map(|person| person.id),
         );
         busy.par_extend(
@@ -198,10 +205,9 @@ impl CoreHost {
             tick: now,
         }
         .plan_with_runtime(1, self.agreement_deadlines.as_ref())?;
-        let actors = plan.actors();
-        let deliveries = plan.selected_deliveries();
-        let outcomes = self.deliver_agreements(&deliveries)?;
-        Ok(CoreDeliveryResults { actors, outcomes })
+        let mut result = self.settle_agreement_deliveries(&plan.selected_deliveries())?;
+        result.actors = plan.actors();
+        Ok(result)
     }
     /// Record personally chosen offers without reserving the promised goods.
     pub fn propose_agreements(
@@ -280,6 +286,13 @@ impl CoreHost {
         &mut self,
         deliveries: &[game_agreements::Delivery],
     ) -> Result<Vec<game_lots::TransactionOutcome>, String> {
+        Ok(self.settle_agreement_deliveries(deliveries)?.outcomes)
+    }
+
+    fn settle_agreement_deliveries(
+        &mut self,
+        deliveries: &[game_agreements::Delivery],
+    ) -> Result<CoreDeliveryResults, String> {
         let tick = self.core.physical.tick();
         let offset = self.core.elapsed_millis().ok_or("no physical interval")?;
         if offset >= self.core.physical.tick_millis()
@@ -288,7 +301,7 @@ impl CoreHost {
             return Err("publish pending interval events before delivering".into());
         }
         if deliveries.is_empty() {
-            return Ok(Vec::new());
+            return Ok(CoreDeliveryResults::default());
         }
         let owner = self.agreements.as_ref().ok_or("no agreement owner")?;
         let instant = owner
@@ -345,7 +358,7 @@ impl CoreHost {
             .map(|row| row.id)
             .collect();
         if accepted.is_empty() {
-            return Ok(outcomes);
+            return Ok(CoreDeliveryResults { outcomes, ..Default::default() });
         }
         accepted.par_sort_unstable();
         let successful: Vec<_> = ordered
@@ -361,43 +374,37 @@ impl CoreHost {
             .physical
             .validate_interval_consumption(&physical)?;
         self.core.physical.commit_interval_consumption(physical)?;
-        if self.expeditions.is_some() {
-            let mut receipts: Vec<_> = ordered
-                .par_iter()
-                .zip(transfers.par_iter())
-                .filter_map(|(delivery, transfer)| {
-                    accepted.binary_search(&delivery.contract).ok()?;
-                    let region = self.core.people[self
-                        .core
-                        .people
-                        .binary_search_by_key(&transfer.debtor, |person| person.id)
-                        .ok()?]
-                    .region?;
-                    Some(game_economy_expeditions::elapsed::Delivery {
-                        traveler: transfer.debtor,
-                        receiver: transfer.creditor,
-                        region,
-                        good: transfer.good,
-                        quantity: transfer.quantity,
-                    })
+        let receipts: Vec<_> = ordered.par_iter().zip(&transfers)
+            .filter_map(|(delivery, transfer)| {
+                accepted.binary_search(&delivery.contract).ok()?;
+                let index = self.core.people.binary_search_by_key(&transfer.debtor, |person| person.id)
+                    .expect("validated debtor");
+                Some(CorePromiseTransfer {
+                    contract: delivery.contract,
+                    debtor: transfer.debtor,
+                    creditor: transfer.creditor,
+                    region: self.core.people[index].region.expect("validated local debtor"),
+                    good: transfer.good,
+                    quantity: transfer.quantity,
                 })
-                .collect();
-            self.record_expedition_deliveries(&mut receipts);
+            }).collect();
+        if self.expeditions.is_some() {
+            let mut deliveries: Vec<_> = receipts.par_iter().map(|receipt| {
+                game_economy_expeditions::elapsed::Delivery {
+                    traveler: receipt.debtor, receiver: receipt.creditor, region: receipt.region,
+                    good: receipt.good, quantity: receipt.quantity,
+                }
+            }).collect();
+            self.record_expedition_deliveries(&mut deliveries);
         }
         if self.tracks_work_expectations() {
             let base = (self.practice_work_evidence.starts.len()
                 + self.practice_work_evidence.gifts.len()) as u64;
-            let admitted: Vec<_> = ordered
-                .par_iter()
-                .zip(transfers.par_iter())
-                .filter(|(delivery, _)| accepted.binary_search(&delivery.contract).is_ok())
-                .map(|(_, transfer)| transfer)
-                .collect();
             self.practice_work_evidence
                 .gifts
                 .par_extend(
-                    admitted
-                        .into_par_iter()
+                    receipts
+                        .par_iter()
                         .enumerate()
                         .map(|(index, transfer)| {
                             (
@@ -413,7 +420,7 @@ impl CoreHost {
         }
         Self::learn_agreement_outcomes(&self.core.people, self.opinions.as_mut(), &next);
         self.publish_agreements(next);
-        Ok(outcomes)
+        Ok(CoreDeliveryResults { outcomes, transfers: receipts, ..Default::default() })
     }
 
     /// Let people with active personal goals address local requests.

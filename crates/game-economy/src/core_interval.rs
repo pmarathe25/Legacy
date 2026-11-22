@@ -51,7 +51,7 @@ pub use host::{
     CoreLocalTransportResults, CoreMarkInscription, CoreMarkObservation, CoreMarketResults,
     CoreMechanics, CorePersonalConflict, CorePlayerFatigue, CorePlayerField, CorePlayerJob, CorePlayerLanguage,
     CorePlayerMarkedPage, CorePlayerResource, CorePlayerSite, CorePlayerView, CorePlayerWound,
-    CorePracticeWorkEvidence, CorePromiseReply, CorePurpose, CoreRepairResults, CoreRequestResults,
+    CorePracticeWorkEvidence, CorePromiseReply, CorePromiseTransfer, CorePurpose, CoreRepairResults, CoreRequestResults,
     CoreRun, CoreRunEvent, CoreSchedule, CoreSeenPerson, CoreSharedApparatus, CoreSharedWork, CoreSiteChanges,
     CoreSites, CoreSkillCredit, CoreSkills, CoreSocial, CoreSocialResults, CoreStepper,
     CoreToolRepairResults, CoreTreatmentResults, CoreWorkIntent, CoreWritingPracticeResults,

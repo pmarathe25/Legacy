@@ -200,6 +200,137 @@ fn the_recipient_learns_at_the_successful_final_delivery() {
 }
 
 #[test]
+fn autonomous_delivery_receipts_name_only_accepted_transfers_at_their_actual_time() {
+    let run = |workers, quantum, quantity, steps: &[u64]| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut opening = scenario(quantum, false).snapshot();
+                opening.core.people[0].hunger = 80;
+                opening.agreements.as_mut().unwrap().policies =
+                    serde_json::from_value(serde_json::json!([{"person": 1, "honor": true}]))
+                        .unwrap();
+                let good = opening
+                    .core
+                    .physical
+                    .goods
+                    .iter()
+                    .find(|good| good.name == "bread")
+                    .unwrap()
+                    .id;
+                let mut host = CoreHost::resume(opening).unwrap();
+                assert_eq!(host.advance_continuous(3, &[]).unwrap().failure, None);
+                let contract = host
+                    .propose_agreements(&[Proposal {
+                        debtor: 1,
+                        creditor: 2,
+                        good,
+                        quantity,
+                        due: 50,
+                    }])
+                    .unwrap()[0];
+                host.decide_agreements(&[Decision {
+                    contract,
+                    actor: 2,
+                    accept: true,
+                }])
+                .unwrap();
+                let mut receipts = Vec::new();
+                let mut outcomes = Vec::new();
+                for &elapsed in steps {
+                    let result = host.advance_continuous(elapsed, &[]).unwrap();
+                    assert_eq!(result.failure, None);
+                    for event in result.events {
+                        match event {
+                            CoreRunEvent::PromiseTransfers {
+                                at_millis,
+                                transfers,
+                            } => {
+                                receipts.extend(transfers.into_iter().map(|row| (at_millis, row)));
+                            }
+                            CoreRunEvent::Deliveries(rows) => outcomes.extend(rows),
+                            _ => (),
+                        }
+                    }
+                    host = restored(&host);
+                }
+                if quantity == 1 {
+                    let [(time, receipt)] = receipts.as_slice() else {
+                        panic!("expected one physical receipt: {receipts:?}");
+                    };
+                    assert_eq!(*time, 20);
+                    assert_eq!(
+                        (receipt.contract, receipt.debtor, receipt.creditor),
+                        (contract, 1, 2)
+                    );
+                    assert_eq!(
+                        (receipt.good, receipt.quantity, receipt.region),
+                        (good, 1, 1)
+                    );
+                    assert_eq!(outcomes.len(), 1);
+                    assert!(outcomes[0].accepted);
+                } else {
+                    assert!(receipts.is_empty());
+                    assert!(!outcomes.is_empty() && outcomes.iter().all(|row| !row.accepted));
+                }
+                (receipts, outcomes)
+            })
+    };
+    assert_eq!(run(1, 1000, 1, &[44]), run(6, 37, 1, &[1, 16, 9, 18]));
+    run(4, 37, 2, &[44]);
+}
+
+#[test]
+fn a_hungry_debtor_can_decline_or_deliver_under_their_own_pressure() {
+    let choose = |fear| {
+        let mut opening = scenario(1000, false).snapshot();
+        opening.core.people[0].hunger = 80;
+        opening.agreements.as_mut().unwrap().policies =
+            serde_json::from_value(serde_json::json!([{
+                "person": 1, "honor": true,
+                "maximum_honor_hunger": 30, "fear_honor_threshold": 9,
+            }]))
+            .unwrap();
+        opening.opinions = Some(serde_json::from_value(serde_json::json!({
+            "rules": { "minimum": -10, "maximum": 10, "initial": 0, "fulfilled_gain": 0, "default_loss": 0 },
+            "records": [{ "observer": 1, "target": 2, "trust": 0, "fear": fear }],
+        })).unwrap());
+        let good = opening
+            .core
+            .physical
+            .goods
+            .iter()
+            .find(|good| good.name == "bread")
+            .unwrap()
+            .id;
+        let mut host = CoreHost::resume(opening).unwrap();
+        let contract = host
+            .propose_agreements(&[Proposal {
+                debtor: 1,
+                creditor: 2,
+                good,
+                quantity: 1,
+                due: 50,
+            }])
+            .unwrap()[0];
+        host.decide_agreements(&[Decision {
+            contract,
+            actor: 2,
+            accept: true,
+        }])
+        .unwrap();
+        host.deliver_agreements_autonomously(&[]).unwrap()
+    };
+    assert!(choose(0).transfers.is_empty());
+    let pressured = choose(9);
+    assert_eq!(pressured.actors, [1]);
+    assert_eq!(pressured.transfers.len(), 1);
+    assert_eq!(pressured.transfers[0].quantity, 1);
+}
+
+#[test]
 fn elapsed_promises_expire_after_the_last_valid_delivery_and_conserve_stock() {
     let run = |workers, quantum, steps: &[u64]| {
         rayon::ThreadPoolBuilder::new()

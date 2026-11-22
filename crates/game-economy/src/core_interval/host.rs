@@ -97,7 +97,7 @@ pub use player::{
     CorePlayerSite, CorePlayerView, CorePlayerWound, CorePromiseReply, CoreSeenPerson,
 };
 pub use purpose::CorePurpose;
-pub use requests::{CoreDeliveryResults, CoreRequestResults};
+pub use requests::{CoreDeliveryResults, CorePromiseTransfer, CoreRequestResults};
 pub use scheduler::{
     CoreRun, CoreRunEvent, CoreSchedule, CoreStepper, DecisionPhase, Incapacitation,
 };
