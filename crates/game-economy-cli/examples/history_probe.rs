@@ -174,6 +174,13 @@ fn run_steps(
                     )?;
                     ("expeditions", events.len())
                 }
+                CoreRunEvent::LocalGoalSearchExpiry { at_millis, people } => {
+                    write_line(
+                        &mut writer,
+                        &json!({"kind":"local_goal_search_expiry","step":step,"at_millis":at_millis,"people":people}),
+                    )?;
+                    ("local_goal_search_expiry", people.len())
+                }
                 CoreRunEvent::Disease(rows) => {
                     write_line(
                         &mut writer,

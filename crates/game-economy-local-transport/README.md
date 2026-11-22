@@ -76,6 +76,13 @@ With `LEGACY_AT_STORE=1 LEGACY_GOAL_RETURN=1`, the concentrated goal-fetch bench
 
 A goal fetcher may optionally define `search = { store = 1, alternatives = [2, 3], max_visits = 3, willing = true, retry_ticks = 8, max_ticks = 16 }`. When its own work goal lacks an input at regional stock, the person can choose to visit the ordered known stores without observing their contents remotely. The bounded visit count defaults to one; at most 32 distinct stores in the same region may be listed. The person may use an authored direct route or travel through regional stock. A paused choice retains the current leg until its expiry, with departure counting toward `max_ticks`; exhausting the choices does not force a return. A successful local pickup can motivate the existing return-to-stock path. Explicit carrying and visit choices take priority over starting a search.
 
+An elapsed search uses
+`elapsed = { retry_millis = 28800000, max_millis = 57600000 }` inside that
+table in place of the two tick fields. A person can reconsider at a
+decision opportunity after the retry time. The active search ends at its
+exact deadline and pauses only a walking leg still motivated by that
+search. Someone walking for a separate reason can continue.
+
 Set `LEGACY_GOAL_SEARCH=1` in the existing concentrated goal-fetch benchmark to measure outbound searches, and add `LEGACY_GOAL_EMPTY=1` to measure the boundary after arrival at an empty store. On a Ryzen 5 7600 with 100,000 people, one and six workers measured 98.2 and 34.2 ms outbound, and 100.9 and 33.4 ms after empty arrivals. Each pair produced identical state fingerprints.
 
 Add `LEGACY_GOAL_MULTI=1` to measure the same people continuing from an empty first store toward a second. One and six workers measured 131.0 and 52.8 ms with identical fingerprints on the same machine. These figures are workload-specific and sublinear.

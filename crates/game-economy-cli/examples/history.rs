@@ -88,6 +88,7 @@ fn observation(event: &CoreRunEvent, current_tick: &mut u64) -> Option<Value> {
         CoreRunEvent::WrittenExplanations(rows) if !rows.is_empty() => Some(json!({"kind":"written_explanations","events":rows})),
         CoreRunEvent::Disease(rows) if !rows.is_empty() => Some(json!({"kind":"disease","events":rows})),
         CoreRunEvent::LocalWalking { at_millis, events } => Some(json!({"kind":"local_walking","at_millis":at_millis,"events":events})),
+        CoreRunEvent::LocalGoalSearchExpiry { at_millis, people } => Some(json!({"kind":"local_goal_search_expiry","at_millis":at_millis,"people":people})),
         CoreRunEvent::Confinement { at_millis, events } => Some(json!({"kind":"confinement","at_millis":at_millis,"events":events})),
         CoreRunEvent::SiteChanges { at_millis, changes } => Some(json!({"kind":"site_changes","at_millis":at_millis,"demolished":changes.demolished,"salvaged":changes.salvaged,"released":changes.released})),
         CoreRunEvent::Expeditions(events) => Some(json!({"kind":"expeditions","events":events})),

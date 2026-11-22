@@ -281,6 +281,7 @@ impl CoreHost {
             && halting.is_empty()
             && goals.as_ref().is_none_or(|plan| plan.searches.is_empty())
         {
+            self.publish_local_goal_searches(Vec::new());
             return Ok(Vec::new());
         }
         let mut next = walking.prepare(&self.core.people, &starts, tick)?;
@@ -297,16 +298,7 @@ impl CoreHost {
         }
         let owner = self.local_transport.as_mut().expect("local transport");
         owner.walking = Some(next);
-        if let Some(plan) = goals {
-            let mut edits = plan.searches;
-            edits.par_sort_unstable_by_key(|row| row.person);
-            owner.goal_fetchers.par_iter_mut().for_each(|preference| {
-                if let Ok(index) = edits.binary_search_by_key(&preference.person, |row| row.person)
-                {
-                    preference.search = Some(edits[index].search.clone());
-                }
-            });
-        }
+        self.publish_local_goal_searches(goals.map_or_else(Vec::new, |plan| plan.searches));
         self.work_checked_revision = None;
         Ok(events)
     }

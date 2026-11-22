@@ -770,6 +770,10 @@ pub enum CoreRunEvent {
         at_millis: u128,
         events: Vec<game_economy_local_transport::walking::Event>,
     },
+    LocalGoalSearchExpiry {
+        at_millis: u128,
+        people: Vec<u64>,
+    },
     Confinement {
         at_millis: u128,
         events: Vec<game_economy_confinement::Event>,
@@ -1373,6 +1377,16 @@ impl CoreHost {
             let decision_due = decision == Some(u128::from(offset));
             if deadline.after_millis == 0 {
                 let mut handled = false;
+                if deadline.local_goal_search_expiry {
+                    let people = self.expire_local_goal_searches();
+                    if !people.is_empty() {
+                        run.events.push(CoreRunEvent::LocalGoalSearchExpiry {
+                            at_millis: self.core.simulated_millis(),
+                            people,
+                        });
+                        handled = true;
+                    }
+                }
                 if deadline.agreement_expiry {
                     let events = self.expire_due_agreements();
                     if !events.is_empty() {

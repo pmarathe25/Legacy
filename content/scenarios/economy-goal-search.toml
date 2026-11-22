@@ -105,7 +105,7 @@ goods = { timber = 5 }
 person = 2
 enabled = true
 max_quantity = 5
-search = { store = 1, willing = true, retry_ticks = 8, max_ticks = 8 }
+search = { store = 1, willing = true, elapsed = { retry_millis = 28800000, max_millis = 28800000 } }
 
 [[aspirations]]
 person = 2

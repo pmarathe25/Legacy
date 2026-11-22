@@ -144,8 +144,7 @@ impl LocalTransport {
             return false;
         };
         self.walking.is_some()
-            && search.retry_ticks > 0
-            && search.max_ticks > 0
+            && search.valid_clock()
             && search.max_visits > 0
             && search.max_visits <= 32
             && search.alternatives.len() < 32
