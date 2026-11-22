@@ -642,6 +642,70 @@ fn inherited_mate_desire_controls_conception_on_an_elapsed_opportunity() {
 }
 
 #[test]
+fn partnership_choices_and_separation_use_elapsed_opportunities_even_without_conception() {
+    use game_economy::core_interval::CoreRunEvent;
+
+    let run = |quantum, workers| rayon::ThreadPoolBuilder::new()
+        .num_threads(workers).build().unwrap().install(|| {
+            let mut core = fixture();
+            core.physical.tick_millis = quantum;
+            core.travel = None;
+            core.people[1].region = Some(1);
+            core.nutrition = None;
+            core.pending_food.clear();
+            core.rules.hunger_per_tick = 0;
+            core.rules.starvation_damage = 0;
+            let profile = serde_json::json!({
+                "desire":1000,"genetic_weight":0,"affinity_weight":0,
+                "attraction_weight":0,"hunger_weight":0,"dependent_weight":0,
+            });
+            let snapshot: CoreHostSnapshot = serde_json::from_value(serde_json::json!({
+                "core":core,
+                "family": {
+                    "elapsed_lifetimes":{"unit_millis":200,"elapsed_gestation":true,
+                        "conception_period_millis":200,"review_partnerships":true},
+                    "rules":{"adult_age":2,"fertile_until":10,"gestation":2,"birth_spacing":3,
+                        "lifespan_min":11,"lifespan_max":11,"conception_one_in":1,
+                        "minimum_health":1,"maximum_hunger":100,"newborn_health":50,
+                        "mutation_per_million":0,"mutation_step":0,"subjective_mating":true},
+                    "members":[
+                        {"id":1,"age":3,"mate_preference":profile,
+                            "genome":{"sex":"Male","alleles":[[100,100],[100,100],[100,100],[100,100]]}},
+                        {"id":2,"age":3,"mate_preference":profile,
+                            "genome":{"sex":"Male","alleles":[[100,100],[100,100],[100,100],[100,100]]}}
+                    ],"next_id":3
+                }
+            })).unwrap();
+            let mut host = CoreHost::begin(snapshot, &[(1, 1)]).unwrap();
+            host.enable_schedule(1000, 1).unwrap();
+            let observations = |run: game_economy::core_interval::CoreRun| {
+                assert_eq!(run.failure, None);
+                run.events.into_iter().filter_map(|event| match event {
+                    CoreRunEvent::FamilyTransitions { at_millis, events } => Some((at_millis, events)),
+                    _ => None,
+                }).flat_map(|(at, events)| events.into_iter().map(move |row| (at, row.kind))).collect::<Vec<_>>()
+            };
+            assert!(observations(host.advance_continuous(199, &[]).unwrap()).is_empty());
+            assert!(host.snapshot().family.unwrap().members[0].partner.is_none());
+            let formed = observations(host.advance_continuous(1, &[]).unwrap());
+            let mut saved = host.snapshot();
+            let family = saved.family.as_mut().unwrap();
+            assert_eq!(family.members[0].partner, Some(2));
+            assert_eq!(family.totals.partnerships, 1);
+            family.members[0].mate_preference.as_mut().unwrap().minimum = 1;
+            let mut host = CoreHost::resume(serde_json::from_slice(&serde_json::to_vec(&saved).unwrap()).unwrap()).unwrap();
+            assert!(observations(host.advance_continuous(199, &[]).unwrap()).is_empty());
+            let separated = observations(host.advance_continuous(1, &[]).unwrap());
+            assert!(host.snapshot().family.unwrap().members[0].partner.is_none());
+            (formed, separated)
+        });
+    let exact = run(1000, 1);
+    assert_eq!(exact, run(37, 6));
+    assert_eq!(exact.0, [(200, "partnership".into())]);
+    assert_eq!(exact.1, [(400, "separation".into())]);
+}
+
+#[test]
 fn fatal_starvation_wins_an_arrival_tie_and_places_the_body_at_the_source() {
     let mut state = fixture();
     state.nutrition = None;

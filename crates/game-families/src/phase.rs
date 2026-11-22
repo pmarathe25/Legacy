@@ -4,6 +4,7 @@ use game_genetics::inherit;
 use game_matching::resolve;
 use rayon::prelude::*;
 use std::collections::BTreeSet;
+mod relationships;
 
 pub struct Draft {
     pub families: Families,
@@ -242,10 +243,12 @@ impl Families {
         tick: u64,
         now: u128,
     ) -> Result<Option<ElapsedFamilyDraft>, &'static str> {
-        let period = self
+        let calendar = self
             .elapsed_lifetimes
             .as_ref()
-            .and_then(|calendar| calendar.conception_period_millis)
+            .ok_or("elapsed conception has no calendar")?;
+        let period = calendar
+            .conception_period_millis
             .ok_or("elapsed conception has no period")?;
         if period == 0 || now == 0 || !now.is_multiple_of(u128::from(period)) {
             return Err("conception is outside its elapsed opportunity");
@@ -277,7 +280,12 @@ impl Families {
                 exact: true,
             },
         )?;
-        if choices.is_empty() {
+        let relationships = if calendar.review_partnerships {
+            relationships::review(self, physical, &dependents, seed, tick, now)
+        } else {
+            relationships::Draft::default()
+        };
+        if choices.is_empty() && relationships.events.is_empty() {
             return Ok(None);
         }
         choices.par_sort_unstable_by_key(|choice| choice.0);
@@ -286,28 +294,39 @@ impl Families {
             if let Ok(choice) = choices.binary_search_by_key(&member.id, |choice| choice.0) {
                 member.pregnancy = Some(choices[choice].1);
             }
+            if let Ok(change) = relationships
+                .changes
+                .binary_search_by_key(&member.id, |row| row.0)
+            {
+                member.partner = relationships.changes[change].1;
+            }
         });
         families.totals.conceptions = families
             .totals
             .conceptions
             .checked_add(choices.len() as u64)
             .ok_or("family counter overflow")?;
-        families
-            .elapsed_lifetimes
-            .as_mut()
-            .expect("checked conception clock")
-            .refresh_deliveries(&families.members);
-        let events = choices
-            .par_iter()
-            .map(|&(mother, pregnancy)| {
-                event(
-                    tick,
-                    "conception",
-                    vec![mother, pregnancy.father],
-                    physical.read(mother).region,
-                )
-            })
-            .collect();
+        families.totals.partnerships = families
+            .totals
+            .partnerships
+            .checked_add(relationships.formed)
+            .ok_or("family counter overflow")?;
+        if !choices.is_empty() {
+            families
+                .elapsed_lifetimes
+                .as_mut()
+                .expect("checked conception clock")
+                .refresh_deliveries(&families.members);
+        }
+        let mut events = relationships.events;
+        events.par_extend(choices.par_iter().map(|&(mother, pregnancy)| {
+            event(
+                tick,
+                "conception",
+                vec![mother, pregnancy.father],
+                physical.read(mother).region,
+            )
+        }));
         Ok(Some(ElapsedFamilyDraft {
             families,
             births: Vec::new(),
@@ -460,14 +479,17 @@ impl Families {
             return Err("elapsed natural mortality requires an interval host");
         }
         let rules = &self.rules;
+        let elapsed_partnerships = calendar.is_some_and(|clock| clock.review_partnerships);
         let (mut members, mut events) = stage_life(self, physical, tick, penalty, now)?;
         #[cfg(feature = "profile")]
         {
             drop(profile_phase);
             profile_phase = game_diagnostics::span("family.reconsider");
         }
-        game_family_index::reconsider(&mut members, physical, rules.fertile_until)?;
-        if rules.subjective_mating {
+        if !elapsed_partnerships {
+            game_family_index::reconsider(&mut members, physical, rules.fertile_until)?;
+        }
+        if rules.subjective_mating && !elapsed_partnerships {
             let index = OrderedMemberIndex::new(&members);
             let mut separations: Vec<_> = members
                 .par_iter()
@@ -497,7 +519,7 @@ impl Families {
             });
         }
         let index = OrderedMemberIndex::new(&members);
-        let mut parents: Vec<_> = if rules.subjective_mating {
+        let mut parents: Vec<_> = if rules.subjective_mating && !elapsed_partnerships {
             members
                 .par_iter()
                 .filter(|child| child.alive && child.age < rules.adult_age)
@@ -522,20 +544,24 @@ impl Families {
             drop(profile_phase);
             profile_phase = game_diagnostics::span("family.matching");
         }
-        let mut local: Vec<_> = members
-            .par_iter()
-            .filter_map(|m| {
-                let person = physical.read(m.id);
-                (m.partner.is_none()
-                    && !physical.controlled(m.id)
-                    && if rules.subjective_mating {
-                        eligible_for_partnership(m, &person, rules)
-                    } else {
-                        eligible(m, &person, rules)
-                    })
-                .then(|| (person.region.unwrap(), physical.contact_partition(m.id), m))
-            })
-            .collect();
+        let mut local: Vec<_> = if elapsed_partnerships {
+            Vec::new()
+        } else {
+            members
+                .par_iter()
+                .filter_map(|m| {
+                    let person = physical.read(m.id);
+                    (m.partner.is_none()
+                        && !physical.controlled(m.id)
+                        && if rules.subjective_mating {
+                            eligible_for_partnership(m, &person, rules)
+                        } else {
+                            eligible(m, &person, rules)
+                        })
+                    .then(|| (person.region.unwrap(), physical.contact_partition(m.id), m))
+                })
+                .collect()
+        };
         local.par_sort_unstable_by_key(|(region, partition, member)| {
             (*region, *partition, member.id)
         });

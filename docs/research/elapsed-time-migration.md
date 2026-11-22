@@ -215,8 +215,10 @@ Work capability and care use age at the actual instant when the calendar is
 enabled. `family.elapsed_lifetimes.elapsed_gestation` also schedules deliveries
 and maternal recovery independently. Delivery events carry exact elapsed times
 in the history stream. `conception_period_millis` gives subjective conception
-opportunities their own configured cadence. Partnership decisions, most family
-history, and succession still use physical settlement.
+opportunities their own configured cadence. Set `review_partnerships = true`
+to evaluate personal partnerships and choices to separate at those elapsed
+opportunities. Family history with legacy timing and succession still use
+physical settlement.
 `care.elapsed.period_millis` schedules visits and neglect at independent elapsed
 deadlines. Each visit reevaluates personal preferences, current age, and physical
 reach. Food moves through custody when the transfer succeeds. Saves retain the

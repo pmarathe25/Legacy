@@ -623,6 +623,7 @@ last_tick = 0
 unit_millis = 3600000
 elapsed_gestation = true
 conception_period_millis = 3600000
+review_partnerships = true
 
 [family.rules]
 adult_age = 140160
