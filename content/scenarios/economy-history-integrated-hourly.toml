@@ -91,9 +91,9 @@ minds = [
 [pastimes.culture]
 presentations = [{ person = 34, activity = 2 }]
 listeners = [
-    { person = 33, interests = [{ activity = 2, value = 3 }] },
-    { person = 36, interests = [{ activity = 2, value = 7 }] },
-    { person = 37, interests = [{ activity = 2, value = -4 }] },
+    { person = 33, minimum_millis = 120000, interests = [{ activity = 2, value = 3 }] },
+    { person = 36, minimum_millis = 180000, stay_value = -2, interests = [{ activity = 2, value = 7 }] },
+    { person = 37, minimum_millis = 120000, interests = [{ activity = 2, value = -4 }] },
 ]
 
 [rules]

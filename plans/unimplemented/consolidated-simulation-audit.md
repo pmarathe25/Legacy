@@ -120,12 +120,14 @@ to track rates, deadlines, and behavior under different advance sizes. The
   authored skill, with signed personal effects on subsequent interest.
   Tests cover materials, instruments, interruption, and deterministic
   decisions for 4,096 individual participants.
-- Performers can choose whether to share a pastime. At a completed local
-  performance, individuals can choose whether to listen alongside their
-  other leisure preferences. A listener's own memory can change later
-  interest in practicing the activity. The observer records the heard
-  passage and its performer. Full attendance and shared musical form
-  remain open.
+- Performers can choose whether to share a pastime. Listeners can compare
+  an active performance with their own leisure preferences, join partway
+  through, or leave. Elapsed attention belongs to one person and one local
+  performance. Walking away breaks continuity even if they return before
+  the ending. Hearing receipts give the actual listening duration when
+  known, and memory can change later interest in the activity. Worker
+  determinism covers 4,096 listeners both in one venue and in separate
+  venues. Emergent shared musical forms remain open.
 - Bounded private episodes come from actual meetings and completed creative
   activities. Attention and memory length can differ across people. Recall
   fades by elapsed time and precise dates can become uncertain. Explicit
