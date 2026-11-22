@@ -81,8 +81,10 @@ to track rates, deadlines, and behavior under different advance sizes. The
 - Authored pastime catalogs provide song composition, instrument practice,
   and material-based painting. Characters can take up or stop an activity.
   Completion is dated by elapsed time and people can assign it different
-  meaning. Tests cover finite material use, retained instruments, interruption,
-  and deterministic decisions for 4,096 individual participants.
+  meaning. Completed practice can carry across activities using the same
+  authored skill, with signed personal effects on subsequent interest.
+  Tests cover materials, instruments, interruption, and deterministic
+  decisions for 4,096 individual participants.
 - Bounded private episodes come from actual meetings and completed creative
   activities. Attention and memory length can differ across people. Recall
   fades by elapsed time and precise dates can become uncertain. Explicit
@@ -103,6 +105,16 @@ to track rates, deadlines, and behavior under different advance sizes. The
   recipient can change their trust using their own view of fulfillment or
   default. Recipients with opposite responses make different choices after
   the same outcome. Elapsed decision rounds consider only open agreements.
+- On the elapsed family clock either participant can seek a mating
+  encounter. The other participant evaluates it independently, and a
+  separately chosen partnership can form or end at its review instant.
+  An authored diploid locus can influence individual courtship desire.
+  Inherited variants survive saves, and annual history measures allele
+  values among living characters.
+- An empirical investigator can value expected motion, stall, or uncertainty
+  differently when choosing a trial. Expedition invitations can offer a
+  rendezvous alongside the trip. The recipient can choose whether to accept
+  the trip or wait for company.
 - Annual histories follow the calendar even when the annual checkpoint falls
   inside a physical interval. The resumed state matches the uninterrupted
   run when the caller partitions time differently and changes worker count.
@@ -186,10 +198,10 @@ reports.
 | Content identity and compatibility | Namespaced objects and recipes accept stable runtime IDs. The loader validates pack versions and dependencies and rejects duplicate identities. Persist a catalog manifest with versioned saves and define how a resumed world accepts compatible catalog additions. |
 | Import and storage | The [catalog importer](../../crates/game-content-import/src/lib.rs) creates empty stock entries across inventories and goods and can enlarge authored capacity to fit recipes. Allow sparse stock or explicit lazy creation, preserve authored capacity, and diagnose incompatible recipes. Adding unused goods should not allocate stock proportional to the number of inventories. |
 | Quantities and lot identity | Represent the physical capacity being consumed, such as volume, mass, or slots, where counting unlike raw quantities gives wrong results. Keep stable batch provenance and expiry for goods that also need individual identity. The [current lot model](../../crates/game-lot-model/src/lib.rs) rejects both combinations for identified items. Cover perishability, splitting, merges, transfer, rollback, and conservation. |
-| Production, knowledge, and work | Workshop recipes can author several outputs or byproducts. Separate exact recipe knowledge, a worker's preferences, and the work they pick. Multiple recipes per character and specific recipe teaching now have interval slices. Expand content through those paths. Keep specific recipe knowledge separate from practice in a shared skill category. |
+| Production, knowledge, and work | Workshop recipes support several outputs or byproducts. Multiple recipes per character, specific recipe teaching, and practice across creative activities have interval slices. Extend choice and practice across work, and keep exact recipe knowledge distinct from skill and personal preferences. |
 | Reach and apparatus | Regional colocation is a coarse default and mechanically usable parts currently often have to be in one actor's custody. Use shared physical reach and access semantics for installed, carried, and jointly used equipment. Broaden bounded design generation beyond the first compatible component mapping. Preserve identity, wear, breakage, loads, and separate judgments about claims, permission, and cooperation. |
 | Nutrition, diets, and crops | Authored food rejects unsupported nutrient names, and interval scenarios can set exact metabolism deadlines. The nutrient types are still fixed. Design an extensible nutrient catalog, wider diets and preferences, multiple seed or crop outputs, and meaningful byproducts. Exercise a new food, diet, and crop archetype defined in content. |
-| Genetics and expressive traits | Move past the initial fixed-locus assumptions using data-defined trait definitions and expression, with compact storage chosen for the enabled traits. Keep inheritance, mutation, and selection reproducible and preserve provenance. A new trait should not require a hard-coded system enum for every content pack. |
+| Genetics and expressive traits | Families can author named diploid loci and bind one to personally weighted courtship desire. Extend data-defined expression to other abilities and to wildlife. Keep inheritance and selection reproducible and retain compact storage and provenance. |
 | Time and system registration | Use explicit units and distinguish simulated time, the caller's advance size, physical deadlines, and decision cadence. Follow the [elapsed-time notes](../../docs/research/elapsed-time-migration.md) for save compatibility and hazard clocks. Reduce central enumerations and fixed-width domain masks where they make independent owner additions costly. Keep typed, batched owner boundaries and use efficient declared schedules or dispatch where useful. |
 
 ## Autonomy follow-ups
