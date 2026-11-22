@@ -85,6 +85,12 @@ to track rates, deadlines, and behavior under different advance sizes. The
   authored skill, with signed personal effects on subsequent interest.
   Tests cover materials, instruments, interruption, and deterministic
   decisions for 4,096 individual participants.
+- Performers can choose whether to share a pastime. At a completed local
+  performance, individuals can choose whether to listen alongside their
+  other leisure preferences. A listener's own memory can change later
+  interest in practicing the activity. The observer records the heard
+  passage and its performer. Full attendance and shared musical form
+  remain open.
 - Bounded private episodes come from actual meetings and completed creative
   activities. Attention and memory length can differ across people. Recall
   fades by elapsed time and precise dates can become uncertain. Explicit
@@ -121,11 +127,11 @@ to track rates, deadlines, and behavior under different advance sizes. The
 - Two 31-day histories with minute-sized advances and one and six workers
   produced byte-identical checkpoint state. The same experiment still needs
   timed measurements under controlled CPU load and on larger mixed worlds.
-- The 5,100-person benchmarks give identical ordered receipts across worker
-  counts. The original minute observation test staged 306,000 rows per
-  physiology owner. The sparse fatigue stage now skips every unchanged
-  fatigue row in this idle case. Vitals still stages 306,000 rows with minute
-  advances and 5,100 with one hourly advance.
+- In the 5,100-person minute observation test, deferred physiology staged
+  10,200 vital rows versus 306,000 with dense progress. Exact single-person
+  observations gave the same count. Saved state and 21 ordered receipts agree
+  across one through eight workers. Whole-simulation scaling under mixed,
+  sustained workloads remains open.
 
 ## Working constraints
 

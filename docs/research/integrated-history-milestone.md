@@ -155,6 +155,14 @@ whose effort can create fatigue. Vitals staging still touched 306,000 rows.
 The saved-state fingerprint and all 14 ordered receipts matched the
 original run at one, two, four, six, and eight workers.
 
+The next scoped observer retains fractional vital progress during quiet
+parts of a prepared segment. It projects snapshots and individual observations
+on demand and materializes bodies before decisions and physical events. In a
+development run with 5,100 concentrated residents and minute calls, it staged
+10,200 vital rows versus 306,000 with independent dense calls. Both paths
+produced the same saved state and 21 ordered events at one, two, four, six,
+and eight workers. This sample isolates avoidable staging work.
+
 
 ## First thirty years
 
