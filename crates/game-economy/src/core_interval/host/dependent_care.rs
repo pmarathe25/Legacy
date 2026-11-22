@@ -150,18 +150,22 @@ impl CoreHost {
     }
 
     /// Each child interprets an actual visit or an unattended care period at their current age.
-    pub(super) fn develop_after_care(&mut self) -> Vec<game_economy_family::familiarity::Recognition> {
-        let (Some(care), Some(family)) =
-            (&self.dependent_care, &mut self.family)
-        else {
+    pub(super) fn develop_after_care(
+        &mut self,
+    ) -> Vec<game_economy_family::familiarity::Recognition> {
+        let (Some(care), Some(family)) = (&self.dependent_care, &mut self.family) else {
             return Vec::new();
         };
         if care.events.is_empty() {
             return Vec::new();
         }
-        let develop_obligation = self.opinions.as_ref()
+        let develop_obligation = self
+            .opinions
+            .as_ref()
             .is_some_and(game_opinions::Opinions::tracks_obligation_development);
-        let learn_relationships = self.opinions.as_ref()
+        let learn_relationships = self
+            .opinions
+            .as_ref()
             .is_some_and(game_opinions::Opinions::tracks_care_reactions);
         if family.familiarity.is_none() && !develop_obligation && !learn_relationships {
             return Vec::new();
@@ -180,10 +184,16 @@ impl CoreHost {
             })
             .collect();
         let recognized = if let Some(familiarity) = &mut family.familiarity {
-            let visits: Vec<_> = experiences.par_iter()
-                .filter_map(|&(child, age, caregiver)| Some(game_economy_family::familiarity::Experience {
-                    child, age, caregiver: caregiver?,
-                })).collect();
+            let visits: Vec<_> = experiences
+                .par_iter()
+                .filter_map(|&(child, age, caregiver)| {
+                    Some(game_economy_family::familiarity::Experience {
+                        child,
+                        age,
+                        caregiver: caregiver?,
+                    })
+                })
+                .collect();
             if visits.is_empty() {
                 Vec::new()
             } else {
@@ -192,17 +202,27 @@ impl CoreHost {
         } else {
             Vec::new()
         };
-        let Some(opinions) = self.opinions.as_mut() else { return recognized };
+        let Some(opinions) = self.opinions.as_mut() else {
+            return recognized;
+        };
         if develop_obligation {
-            let childhood: Vec<_> = experiences.par_iter()
+            let childhood: Vec<_> = experiences
+                .par_iter()
                 .map(|&(child, age, caregiver)| (child, age, caregiver.is_some()))
                 .collect();
             opinions.develop_obligation(&childhood);
         }
         if learn_relationships {
-            let visits: Vec<_> = experiences.par_iter().filter_map(|&(child, age, caregiver)| {
-                Some(game_opinions::CareExperience { child, age, caregiver: caregiver? })
-            }).collect();
+            let visits: Vec<_> = experiences
+                .par_iter()
+                .filter_map(|&(child, age, caregiver)| {
+                    Some(game_opinions::CareExperience {
+                        child,
+                        age,
+                        caregiver: caregiver?,
+                    })
+                })
+                .collect();
             opinions.learn_care(&visits, self.core.physical.tick());
         }
         recognized
@@ -353,10 +373,61 @@ impl CoreHost {
             tick,
         };
         let now = self.core.simulated_millis();
-        if let Some(sequence) = sequence {
-            context.prepare_elapsed_at(1, now, sequence).map(Some)
-        } else {
-            context.prepare_at(1, Some(now)).map(Some)
+        let inferred = self.infer_care_visits(care, now);
+        context
+            .prepare_with_observations(1, now, sequence, &inferred)
+            .map(Some)
+    }
+
+    fn infer_care_visits(
+        &self,
+        care: &game_economy_work::care::DependentCare,
+        now: u128,
+    ) -> Vec<game_economy_work::care::InferredVisit> {
+        use game_economy_work::care::{InferredVisit, Preference, SignalCue};
+        if care.signal_responses.is_empty() {
+            return Vec::new();
         }
+        let Some(signals) = self
+            .social
+            .as_ref()
+            .and_then(|owner| owner.signals.as_ref())
+        else {
+            return Vec::new();
+        };
+        care.signal_responses
+            .par_iter()
+            .flat_map_iter(|response| {
+                signals
+                    .remembered(response.person)
+                    .iter()
+                    .filter_map(move |observation| {
+                        let noticed_at = observation.at_millis?;
+                        if observation.interpreted != Some(response.meaning)
+                            || now.checked_sub(noticed_at)?
+                                >= u128::from(response.memory_millis.get())
+                        {
+                            return None;
+                        }
+                        Some(InferredVisit {
+                            preference: Preference {
+                                person: response.person,
+                                child: observation.actor,
+                                value: response.value,
+                                affinity_weight: response.affinity_weight,
+                                fear_weight: response.fear_weight,
+                                obligation_weight: response.obligation_weight,
+                                hunger_weight: response.hunger_weight,
+                                disregard_claims: false,
+                            },
+                            cue: SignalCue {
+                                form: observation.form,
+                                meaning: response.meaning,
+                                noticed_at,
+                            },
+                        })
+                    })
+            })
+            .collect()
     }
 }

@@ -7,6 +7,7 @@ pub use preferences::{Feelings, Preference};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
+use std::num::NonZeroU64;
 pub use view::{CareFamily, CareMember, FamilyView};
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -42,6 +43,38 @@ pub struct Event {
     pub tick: u64,
     pub child: u64,
     pub caregiver: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signal: Option<SignalCue>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SignalCue {
+    pub form: u32,
+    pub meaning: u32,
+    pub noticed_at: u128,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SignalResponse {
+    pub person: u64,
+    pub meaning: u32,
+    pub memory_millis: NonZeroU64,
+    pub value: i32,
+    #[serde(default)]
+    pub affinity_weight: i32,
+    #[serde(default)]
+    pub fear_weight: i32,
+    #[serde(default)]
+    pub obligation_weight: i32,
+    #[serde(default)]
+    pub hunger_weight: i32,
+}
+
+pub struct InferredVisit {
+    pub preference: Preference,
+    pub cue: SignalCue,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -85,6 +118,8 @@ pub struct DependentCare {
     pub policies: Vec<Policy>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub preferences: Vec<Preference>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub signal_responses: Vec<SignalResponse>,
     #[serde(default)]
     pub events: Vec<Event>,
 }
@@ -130,18 +165,31 @@ impl DependentCare {
             .map(|row| (row.person, row.child))
             .collect();
         pairs.par_sort_unstable();
+        let mut responses: Vec<_> = self
+            .signal_responses
+            .par_iter()
+            .map(|row| (row.person, row.meaning))
+            .collect();
+        responses.par_sort_unstable();
         if ids.par_windows(2).any(|pair| pair[0] == pair[1])
             || ids.par_iter().any(|id| !people.contains(id))
             || pairs.par_windows(2).any(|pair| pair[0] == pair[1])
             || pairs.par_iter().any(|(person, child)| {
                 person == child || !people.contains(person) || !people.contains(child)
             })
+            || responses.par_windows(2).any(|pair| pair[0] == pair[1])
+            || responses
+                .par_iter()
+                .any(|(person, meaning)| *meaning == 0 || !people.contains(person))
             || self.events.par_iter().any(|event| {
                 event.tick > tick
                     || !people.contains(&event.child)
                     || event
                         .caregiver
                         .is_some_and(|id| id == event.child || !people.contains(&id))
+                    || event.signal.is_some_and(|cue| {
+                        event.caregiver.is_none() || cue.form == 0 || cue.meaning == 0
+                    })
             })
         {
             return Err("invalid dependent care state");
@@ -189,9 +237,16 @@ impl DependentCare {
         ),
     ) -> Draft {
         let interval = self.rules.care_interval.max(1);
-        self.choose_visits(family, adult_age, people, busy, clock, context, |child| {
-            clock.1 % interval == child % interval
-        })
+        self.choose_visits(
+            family,
+            adult_age,
+            people,
+            busy,
+            clock,
+            context,
+            &[],
+            |child| clock.1 % interval == child % interval,
+        )
     }
 
     pub fn prepare_elapsed_visits(
@@ -206,7 +261,37 @@ impl DependentCare {
             impl Fn(u64, u64) -> Feelings + Sync,
         ),
     ) -> Draft {
-        self.choose_visits(family, adult_age, people, busy, clock, context, |_| true)
+        self.choose_visits(family, adult_age, people, busy, clock, context, &[], |_| {
+            true
+        })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn prepare_observed_visits(
+        &self,
+        family: &impl CareFamily,
+        adult_age: u64,
+        people: &[PersonSnapshot],
+        busy: &[u64],
+        clock: (u64, u64),
+        context: (
+            impl Fn(usize, usize) -> bool + Sync,
+            impl Fn(u64, u64) -> Feelings + Sync,
+        ),
+        inferred: &[InferredVisit],
+        elapsed: bool,
+    ) -> Draft {
+        let interval = self.rules.care_interval.max(1);
+        self.choose_visits(
+            family,
+            adult_age,
+            people,
+            busy,
+            clock,
+            context,
+            inferred,
+            |child| elapsed || clock.1 % interval == child % interval,
+        )
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -221,6 +306,7 @@ impl DependentCare {
             impl Fn(usize, usize) -> bool + Sync,
             impl Fn(u64, u64) -> Feelings + Sync,
         ),
+        inferred: &[InferredVisit],
         due: impl Fn(u64) -> bool + Sync,
     ) -> Draft {
         let (colocated, feelings) = context;
@@ -299,6 +385,7 @@ impl DependentCare {
             .collect();
         // Ordered, unique parent slots need no shared arbitration at all.
         if self.preferences.is_empty()
+            && inferred.is_empty()
             && children.par_iter().all(|child| child.first.is_some())
             && children
                 .par_windows(2)
@@ -310,6 +397,7 @@ impl DependentCare {
                     tick,
                     child: child.id,
                     caregiver: child.first.map(|slot| people[slot].0),
+                    signal: None,
                 })
                 .collect();
             let actors = children
@@ -322,11 +410,11 @@ impl DependentCare {
                 disregard_claims: Vec::new(),
             };
         }
-        let assignments = if self.preferences.is_empty() {
+        let assignments = if self.preferences.is_empty() && inferred.is_empty() {
             Vec::new()
         } else {
             preferences::assignments(
-                &self.preferences,
+                (&self.preferences, inferred),
                 &children,
                 people,
                 &busy,
@@ -339,13 +427,20 @@ impl DependentCare {
             assignments
                 .binary_search_by_key(&child, |row| row.child)
                 .ok()
-                .map(|index| assignments[index].caregiver)
+                .map(|index| &assignments[index])
         };
+        let responding: HashSet<_> = assignments
+            .par_iter()
+            .filter_map(|row| row.signal.map(|_| row.caregiver))
+            .collect();
         if !assignments.is_empty() {
             children.par_iter_mut().for_each(|child| {
                 if directed_for(child.id).is_some() {
                     child.first = None;
                     child.second = None;
+                } else if !responding.is_empty() {
+                    child.first = child.first.filter(|slot| !responding.contains(slot));
+                    child.second = child.second.filter(|slot| !responding.contains(slot));
                 }
             });
         }
@@ -372,13 +467,16 @@ impl DependentCare {
             .par_iter()
             .zip(accepted.par_iter())
             .map(|(child, &parent)| {
-                directed_for(child.id).or(parent).or_else(|| {
-                    child.second.filter(|&p| {
-                        second
-                            .as_ref()
-                            .is_some_and(|minima| minima.get(p) == Some(child.rank))
+                directed_for(child.id)
+                    .map(|row| row.caregiver)
+                    .or(parent)
+                    .or_else(|| {
+                        child.second.filter(|&p| {
+                            second
+                                .as_ref()
+                                .is_some_and(|minima| minima.get(p) == Some(child.rank))
+                        })
                     })
-                })
             })
             .collect();
         let events = children
@@ -388,6 +486,7 @@ impl DependentCare {
                 tick,
                 child: child.id,
                 caregiver: parent.map(|i| people[i].0),
+                signal: directed_for(child.id).and_then(|row| row.signal),
             })
             .collect();
         let mut actors: Vec<_> = selected
@@ -624,6 +723,7 @@ mod tests {
                 pressure_threshold: None,
             },
             preferences: vec![],
+            signal_responses: vec![],
             policies: vec![
                 Policy {
                     person: 1,
@@ -740,6 +840,7 @@ mod tests {
                 pressure_threshold: None,
             },
             preferences: vec![],
+            signal_responses: vec![],
             policies: vec![Policy {
                 person: 1,
                 willing: true,

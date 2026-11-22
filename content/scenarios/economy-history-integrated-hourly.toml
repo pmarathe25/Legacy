@@ -1763,6 +1763,7 @@ cohorts = [
 
 [care]
 inherit_births = true
+signal_responses = [{ person = 1, meaning = 1, memory_millis = 7200000, value = 12, affinity_weight = 1 }]
 policies = [{ person = 1, willing = true }, { person = 2, willing = true }, { person = 3, willing = true }, { person = 4, willing = true }, { person = 5, willing = true }, { person = 6, willing = true }, { person = 7, willing = true }, { person = 8, willing = true }, { person = 9, willing = true }, { person = 10, willing = true }, { person = 11, willing = true }, { person = 12, willing = true }, { person = 13, willing = true }, { person = 14, willing = true }, { person = 15, willing = true }, { person = 16, willing = true }, { person = 17, willing = true }, { person = 18, willing = true }, { person = 19, willing = true }, { person = 20, willing = true }, { person = 21, willing = true }, { person = 22, willing = true }, { person = 23, willing = true }, { person = 24, willing = true }, { person = 25, willing = true }, { person = 26, willing = true }, { person = 27, willing = true }, { person = 28, willing = true }, { person = 29, willing = true }, { person = 30, willing = true }, { person = 31, willing = true }, { person = 32, willing = true }, { person = 33, willing = true }, { person = 34, willing = true }, { person = 35, willing = true }, { person = 36, willing = true }, { person = 37, willing = true }, { person = 38, willing = true }, { person = 39, willing = true }, { person = 40, willing = true }, { person = 41, willing = true }, { person = 42, willing = true }, { person = 43, willing = true }, { person = 44, willing = true }, { person = 45, willing = true }, { person = 46, willing = true }, { person = 47, willing = true }, { person = 48, willing = true }, { person = 49, willing = true }, { person = 50, willing = true }, { person = 51, willing = true }, { person = 52, willing = true }, { person = 53, willing = true }, { person = 54, willing = true }, { person = 55, willing = true }, { person = 56, willing = true }, { person = 57, willing = true }, { person = 58, willing = true }, { person = 59, willing = true }, { person = 60, willing = true }]
 
 [care.elapsed]
@@ -2870,6 +2871,9 @@ catalog = "signals/basic.toml"
 person = 1
 idle = 0
 attention = 500
+remember = true
+capacity = 4
+interpretations = [{ form = 1, meaning = 1 }]
 expressions = [{ form = 2, intended = 2, recipient = 2, enabled = true, value = 1 }]
 
 [[signals.minds]]

@@ -566,7 +566,9 @@ fn classify(kind: &str, row: &Value) -> Option<Receipt> {
         let child = row["child"].as_u64()?;
         let caregiver = row["caregiver"].as_u64();
         return Some(Receipt {
-            label: if caregiver.is_some() {
+            label: if row.get("signal").is_some_and(|value| !value.is_null()) {
+                "care visits prompted by interpreted signals"
+            } else if caregiver.is_some() {
                 "care visits"
             } else {
                 "missed care visits"

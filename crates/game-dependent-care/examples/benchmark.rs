@@ -60,6 +60,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         elapsed: None,
         inherit_births: false,
         preferences: vec![],
+        signal_responses: vec![],
         rules: Rules {
             dependent_until: 5,
             max_caregiver_hunger: 10,

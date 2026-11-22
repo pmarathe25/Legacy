@@ -1,6 +1,54 @@
 use game_economy::core_interval::{CoreHost, CoreRunEvent};
 
 #[test]
+fn an_unrelated_caregiver_acts_on_their_own_recent_interpretation() {
+    let content = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content");
+    let scenario = content.join("scenarios/economy-care-signals.toml");
+    let simulate = |workers, durations: &[u64]| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut host = game_economy_cli::core_scenario(&scenario, &content).unwrap();
+                let mut visits = Vec::new();
+                for &duration in durations {
+                    let advanced = host.advance_continuous(duration, &[]).unwrap();
+                    assert_eq!(advanced.failure, None);
+                    visits.extend(advanced.events.into_iter().filter_map(|event| {
+                        if let CoreRunEvent::Care(visit) = event {
+                            Some(visit)
+                        } else {
+                            None
+                        }
+                    }));
+                    let save = serde_json::to_vec(&host.snapshot()).unwrap();
+                    host = CoreHost::resume(serde_json::from_slice(&save).unwrap()).unwrap();
+                }
+                assert_eq!(visits.len(), 2);
+                let first = &visits[0];
+                assert_eq!(first.at_millis, 137);
+                assert_eq!(first.events[0].child, 3);
+                assert_eq!(first.events[0].caregiver, Some(1));
+                let signal = first.events[0].signal.unwrap();
+                assert_eq!(
+                    (signal.form, signal.meaning, signal.noticed_at),
+                    (1, 1, 100)
+                );
+                assert_eq!(first.events[1].child, 4);
+                assert!(first.events[1].caregiver.is_none());
+                assert!(first.transfers.iter().any(|row| row.accepted));
+                let next = &visits[1];
+                assert_eq!(next.at_millis, 274);
+                assert!(next.events.iter().all(|row| row.caregiver.is_none()));
+                assert!(next.transfers.is_empty());
+                (host.snapshot(), visits)
+            })
+    };
+    assert_eq!(simulate(1, &[274]), simulate(6, &[101, 31, 97, 45]));
+}
+
+#[test]
 fn a_child_can_learn_familiarity_with_an_unrelated_caregiver() {
     let content = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content");
     let scenario = content.join("scenarios/economy-care-familiarity.toml");

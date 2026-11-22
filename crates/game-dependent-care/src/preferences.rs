@@ -1,5 +1,5 @@
 //! Directed priorities for looking after a particular child.
-use crate::Child;
+use crate::{Child, InferredVisit, SignalCue};
 use game_production_model::{PersonSnapshot, person_index};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -35,10 +35,11 @@ pub(super) struct Assignment {
     pub child: u64,
     pub caregiver: usize,
     pub disregard_claims: bool,
+    pub signal: Option<SignalCue>,
 }
 
 pub(super) fn assignments(
-    preferences: &[Preference],
+    (preferences, inferred): (&[Preference], &[InferredVisit]),
     children: &[Child],
     people: &[PersonSnapshot],
     busy: &[u64],
@@ -49,7 +50,13 @@ pub(super) fn assignments(
     let (seed, tick) = clock;
     let mut offers: Vec<_> = preferences
         .par_iter()
-        .filter_map(|preference| {
+        .map(|preference| (preference, None))
+        .chain(
+            inferred
+                .par_iter()
+                .map(|row| (&row.preference, Some(row.cue))),
+        )
+        .filter_map(|(preference, signal)| {
             let child = preference.child;
             let person = preference.person;
             let caregiver = person_index(people, person)?;
@@ -74,13 +81,23 @@ pub(super) fn assignments(
                     child,
                     caregiver,
                     disregard_claims: preference.disregard_claims,
+                    signal,
                 },
             ))
         })
         .collect();
     // Each person offers the visit they value most. Resolve duplicate offers
     // for a child separately. No person can be assigned to a second visit.
-    offers.par_sort_unstable_by_key(|&(value, row)| (row.caregiver, value, row.child));
+    offers.par_sort_unstable_by_key(|&(value, row)| {
+        (
+            row.caregiver,
+            value,
+            row.child,
+            row.signal.is_some(),
+            Reverse(row.signal.map_or(0, |cue| cue.noticed_at)),
+            row.signal.map_or(0, |cue| cue.form),
+        )
+    });
     offers.dedup_by_key(|(_, row)| row.caregiver);
     offers.par_sort_unstable_by_key(|&(_, row)| {
         let person = people[row.caregiver].0;
