@@ -136,6 +136,11 @@ to track rates, deadlines, and behavior under different advance sizes. The
   A debtor can condition delivery on their own hunger. Personal fear or
   obligation may still motivate them. History dates accepted transfers and
   identifies the actual participants, goods, and quantity.
+- An individual can set their own hunger limit for proposing or accepting
+  promises. In the same situation, another individual can negotiate
+  willingly or under pressure. Recipients can value the stated quantity
+  and their directed affinity differently. Explicit refusals carry an
+  elapsed date in the archive. Negotiation changes no physical custody.
 - The archive can identify when at least two of the same helpers joined a
   different lead most often in consecutive years. It uses accepted crew
   starts and excludes people whose most frequent lead was tied.
@@ -264,7 +269,7 @@ reports.
 | Area | Behavior to review and intended direction |
 | --- | --- |
 | Scheduler and ongoing work | Meetings and delivery can reserve an actor before competing proposals are compared. Reading and starting to help have personal-choice paths. Move remaining discretionary actions into shared evaluation, including an option to idle or keep, interrupt, or abandon an activity. Respect prior commitments as motives and account for setup or interruption costs. |
-| Rest and capability | Interval rest and resumption are now personal choices, and elapsed fatigue and exhaustion are physical effects in the integrated path. Keep that behavior, and broaden alternatives while occupied. Check remaining shared age or hunger gates on negotiation, delivery, agriculture, and work. Model relevant ability and risk directly. |
+| Rest and capability | Rest, resumption, negotiation, and promised delivery support personal choices, and elapsed fatigue and exhaustion are physical effects in the integrated path. Broaden alternatives while occupied. Check remaining shared age or hunger gates on agriculture, work, and other activities. Model relevant ability and risk directly. |
 | Meetings and pressure | Bounded contact candidates use personal, directed affinity, with optional refusal thresholds and a separate pressure response. Broaden deliberate approaches to additional motives, and move chosen departures and meetings into shared evaluation where they compete for the same time. Preserve incidental contact, refusal, compliance under pressure, and physical coercion. |
 | Teaching and language | Personal choice profiles can independently decline or rank practice lessons during encounters. Extend this to competition with other activities, comprehension, and incidental learning. Preserve exact recipe knowledge separately. Keep phoneme mappings and written marks personal and revisable, with choices about whether to explain, adopt, or modify them. |
 | Interpretation and relationships | Ordinary and pressured encounters support signed trust and affinity responses by person and directed relationship. Promise outcomes and help have shared fallbacks, with personal and directed overrides in existing paths. Extend signed interpretation and neutral responses to remaining paths. Preserve the ability to enjoy harm, feel no obligation, distrust a helpful person, or help from real affection, fear, or obligation. |
