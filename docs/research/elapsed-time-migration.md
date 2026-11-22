@@ -203,7 +203,12 @@ and ordinary healing at that instant. Legacy exposure still uses settlement.
 `dynamics.disease.time_unit_millis` measures case stages and recurring damage
 from the exact exposure time. The interval host stops at damage, recovery, and
 immunity expiry deadlines. Meetings and other contact opportunities follow
-their respective decision schedules.
+their respective decision schedules. Social encounter ordinals are kept in
+social history. Direct-contact exposure uses the current physical generation
+for custody and the actual elapsed instant for disease progression and draws.
+The minute-quantum preflight now crosses the first hourly encounter and
+completes the full day. It still exercises legacy settlement owners, so
+matching whole-world histories across different quanta remains open.
 Optional `nutrition.rules.interval_millis` sets absolute metabolism deadlines
 and applies deficiency damage at those times. A meal credits nutrients at
 successful consumption in this mode. An explicit

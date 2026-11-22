@@ -1,0 +1,67 @@
+# Direct contact follows an elapsed social opportunity across physical quanta.
+seed = 39
+tick_millis = 37
+decision_period_millis = 1000
+social_period_millis = 83
+stock_capacity = 20
+food_relief_divisor = 20
+
+[rules]
+hunger_rate = { units = 0, per_millis = 60000 }
+meal_threshold = 20
+starvation_threshold = 50
+max_health = 100
+max_work_hunger = 30
+carrying_capacity = 20
+
+[[regions]]
+id = 1
+storage = {}
+stock = {}
+
+[[people]]
+id = 1
+region = 1
+health = 100
+hunger = 0
+willing_to_work = false
+seek_meals = false
+
+[[people]]
+id = 2
+region = 1
+health = 100
+hunger = 0
+willing_to_work = false
+seek_meals = false
+
+[dynamics.social.rules]
+min_health = 1
+max_hunger = 50
+familiarity_gain = 1
+familiarity_max = 20
+
+[[dynamics.social.participants]]
+person = 1
+willing = true
+
+[[dynamics.social.participants]]
+person = 2
+willing = true
+
+[dynamics.disease]
+time_unit_millis = 100
+
+[[dynamics.disease.strains]]
+id = 1
+name = "Fixture fever"
+incubation = 0
+infectious_ticks = 4
+immunity_ticks = 4
+damage_per_tick = 1
+transmission_per_million = 1000000
+
+[[dynamics.disease.cases]]
+person = 1
+strain = 1
+infected_at = 0

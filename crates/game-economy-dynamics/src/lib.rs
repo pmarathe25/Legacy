@@ -4,7 +4,7 @@ use game_economy_person::Person;
 use game_social::{Contact, Social};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::{borrow::Cow, collections::HashSet};
 mod friendship;
 mod mission_meetings;
 mod openings;
@@ -246,6 +246,22 @@ pub struct Dynamics {
     #[serde(default)]
     pub claims: Option<claims::Claims>,
 }
+/// Contact receipts use the physical generation while social history retains
+/// its own encounter ordinal. Speaking across a barrier is not direct contact.
+pub fn contacts_for_disease<'a>(
+    meetings: &'a [game_social::Encounter],
+    tick: u64,
+    touch: Option<&(dyn Fn(u64, u64) -> bool + Sync)>,
+) -> Cow<'a, [game_social::Encounter]> {
+    let reachable = |event: &game_social::Encounter| touch.is_none_or(|check| check(event.a, event.b));
+    if meetings.par_iter().all(|event| event.tick == tick && reachable(event)) {
+        return Cow::Borrowed(meetings);
+    }
+    Cow::Owned(meetings.par_iter().filter(|event| reachable(event)).map(|event| {
+        game_social::Encounter { tick, ..event.clone() }
+    }).collect())
+}
+
 pub type OpeningLocator<'a> = dyn Fn(u64) -> Option<(u64, u8, u64, bool)> + Sync + 'a;
 
 pub struct Clock<'a> {
@@ -437,22 +453,7 @@ impl Dynamics {
                 let meetings = social
                     .as_ref()
                     .map_or(&[][..], |social| social.events.as_slice());
-                // Talking through a barrier is social contact, not the direct
-                // physical exposure represented by this disease route.
-                let filtered = contact
-                    .filter(|can_touch| {
-                        meetings
-                            .par_iter()
-                            .any(|event| !can_touch(event.a, event.b))
-                    })
-                    .map(|can_touch| {
-                        meetings
-                            .par_iter()
-                            .filter(|event| can_touch(event.a, event.b))
-                            .cloned()
-                            .collect::<Vec<_>>()
-                    });
-                let meetings = filtered.as_deref().unwrap_or(meetings);
+                let meetings = contacts_for_disease(meetings, tick, contact);
                 let combined: Option<Vec<_>> = (!exposure.is_empty()).then(|| {
                     let mut contacts: Vec<_> = meetings
                         .par_iter()
@@ -472,7 +473,7 @@ impl Dynamics {
                 });
                 disease.prepare_validated_with_combat(
                     &disease_people,
-                    combined.as_deref().unwrap_or(meetings),
+                    combined.as_deref().unwrap_or(&meetings),
                     combat,
                     seed,
                     tick - 1,
@@ -505,6 +506,22 @@ impl Dynamics {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn conversational_access_does_not_supply_direct_physical_contact() {
+        use super::contacts_for_disease;
+        let meetings = [2, 3].map(|b| game_social::Encounter {
+            tick: 1,
+            a: 1,
+            b,
+            region: 1,
+            pressured: None,
+            also_pressured: None,
+        });
+        let contacts = contacts_for_disease(&meetings, 37, Some(&|_, b| b == 2));
+        assert_eq!(contacts.len(), 1);
+        assert_eq!((contacts[0].tick, contacts[0].a, contacts[0].b), (37, 1, 2));
+        assert_eq!(meetings[0].tick, 1);
+    }
     use super::*;
     use game_disease::{Case, Event, EventKind, Strain};
 

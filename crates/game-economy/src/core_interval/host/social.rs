@@ -369,7 +369,12 @@ impl CoreHost {
                         .iter()
                         .any(|strain| strain.transmission_per_million > 0)
             })
-            .map(|health| self.stage_encounter_health(health, None, &meetings, tick))
+            .map(|health| {
+                let contacts = game_economy_dynamics::contacts_for_disease(
+                    &meetings, tick, walking.then_some(&contact),
+                );
+                self.stage_encounter_health(health, None, &contacts, tick)
+            })
             .transpose()?
             .map_or_else(
                 || (None, Vec::new()),
