@@ -10,6 +10,7 @@ pub struct CoreWorkInscription {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CoreWorkObservation {
     pub item: u64,
+    pub surface: Option<u32>,
     pub forms: Vec<CoreMarkObservation>,
 }
 
@@ -18,6 +19,8 @@ pub struct CoreWorkEdition {
     pub person: u64,
     pub item: u64,
     pub at_millis: u128,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub surface: Option<u32>,
 }
 
 impl CoreHost {
@@ -61,7 +64,7 @@ impl CoreHost {
             .iter()
             .map(|marks| self.interpret_marks(person, marks))
             .collect();
-        Ok(CoreWorkObservation { item, forms })
+        Ok(CoreWorkObservation { item, surface: page.surface, forms })
     }
 
     pub(in crate::core_interval::host) fn compose_autonomously(
@@ -137,19 +140,21 @@ impl CoreHost {
                 Some((intent.person, glyphs))
             })
             .collect::<Vec<_>>();
-        let receipts: Vec<_> = self
-            .write_glyph_pages(pages)?
+        let results = self.write_glyph_pages(pages)?;
+        let writing = self.writing.as_mut().expect("composition owner exists");
+        let receipts: Vec<_> = results
             .into_iter()
             .filter_map(|(person, item)| {
+                let item = item?;
                 Some(CoreWorkEdition {
                     person,
-                    item: item?,
+                    item,
                     at_millis: now,
+                    surface: writing.page(item).expect("accepted edition exists").surface,
                 })
             })
             .collect();
         if !receipts.is_empty() {
-            let writing = self.writing.as_mut().expect("composition owner exists");
             Arc::make_mut(&mut writing.compositions)
                 .par_iter_mut()
                 .for_each(|intent| {

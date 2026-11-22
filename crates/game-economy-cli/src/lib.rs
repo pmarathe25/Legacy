@@ -368,6 +368,10 @@ struct WritingConfig {
     ink_quantity: u64,
     next_item: u64,
     #[serde(default)]
+    surfaces: Vec<WritingSurfaceConfig>,
+    #[serde(default)]
+    surface_choices: Vec<WritingSurfaceChoiceConfig>,
+    #[serde(default)]
     literacy: Vec<game_economy::Literacy>,
     #[serde(default)]
     pages: Vec<game_economy::WrittenPage>,
@@ -389,6 +393,28 @@ struct WritingConfig {
     text_retention: Vec<game_economy::TextRetention>,
     #[serde(default)]
     text_memories: Vec<game_economy::TextMemory>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WritingMaterialConfig {
+    good: String,
+    quantity: u64,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WritingSurfaceConfig {
+    blank: WritingMaterialConfig,
+    pigment: Option<WritingMaterialConfig>,
+    page: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WritingSurfaceChoiceConfig {
+    person: u64,
+    page: String,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -2013,6 +2039,30 @@ fn build_scenario(
                     .copied()
                     .ok_or_else(|| format!("unknown writing good {name}"))
             };
+            let material = |input: WritingMaterialConfig| -> Result<_, String> {
+                Ok((resolve(&input.good)?, input.quantity))
+            };
+            let surfaces = config
+                .surfaces
+                .into_iter()
+                .map(|surface| {
+                    Ok(game_economy::WritingSurface {
+                        blank: material(surface.blank)?,
+                        pigment: surface.pigment.map(material).transpose()?,
+                        page: resolve(&surface.page)?,
+                    })
+                })
+                .collect::<Result<Vec<_>, String>>()?;
+            let surface_choices = config
+                .surface_choices
+                .into_iter()
+                .map(|choice| {
+                    Ok(game_economy::WritingSurfaceChoice {
+                        person: choice.person,
+                        page: resolve(&choice.page)?,
+                    })
+                })
+                .collect::<Result<Vec<_>, String>>()?;
             Ok::<_, String>(game_economy::Writing {
                 paper: resolve(&config.paper)?,
                 ink: resolve(&config.ink)?,
@@ -2020,6 +2070,8 @@ fn build_scenario(
                 paper_quantity: config.paper_quantity,
                 ink_quantity: config.ink_quantity,
                 next_item: config.next_item,
+                surfaces: surfaces.into(),
+                surface_choices: surface_choices.into(),
                 literacy: config.literacy.into(),
                 pages: config.pages.into(),
                 reads: config.reads.into(),

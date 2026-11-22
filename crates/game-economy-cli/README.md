@@ -113,10 +113,12 @@ custody. The [pastime scenario](../../content/scenarios/economy-pastimes.toml)
 includes song composition, instrument practice, and painting.
 
 `compose SOUNDS SOUNDS ...` writes an ordered sequence of personal forms on
-one carried page. Each form must have marks the character already chose.
-Paper and ink are consumed only when the physical page can be created.
+one carried object. Each form must have marks the character already chose.
+`writing-surfaces` lists the configured output good IDs and the current choice.
+`writing-surface GOOD` selects a surface, or use `writing-surface default`
+to return to paper. Materials are consumed only when the object can be created.
 `read-work PAGE` shows the actual marks and the meanings this character
-can recognize while carrying the page. The same marks can have different
+can recognize while carrying it. The same marks can have different
 meanings for different readers.
 
 In a scenario with personal episodes, `memories` recalls the controlled

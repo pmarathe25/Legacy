@@ -18190,6 +18190,7 @@ fn literacy_study_depends_on_personal_choice_encounter_and_a_physical_page() {
                 if page_present {
                     writing.next_item = 2;
                     writing.pages = std::sync::Arc::new(vec![game_economy::WrittenPage {
+                        surface: None,
                         item: 1,
                         author: 2,
                         script: 1,
@@ -18424,6 +18425,7 @@ fn consumed_written_pages_are_retired_but_personal_memories_survive() {
                 writing.next_item = 2;
                 writing.text_authors = Default::default();
                 writing.pages = std::sync::Arc::new(vec![game_economy::WrittenPage {
+                    surface: None,
                     item: 1,
                     author: 2,
                     script: 1,
@@ -18671,6 +18673,7 @@ fn written_page_retirement_rolls_back_when_another_item_has_no_owner() {
     writing.next_item = 3;
     writing.text_authors = Default::default();
     writing.pages = std::sync::Arc::new(vec![game_economy::WrittenPage {
+        surface: None,
         item: 1,
         author: 2,
         script: 1,

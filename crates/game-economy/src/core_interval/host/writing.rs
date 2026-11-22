@@ -8,6 +8,23 @@ enum GlyphPage {
     Form(Vec<u32>),
     Work(Vec<Vec<u32>>),
 }
+
+fn writing_action(
+    owner: &crate::Writing,
+    index: usize,
+    writer: u64,
+    item: u64,
+) -> game_lot_runtime::WritingPage {
+    let surface = owner.surface_for(writer);
+    game_lot_runtime::WritingPage {
+        action: index as u64 + 1,
+        writer,
+        blank: surface.blank,
+        pigment: surface.pigment,
+        page: surface.page,
+        item,
+    }
+}
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct CoreWritingResults {
     pub actors: Vec<u64>,
@@ -29,6 +46,29 @@ pub struct CoreMarkObservation {
 }
 
 impl CoreHost {
+    pub fn controlled_writing_surfaces(&self, person: u64) -> Result<(u32, Vec<u32>), String> {
+        self.controlled_person(person)?;
+        let writing = self.writing.as_ref().ok_or("physical writing is disabled")?;
+        let available = std::iter::once(writing.page)
+            .chain(writing.surfaces.iter().map(|surface| surface.page))
+            .collect();
+        Ok((writing.surface_for(person).page, available))
+    }
+
+    pub fn choose_controlled_writing_surface(
+        &mut self,
+        person: u64,
+        page: Option<u32>,
+    ) -> Result<(), String> {
+        if self.controlled_person(person)?.health == 0 {
+            return Err("the controlled person cannot choose a surface while incapacitated".into());
+        }
+        self.writing
+            .as_mut()
+            .ok_or("physical writing is disabled")?
+            .choose_surface(person, page)
+    }
+
     /// Inscribe individually selected forms on real pages using carried materials.
     /// Rejected physical transactions create no page or writing record.
     pub fn inscribe_marks(
@@ -111,16 +151,7 @@ impl CoreHost {
             .par_iter()
             .zip(items.par_iter())
             .enumerate()
-            .map(|(index, ((person, _), &item))| game_lot_runtime::WritingPage {
-                action: index as u64 + 1,
-                writer: *person,
-                paper: owner.paper,
-                paper_quantity: owner.paper_quantity,
-                ink: owner.ink,
-                ink_quantity: owner.ink_quantity,
-                page: owner.page,
-                item,
-            })
+            .map(|(index, ((person, _), &item))| writing_action(owner, index, *person, item))
             .collect();
         let physical = self
             .core
@@ -143,6 +174,7 @@ impl CoreHost {
                         };
                         crate::WrittenPage {
                             item: action.item, author: action.writer, script: 0, written_at: tick,
+                            surface: (action.page != owner.page).then_some(action.page),
                             claim: None, text: None, marks, work,
                         }
                     })
@@ -468,16 +500,7 @@ impl CoreHost {
             .zip(items.par_iter())
             .enumerate()
             .map(
-                |(index, ((person, _, _), &item))| game_lot_runtime::WritingPage {
-                    action: index as u64 + 1,
-                    writer: *person,
-                    paper: owner.paper,
-                    paper_quantity: owner.paper_quantity,
-                    ink: owner.ink,
-                    ink_quantity: owner.ink_quantity,
-                    page: owner.page,
-                    item,
-                },
+                |(index, ((person, _, _), &item))| writing_action(owner, index, *person, item),
             )
             .collect();
         let physical = self
@@ -497,6 +520,7 @@ impl CoreHost {
                     .map(|_| crate::WrittenPage {
                         item: page.item,
                         author: *person,
+                        surface: (page.page != owner.page).then_some(page.page),
                         script: *script,
                         written_at: tick,
                         claim: None,
@@ -654,16 +678,7 @@ impl CoreHost {
             .zip(items.par_iter())
             .enumerate()
             .map(
-                |(index, ((person, _, _), &item))| game_lot_runtime::WritingPage {
-                    action: index as u64 + 1,
-                    writer: *person,
-                    paper: owner.paper,
-                    paper_quantity: owner.paper_quantity,
-                    ink: owner.ink,
-                    ink_quantity: owner.ink_quantity,
-                    page: owner.page,
-                    item,
-                },
+                |(index, ((person, _, _), &item))| writing_action(owner, index, *person, item),
             )
             .collect();
         let physical = self
@@ -683,6 +698,7 @@ impl CoreHost {
                     .map(|_| crate::WrittenPage {
                         item: page.item,
                         author: *person,
+                        surface: (page.page != owner.page).then_some(page.page),
                         script: *script,
                         written_at: tick,
                         claim: Some(text.clone()),
@@ -808,28 +824,22 @@ impl CoreHost {
             .enumerate()
             .map(|(index, &(person, _))| {
                 let movement = index as u64 * 2 + 1;
+                let surface = owner.surface_for(person);
                 game_lots::Transaction {
                     id: index as u64 + 1,
-                    movements: vec![
-                        game_lots::Movement {
+                    movements: std::iter::once(surface.blank)
+                        .chain(surface.pigment)
+                        .enumerate()
+                        .map(|(index, (good, quantity))| game_lots::Movement {
                             batch: None,
-                            id: movement,
+                            id: movement + index as u64,
                             from: game_lots::Place::Person(person),
                             to: None,
-                            good: owner.paper,
-                            quantity: owner.paper_quantity,
+                            good,
+                            quantity,
                             item: None,
-                        },
-                        game_lots::Movement {
-                            batch: None,
-                            id: movement + 1,
-                            from: game_lots::Place::Person(person),
-                            to: None,
-                            good: owner.ink,
-                            quantity: owner.ink_quantity,
-                            item: None,
-                        },
-                    ],
+                        })
+                        .collect(),
                     creations: vec![],
                 }
             })

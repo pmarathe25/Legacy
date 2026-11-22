@@ -320,6 +320,14 @@ impl<'a> Player<'a> {
             .choose_controlled_word(self.person, game_language::Word { meaning, sounds })
     }
 
+    pub fn writing_surfaces(&self) -> Result<(u32, Vec<u32>), String> {
+        self.host.controlled_writing_surfaces(self.person)
+    }
+
+    pub fn choose_writing_surface(&mut self, page: Option<u32>) -> Result<(), String> {
+        self.host.choose_controlled_writing_surface(self.person, page)
+    }
+
     pub fn inscribe(&mut self, sounds: Vec<u8>) -> Result<Option<u64>, String> {
         self.host.controlled_person(self.person)?;
         let result = self.host.inscribe_marks(&[CoreMarkInscription {

@@ -614,7 +614,7 @@ impl Runtime {
         ))
     }
 
-    /// Stage identified pages and consume the writer's actual paper and ink atomically.
+    /// Stage identified written objects and consume the writer's chosen materials atomically.
     pub fn prepare_interval_writing(
         &self,
         pages: &[crate::WritingPage],
