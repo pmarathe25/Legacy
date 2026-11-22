@@ -1645,6 +1645,8 @@ meeting_trust = { regular = 1, pressured = -2 }
 [[opinions.sensitivities]]
 person = 2
 meeting_trust = { regular = -1, pressured = 0 }
+social_affinity_floor = -1
+relationship_cases = [{ target = 1, social_affinity_floor = 1 }]
 
 [[opinions.sensitivities]]
 person = 16

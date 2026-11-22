@@ -18,6 +18,11 @@ to track rates, deadlines, and behavior under different advance sizes. The
   lessons can share an elapsed encounter opportunity. History records the
   actual times. Irregular advances, save/reload, and different settlement
   intervals and worker counts are covered by composed tests.
+- Individuals can refuse ordinary meetings according to their own directed
+  feelings. Opposite weights can lead two versions of a character to make
+  opposite choices in the same encounter. Fear or felt obligation can
+  still motivate a refused approach to turn into a pressured meeting.
+  Actor claims allow only one physical slot per participant in a round.
 - Physical storage projects shelf life from the local ambient calendar or a
   holder's explicit temperature. Exact age survives movement and season
   changes. Preparations can mature in custody and stock can spoil before a
@@ -260,7 +265,7 @@ reports.
 | --- | --- |
 | Scheduler and ongoing work | Meetings and delivery can reserve an actor before competing proposals are compared. Reading and starting to help have personal-choice paths. Move remaining discretionary actions into shared evaluation, including an option to idle or keep, interrupt, or abandon an activity. Respect prior commitments as motives and account for setup or interruption costs. |
 | Rest and capability | Interval rest and resumption are now personal choices, and elapsed fatigue and exhaustion are physical effects in the integrated path. Keep that behavior, and broaden alternatives while occupied. Check remaining shared age or hunger gates on negotiation, delivery, agriculture, and work. Model relevant ability and risk directly. |
-| Meetings and pressure | Known local peers can be preferred by directed affinity, while incidental pairing chooses adjacent people from a seeded local order. Extend bounded deliberate approaches to aversion and goals. Separate an incidental encounter, a deliberate approach, and the receiver's response. Preserve refusal, compliance under pressure, and physical coercion. |
+| Meetings and pressure | Bounded contact candidates use personal, directed affinity, with optional refusal thresholds and a separate pressure response. Broaden deliberate approaches to additional motives, and move chosen departures and meetings into shared evaluation where they compete for the same time. Preserve incidental contact, refusal, compliance under pressure, and physical coercion. |
 | Teaching and language | Personal choice profiles can independently decline or rank practice lessons during encounters. Extend this to competition with other activities, comprehension, and incidental learning. Preserve exact recipe knowledge separately. Keep phoneme mappings and written marks personal and revisable, with choices about whether to explain, adopt, or modify them. |
 | Interpretation and relationships | Ordinary and pressured encounters support signed trust and affinity responses by person and directed relationship. Promise outcomes and help have shared fallbacks, with personal and directed overrides in existing paths. Extend signed interpretation and neutral responses to remaining paths. Preserve the ability to enjoy harm, feel no obligation, distrust a helpful person, or help from real affection, fear, or obligation. |
 | Family and learned inclinations | Either participant can initiate a subjective mating opportunity using inherited desire. Each person weighs their own feelings and circumstances. A match can occur outside a partnership. Legacy automatic pairing still uses pedigree exclusions. Model how characters learn about their family and form preferences around that knowledge. Review the single reciprocal partner field and the feature policies copied from a parent, retaining genetic dispositions while allowing experience and upbringing to change behavior. |
