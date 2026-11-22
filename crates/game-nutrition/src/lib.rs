@@ -1,6 +1,7 @@
 //! Individual nutrient reserves, with no shared ownership or institutional rules.
 pub use game_production_model::FoodEffect;
 pub use game_production_model::NUTRIENT_NAMES as NAMES;
+use game_production_model::{Good, is_named_nutrient};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashSet};
@@ -30,6 +31,19 @@ pub struct Rules {
     pub deficiency_damage: u32,
     /// Nutrients in one meal from the abstract regional or carried food supply.
     pub scalar_meal: Nutrients,
+    /// Additional dietary dimensions identified by stable names in food catalogs.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub named: BTreeMap<String, NamedRule>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NamedRule {
+    pub id: u32,
+    pub capacity: u32,
+    pub initial: u32,
+    pub metabolism: u32,
+    pub minimum: u32,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -37,6 +51,9 @@ pub struct Rules {
 pub struct Person {
     pub person: u64,
     pub reserves: Nutrients,
+    /// Only values that differ from their named rule's initial reserve are stored.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub named: Vec<(u32, u32)>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -53,7 +70,18 @@ impl Nutrition {
             Some(millis) => millis == 0 || self.rules.interval != 0,
             None => self.rules.interval == 0,
         };
+        let mut named: Vec<_> = self.rules.named.values().collect();
+        named.sort_unstable_by_key(|row| row.id);
         if invalid_cadence
+            || !named.is_empty() && self.rules.interval_millis.is_none()
+            || named.windows(2).any(|pair| pair[0].id == pair[1].id)
+            || self.rules.named.iter().any(|(name, row)| {
+                !is_named_nutrient(name)
+                    || row.id == 0
+                    || row.capacity == 0
+                    || row.initial > row.capacity
+                    || row.minimum > row.capacity
+            })
             || self
                 .rules
                 .health_effect_delay_millis
@@ -65,6 +93,18 @@ impl Nutrition {
             || self.people.par_iter().any(|row| {
                 !people.contains(&row.person)
                     || (0..6).any(|i| row.reserves[i] > self.rules.capacity[i])
+                    || row
+                        .named
+                        .windows(2)
+                        .any(|entries| entries[0].0 >= entries[1].0)
+                    || row.named.iter().any(|&(id, reserve)| {
+                        named
+                            .binary_search_by_key(&id, |rule| rule.id)
+                            .ok()
+                            .is_none_or(|index| {
+                                reserve == named[index].initial || reserve > named[index].capacity
+                            })
+                    })
             })
         {
             return Err("invalid nutrition state");
@@ -89,22 +129,34 @@ impl Nutrition {
     pub fn metabolize(&self, people: &[(u64, bool)]) -> (Self, Vec<u64>) {
         let mut old: Vec<_> = self.people.par_iter().collect();
         old.par_sort_unstable_by_key(|row| row.person);
+        let mut named_rules: Vec<_> = self.rules.named.values().collect();
+        named_rules.sort_unstable_by_key(|rule| rule.id);
         let rows: Vec<_> = people
             .par_iter()
             .map(|&(person, living)| {
                 let mut reserves = self.reserves_for(&old, person);
                 let mut deficient = false;
                 if living {
-                    for (reserve, metabolism) in reserves.iter_mut().zip(self.rules.metabolism) {
+                    for (reserve, metabolism) in
+                        reserves.reserves.iter_mut().zip(self.rules.metabolism)
+                    {
                         *reserve = reserve.saturating_sub(metabolism);
                     }
+                    let mut named_deficient = false;
+                    for rule in &named_rules {
+                        let reserve = reserves
+                            .adjust_named(rule, |prior| prior.saturating_sub(rule.metabolism));
+                        named_deficient |= reserve < rule.minimum;
+                    }
                     deficient = self.rules.deficiency_damage > 0
-                        && reserves
-                            .iter()
-                            .zip(self.rules.minimum)
-                            .any(|(&reserve, min)| reserve < min);
+                        && (named_deficient
+                            || reserves
+                                .reserves
+                                .iter()
+                                .zip(self.rules.minimum)
+                                .any(|(&reserve, min)| reserve < min));
                 }
-                (Person { person, reserves }, deficient)
+                (reserves, deficient)
             })
             .collect();
         let deficient = rows
@@ -123,12 +175,15 @@ impl Nutrition {
 
     /// Add the nutrients carried by already validated consumption receipts.
     /// Contributions from separate meals accumulate up to physical capacity.
-    pub fn ingest(&self, intake: &[FoodEffect]) -> Self {
+    pub fn ingest(&self, intake: &[FoodEffect], goods: &[Good]) -> Self {
         let mut old: Vec<_> = self.people.par_iter().collect();
         old.par_sort_unstable_by_key(|row| row.person);
         let mut intake: Vec<_> = intake
             .par_iter()
-            .filter(|row| row.nutrients != [0; 6])
+            .filter(|row| {
+                row.nutrients != [0; 6]
+                    || (!self.rules.named.is_empty() && row.nutrient_source.is_some())
+            })
             .collect();
         intake.par_sort_unstable_by_key(|row| row.person);
         let mut updated: Vec<_> = intake
@@ -137,13 +192,26 @@ impl Nutrition {
                 let person = meals[0].person;
                 let mut reserves = self.reserves_for(&old, person);
                 for meal in meals {
-                    for (index, reserve) in reserves.iter_mut().enumerate() {
+                    for (index, reserve) in reserves.reserves.iter_mut().enumerate() {
                         *reserve = reserve
                             .saturating_add(meal.nutrients[index])
                             .min(self.rules.capacity[index]);
                     }
+                    if !self.rules.named.is_empty()
+                        && let Some(good) = meal.nutrient_source
+                        && let Ok(index) = goods.binary_search_by_key(&good, |row| row.id)
+                        && let Some(food) = &goods[index].food
+                    {
+                        for (name, &amount) in &food.nutrients {
+                            if amount > 0
+                                && let Some(rule) = self.rules.named.get(name)
+                            {
+                                reserves.adjust_named(rule, |prior| prior.saturating_add(amount));
+                            }
+                        }
+                    }
                 }
-                Person { person, reserves }
+                reserves
             })
             .collect();
         let mut people: Vec<_> = old
@@ -163,10 +231,34 @@ impl Nutrition {
         }
     }
 
-    fn reserves_for(&self, old: &[&Person], person: u64) -> Nutrients {
+    fn reserves_for(&self, old: &[&Person], person: u64) -> Person {
         old.binary_search_by_key(&person, |row| row.person)
             .ok()
-            .map_or(self.rules.initial, |index| old[index].reserves)
+            .map_or_else(
+                || Person {
+                    person,
+                    reserves: self.rules.initial,
+                    named: Vec::new(),
+                },
+                |index| old[index].clone(),
+            )
+    }
+}
+
+impl Person {
+    fn adjust_named(&mut self, rule: &NamedRule, update: impl Fn(u32) -> u32) -> u32 {
+        let slot = self.named.binary_search_by_key(&rule.id, |entry| entry.0);
+        let previous = slot.map_or(rule.initial, |index| self.named[index].1);
+        let next = update(previous).min(rule.capacity);
+        match slot {
+            Ok(index) if next == rule.initial => {
+                self.named.remove(index);
+            }
+            Ok(index) => self.named[index].1 = next,
+            Err(index) if next != rule.initial => self.named.insert(index, (rule.id, next)),
+            Err(_) => {}
+        }
+        next
     }
 }
 
@@ -201,6 +293,7 @@ macro_rules! eat_scalar {
                     at_millis: None,
                     health: 0,
                     nutrients,
+                    nutrient_source: None,
                 });
         }
         Ok(())

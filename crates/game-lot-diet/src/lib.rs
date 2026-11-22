@@ -23,12 +23,13 @@ pub fn validate_pending_at(
     if pending.par_iter().any(|row| {
         let invalid_time = match row.at_millis {
             Some(at) => {
-                millis.is_none_or(|now| at <= now) || row.health == 0 || row.nutrients != [0; 6]
+                millis.is_none_or(|now| at <= now) || row.health == 0 || row.has_nutrients()
             }
             None => row.at <= tick,
         };
         invalid_time
-            || (row.health == 0 && row.nutrients == [0; 6])
+            || (row.health == 0 && !row.has_nutrients())
+            || row.nutrient_source == Some(0)
             || !people.contains(&row.person)
     }) {
         return Err("invalid pending food effect".into());
@@ -49,6 +50,7 @@ struct Record {
     relief: u32,
     health: i32,
     nutrients: [u32; 6],
+    nutrient_source: Option<u32>,
 }
 pub struct Plan {
     actions: Vec<Transaction>,
@@ -96,14 +98,17 @@ impl Plan {
             {
                 return Err("invalid consumed food receipt".into());
             }
-            let pending =
-                (record.health != 0 || record.nutrients != [0; 6]).then_some(FoodEffect {
-                    person: record.meal.person,
-                    at: effect_tick,
-                    at_millis: None,
-                    health: record.health,
-                    nutrients: record.nutrients,
-                });
+            let pending = (record.health != 0
+                || record.nutrients != [0; 6]
+                || record.nutrient_source.is_some())
+            .then_some(FoodEffect {
+                person: record.meal.person,
+                at: effect_tick,
+                at_millis: None,
+                health: record.health,
+                nutrients: record.nutrients,
+                nutrient_source: record.nutrient_source,
+            });
             Ok(Some(((record.meal.person, record.relief), pending)))
         };
         // Meal planning validates unique action IDs, so aligned receipts are
@@ -235,7 +240,10 @@ impl Plan {
                 {
                     return Err("invalid consumed food receipt".to_string());
                 }
-                let pending = if record.health != 0 || record.nutrients != [0; 6] {
+                let pending = if record.health != 0
+                    || record.nutrients != [0; 6]
+                    || record.nutrient_source.is_some()
+                {
                     Some(FoodEffect {
                         person: record.meal.person,
                         at: events
@@ -245,6 +253,7 @@ impl Plan {
                         at_millis: None,
                         health: record.health,
                         nutrients: record.nutrients,
+                        nutrient_source: record.nutrient_source,
                     })
                 } else {
                     None
@@ -312,6 +321,7 @@ pub fn plan_from(
                 relief: food.hunger_relief,
                 health: food.health_effect,
                 nutrients: amounts(&food.nutrients),
+                nutrient_source: food.supplies_named_nutrients().then_some(meal.good),
             })
         })
         .collect::<Result<_, String>>()?;

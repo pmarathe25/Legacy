@@ -1039,15 +1039,18 @@ fn fixture() -> CoreSnapshot {
                 minimum: [0; 6],
                 deficiency_damage: 0,
                 scalar_meal: [0; 6],
+                named: Default::default(),
             },
             people: vec![
                 game_nutrition::Person {
                     person: 1,
                     reserves: [2; 6],
+                    named: Vec::new(),
                 },
                 game_nutrition::Person {
                     person: 2,
                     reserves: [2; 6],
+                    named: Vec::new(),
                 },
             ],
         }),
@@ -1057,6 +1060,7 @@ fn fixture() -> CoreSnapshot {
             at: 1,
             health: 1,
             nutrients: [1; 6],
+            nutrient_source: None,
         }],
     }
 }

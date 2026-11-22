@@ -1,0 +1,55 @@
+# Two carried foods with different contributions to a named nutrient reserve.
+seed = 58
+tick_millis = 127
+decision_period_millis = 500
+stock_capacity = 10
+food_relief_divisor = 20
+
+[rules]
+hunger_rate = { units = 0, per_millis = 1 }
+meal_threshold = 5
+starvation_threshold = 50
+max_health = 100
+carrying_capacity = 10
+max_work_hunger = 20
+
+[nutrition.rules]
+interval_millis = 100
+capacity = [100, 100, 100, 100, 100, 100]
+initial = [0, 0, 0, 0, 0, 0]
+metabolism = [0, 0, 0, 0, 0, 0]
+minimum = [0, 0, 0, 0, 0, 0]
+scalar_meal = [0, 0, 0, 0, 0, 0]
+deficiency_damage = 3
+
+[nutrition.rules.named."leafy-produce:folate"]
+id = 1
+capacity = 8
+initial = 1
+metabolism = 2
+minimum = 2
+
+[[regions]]
+id = 1
+storage = {}
+stock = {}
+
+[[people]]
+id = 1
+region = 1
+health = 100
+hunger = 10
+willing_to_work = false
+seek_meals = true
+controlled = true
+goods = { "leafy-produce:folate-leaves" = 1 }
+
+[[people]]
+id = 2
+region = 1
+health = 100
+hunger = 10
+willing_to_work = false
+seek_meals = true
+controlled = true
+goods = { bread = 4 }

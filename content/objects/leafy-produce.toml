@@ -1,0 +1,11 @@
+id = "objects/leafy-produce"
+version = 1
+namespace = "leafy-produce"
+
+[data.objects.folate-leaves]
+id = 210001
+runtime_id = 210001
+name = "Folate leaves"
+mass = 1
+tags = ["food", "plant"]
+food = { portion = 1, relief = 20, shelf_days = 2, nutrients = { "leafy-produce:folate" = 7 } }
