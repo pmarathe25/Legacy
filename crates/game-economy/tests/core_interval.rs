@@ -2420,6 +2420,7 @@ fn timed_fatigue_tracks_early_completion_across_save_and_workers() {
                     requests: None,
                 });
                 failed_goal.goals = Some(game_goals::Goals {
+                    review_clock: None,
                     retry_interval: 1,
                     plan_inputs: false,
                     people: vec![game_goals::Goal {
@@ -4150,6 +4151,7 @@ fn core_host_autonomous_work_benchmark() {
         opinions: None,
         dreams: None, shared_work: None, market: None, writing: None, local_transport: None, construction: None, hauling: None,
         goals: goal_setbacks.then(|| game_goals::Goals {
+            review_clock: None,
             retry_interval: 1,
             plan_inputs: goal_planning,
             people: (2..=count)
@@ -10083,7 +10085,7 @@ fn scheduled_personal_goals_create_requests_and_count_only_witnessed_help() {
                 askers: vec![Asker { person: 2, interval: 1, lifetime: 3, retry_after_offer: false }],
                 pending: vec![], events: vec![],
             };
-            let goals = game_goals::Goals { retry_interval: 3, plan_inputs: false, people: vec![game_goals::Goal { person: 2, recipe: 1, priority: 1, target: 1, progress: 0, next_review: 0, enabled: true, recognize_help: true }], events: vec![] };
+            let goals = game_goals::Goals { review_clock: None, retry_interval: 3, plan_inputs: false, people: vec![game_goals::Goal { person: 2, recipe: 1, priority: 1, target: 1, progress: 0, next_review: 0, enabled: true, recognize_help: true }], events: vec![] };
             let snapshot = CoreHostSnapshot { pastimes: None, work_capabilities: None, personal_conflict: None, expeditions: None, campaign: None, mechanics: None, core: initial, autowork: Some(game_autowork::Autowork { next_id: 2, policies: vec![], requests: Some(requests) }), tool_wear: None, opinions: None, goals: Some(goals), dreams: None, shared_work: None, market: None, writing: None, local_transport: None, construction: None, hauling: None, agreements: None, sites: None, tool_requirements: vec![], paused_work_rates: vec![], pending_vital_deaths: vec![], fatigue: None, activity: vec![], giving: None, practice_work_asks: vec![], practice_work_evidence: Default::default(), skills: None, taking: None, medical: None, goal_setbacks: vec![], purpose: None, animal_restraints: None, animal_products: None, recovery: None, fauna: None, hunting: None, animal_feelings: None, animal_care: None, animal_handling: None, family: None, dependent_care: None, gathering: None, environment: None, irrigation: None, agriculture: None, health: None, knowledge: None, social: None, personality: None, claims: None, food_search: None, schedule: None };
             let mut host = CoreHost::begin(snapshot, &[(1, 1)]).unwrap();
             host.enable_schedule(1000, 1).unwrap();
@@ -10133,7 +10135,7 @@ fn work_practice_asks_then_freely_gives_for_witnessed_work() {
                 askers: vec![],
                 pending: vec![], events: vec![],
             };
-            let goals = game_goals::Goals { retry_interval: 3, plan_inputs: false, people: vec![game_goals::Goal { person: 2, recipe: 1, priority: 1, target: 1, progress: 0, next_review: 0, enabled: true, recognize_help: true }], events: vec![] };
+            let goals = game_goals::Goals { review_clock: None, retry_interval: 3, plan_inputs: false, people: vec![game_goals::Goal { person: 2, recipe: 1, priority: 1, target: 1, progress: 0, next_review: 0, enabled: true, recognize_help: true }], events: vec![] };
             let snapshot = CoreHostSnapshot { pastimes: None, work_capabilities: None, personal_conflict: None, expeditions: None, campaign: None, mechanics: None, core: initial, autowork: Some(game_autowork::Autowork { next_id: 2, policies: vec![], requests: Some(requests) }), tool_wear: None, opinions: None, goals: Some(goals), dreams: None, shared_work: None, market: None, writing: None, local_transport: None, construction: None, hauling: None, agreements: None, sites: None, tool_requirements: vec![], paused_work_rates: vec![], pending_vital_deaths: vec![], fatigue: None, activity: vec![], giving: Some(serde_json::from_value(serde_json::json!({"policies":[],"practices":{"minds":[{
                 "person":2,"invent":false,"approve":false,"willing":false,"shortage_threshold":5,"minimum_shortages":1,"review_interval":2,"proposal_lifetime":8,
                 "work":{"invent":false,"approve":true,"willing":willing,"ask_willing":true,"review_interval":2,"proposal_lifetime":8,"sequence":1,
@@ -10194,7 +10196,7 @@ fn worker_subjectively_reacts_to_received_or_missing_work_gift() {
                 askers: vec![],
                 pending: vec![], events: vec![],
             };
-            let goals = game_goals::Goals { retry_interval: 3, plan_inputs: false, people: vec![game_goals::Goal { person: 2, recipe: 1, priority: 1, target: 1, progress: 0, next_review: 0, enabled: true, recognize_help: true }], events: vec![] };
+            let goals = game_goals::Goals { review_clock: None, retry_interval: 3, plan_inputs: false, people: vec![game_goals::Goal { person: 2, recipe: 1, priority: 1, target: 1, progress: 0, next_review: 0, enabled: true, recognize_help: true }], events: vec![] };
             let snapshot = CoreHostSnapshot { pastimes: None, work_capabilities: None, personal_conflict: None, expeditions: None, campaign: None, mechanics: None, core: initial, autowork: Some(game_autowork::Autowork { next_id: 2, policies: vec![], requests: Some(requests) }), tool_wear: None, opinions: Some(serde_json::from_value(serde_json::json!({"rules":{"minimum":-10,"maximum":10,"initial":0,"fulfilled_gain":1,"default_loss":1,"affinity":{"limit":10}}})).unwrap()), goals: Some(goals), dreams: None, shared_work: None, market: None, writing: None, local_transport: None, construction: None, hauling: None, agreements: None, sites: None, tool_requirements: vec![], paused_work_rates: vec![], pending_vital_deaths: vec![], fatigue: None, activity: vec![], giving: Some(serde_json::from_value(serde_json::json!({"policies":[],"practices":{"minds":[{
                 "person":1,"invent":false,"approve":false,"willing":false,"shortage_threshold":5,"minimum_shortages":1,"review_interval":2,"proposal_lifetime":8,
                 "work":{"invent":false,"approve":true,"willing":false,"ask_willing":false,"review_interval":2,"proposal_lifetime":8,
@@ -10264,7 +10266,7 @@ fn same_interval_delivery_respects_its_order_relative_to_work_start() {
                 askers: vec![],
                 pending: vec![], events: vec![],
             };
-            let goals = game_goals::Goals { retry_interval: 3, plan_inputs: false, people: vec![game_goals::Goal { person: 2, recipe: 1, priority: 1, target: 1, progress: 0, next_review: 0, enabled: true, recognize_help: true }], events: vec![] };
+            let goals = game_goals::Goals { review_clock: None, retry_interval: 3, plan_inputs: false, people: vec![game_goals::Goal { person: 2, recipe: 1, priority: 1, target: 1, progress: 0, next_review: 0, enabled: true, recognize_help: true }], events: vec![] };
             let snapshot = CoreHostSnapshot { pastimes: None, work_capabilities: None, personal_conflict: None, expeditions: None, campaign: None, mechanics: None, core: initial, autowork: Some(game_autowork::Autowork { next_id: 2, policies: vec![], requests: Some(requests) }), tool_wear: None, opinions: Some(serde_json::from_value(serde_json::json!({"rules":{"minimum":-10,"maximum":10,"initial":0,"fulfilled_gain":1,"default_loss":1,"affinity":{"limit":10}}})).unwrap()), goals: Some(goals), dreams: None, shared_work: None, market: None, writing: None, local_transport: None, construction: None, hauling: None, agreements: Some(serde_json::from_value(serde_json::json!({"next_id":1})).unwrap()), sites: None, tool_requirements: vec![], paused_work_rates: vec![], pending_vital_deaths: vec![], fatigue: None, activity: vec![], giving: Some(serde_json::from_value(serde_json::json!({"policies":[],"practices":{"minds":[{
                 "person":1,"invent":false,"approve":false,"willing":false,"shortage_threshold":5,"minimum_shortages":1,"review_interval":2,"proposal_lifetime":8,
                 "work":{"invent":false,"approve":true,"willing":false,"ask_willing":false,"review_interval":2,"proposal_lifetime":8,
@@ -10344,7 +10346,7 @@ fn worker_can_dislike_a_gift_and_enjoy_not_receiving_it() {
                 askers: vec![],
                 pending: vec![], events: vec![],
             };
-            let goals = game_goals::Goals { retry_interval: 3, plan_inputs: false, people: vec![game_goals::Goal { person: 2, recipe: 1, priority: 1, target: 1, progress: 0, next_review: 0, enabled: true, recognize_help: true }], events: vec![] };
+            let goals = game_goals::Goals { review_clock: None, retry_interval: 3, plan_inputs: false, people: vec![game_goals::Goal { person: 2, recipe: 1, priority: 1, target: 1, progress: 0, next_review: 0, enabled: true, recognize_help: true }], events: vec![] };
             let snapshot = CoreHostSnapshot { pastimes: None, work_capabilities: None, personal_conflict: None, expeditions: None, campaign: None, mechanics: None, core: initial, autowork: Some(game_autowork::Autowork { next_id: 2, policies: vec![], requests: Some(requests) }), tool_wear: None, opinions: Some(serde_json::from_value(serde_json::json!({"rules":{"minimum":-10,"maximum":10,"initial":0,"fulfilled_gain":1,"default_loss":1,"affinity":{"limit":10}}})).unwrap()), goals: Some(goals), dreams: None, shared_work: None, market: None, writing: None, local_transport: None, construction: None, hauling: None, agreements: None, sites: None, tool_requirements: vec![], paused_work_rates: vec![], pending_vital_deaths: vec![], fatigue: None, activity: vec![], giving: Some(serde_json::from_value(serde_json::json!({"policies":[],"practices":{"minds":[{
                 "person":1,"invent":false,"approve":false,"willing":false,"shortage_threshold":5,"minimum_shortages":1,"review_interval":2,"proposal_lifetime":8,
                 "work":{"invent":false,"approve":true,"willing":false,"ask_willing":false,"review_interval":2,"proposal_lifetime":8,
@@ -10415,7 +10417,7 @@ fn abandoned_requested_work_does_not_create_a_completed_expectation() {
                 askers: vec![],
                 pending: vec![], events: vec![],
             };
-            let goals = game_goals::Goals { retry_interval: 3, plan_inputs: false, people: vec![game_goals::Goal { person: 2, recipe: 1, priority: 1, target: 1, progress: 0, next_review: 0, enabled: true, recognize_help: true }], events: vec![] };
+            let goals = game_goals::Goals { review_clock: None, retry_interval: 3, plan_inputs: false, people: vec![game_goals::Goal { person: 2, recipe: 1, priority: 1, target: 1, progress: 0, next_review: 0, enabled: true, recognize_help: true }], events: vec![] };
             let snapshot = CoreHostSnapshot { pastimes: None, work_capabilities: None, personal_conflict: None, expeditions: None, campaign: None, mechanics: None, core: initial, autowork: Some(game_autowork::Autowork { next_id: 2, policies: vec![], requests: Some(requests) }), tool_wear: None, opinions: Some(serde_json::from_value(serde_json::json!({"rules":{"minimum":-10,"maximum":10,"initial":0,"fulfilled_gain":1,"default_loss":1,"affinity":{"limit":10}}})).unwrap()), goals: Some(goals), dreams: None, shared_work: None, market: None, writing: None, local_transport: None, construction: None, hauling: None, agreements: None, sites: None, tool_requirements: vec![], paused_work_rates: vec![], pending_vital_deaths: vec![], fatigue: None, activity: vec![], giving: Some(serde_json::from_value(serde_json::json!({"policies":[],"practices":{"minds":[{
                 "person":1,"invent":false,"approve":false,"willing":false,"shortage_threshold":5,"minimum_shortages":1,"review_interval":2,"proposal_lifetime":8,
                 "work":{"invent":false,"approve":true,"willing":false,"ask_willing":false,"review_interval":2,"proposal_lifetime":8,
@@ -10478,7 +10480,7 @@ fn work_expectation_observes_only_accepted_early_deliveries() {
                 askers: vec![],
                 pending: vec![], events: vec![],
             };
-            let goals = game_goals::Goals { retry_interval: 3, plan_inputs: false, people: vec![game_goals::Goal { person: 2, recipe: 1, priority: 1, target: 1, progress: 0, next_review: 0, enabled: true, recognize_help: true }], events: vec![] };
+            let goals = game_goals::Goals { review_clock: None, retry_interval: 3, plan_inputs: false, people: vec![game_goals::Goal { person: 2, recipe: 1, priority: 1, target: 1, progress: 0, next_review: 0, enabled: true, recognize_help: true }], events: vec![] };
             let snapshot = CoreHostSnapshot { pastimes: None, work_capabilities: None, personal_conflict: None, expeditions: None, campaign: None, mechanics: None, core: initial, autowork: Some(game_autowork::Autowork { next_id: 2, policies: vec![], requests: Some(requests) }), tool_wear: None, opinions: Some(serde_json::from_value(serde_json::json!({"rules":{"minimum":-10,"maximum":10,"initial":0,"fulfilled_gain":1,"default_loss":1,"affinity":{"limit":10}}})).unwrap()), goals: Some(goals), dreams: None, shared_work: None, market: None, writing: None, local_transport: None, construction: None, hauling: None, agreements: Some(serde_json::from_value(serde_json::json!({"next_id":1})).unwrap()), sites: None, tool_requirements: vec![], paused_work_rates: vec![], pending_vital_deaths: vec![], fatigue: None, activity: vec![], giving: Some(serde_json::from_value(serde_json::json!({"policies":[],"practices":{"minds":[{
                 "person":1,"invent":false,"approve":false,"willing":false,"shortage_threshold":5,"minimum_shortages":1,"review_interval":2,"proposal_lifetime":8,
                 "work":{"invent":false,"approve":true,"willing":false,"ask_willing":false,"review_interval":2,"proposal_lifetime":8,
@@ -10561,7 +10563,7 @@ fn work_expectation_survives_early_completion_and_save() {
                 askers: vec![],
                 pending: vec![], events: vec![],
             };
-            let goals = game_goals::Goals { retry_interval: 3, plan_inputs: false, people: vec![game_goals::Goal { person: 2, recipe: 1, priority: 1, target: 1, progress: 0, next_review: 0, enabled: true, recognize_help: true }], events: vec![] };
+            let goals = game_goals::Goals { review_clock: None, retry_interval: 3, plan_inputs: false, people: vec![game_goals::Goal { person: 2, recipe: 1, priority: 1, target: 1, progress: 0, next_review: 0, enabled: true, recognize_help: true }], events: vec![] };
             let snapshot = CoreHostSnapshot { pastimes: None, work_capabilities: None, personal_conflict: None, expeditions: None, campaign: None, mechanics: None, core: initial, autowork: Some(game_autowork::Autowork { next_id: 2, policies: vec![], requests: Some(requests) }), tool_wear: None, opinions: Some(serde_json::from_value(serde_json::json!({"rules":{"minimum":-10,"maximum":10,"initial":0,"fulfilled_gain":1,"default_loss":1,"affinity":{"limit":10}}})).unwrap()), goals: Some(goals), dreams: None, shared_work: None, market: None, writing: None, local_transport: None, construction: None, hauling: None, agreements: None, sites: None, tool_requirements: vec![], paused_work_rates: vec![], pending_vital_deaths: vec![], fatigue: None, activity: vec![], giving: Some(serde_json::from_value(serde_json::json!({"policies":[],"practices":{"minds":[{
                 "person":1,"invent":false,"approve":false,"willing":false,"shortage_threshold":5,"minimum_shortages":1,"review_interval":2,"proposal_lifetime":8,
                 "work":{"invent":false,"approve":true,"willing":false,"ask_willing":false,"review_interval":2,"proposal_lifetime":8,
@@ -10652,6 +10654,7 @@ fn core_host_goal_asking_benchmark() {
         })
         .collect();
     let goals = game_goals::Goals {
+        review_clock: None,
         retry_interval: 3,
         plan_inputs: false,
         people: askers
@@ -10802,6 +10805,7 @@ fn personal_goal_selects_work_and_advances_only_after_completion() {
     )
     .unwrap();
     let goals = game_goals::Goals {
+        review_clock: None,
         retry_interval: 3,
         plan_inputs: false,
         people: vec![game_goals::Goal {

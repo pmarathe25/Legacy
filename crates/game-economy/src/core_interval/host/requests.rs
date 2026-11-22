@@ -504,14 +504,14 @@ impl CoreHost {
             .map(|person| (person.id, person.region, person.health, person.hunger))
             .collect();
         let offers = owner.offer_index(self.agreements.as_ref(), tick);
-        let Some(draft) = game_work_asking::prepare_with_practices(
+        let Some(draft) = game_work_asking::prepare_for_goal_clock(
             owner,
             self.goals.as_ref(),
             &people,
             &busy,
             offers.as_ref(),
             &practices,
-            tick,
+            (tick, Some(self.core.simulated_millis()), None),
         )
         .map_err(str::to_owned)?
         else {
@@ -561,7 +561,7 @@ impl CoreHost {
         let Some(goals) = &self.goals else {
             return Ok(None);
         };
-        let blocked: Vec<_> = if clear_events {
+        let blocked: Vec<_> = if clear_events && goals.review_clock.is_none() {
             self.goal_setbacks
                 .par_iter()
                 .map(|&(person, recipe)| game_goals::Completion { person, recipe })
@@ -607,7 +607,7 @@ impl CoreHost {
             completed.par_extend(goals.recognized_help(&observed));
         }
         if let Some(next) = goals
-            .prepare(&completed, &blocked, tick)
+            .prepare_at(&completed, &blocked, tick, Some(self.core.simulated_millis()))
             .map_err(str::to_owned)?
         {
             return Ok(Some(next));

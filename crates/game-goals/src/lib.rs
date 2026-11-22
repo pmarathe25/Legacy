@@ -9,6 +9,8 @@ use std::collections::HashSet;
 pub struct Goals {
     #[serde(default = "retry_interval")]
     pub retry_interval: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub review_clock: Option<ReviewClock>,
     /// Plan available recipes for missing local inputs before the final job.
     #[serde(default)]
     pub plan_inputs: bool,
@@ -20,6 +22,7 @@ impl Clone for Goals {
     fn clone(&self) -> Self {
         Self {
             retry_interval: self.retry_interval,
+            review_clock: self.review_clock.clone(),
             plan_inputs: self.plan_inputs,
             people: self.people.par_iter().cloned().collect(),
             events: self.events.par_iter().cloned().collect(),
@@ -43,6 +46,28 @@ pub struct Goal {
     #[serde(default)]
     pub recognize_help: bool,
 }
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReviewClock {
+    pub unit_millis: std::num::NonZeroU64,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub deadlines: Vec<ReviewDeadline>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReviewDeadline {
+    pub person: u64,
+    pub recipe: u32,
+    pub at_millis: u128,
+}
+
+impl ReviewDeadline {
+    fn key(self) -> (u64, u32) {
+        (self.person, self.recipe)
+    }
+}
+
 fn enabled() -> bool {
     true
 }
@@ -75,6 +100,30 @@ pub struct Completion {
     pub recipe: u32,
 }
 impl Goals {
+    pub fn ready_at(&self, goal: &Goal, tick: u64, now: Option<u128>) -> bool {
+        if let Some((clock, now)) = self.review_clock.as_ref().zip(now) {
+            let deadline = clock
+                .deadlines
+                .binary_search_by_key(&(goal.person, goal.recipe), |row| row.key())
+                .ok()
+                .map_or_else(
+                    || u128::from(goal.next_review) * u128::from(clock.unit_millis.get()),
+                    |index| clock.deadlines[index].at_millis,
+                );
+            return now >= deadline;
+        }
+        goal.next_review <= tick
+    }
+
+    pub fn review_ordinal(&self, now: u128, legacy: u64) -> u64 {
+        self.review_clock
+            .as_ref()
+            .map_or(legacy / self.retry_interval, |clock| {
+                let period = u128::from(clock.unit_millis.get()) * u128::from(self.retry_interval);
+                u64::try_from(now / period).unwrap_or(u64::MAX)
+            })
+    }
+
     /// Select witnessed completions that each goal's owner personally counts.
     pub fn recognized_help(&self, observations: &[(u64, u32)]) -> Vec<Completion> {
         if observations.is_empty() || !self.people.par_iter().any(|goal| goal.recognize_help) {
@@ -114,7 +163,16 @@ impl Goals {
         if self.retry_interval == 0 {
             return Err("invalid goal retry interval");
         }
-        if keys.par_windows(2).any(|p| p[0] == p[1])
+        if self.review_clock.as_ref().is_some_and(|clock| {
+            clock
+                .deadlines
+                .par_windows(2)
+                .any(|pair| pair[0].key() >= pair[1].key())
+                || clock
+                    .deadlines
+                    .par_iter()
+                    .any(|row| row.at_millis == 0 || keys.binary_search(&row.key()).is_err())
+        }) || keys.par_windows(2).any(|p| p[0] == p[1])
             || self.people.par_iter().any(|g| {
                 !people.contains(&g.person)
                     || !recipes.contains(&g.recipe)
@@ -130,7 +188,11 @@ impl Goals {
         Ok(())
     }
     /// Pick at most one active goal per person; authored direct policies win.
-    pub fn policies(&self, base: &Autowork, now: u64) -> Autowork {
+    pub fn policies(&self, base: &Autowork, tick: u64) -> Autowork {
+        self.policies_at(base, tick, None)
+    }
+
+    pub fn policies_at(&self, base: &Autowork, tick: u64, now: Option<u128>) -> Autowork {
         let mut occupied: Vec<_> = base.policies.par_iter().map(|p| p.person).collect();
         if occupied.par_windows(2).any(|pair| pair[0] > pair[1]) {
             occupied.par_sort_unstable();
@@ -141,7 +203,7 @@ impl Goals {
             .filter(|g| {
                 g.enabled
                     && g.progress < g.target
-                    && g.next_review <= now
+                    && self.ready_at(g, tick, now)
                     && occupied.binary_search(&g.person).is_err()
             })
             .collect();
@@ -190,10 +252,30 @@ impl Goals {
         blocked: &[Completion],
         tick: u64,
     ) -> Result<Option<Self>, &'static str> {
+        self.prepare_at(completed, blocked, tick, None)
+    }
+
+    pub fn prepare_at(
+        &self,
+        completed: &[Completion],
+        blocked: &[Completion],
+        tick: u64,
+        now: Option<u128>,
+    ) -> Result<Option<Self>, &'static str> {
         if completed.is_empty() && blocked.is_empty() {
             return Ok(None);
         }
-        let retry = if blocked.is_empty() {
+        let elapsed_retry = self
+            .review_clock
+            .as_ref()
+            .zip(now)
+            .filter(|_| !blocked.is_empty())
+            .map(|(clock, now)| {
+                let delay = u128::from(clock.unit_millis.get()) * u128::from(self.retry_interval);
+                now.checked_add(delay).ok_or("elapsed goal review overflow")
+            })
+            .transpose()?;
+        let retry = if blocked.is_empty() || elapsed_retry.is_some() {
             0
         } else {
             tick.checked_add(self.retry_interval)
@@ -249,7 +331,9 @@ impl Goals {
                 ) && goal.enabled
                     && goal.progress < goal.target
                 {
-                    next.next_review = retry;
+                    if elapsed_retry.is_none() {
+                        next.next_review = retry;
+                    }
                     Some(Event {
                         tick,
                         person: goal.person,
@@ -274,8 +358,35 @@ impl Goals {
         {
             events.par_sort_unstable_by_key(|e| (e.person, e.recipe));
         }
+        let mut review_clock = self.review_clock.clone();
+        if let Some((clock, at_millis)) = review_clock.as_mut().zip(elapsed_retry) {
+            let changes: Vec<_> = events
+                .par_iter()
+                .filter_map(|event| {
+                    event.blocked.then_some(ReviewDeadline {
+                        person: event.person,
+                        recipe: event.recipe,
+                        at_millis,
+                    })
+                })
+                .collect();
+            let mut deadlines: Vec<_> = clock
+                .deadlines
+                .par_iter()
+                .copied()
+                .filter(|row| {
+                    changes
+                        .binary_search_by_key(&row.key(), |entry| entry.key())
+                        .is_err()
+                })
+                .collect();
+            deadlines.par_extend(changes);
+            deadlines.par_sort_unstable_by_key(|row| row.key());
+            clock.deadlines = deadlines;
+        }
         Ok(Some(Self {
             retry_interval: self.retry_interval,
+            review_clock,
             plan_inputs: self.plan_inputs,
             people: rows.into_par_iter().map(|row| row.0).collect(),
             events,
@@ -302,6 +413,7 @@ mod tests {
     fn input_planning_survives_blocked_and_completed_goal_updates() {
         let goals = Goals {
             retry_interval: 3,
+            review_clock: None,
             plan_inputs: true,
             people: vec![goal(1, 1, 1, 2)],
             events: vec![],
@@ -335,6 +447,7 @@ mod tests {
     fn completed_work_advances_the_selected_goal_and_blocking_selects_an_alternative() {
         let goals = Goals {
             retry_interval: 3,
+            review_clock: None,
             plan_inputs: false,
             people: vec![goal(1, 1, 1, 2), goal(1, 2, 3, 1), goal(2, 1, 1, 1)],
             events: vec![],
@@ -449,6 +562,7 @@ mod tests {
     fn blocked_membership_handles_duplicate_and_sparse_identities() {
         let goals = Goals {
             retry_interval: 3,
+            review_clock: None,
             plan_inputs: false,
             people: (1..=3).map(|person| goal(person, 1, 0, 1)).collect(),
             events: vec![],
@@ -490,6 +604,7 @@ mod tests {
     fn population_selection_and_progress_are_worker_invariant() {
         let goals = Goals {
             retry_interval: 3,
+            review_clock: None,
             plan_inputs: false,
             people: (1..=10000)
                 .rev()

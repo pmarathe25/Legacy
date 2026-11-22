@@ -218,6 +218,13 @@ trust response, which informs later choices. A lapsed offer has no such result.
 Elapsed acceptance and delivery decisions use the open-agreement index.
 Physical evidence keeps its original tick provenance.
 
+With `goals.review_clock.unit_millis` configured, a failed attempt to
+start work for a personal goal delays its next eligible review by
+`goals.retry_interval` of those units. The delay starts at the actual
+choice. Another attempt depends on the character's next decision.
+Supply planning and work requests use the same goal readiness.
+Scenarios without this clock keep the older settlement-based review dates.
+
 An elapsed environment can set `exposure_period_millis` to schedule personal
 hazard damage and shelter rotation at fixed simulated times. The host uses
 the season just before each exposure event and applies it before new choices

@@ -2624,7 +2624,7 @@ impl CoreHost {
         let mut effective = self.effective_autonomous_work(blocked)?;
         let outcomes =
             self.start_autonomous_work_inner(blocked, rate, effective.policy.as_mut())?;
-        self.record_goal_setbacks(&effective.goal_candidates, &outcomes);
+        self.record_goal_setbacks(&effective.goal_candidates, &outcomes)?;
         Ok(outcomes)
     }
 
@@ -2634,7 +2634,7 @@ impl CoreHost {
             .goals
             .as_ref()
             .zip(self.autowork.as_ref())
-            .map(|(goals, owner)| goals.policies(owner, self.core.physical.tick()));
+            .map(|(goals, owner)| goals.policies_at(owner, self.core.physical.tick(), Some(self.core.simulated_millis())));
         let candidates = self.goal_work_candidates(blocked, effective.as_ref());
         if let (Some(goals), Some(base), Some(planned)) = (
             self.goals.as_ref().filter(|goals| goals.plan_inputs),
@@ -2659,7 +2659,7 @@ impl CoreHost {
                 base,
                 &production,
                 &people,
-                tick / goals.retry_interval,
+                goals.review_ordinal(self.core.simulated_millis(), tick),
             );
         }
         Ok(EffectiveWork {

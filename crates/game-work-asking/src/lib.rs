@@ -64,6 +64,27 @@ pub fn prepare_at_endpoints(
     timing_and_endpoint: (u64, Option<&EndpointLookup<'_>>),
 ) -> Result<Option<Draft>, &'static str> {
     let (tick, endpoint) = timing_and_endpoint;
+    prepare_for_goal_clock(
+        owner,
+        goals,
+        people,
+        busy,
+        offers,
+        practices,
+        (tick, None, endpoint),
+    )
+}
+
+pub fn prepare_for_goal_clock(
+    owner: &Requests,
+    goals: Option<&Goals>,
+    people: &[PersonSnapshot],
+    busy: &[u64],
+    offers: Option<&OfferIndex>,
+    practices: &[PracticeRequest],
+    timing_and_endpoint: (u64, Option<u128>, Option<&EndpointLookup<'_>>),
+) -> Result<Option<Draft>, &'static str> {
+    let (tick, now, endpoint) = timing_and_endpoint;
     let Some(goals) = goals.filter(|_| !owner.askers.is_empty() || !practices.is_empty()) else {
         return Ok(None);
     };
@@ -77,10 +98,19 @@ pub fn prepare_at_endpoints(
     {
         return Ok(None);
     }
+    let clock = goals;
     let mut goals: Vec<_> = goals
         .people
         .par_iter()
-        .filter(|row| row.enabled && row.progress < row.target && row.next_review < tick)
+        .filter(|row| {
+            row.enabled
+                && row.progress < row.target
+                && if clock.review_clock.is_some() {
+                    clock.ready_at(row, tick, now)
+                } else {
+                    row.next_review < tick
+                }
+        })
         .collect();
     let mut active_goals: Vec<_> = goals
         .par_iter()
@@ -377,6 +407,7 @@ mod tests {
             events: vec![],
         };
         let goals = Goals {
+            review_clock: None,
             retry_interval: 1,
             plan_inputs: false,
             events: vec![],

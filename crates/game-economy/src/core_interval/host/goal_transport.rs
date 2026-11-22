@@ -221,7 +221,7 @@ impl CoreHost {
             review: self
                 .goals
                 .as_ref()
-                .map_or(0, |goals| now / goals.retry_interval),
+                .map_or(0, |goals| goals.review_ordinal(self.core.simulated_millis(), now)),
         }
     }
 

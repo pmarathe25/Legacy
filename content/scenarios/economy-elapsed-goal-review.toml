@@ -1,0 +1,37 @@
+# A craft goal waits its own duration after finding the needed stock unavailable.
+seed = 29
+tick_millis = 37
+decision_period_millis = 17
+stock_capacity = 40
+food_relief_divisor = 20
+
+[rules]
+hunger_rate = { units = 0, per_millis = 1000 }
+meal_threshold = 20
+starvation_threshold = 50
+max_health = 100
+max_work_hunger = 30
+carrying_capacity = 20
+
+[[regions]]
+id = 1
+stock = {}
+
+[[people]]
+id = 1
+region = 1
+health = 100
+hunger = 0
+willing_to_work = true
+seek_meals = false
+
+[goals]
+retry_interval = 2
+review_clock = { unit_millis = 73 }
+plan_inputs = false
+
+[[goals.people]]
+person = 1
+recipe = "fixture-tool"
+priority = 1
+target = 1

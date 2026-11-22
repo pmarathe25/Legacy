@@ -1874,6 +1874,7 @@ person = 12
 deprivation = 0
 
 [goals]
+review_clock = { unit_millis = 3600000 }
 retry_interval = 2190
 plan_inputs = true
 [[goals.people]]

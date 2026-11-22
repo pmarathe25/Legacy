@@ -572,7 +572,7 @@ impl CoreHost {
         outcomes.par_sort_unstable_by_key(|row| row.0);
         self.autowork.as_mut().expect("owner checked").next_id = next_id;
         self.publish_claim_work(&uses, &outcomes, self.core.physical.tick());
-        self.record_goal_setbacks(&candidates, &outcomes);
+        self.record_goal_setbacks(&candidates, &outcomes)?;
         let accepted: std::collections::HashMap<_, _> = outcomes.into_iter().collect();
         Ok(starts
             .into_par_iter()

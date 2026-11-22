@@ -309,6 +309,10 @@ and expiry times. An expiry ends only the search and a walking leg still
 motivated by it. A standing visit preference can continue the same leg.
 The test compares different physical quanta, irregular advances, checkpoint
 reloads, and worker counts.
+Work goals can back off after an unsuccessful start. Their optional duration
+counts from the blocked attempt, with the next review on the person's
+decision clock. Production, supply planning, and requests use the same
+readiness.
 
 ## Content extensibility
 

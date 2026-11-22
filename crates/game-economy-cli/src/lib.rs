@@ -302,9 +302,16 @@ fn goal_enabled() -> bool {
 struct AuthoredGoals {
     #[serde(default = "goal_retry_interval")]
     retry_interval: u64,
+    review_clock: Option<AuthoredGoalClock>,
     #[serde(default)]
     plan_inputs: bool,
     people: Vec<AuthoredGoal>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AuthoredGoalClock {
+    unit_millis: std::num::NonZeroU64,
 }
 
 #[derive(Deserialize)]
@@ -3005,6 +3012,10 @@ fn build_scenario(
                 .collect::<Result<Vec<_>, String>>()?;
             Ok::<_, String>(Goals {
                 retry_interval: owner.retry_interval,
+                review_clock: owner.review_clock.map(|clock| game_economy::GoalReviewClock {
+                    unit_millis: clock.unit_millis,
+                    deadlines: vec![],
+                }),
                 plan_inputs: owner.plan_inputs,
                 people,
                 events: vec![],
@@ -3192,6 +3203,7 @@ fn build_scenario(
         confinement: scenario.confinement,
         goals: authored_goals.or_else(|| {
             has_dreams.then_some(Goals {
+                review_clock: None,
                 retry_interval: 3,
                 plan_inputs: true,
                 people: vec![],

@@ -446,6 +446,7 @@ mod tests {
     }
     fn goals() -> Goals {
         Goals {
+            review_clock: None,
             retry_interval: 2,
             plan_inputs: false,
             people: vec![],

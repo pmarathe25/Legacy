@@ -70,9 +70,9 @@ impl CoreHost {
         &mut self,
         candidates: &[(u64, u32)],
         outcomes: &[(u64, bool)],
-    ) {
+    ) -> Result<(), String> {
         if candidates.is_empty() {
-            return;
+            return Ok(());
         }
         let mut started: Vec<_> = outcomes
             .par_iter()
@@ -87,13 +87,35 @@ impl CoreHost {
             })
             .collect();
         started.par_sort_unstable();
-        self.goal_setbacks.par_extend(
-            candidates
+        let blocked: Vec<_> = candidates
+            .par_iter()
+            .copied()
+            .filter(|(person, _)| started.binary_search(person).is_err())
+            .collect();
+        if let Some(owner) = self
+            .goals
+            .as_ref()
+            .filter(|owner| owner.review_clock.is_some())
+        {
+            let setbacks: Vec<_> = blocked
                 .par_iter()
-                .copied()
-                .filter(|(person, _)| started.binary_search(person).is_err()),
-        );
+                .map(|&(person, recipe)| game_goals::Completion { person, recipe })
+                .collect();
+            if let Some(next) = owner
+                .prepare_at(
+                    &[],
+                    &setbacks,
+                    self.core.physical.tick(),
+                    Some(self.core.simulated_millis()),
+                )
+                .map_err(str::to_owned)?
+            {
+                self.goals = Some(next);
+            }
+        }
+        self.goal_setbacks.par_extend(blocked);
         self.goal_setbacks.par_sort_unstable();
         self.goal_setbacks.dedup();
+        Ok(())
     }
 }

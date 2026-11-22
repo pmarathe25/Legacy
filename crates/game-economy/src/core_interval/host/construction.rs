@@ -22,7 +22,7 @@ impl CoreHost {
         {
             return Vec::new();
         }
-        let planned = goals.policies(work, self.core.physical.tick());
+        let planned = goals.policies_at(work, self.core.physical.tick(), Some(self.core.simulated_millis()));
         planned.policies[work.policies.len()..]
             .par_iter()
             .filter(|policy| policy.enabled)
